@@ -1,0 +1,43 @@
+# Default routing policy for Eileen.
+#
+# These are defaults, not prisons. A spoken override ("send this straight to
+# Claude", "keep this local", "have all three debate it") wins immediately.
+#
+# harness:   claude | codex | gemini | opencode | local
+# cost_tier: cheap | standard | frontier
+# local_only: true means the coordinator must not send this kind off the PC.
+#
+# Model names are examples. Change them freely; nothing in the code depends on them.
+
+default:
+  kind: default
+  harness: claude
+  model: claude-sonnet-5
+  cost_tier: standard
+
+rules:
+  - kind: coding
+    harness: codex
+    model: gpt-5.6-sol
+    cost_tier: standard
+
+  - kind: architecture
+    harness: claude
+    model: claude-opus-5
+    cost_tier: frontier
+
+  - kind: research
+    harness: claude
+    model: claude-sonnet-5
+    cost_tier: standard
+
+  - kind: trivial
+    harness: local
+    model: qwen3-8b
+    cost_tier: cheap
+    local_only: true
+
+  - kind: simulation
+    harness: claude
+    model: claude-sonnet-5
+    cost_tier: standard

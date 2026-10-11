@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Rust
+target/
+**/*.rs.bk
+
+# Environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Editors
+.idea/
+.vscode/settings.json
+
+# Node (Playwright MCP and friends)
+node_modules/
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
