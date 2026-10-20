@@ -66,6 +66,21 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
   - The product and repository are still called Eileen; this is the user's own assistant's name, voice and personality.
   - Safety settings follow the permission tiers: a user can relax confirmation for reversible things, but nothing a setting does can let Eileen enter credentials, make payments or skip confirmation for tier-2 actions without an explicit, logged decision by the user.
 - **Voice cloning engine and watermarks (decided 2026-10-20).** Use whichever permissively licensed cloner is best on the PC; per the dictation-and-voices research that is Kyutai Pocket TTS (MIT code, CC-BY-4.0 weights, credited in the about screen and NOTICE file), streaming through Eileen's own sherpa-onnx path, with Kokoro as the default voice. Chatterbox is an optional extra for pre-rendered expressive speech only. No watermark by default on any engine, Chatterbox included (its Perth watermark is turned off); watermarking is an opt-in setting for users who want it on saved or exported audio. The consent enrollment for cloned voices stays, since it protects the people whose voices are cloned.
+- **AI-native at the root: intent, not commands.** Users never have to learn what to say. Any phrasing, in any language, typed or spoken, half-finished or vague, maps to the right action, because resolving intent is the job AI models are good at. The resolver is layered so it stays instant where it can:
+  1. a deterministic fast path for exact and learned phrasings (no model, instant);
+  2. a local semantic matcher in Rust (a small on-device embedding or classification model) that maps paraphrases to known actions and skills in milliseconds;
+  3. the brain for everything else, with the live context (focused app, its UI tree, selection, jobs, user model);
+  4. when no capability exists yet, a worker figures it out and the learning loop turns the result into a skill, which then feeds layers 1 and 2.
+  Unclear requests get one short clarifying question, never an error. "What can you do here?" is answered by introspection (the tools registered, the focused app's controls and hooks, the learned skills that apply), not from a static list. The HUD suggestions are a bonus built on the same introspection, not the fix.
+- **Use AI wherever it makes the engineering better, not only in the product.** Where a model makes a part of the system more robust, faster to build or easier to fix, use it, with deterministic checks around it. For example:
+  - self-healing UI automation: when a control's automation ID or position changes after an app update, re-find it by its description and update the skill;
+  - natural-language settings and config edits (already in "customise anything");
+  - bug triage: the flight recorder and replay feed a worker that explains what went wrong and points at the code, from the code map;
+  - test generation: successful and failed trajectories become regression scenarios automatically;
+  - documentation upkeep: a check that flags when code changed but its guidance did not, with a drafted update;
+  - code review on pull requests by a Claude worker in addition to the deterministic CI gates, set up by the owner on their own account;
+  - error messages that explain themselves in plain language and offer the fix.
+  Deterministic code stays the default where it is exact and cheap; AI fills the places where rules are brittle.
 
 ## Proposed 2026-10-20 (by the assistant, not yet confirmed by the owner)
 
