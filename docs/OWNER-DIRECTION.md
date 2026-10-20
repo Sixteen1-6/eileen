@@ -30,3 +30,11 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
 - **Signing in.** The owner signs in to each vendor CLI themselves. Eileen never runs a login flow and never reads vendor credential files.
 - **Claude is the default.** For now the brain and every worker route to Claude on the owner's plan. Codex is added later, once the owner installs and signs in to the Codex CLI; the routing design keeps a slot for it and for Grok and DeepSeek, but v0.1 must work end to end with Claude alone.
 - **Public.** The repository is public as of 2026-10-20.
+- **Eileen learns from every request. This is a main point of the product.** When someone asks for something hard and a worker finds a way to do it, that way is captured and built in, so the next time the same kind of request comes in it is faster, cheaper and more reliable, and eventually needs no model at all. Eileen keeps learning from how the user works (their apps, files, habits, phrasing and corrections) and gets better over time. Concretely, v0.1 must include:
+  - recording what each job did (the request, what was on screen, every tool call, the result, and whether the user was happy, corrected it or undid it);
+  - turning a successful job into a reusable, named skill that future workers load automatically;
+  - matching new requests to known skills, and replaying a well-proven skill directly, checking each step and falling back to a worker the moment a check fails;
+  - repairing a skill when it breaks, with its history kept so a bad change can be rolled back;
+  - letting the user ask what Eileen has learned, correct it, or tell it to forget something;
+  - keeping all of this on the user's PC, private by default, with any sharing of skills strictly opt-in and stripped of personal data;
+  - never letting a learned skill skip a confirmation or raise a permission, and never turning text seen on screen into a skill without the user's say-so.
