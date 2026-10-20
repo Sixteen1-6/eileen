@@ -28,3 +28,5 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
   - It thinks with you on hard problems, not only executes commands: it can explore, simulate, compare options and explain.
   - A visual layer (a heads-up display or overlay on the screen) shows what it is listening to, doing and watching, since there are no holograms.
 - **Signing in.** The owner signs in to each vendor CLI themselves. Eileen never runs a login flow and never reads vendor credential files.
+- **Claude is the default.** For now the brain and every worker route to Claude on the owner's plan. Codex is added later, once the owner installs and signs in to the Codex CLI; the routing design keeps a slot for it and for Grok and DeepSeek, but v0.1 must work end to end with Claude alone.
+- **Public.** The repository is public as of 2026-10-20.
