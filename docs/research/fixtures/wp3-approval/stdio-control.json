@@ -1,0 +1,81 @@
+{
+  "allow": [
+    {
+      "t_ms": 2806.6,
+      "event": {
+        "type": "control_request",
+        "request_id": "70bd7443-478d-4b77-8d60-d5c6ed0c44fe",
+        "request": {
+          "subtype": "can_use_tool",
+          "tool_name": "Bash",
+          "display_name": "Bash",
+          "input": {
+            "command": "touch tier2-asked.txt",
+            "description": "Create empty file tier2-asked.txt"
+          },
+          "description": "Create empty file tier2-asked.txt",
+          "decision_reason": "Eileen: tier 2, asking the user (appr_01TEST)",
+          "decision_reason_type": "hook",
+          "decision_reason_hook_event": "PreToolUse",
+          "decision_reason_hook_source": "settings",
+          "tool_use_id": "toolu_01YSZyCZJoHiAaZxpR6zJzNG"
+        }
+      }
+    },
+    {
+      "t_ms": 2807.0,
+      "sent_to_cli": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "70bd7443-478d-4b77-8d60-d5c6ed0c44fe",
+          "response": {
+            "behavior": "allow",
+            "updatedInput": {
+              "command": "touch tier2-asked.txt",
+              "description": "Create empty file tier2-asked.txt"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "deny": [
+    {
+      "t_ms": 1491.6,
+      "event": {
+        "type": "control_request",
+        "request_id": "59734163-8fdc-47d0-b37c-77a0447b7b05",
+        "request": {
+          "subtype": "can_use_tool",
+          "tool_name": "Bash",
+          "display_name": "Bash",
+          "input": {
+            "command": "touch tier2-asked.txt",
+            "description": "Create empty file tier2-asked.txt"
+          },
+          "description": "Create empty file tier2-asked.txt",
+          "decision_reason": "Eileen: tier 2, asking the user (appr_01TEST)",
+          "decision_reason_type": "hook",
+          "decision_reason_hook_event": "PreToolUse",
+          "decision_reason_hook_source": "settings",
+          "tool_use_id": "toolu_017xV4W6JU2zRjWtcQVKNNkE"
+        }
+      }
+    },
+    {
+      "t_ms": 1491.9,
+      "sent_to_cli": {
+        "type": "control_response",
+        "response": {
+          "subtype": "success",
+          "request_id": "59734163-8fdc-47d0-b37c-77a0447b7b05",
+          "response": {
+            "behavior": "deny",
+            "message": "Eileen: the user declined this (test)"
+          }
+        }
+      }
+    }
+  ]
+}

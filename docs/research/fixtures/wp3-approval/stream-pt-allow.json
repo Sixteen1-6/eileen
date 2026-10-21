@@ -1,0 +1,389 @@
+[
+  {
+    "t_ms": 0.0,
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "tools": [
+        "Bash"
+      ],
+      "mcp_servers": [
+        {
+          "name": "eileen",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "permissionMode": "dontAsk",
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.304",
+      "capabilities": [
+        "interrupt_receipt_v1",
+        "interrupt_cancel_queued_v1",
+        "interrupt_send_now_v1",
+        "msg_lifecycle_v1",
+        "request_marker_lists_v1",
+        "sdk_mcp_tools_list_changed",
+        "sdk_mcp_manifests",
+        "mcp_read_resource_v1",
+        "mcp_tool_ui_meta_v1",
+        "ui_surface_v1",
+        "mcp_call_result_not_for_model_v1"
+      ],
+      "agents": [
+        "claude",
+        "Explore",
+        "general-purpose",
+        "Plan",
+        "statusline-setup"
+      ],
+      "uuid": "02904031-27b0-493a-949b-f67210bba7f2",
+      "$omitted": [
+        "additional_directories",
+        "analytics_disabled",
+        "cwd",
+        "fast_mode_disabled_reason",
+        "fast_mode_state",
+        "messaging_socket_path",
+        "original_cwd",
+        "output_style",
+        "per_turn_effort_active",
+        "plugins",
+        "powershell_path",
+        "product_feedback_disabled",
+        "skills",
+        "slash_commands",
+        "terminal_slash_commands",
+        "view_mode"
+      ]
+    }
+  },
+  {
+    "t_ms": 1668.0,
+    "event": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgFEMMxYYFFmfKaAKLPJ4",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01RoL4SGHmKKGragXFts7H5p",
+            "name": "Bash",
+            "input": {
+              "command": "touch tier2-asked.txt",
+              "description": "Create empty file tier2-asked.txt"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 1000,
+          "cache_read_input_tokens": 4033,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 1000
+          },
+          "output_tokens": 16,
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "uuid": "10c7ee3d-f954-470d-bf50-1292742b64e6",
+      "timestamp": "2026-10-21T10:33:18.330Z",
+      "request_id": "req_011CgFEMMfgNmZPvU7hLyKEL",
+      "wire_tool_inputs": {
+        "toolu_01RoL4SGHmKKGragXFts7H5p": {
+          "command": "touch tier2-asked.txt",
+          "description": "Create empty file tier2-asked.txt"
+        }
+      }
+    }
+  },
+  {
+    "t_ms": 1702.4,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "26a4650a-5b91-4eb1-a674-8738395074e3",
+      "hook_name": "PreToolUse:Bash",
+      "hook_event": "PreToolUse",
+      "uuid": "5b7e61c0-2a4b-4ab3-ac4e-44ecbae16b54",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 1766.9,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "26a4650a-5b91-4eb1-a674-8738395074e3",
+      "hook_name": "PreToolUse:Bash",
+      "hook_event": "PreToolUse",
+      "output": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+      "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "9ac81ec8-4854-49b3-8e29-4f087ac36d9b",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 15186.1,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "f9a06d33-6dee-4633-adc8-c81adeda15f4",
+      "hook_name": "PostToolUse:Bash",
+      "hook_event": "PostToolUse",
+      "uuid": "a94ef12b-1aa3-467a-9d99-125d24187dc8",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 15199.9,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "f9a06d33-6dee-4633-adc8-c81adeda15f4",
+      "hook_name": "PostToolUse:Bash",
+      "hook_event": "PostToolUse",
+      "output": "{}",
+      "stdout": "{}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "cd0eb543-624c-41c0-a400-934056dcde49",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 15217.8,
+    "event": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01RoL4SGHmKKGragXFts7H5p",
+            "type": "tool_result",
+            "content": "(Bash completed with no output)",
+            "is_error": false
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "uuid": "5505242e-7348-4d69-be22-e09805daa2df",
+      "timestamp": "2026-10-21T10:33:31.889Z",
+      "tool_use_result": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": true
+      },
+      "tool_result_meta": [
+        {
+          "id": "toolu_01RoL4SGHmKKGragXFts7H5p",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "user_temporary"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "t_ms": 16232.9,
+    "event": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgFENUcfJTszRYwfGN2bL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "1. `touch tier2-asked.txt` - ran (completed with no output)."
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 130,
+          "cache_read_input_tokens": 5033,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 130
+          },
+          "output_tokens": 3,
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "uuid": "1148dd42-5595-4dca-8e20-7f2e53039aa7",
+      "timestamp": "2026-10-21T10:33:32.907Z",
+      "request_id": "req_011CgFENUPmdjJpzm7jcJkCb"
+    }
+  },
+  {
+    "t_ms": 16278.2,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "a7cf9c4d-302f-4d8f-881a-b5eb894f556e",
+      "hook_name": "Stop",
+      "hook_event": "Stop",
+      "uuid": "76604e9f-8545-4d0e-ab81-71fe0a3c1069",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 16288.9,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "a7cf9c4d-302f-4d8f-881a-b5eb894f556e",
+      "hook_name": "Stop",
+      "hook_event": "Stop",
+      "output": "{}",
+      "stdout": "{}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "070d7ff1-0e05-40cd-ae0f-2c6918789d6a",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+    }
+  },
+  {
+    "t_ms": 16313.5,
+    "event": {
+      "duration_api_ms": 2621,
+      "stop_reason": "end_turn",
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "total_cost_usd": 0.00037606,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 1130,
+        "cache_read_input_tokens": 9066,
+        "output_tokens": 118,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 1130,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 27,
+            "cache_read_input_tokens": 5033,
+            "cache_creation_input_tokens": 130,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 130
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 4,
+          "outputTokens": 118,
+          "cacheReadInputTokens": 9066,
+          "cacheCreationInputTokens": 1130,
+          "webSearchRequests": 0,
+          "costUSD": 0.00037606,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "safety_stops": 0,
+      "is_error": false,
+      "num_turns": 2,
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "1. `touch tier2-asked.txt` - ran (completed with no output).",
+      "ttft_ms": 1966,
+      "type": "result",
+      "duration_ms": 16622,
+      "uuid": "7eba6234-2f16-4fe8-bc74-17f6d9759083",
+      "ttft_stream_ms": 1579,
+      "time_to_request_ms": 438,
+      "first_content_frame_ms": 1580,
+      "queued_turn_count": 0,
+      "result_index": 0
+    }
+  }
+]

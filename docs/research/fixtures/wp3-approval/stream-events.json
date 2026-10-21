@@ -1,0 +1,373 @@
+{
+  "init": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+    "tools": [
+      "Bash"
+    ],
+    "mcp_servers": [
+      {
+        "name": "eileen",
+        "status": "connected",
+        "source": "dynamic"
+      }
+    ],
+    "model": "claude-haiku-5-5",
+    "permissionMode": "dontAsk",
+    "apiKeySource": "none",
+    "claude_code_version": "2.1.304",
+    "capabilities": [
+      "interrupt_receipt_v1",
+      "interrupt_cancel_queued_v1",
+      "interrupt_send_now_v1",
+      "msg_lifecycle_v1",
+      "request_marker_lists_v1",
+      "sdk_mcp_tools_list_changed",
+      "sdk_mcp_manifests",
+      "mcp_read_resource_v1",
+      "mcp_tool_ui_meta_v1",
+      "ui_surface_v1",
+      "mcp_call_result_not_for_model_v1"
+    ],
+    "agents": [
+      "claude",
+      "Explore",
+      "general-purpose",
+      "Plan",
+      "statusline-setup"
+    ],
+    "uuid": "02904031-27b0-493a-949b-f67210bba7f2",
+    "$omitted": [
+      "additional_directories",
+      "analytics_disabled",
+      "cwd",
+      "fast_mode_disabled_reason",
+      "fast_mode_state",
+      "messaging_socket_path",
+      "original_cwd",
+      "output_style",
+      "per_turn_effort_active",
+      "plugins",
+      "powershell_path",
+      "product_feedback_disabled",
+      "skills",
+      "slash_commands",
+      "terminal_slash_commands",
+      "view_mode"
+    ]
+  },
+  "hook_started": {
+    "type": "system",
+    "subtype": "hook_started",
+    "hook_id": "26a4650a-5b91-4eb1-a674-8738395074e3",
+    "hook_name": "PreToolUse:Bash",
+    "hook_event": "PreToolUse",
+    "uuid": "5b7e61c0-2a4b-4ab3-ac4e-44ecbae16b54",
+    "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+  },
+  "hook_response": {
+    "type": "system",
+    "subtype": "hook_response",
+    "hook_id": "26a4650a-5b91-4eb1-a674-8738395074e3",
+    "hook_name": "PreToolUse:Bash",
+    "hook_event": "PreToolUse",
+    "output": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+    "stderr": "",
+    "exit_code": 200,
+    "outcome": "success",
+    "uuid": "9ac81ec8-4854-49b3-8e29-4f087ac36d9b",
+    "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5"
+  },
+  "hook_response_failed_block": [
+    {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "691c425d-cb10-4a41-a553-a80521793b3d",
+      "hook_name": "PreToolUse:Bash",
+      "hook_event": "PreToolUse",
+      "output": "connect ECONNREFUSED 127.0.0.1:51439",
+      "stdout": "",
+      "stderr": "connect ECONNREFUSED 127.0.0.1:51439",
+      "outcome": "error",
+      "uuid": "18a3067e-1156-47d0-acdf-e2bd99e859a5",
+      "session_id": "19e53e96-153e-484c-ab0c-30b95daef503"
+    }
+  ],
+  "permission_denied_hook_ask": [
+    {
+      "type": "system",
+      "subtype": "permission_denied",
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_01AFdFK9efL5UDFfPT2PJYM1",
+      "decision_reason_type": "hook",
+      "decision_reason": "Eileen: tier 2, asking the user (appr_01TEST)",
+      "message": "Eileen: tier 2, asking the user (appr_01TEST)",
+      "uuid": "3c962c2a-e810-434f-bd4c-54134a1dc038",
+      "session_id": "f6ead462-1d92-407c-9847-de1297d1ca9e"
+    }
+  ],
+  "permission_denied_mode": [
+    {
+      "type": "system",
+      "subtype": "permission_denied",
+      "tool_name": "Bash",
+      "tool_use_id": "toolu_011KXwvGGmjvv4dv5tcLor93",
+      "decision_reason_type": "mode",
+      "message": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed.",
+      "uuid": "76071e94-abfe-4744-b3cf-b3b7f5e68015",
+      "session_id": "4911eaed-f3e2-4402-a7ae-a87bba0842ef"
+    }
+  ],
+  "tool_results": {
+    "guard-deny": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "is_error": true,
+        "tool_use_id": "toolu_01BUAWis45bYchXjZgxUTqVZ"
+      }
+    ],
+    "pt-deny": [
+      {
+        "type": "tool_result",
+        "content": "Eileen: the user declined this (test)",
+        "is_error": true,
+        "tool_use_id": "toolu_012QtTscUWUoxxprSsoDx5ND"
+      }
+    ],
+    "pt-garbage": [
+      {
+        "type": "tool_result",
+        "content": "The permission prompt tool returned an invalid permission result. Expected {behavior: 'allow', updatedInput?: object} or {behavior: 'deny', message: string}. updatedPermissions may hold at most 4096 updates, rules and directories in all.",
+        "is_error": true,
+        "tool_use_id": "toolu_01QUkkw5zsLKnuCDjeGhko72"
+      }
+    ],
+    "pt-iserror": [
+      {
+        "type": "tool_result",
+        "content": "<tool_use_error>Error calling tool (Bash): Eileen: approval service failed (test)</tool_use_error>",
+        "is_error": true,
+        "tool_use_id": "toolu_01D9KR4kkXZYak21HjntpSjP"
+      }
+    ],
+    "pt-exit": [
+      {
+        "type": "tool_result",
+        "content": "<tool_use_error>Error calling tool (Bash): Connection closed</tool_use_error>",
+        "is_error": true,
+        "tool_use_id": "toolu_017Sx1Su745AiWdwP16QCQ2n"
+      }
+    ],
+    "pt-missing-server": [
+      {
+        "type": "tool_result",
+        "content": "<tool_use_error>Error calling tool (Bash): Error: MCP tool mcp__eileen__approve (passed via --permission-prompt-tool) not found. Available MCP tools: none</tool_use_error>",
+        "is_error": true,
+        "tool_use_id": "toolu_01SEWvrRK3TybWWkZvWGkRSy"
+      }
+    ],
+    "pt-hang-mcptimeout": [
+      {
+        "type": "tool_result",
+        "content": "<tool_use_error>Error calling tool (Bash): MCP server \"eileen\" tool \"approve\" timed out after 15s</tool_use_error>",
+        "is_error": true,
+        "tool_use_id": "toolu_01NuYRoqpKDTDLKgEr4LzFBR"
+      }
+    ],
+    "pt-none-prompts": [
+      {
+        "type": "tool_result",
+        "content": "Permission for this tool use was denied. It requires approval, and this session has no approval surface - nobody can answer a permission prompt here - so it was denied automatically. The action was NOT performed; do not claim it succeeded, and do not retry it: this action, and anything else that requires approval, will be denied the same way for the rest of this session. Tell the user what was blocked and why you needed it, then continue with the parts of the task that do not require approval. What required approval: Eileen: tier 2, asking the user (appr_01TEST)",
+        "is_error": true,
+        "tool_use_id": "toolu_016TJUyzRUq9gxKKzTYRrAwv"
+      }
+    ],
+    "pt-no-tool-host": [
+      {
+        "type": "tool_result",
+        "content": "Eileen: tier 2, asking the user (appr_01TEST)",
+        "is_error": true,
+        "tool_use_id": "toolu_01YQeKV2XteFnreK5rqMmskN"
+      }
+    ],
+    "guard-dead-block": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: [http://127.0.0.1:51439/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nconnect ECONNREFUSED 127.0.0.1:51439",
+        "is_error": true,
+        "tool_use_id": "toolu_017Sfdzgv6YtkX1sdQ6Fs8Us"
+      }
+    ],
+    "guard-hang-block": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: timed out; blocking because onFailure is \"block\"",
+        "is_error": true,
+        "tool_use_id": "toolu_01HH4LVpAptRMo4sLEXEWF2B"
+      }
+    ],
+    "guard-garbage-block": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHTTP hook must return JSON, but got non-JSON response body: this is not json",
+        "is_error": true,
+        "tool_use_id": "toolu_01HJfPCgkjLk1fWPJsbPF7ix"
+      }
+    ],
+    "guard-500-block": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHTTP 500 from http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use",
+        "is_error": true,
+        "tool_use_id": "toolu_01U6wqnrGy6G1uEng8HAW1VX"
+      }
+    ],
+    "guard-baddecision-block": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHook JSON output validation failed - hookSpecificOutput.permissionDecision: Invalid option: expected one of \"allow\"|\"deny\"|\"ask\"|\"defer\"\n\nThe hook's output was: {\n  \"hookSpecificOutput\": {\n    \"hookEventName\": \"PreToolUse\",\n    \"permissionDecision\": \"maybe\",\n    \"permissionDecisionReason\": \"an invalid decision value (test)\"\n  }\n}",
+        "is_error": true,
+        "tool_use_id": "toolu_017B56J3NCRMrySvvTxzYVFQ"
+      }
+    ],
+    "pr-unlisted-dontAsk": [
+      {
+        "type": "tool_result",
+        "content": "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed.",
+        "is_error": true,
+        "tool_use_id": "toolu_011KXwvGGmjvv4dv5tcLor93"
+      }
+    ],
+    "steer": [
+      {
+        "type": "tool_result",
+        "content": "PreToolUse:Bash hook error: Eileen: awaiting user approval appr_01TEST; do not retry until told",
+        "is_error": true,
+        "tool_use_id": "toolu_0163dMg5u8Ngf1kgRQuP4DrT"
+      },
+      {
+        "tool_use_id": "toolu_01UAdXk7UyVhd6GGbo9xESYH",
+        "type": "tool_result",
+        "content": "(Bash completed with no output)",
+        "is_error": false
+      }
+    ]
+  },
+  "results": {
+    "guard-deny": [
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 3846,
+        "duration_api_ms": 2413,
+        "permission_denials": [
+          {
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_01BUAWis45bYchXjZgxUTqVZ",
+            "tool_input": {
+              "command": "touch tier3-denied.txt",
+              "description": "Create empty file tier3-denied.txt"
+            }
+          }
+        ],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "1. `touch tier3-denied.txt`: did not run. A PreToolUse hook blocked it (\"tier 3, blocked (test guard)\"). I did not retry it or try another route."
+      }
+    ],
+    "pt-allow": [
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 16622,
+        "duration_api_ms": 2621,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "1. `touch tier2-asked.txt` - ran (completed with no output)."
+      }
+    ],
+    "pt-iserror": [
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 2427,
+        "duration_api_ms": 2173,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "1. touch tier2-asked.txt - did not run. The Bash call returned an error from the approval service (\"Eileen: approval service failed (test)\"). Per your instructions I did not retry it or try another way."
+      }
+    ],
+    "steer": [
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 2411,
+        "duration_api_ms": 2209,
+        "permission_denials": [
+          {
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_0163dMg5u8Ngf1kgRQuP4DrT",
+            "tool_input": {
+              "command": "touch tier2-asked.txt",
+              "description": "Create empty file tier2-asked.txt"
+            }
+          }
+        ],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "1. touch tier2-asked.txt - did not run. The Bash call was blocked by a pending approval hook (\"awaiting user approval appr_01TEST; do not retry until told\"), so I stopped there as instructed and did not retry or work around it."
+      },
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 5345,
+        "duration_api_ms": 5453,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "1. touch tier2-asked.txt - ran. It completed with no output, which is what I expected from touch."
+      }
+    ],
+    "subagent": [
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 2,
+        "duration_ms": 5182,
+        "duration_api_ms": 6238,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "I've started one general-purpose subagent with the two-touch task, and it's running in the background. I haven't run the commands myself. I'll report what it says when its completion notification arrives."
+      },
+      {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "num_turns": 1,
+        "duration_ms": 2585,
+        "duration_api_ms": 12650,
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "stop_reason": "end_turn",
+        "result": "The subagent finished. Its report:\n\n- **`touch tier2-sub.txt`** ran successfully.\n- **`touch tier3-sub.txt`** was blocked before it ran. The subagent reported a PreToolUse hook returning `Eileen: tier 3, blocked (test guard)`. It did not retry.\n\nI didn't run either command myself."
+      }
+    ]
+  }
+}
