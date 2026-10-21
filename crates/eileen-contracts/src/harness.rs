@@ -522,10 +522,39 @@ pub struct ShimEndpoint {
 }
 
 /// A per-session token. Minted by the runtime from OS randomness (the core reads none), checked
-/// by the dispatcher and the hook endpoint. `Debug` does not show it; recordings replace it.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+/// by the dispatcher and the hook endpoint (WP2), which own the verification. `Debug` does not
+/// show it, recordings replace it, and the text is reachable only through [`Self::expose`].
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
-pub struct SessionToken(pub String);
+pub struct SessionToken(String);
+
+impl SessionToken {
+    /// Wraps a token the runtime minted.
+    #[must_use]
+    pub const fn new(token: String) -> Self {
+        Self(token)
+    }
+
+    /// The token's text, for the few places that must send or check it: the generated MCP
+    /// config, the hook URL and the checkers. Never log it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Compares every byte whatever the first difference, so `==` on a token (the derived
+/// comparisons of the types that hold one) does not end early at a mismatch. The checkers
+/// still own verification and may use a vetted constant-time comparison of their own.
+impl PartialEq for SessionToken {
+    fn eq(&self, other: &Self) -> bool {
+        let (ours, theirs) = (self.0.as_bytes(), other.0.as_bytes());
+        let differences = ours.iter().zip(theirs).fold(0_u8, |acc, (a, b)| acc | (a ^ b));
+        ours.len() == theirs.len() && differences == 0
+    }
+}
+
+impl Eq for SessionToken {}
 
 impl fmt::Debug for SessionToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -553,4 +582,21 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<HookEndpoint>();
     r.add::<ShimEndpoint>();
     r.add::<SessionToken>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionToken;
+
+    #[test]
+    fn a_token_compares_by_its_whole_text_and_never_shows_it() {
+        let token = SessionToken::new("c0ffee-01".to_owned());
+        assert_eq!(token, SessionToken::new("c0ffee-01".to_owned()), "the same text");
+        assert_ne!(token, SessionToken::new("c0ffee-02".to_owned()), "one byte differs");
+        assert_ne!(token, SessionToken::new("c0ffee-0".to_owned()), "a prefix");
+        assert_ne!(token, SessionToken::new("c0ffee-011".to_owned()), "a longer token");
+        assert_eq!(token.expose(), "c0ffee-01", "the deliberate accessor");
+        assert_eq!(format!("{token:?}"), "SessionToken([hidden])", "Debug hides it");
+        assert_eq!(serde_json::to_value(&token).unwrap(), "c0ffee-01", "the wire form");
+    }
 }

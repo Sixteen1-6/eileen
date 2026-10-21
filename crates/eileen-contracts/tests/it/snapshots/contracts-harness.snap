@@ -1123,7 +1123,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "SessionToken": {
-      "description": "A per-session token. Minted by the runtime from OS randomness (the core reads none), checked\nby the dispatcher and the hook endpoint. `Debug` does not show it; recordings replace it.",
+      "description": "A per-session token. Minted by the runtime from OS randomness (the core reads none), checked\nby the dispatcher and the hook endpoint (WP2), which own the verification. `Debug` does not\nshow it, recordings replace it, and the text is reachable only through [`Self::expose`].",
       "type": "string"
     },
     "ShimEndpoint": {
