@@ -180,13 +180,20 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   inside a locked file. Each build slot's holder record (PID, worktree, command, start) lives
   beside its lock, `build-slot-0.holder` next to `build-slot-0.lock`, and is removed on release;
   `slots --kill-stale` removes the record of a slot whose lock the OS released when its holder
-  died.
-- Base crates: process-wrap's `job-object` feature turns on the `windows` features
-  `Win32_System_IO` and `std`, which the union of section 4.1 lacked, so a build with the
-  supervisor and a build without it would have compiled `windows` twice. Both joined the union.
-  `windows-sys` 0.61.2 has the same shape through tokio, mio, socket2 and parking_lot (their
-  features reach the workspace build but not xtask's), which `wp0/xtask`'s feature-union check
-  should settle.
+  died. Section 6.1 rule 1 says the lock file records the holder, so this needs the one-line
+  amendment `wp0/holder-records-amendment`, which also names `samples::slot_held_now` in the
+  samples interface (below).
+- Base crates: the `windows` union of section 4.1 lacked two features process-wrap turns on:
+  `Win32_System_IO` from its `job-object` feature, and `std` from its `windows` dependency,
+  which keeps `windows`' default features. Without them a build with the supervisor and a build
+  without it would have compiled `windows` twice; both joined the union. `windows-sys` 0.61.2
+  had the same shape: tokio (`net`, `process`, `signal`), mio and socket2 turn on
+  `Wdk_Foundation`, `Wdk_Storage_FileSystem`, `Wdk_System_IO`, `Win32_Networking_WinSock`,
+  `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_SystemServices`,
+  `Win32_System_WindowsProgramming` and `Win32_System_Console`, and the test tools (insta's
+  console, tempfile, rustix, errno, winapi-util) `Win32_System_Diagnostics_Debug` and
+  `Win32_UI_Input_KeyboardAndMouse`. All of them joined the `windows-sys` union, so
+  `cargo xtask` (the build guard alone), a `-p` build and the workspace build compile one set.
 - Base crates: `tracing` reuses a span's id once it closes, so the flight recorder and the test
   capture give every span a record id of their own, and a remote parent is matched by span id
   among the spans open at the child's start.
@@ -324,12 +331,32 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   run with probability 1/4 from a hash of the seed and the site, so the choice does not depend on
   which site runs first, and an active site fires with probability 1/4 from the run's
   `CoreRng`. `CoreRng` is xoshiro256** seeded through SplitMix64, with Lemire's unbiased range.
+- Base crates, stdx: a fault site is a name written at it, `buggify!("store.write")`, not its
+  file, line and column. `file!()` is spelt with backslashes on Windows and slashes on Linux and
+  moves with unrelated edits, so one seed would have switched on different sites on the owner's
+  PC and on the Linux lane, and a `SimRegression` written on one would not replay on the other.
+  The name feeds the activation hash, is what `buggify::fired` reports and is a
+  `FaultRecord.site`; a test pins the activation for one seed and name, computed with an
+  independent implementation, so both lanes check the same answer.
 - Base crates, buildguard: paging is judged as the 30 s average, because the baseline's limits
   are percentiles of 30 s averages; the headroom rule uses the lowest headroom in the window;
   slot 1 applies the headroom rule as well as its memory requirement; exclusive work takes both
-  slots under slot 0's rules, slot 1's requirement and the 8-job ceiling. Samples cover the last
+  slots under slot 0's rules, slot 1's requirement and the 8-job ceiling. Slot 1's rule is the
+  second-build rule: it applies whenever another build holds a slot, whichever index is free
+  (slot 0's build often ends while slot 1's runs), with the peak measured from the running
+  holder's start; slot 0's rule applies only when no slot is held. Admission decides from the
+  slots as they stand and takes a lock only when the rules admit, so a waiting command never
+  holds a slot or writes a record between its 5 s attempts; a take that loses a race, or a held
+  lock whose record is not written yet, refuses for that tick and the next decides again.
+  `slots --kill-stale` reads and removes a stale record only while it holds that slot's lock. Samples cover the last
   30 s when the oldest in the window is at least 25 s old (one 5 s interval of slack) and the
-  newest is under 10 s old. Percentiles are nearest-rank; "plus 25 percent" rounds to the
+  newest is under 10 s old. `SystemMemory` primes its paging counter when it opens, and a
+  reading taken less than a second after the prime or the previous reading first waits for the
+  rest, so a guarded command that samples straight after opening it never adds a rate over a
+  few microseconds to the shared file; off Windows it primes from `/proc/vmstat` the same way.
+  It is not `Send` on any OS, so code that moves one to another thread fails on Linux as on
+  Windows. `samples::slot_held_now` (and `Store::slot_held`) probes both slot locks, so the
+  runtime fills `slot_held` from the samples module alone, as section 3.1 requires. Percentiles are nearest-rank; "plus 25 percent" rounds to the
   nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is `<slots>:<jobs>:<holder pid>` and counts only while
   that holder's record names the PID and its lock is held, so a stale variable inherited by a
   shell cannot bypass the guard. Low disk refuses at once with exit 75. Off Windows the machine
@@ -339,17 +366,38 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   kill-on-close Job Object, then resumes its threads (process-wrap's technique), so nothing it
   starts escapes the job; the guard's process holds the only handle. Its process tests run the
   test binary again as stand-ins for xtask, cargo and rustc, which block on a lock the test holds
-  instead of sleeping.
+  instead of sleeping. The stand-in cargo starts its stand-in rustc with
+  `CargoInvocation::in_caller_job`, a plain child with no job of its own, as real cargo starts
+  rustc, so killing xtask proves that xtask's job takes cargo's ordinary children. Nothing in the
+  process tests sleeps or polls (check 16): a helper says `ready ...` on a piped stdout that the
+  test reads, exits are waited on through process handles (`procs::Watched`, Windows), and a dead
+  holder's lock release is waited on with a blocking lock.
 - Base crates, trace: the JSON file layer is Eileen's own rather than `fmt`'s JSON, because
   `fmt` formats an event's fields itself and the `pii.` policy could not apply to them; the line
   keeps `fmt`'s field names (`timestamp`, `level`, `target`, `filename`, `line_number`,
   `threadName`, `fields`, `span`, `spans`) and adds `process`. A span's `traceparent` field
   records a parent in another process. The Redactor's card rule takes 15, 16 or 19 digits
   starting with 2 to 6 that pass the Luhn check (so timestamps and other IDs are left alone),
-  and fills a card standing as a bare JSON number with zeros so the line stays JSON. The PII scan
+  and replaces a card standing as a bare JSON number with `0`, because a run of zeros is not
+  valid JSON. A literal secret is registered with its JSON-escaped, `Debug`-escaped and `Debug`
+  then JSON-escaped forms, the file layer redacts each field value before it serializes the line
+  (the line pass stays as a backstop), and the console layer writes through the Redactor;
+  the canary covers a password with a quote, a backslash and a tab, the console, and checks that
+  every file and dump line is JSON. `ring::parse_lines` counts the lines it skips. The `pii.`
+  key is `Option`al: with none, `pii.` fields keep their length alone, never a hash under a
+  constant key. The PII scan
   accepts the reserved example domains and generic user folders (`Public`, `Default`, the CI
   runner's); a scenario's text files are capped at 256 KiB, consented audio at 5 MiB and the
   folder at 8 MiB.
+- Base crates, trace: the scenario privacy rules parse `scenario.toml` into the contracts'
+  `Scenario` (so `eileen-trace` depends on `toml`). Audio passes only when the origin is
+  `contributed-consented-audio`, `intent.audio.file` names it and the record at
+  `intent.audio.consent` is in the folder. "Only placeholders in personal fields" is checked
+  here, for every origin as section 4.8 states: a walk of `scenario.toml` and of every replay
+  input line alongside the contracts' generated schema finds each `Personal` position (the
+  `x-eileen-text` extension), and its text must be built only from the placeholders. A
+  `scenario.toml` or replay line that does not parse fails as unreadable; problems name the
+  file, the line and a JSON pointer, never the text.
 - Base crates, rt: a spawned task also carries the caller's subscriber (and a blocking task its
   dispatcher), so a scoped subscriber in a test or a tool sees what the task logs; a panic
   message loses any backtick-quoted text before it is logged, as the observability report asks
@@ -361,7 +409,12 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   4 KB; restarts default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset after 2
   stable minutes. The detached spawn falls back to a plain spawn only on access denied, and a
   supervised child's own detached spawn cannot leave its job (the test checks `broke_away` is
-  false there).
+  false there). Stderr is read as bytes with at most 4 KB of a line kept and decoded lossily,
+  so a tool writing in the ANSI code page or a megabyte with no newline neither stops the
+  forwarding nor grows memory. `AudioBoost` is not `Send` on any OS. The off-Windows bodies of
+  `opt_out_of_ecoqos` and `boost_audio_thread` are constants, so they carry a `cfg_attr`
+  `expect` of `missing_const_for_fn` and `unnecessary_wraps` there; `free_disk_gb` keeps one
+  body and splits the platform into a helper.
 
 ## Measurements
 
