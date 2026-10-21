@@ -51,6 +51,11 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     assert_eq!(focused["span"]["name"], names::ADDRESSEE, "the current span");
     assert_eq!(focused["spans"][0]["turn_id"], "turn_1", "the span list carries the turn id");
     assert_eq!(focused["fields"]["pii.title"]["len"], 14, "pii reduced to its length");
+    assert_eq!(
+        focused["fields"]["pii.title"].get("h"),
+        None,
+        "TraceConfig::new sets no pii key, so no hash under a key anyone could know"
+    );
     assert_eq!(focused["process"], "eileen-desktop", "process");
     assert!(focused["timestamp"].as_str().unwrap().ends_with('Z'), "UTC timestamp");
     assert!(focused["line_number"].is_u64() && focused["filename"].is_string(), "a code location");
