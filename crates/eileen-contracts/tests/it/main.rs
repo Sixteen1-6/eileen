@@ -9,3 +9,5 @@ mod modules;
 mod schemas;
 #[cfg(test)]
 mod text;
+#[cfg(test)]
+mod wire;
