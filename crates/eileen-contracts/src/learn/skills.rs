@@ -167,8 +167,10 @@ pub struct RecipeStep {
 
 /// A value in arguments, check arguments and expectations. Serialized as a plain JSON literal,
 /// `{"$slot": "t"}`, `{"$step": "id", "ptr": "/json/pointer"}` or `{"$len": <operand>}` (the
-/// length of the array the inner operand resolves to). The linter types every pointer against
-/// the op's output schema (a `Delegate` step's against the report schema).
+/// length of the array the inner operand resolves to). A literal that has one of those shapes,
+/// or whose only key is `$lit`, is written as `{"$lit": <literal>}`, so a literal taken from a
+/// page or the user's words never reads back as a reference. The linter types every pointer
+/// against the op's output schema (a `Delegate` step's against the report schema).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operand {
     /// A literal.
@@ -196,6 +198,7 @@ impl Operand {
             Value::Object(map)
         };
         match self {
+            Self::Lit(value) if is_reference_shaped(value) => single("$lit", value.clone()),
             Self::Lit(value) => value.clone(),
             Self::Slot(name) => single("$slot", Value::String(name.clone())),
             Self::Step { step, ptr } => {
@@ -208,8 +211,8 @@ impl Operand {
         }
     }
 
-    /// Reads an operand from its JSON form; anything that is not one of the three reference
-    /// forms is a literal.
+    /// Reads an operand from its JSON form: `{"$lit": <value>}` is that literal, and anything
+    /// that is not one of the three reference forms is a literal too.
     #[must_use]
     pub fn from_value(value: Value) -> Self {
         let Value::Object(mut map) = value else { return Self::Lit(value) };
@@ -220,6 +223,9 @@ impl Operand {
             if let Some(inner) = map.remove("$len") {
                 return Self::Len(Box::new(Self::from_value(inner)));
             }
+            if let Some(literal) = map.remove("$lit") {
+                return Self::Lit(literal);
+            }
         }
         if map.len() == 2
             && let (Some(Value::String(step)), Some(Value::String(ptr))) =
@@ -228,6 +234,18 @@ impl Operand {
             return Self::Step { step: step.clone(), ptr: ptr.clone() };
         }
         Self::Lit(Value::Object(map))
+    }
+}
+
+/// True for an object [`Operand::from_value`] would not read as a plain literal: one whose only
+/// key is `$slot`, `$len` or `$lit`, or whose two keys are `$step` and `ptr`. Such a literal is
+/// written escaped.
+fn is_reference_shaped(value: &Value) -> bool {
+    let Value::Object(map) = value else { return false };
+    match map.len() {
+        1 => ["$slot", "$len", "$lit"].iter().any(|key| map.contains_key(*key)),
+        2 => map.contains_key("$step") && map.contains_key("ptr"),
+        _ => false,
     }
 }
 
@@ -251,7 +269,7 @@ impl JsonSchema for Operand {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         let operand = generator.subschema_for::<Self>();
         json_schema!({
-            "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer} or {\"$len\": operand}",
+            "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer}, {\"$len\": operand}, or {\"$lit\": literal} for a literal of one of those shapes",
             "anyOf": [
                 {
                     "type": "object",
@@ -269,6 +287,12 @@ impl JsonSchema for Operand {
                     "type": "object",
                     "properties": { "$len": operand },
                     "required": ["$len"],
+                    "additionalProperties": false,
+                },
+                {
+                    "type": "object",
+                    "properties": { "$lit": true },
+                    "required": ["$lit"],
                     "additionalProperties": false,
                 },
                 true,
@@ -560,9 +584,62 @@ pub(super) fn register(r: &mut Registry) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use proptest::prelude::*;
+    use serde_json::{Map, Value, json};
 
     use super::Operand;
+
+    /// JSON that looks like an operand's reference forms, and plain JSON beside it.
+    fn tricky_literal() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i32>().prop_map(Value::from),
+            "[a-z/$]{0,6}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(3, 16, 3, |inner| {
+            let key = prop::sample::select(vec!["$slot", "$step", "ptr", "$len", "$lit", "a"]);
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..3).prop_map(Value::Array),
+                prop::collection::vec((key, inner), 0..3).prop_map(|pairs| Value::Object(
+                    pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect::<Map<_, _>>()
+                )),
+            ]
+        })
+    }
+
+    fn operand() -> impl Strategy<Value = Operand> {
+        let name = "[a-z$]{0,5}";
+        let leaf = prop_oneof![
+            tricky_literal().prop_map(Operand::Lit),
+            name.prop_map(Operand::Slot),
+            (name, "[a-z/]{0,6}").prop_map(|(step, ptr)| Operand::Step { step, ptr }),
+        ];
+        leaf.prop_recursive(3, 8, 1, |inner| inner.prop_map(|op| Operand::Len(Box::new(op))))
+    }
+
+    proptest! {
+        #[test]
+        fn every_operand_reads_back_as_itself(op in operand()) {
+            prop_assert_eq!(&Operand::from_value(op.to_value()), &op);
+            let text = serde_json::to_string(&op).unwrap();
+            prop_assert_eq!(serde_json::from_str::<Operand>(&text).unwrap(), op);
+        }
+    }
+
+    #[test]
+    fn a_literal_shaped_like_a_reference_stays_a_literal() {
+        for literal in [
+            json!({"$slot": "t"}),
+            json!({"$step": "goto", "ptr": "/target_frame"}),
+            json!({"$len": [1, 2]}),
+            json!({"$lit": 5}),
+        ] {
+            let op = Operand::Lit(literal.clone());
+            assert_eq!(op.to_value(), json!({ "$lit": literal }), "written escaped");
+            assert_eq!(Operand::from_value(op.to_value()), op, "{literal}");
+        }
+    }
 
     #[test]
     fn operands_read_and_write_their_four_forms() {

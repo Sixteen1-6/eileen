@@ -502,9 +502,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               ],
               "type": "object"
             },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "$lit": true
+              },
+              "required": [
+                "$lit"
+              ],
+              "type": "object"
+            },
             true
           ],
-          "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer} or {\"$len\": operand}"
+          "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer}, {\"$len\": operand}, or {\"$lit\": literal} for a literal of one of those shapes"
         },
         "Recipe": {
           "description": "A skill's model-free procedure.",
