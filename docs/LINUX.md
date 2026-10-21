@@ -73,7 +73,7 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
 
 | Trait | Linux implementation | Crates (eligible version, licence) | Phase |
 |---|---|---|---|
-| `SystemMemory` | `/proc/meminfo` (`MemAvailable`; `CommitLimit` minus `Committed_AS` as the commit headroom), the 30 s paging rate from `/proc/vmstat` (`pgmajfault` and `pswpin` deltas), the largest non-Eileen process by resident size from `/proc/<pid>/status` | none (std); `rustix` 1.1.5 if needed, already in the lockfile | L0 |
+| `SystemMemory` | `/proc/meminfo`'s `MemAvailable`. Commit headroom follows `vm.overcommit_memory`: `CommitLimit` minus `Committed_AS` under strict overcommit, else `MemAvailable` plus `SwapFree` (section 10). The paging rate is `pgmajfault` deltas at 4 KB per fault, the build guard's formula. The largest process is the one with the most resident memory (`VmRSS` in `/proc/<pid>/status`) outside Eileen's own process tree | none beyond the crate's | L0: built as `LinuxSystemMemory`; the trait implementation lands with `eileen-platform` |
 | `MachineIdentity` | `eileen_platform::machine::FileMachineIdentity`, already written | none | L0 |
 | `MachineProbe` | See the list after this table | `rustix` 1.1.5 for `statvfs`, already in the lockfile; `thiserror` | L0: the readers are built; the trait implementation lands with WP0 phase B's `wp0/machine-contracts` |
 | `SecretStore` | Secret Service over D-Bus through keyring-core, the same front as Windows; the kernel keyring as a fallback | `keyring-core` 1.0.1 (pinned in 4.1), `zbus-secret-service-keyring-store` 1.0.1, `linux-keyutils-keyring-store` 1.0.0, all MIT OR Apache-2.0 | L1 |
@@ -181,7 +181,9 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
      - The local Linux lane over every work package's branch, with findings reported to that package before it merges.
      - `eileen-shell-linux` with `SystemMemory` and, once WP0 phase B adds the machine contracts and the trait, `MachineProbe`.
      - A short Ubuntu developer setup that needs no `sudo`.
-   - Status on 2026-10-21: the machine facts' readers are in `crates/eileen-shell-linux`. They are tested over six fixture machines: one recorded under WSL2, plus synthetic trees for the owner's laptop shape, AMD on btrfs, NVIDIA on LVM, an Arm board and a QEMU virtual machine. Their types mirror BUILD.md 3.3.17 until the contracts land.
+   - Status on 2026-10-21: `crates/eileen-shell-linux` holds the machine facts' readers and the memory sampler.
+     - The readers are tested over six fixture machines: one recorded under WSL2, plus synthetic trees for the owner's laptop shape, AMD on btrfs, NVIDIA on LVM, an Arm board and a QEMU virtual machine. Their types mirror BUILD.md 3.3.17 until the contracts land.
+     - The sampler, `LinuxSystemMemory`, fills the contracts' `MemoryPressure`, and its live sample matches the kernel's figures.
    - Acceptance:
      - Both lanes green on `ubuntu-24.04` and `ubuntu-26.04`.
      - A `SystemMemory` sample that matches recorded `/proc` fixtures exactly and a live reading within the kernel's own figures.
@@ -235,9 +237,12 @@ The text below is for the owner to accept, change or strike. If accepted, it bec
 
 ## 10. What the Linux lane found already
 
-Running the PR lanes on Ubuntu 24.04 over the unmerged `wp0/base-crates` work (`backup/wp0-base-crates` at ca336be) gave 305 of 305 tests passing and two failures that the Windows jobs cannot show.
+Running the PR lanes on Ubuntu 24.04 over the unmerged `wp0/base-crates` work (`backup/wp0-base-crates` at ca336be) gave 305 of 305 tests passing and two failures that the Windows jobs cannot show. Reading the build guard's Linux memory code then showed a third problem, which no test exercises yet.
 
 - **A Linux-only clippy error.** In `eileen-supervisor`, `qos.rs` line 106, the test `an_audio_boost_reverts_on_drop` calls `drop(boost)`. Off Windows, `AudioBoost` holds no MMCSS handle and implements no `Drop`, so `clippy::drop_non_drop` fails the build under `-D warnings`. A `cfg_attr(not(windows), expect(clippy::drop_non_drop, reason = "..."))` on that statement, or ending the scope instead of calling `drop`, fixes it.
 - **A yanked pin.** `tokio` 1.54.0, BUILD.md 4.1's pin, is yanked on crates.io, so `cargo deny --locked check` fails. 1.54.1 appeared on 2026-10-21. The newest release outside the 14-day window is 1.53.2, of 2026-10-03.
+- **Commit headroom that Linux does not enforce.** On Linux the guard reads commit headroom as `CommitLimit` minus `Committed_AS`. The kernel enforces that limit only under strict overcommit (`vm.overcommit_memory = 2`). In the default mode, 0, `Committed_AS` can pass `CommitLimit` on a busy desktop, because browsers and runtimes reserve far more than they touch [inferred: the measurement below shows the mechanism, not how often a real desktop reaches it]. The headroom then reads 0 while gigabytes are free, and slot 0's rule refuses every build.
+  - Measured on 2026-10-21, WSL2 with 16 GB and default overcommit: a 12 GB mapping that is never touched left `MemAvailable` at 13,957 MB but took the headroom from 9,691 MB to 0. Slot 0's rule, at the default 2,048 MB floor plus a two-job build's 2,048 MB estimate, went from admitting to refusing.
+  - The fix that matches the kernel's policy is the one `LinuxSystemMemory` uses: under strict overcommit, keep `CommitLimit` minus `Committed_AS`; otherwise use `MemAvailable` plus `SwapFree`, the memory that can still be backed before the OOM killer acts. The guard and the runtime write the same machine-wide sample files, so both should use the same rule.
 
 `main` itself passes the whole lane on Ubuntu 24.04.
