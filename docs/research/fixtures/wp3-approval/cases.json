@@ -1,0 +1,1151 @@
+{
+  "cli": "2.1.304",
+  "model": "claude-haiku-5-5",
+  "cases": [
+    {
+      "case": "guard-deny",
+      "route": "none",
+      "permission_mode": "dontAsk",
+      "guard": "deny",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier3-denied.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier3-denied.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 12.36
+    },
+    {
+      "case": "pt-allow",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 20.1
+    },
+    {
+      "case": "pt-deny",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "deny",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Eileen: the user declined this (test)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.52
+    },
+    {
+      "case": "pt-allow-noinput",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "allow without updatedInput",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 6.59
+    },
+    {
+      "case": "pt-allow-rewrite",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "allow with a rewritten command",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "rewritten-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 8.1
+    },
+    {
+      "case": "pt-garbage",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "text that is not JSON",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "The permission prompt tool returned an invalid permission result. Expected {behavior: 'allow', updatedInput?: object} or {behavior: 'deny', message: string}. updatedPermissions may hold at most 4096 updates, rules and directories in all."
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.05
+    },
+    {
+      "case": "pt-wrongshape",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "JSON without behavior",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "The permission prompt tool returned an invalid permission result. Expected {behavior: 'allow', updatedInput?: object} or {behavior: 'deny', message: string}. updatedPermissions may hold at most 4096 updates, rules and directories in all."
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 4.75
+    },
+    {
+      "case": "pt-iserror",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "isError: true",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "<tool_use_error>Error calling tool (Bash): Eileen: approval service failed (test)</tool_use_error>"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 4.4
+    },
+    {
+      "case": "pt-exit",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "server process exits mid-call",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "<tool_use_error>Error calling tool (Bash): Connection closed</tool_use_error>"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.74
+    },
+    {
+      "case": "pt-missing-server",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "no MCP server configured",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 1,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [
+        "<tool_use_error>Error calling tool (Bash): Error: MCP tool mcp__eileen__approve (passed via --permission-prompt-tool) not found. Available MCP tools: none</tool_use_error>"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 6.02
+    },
+    {
+      "case": "pt-hang",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "no answer (runner killed the CLI at 200 s)",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 1,
+      "killed_by_runner": true,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 200.4
+    },
+    {
+      "case": "pt-hang-mcptimeout",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "no answer, MCP_TOOL_TIMEOUT=15000",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "<tool_use_error>Error calling tool (Bash): MCP server \"eileen\" tool \"approve\" timed out after 15s</tool_use_error>"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 22.35
+    },
+    {
+      "case": "pt-hold-30s",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "allow after 30 s",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 36.64
+    },
+    {
+      "case": "pt-hold-125s",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "allow after 125 s, MCP_TOOL_TIMEOUT=150000",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 131.36
+    },
+    {
+      "case": "pt-none-prompts",
+      "route": "none (--permission-prompts none)",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Permission for this tool use was denied. It requires approval, and this session has no approval surface - nobody can answer a permission prompt here - so it was denied automatically. The action was NOT performed; do not claim it succeeded, and do not retry it: this action, and anything else that req"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 4.8
+    },
+    {
+      "case": "pt-no-tool-host",
+      "route": "none (default host, no prompt tool)",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Eileen: tier 2, asking the user (appr_01TEST)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.32
+    },
+    {
+      "case": "pr-allow",
+      "route": "PermissionRequest hook",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "hook would answer allow",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": null,
+      "killed_by_runner": null,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Eileen: tier 2, asking the user (appr_01TEST)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 3.25
+    },
+    {
+      "case": "pr-allow-manual",
+      "route": "PermissionRequest hook",
+      "permission_mode": "manual",
+      "guard": "ask",
+      "route_answer": "hook would answer allow",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Eileen: tier 2, asking the user (appr_01TEST)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "default",
+      "wall_s": 5.05
+    },
+    {
+      "case": "pr-unlisted-manual",
+      "route": "PermissionRequest hook",
+      "permission_mode": "manual",
+      "guard": "no decision, command not allowlisted",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-unlisted"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "default",
+      "wall_s": 7.02
+    },
+    {
+      "case": "pr-unlisted-dontAsk",
+      "route": "PermissionRequest hook",
+      "permission_mode": "dontAsk",
+      "guard": "no decision, command not allowlisted",
+      "route_answer": "hook would answer allow",
+      "commands_asked": [
+        [
+          "1. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "mkdir tier0-unlisted"
+      ],
+      "model_saw": [
+        "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this den"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 6.9
+    },
+    {
+      "case": "stdio-allow",
+      "route": "--permission-prompt-tool stdio",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "control_response allow",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 7.66
+    },
+    {
+      "case": "stdio-deny",
+      "route": "--permission-prompt-tool stdio",
+      "permission_mode": "dontAsk",
+      "guard": "ask",
+      "route_answer": "control_response deny",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "Eileen: the user declined this (test)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 4.77
+    },
+    {
+      "case": "steer",
+      "route": "deny then steer",
+      "permission_mode": "dontAsk",
+      "guard": "deny 'awaiting approval', then none after a grant",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier2-asked.txt"
+        ],
+        [
+          "The user approved `touch tier2-asked.txt`. Retry it now with the Bash tool, exactly as written."
+        ]
+      ],
+      "files_created": [
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier2-asked.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: Eileen: awaiting user approval appr_01TEST; do not retry until told",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 10.45
+    },
+    {
+      "case": "guard-dead-block",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "nothing listening, onFailure block",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier0-allowed.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: [http://127.0.0.1:51439/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nconnect ECONNREFUSED 127.0.0.1:51439"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.49
+    },
+    {
+      "case": "guard-dead-open",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "nothing listening, no onFailure",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 7.05
+    },
+    {
+      "case": "guard-hang-block",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "no reply within the 5 s timeout, onFailure block",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier0-allowed.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: timed out; blocking because onFailure is \"block\""
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 10.22
+    },
+    {
+      "case": "guard-garbage-block",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "200 with a non-JSON body, onFailure block",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier0-allowed.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHTTP hook must return JSON, but got non-JSON response body: this is not json"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.4
+    },
+    {
+      "case": "guard-500-block",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "HTTP 500, onFailure block",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier0-allowed.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHTTP 500 from http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.2
+    },
+    {
+      "case": "guard-baddecision-block",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "permissionDecision \"maybe\", onFailure block",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [
+        "touch tier0-allowed.txt"
+      ],
+      "model_saw": [
+        "PreToolUse:Bash hook error: [http://127.0.0.1:63284/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nHook JSON output validation failed - hookSpecificOutput.permissionDecision: Invalid option: expected one of \"allow\"|\"deny\"|\"ask\"|\"defer\"\n\nThe hook's output was: {\n  \"hookS"
+      ],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 5.19
+    },
+    {
+      "case": "mode-manual",
+      "route": "prompt tool",
+      "permission_mode": "manual",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt",
+        "tier0-unlisted",
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt",
+        "mkdir tier0-unlisted"
+      ],
+      "permission_denials": [
+        "touch tier3-denied.txt"
+      ],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "default",
+      "wall_s": 118.72
+    },
+    {
+      "case": "mode-dontAsk",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt",
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier3-denied.txt",
+        "mkdir tier0-unlisted"
+      ],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this den"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 27.45
+    },
+    {
+      "case": "mode-acceptEdits",
+      "route": "prompt tool",
+      "permission_mode": "acceptEdits",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt",
+        "tier0-unlisted",
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier3-denied.txt"
+      ],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "acceptEdits",
+      "wall_s": 26.5
+    },
+    {
+      "case": "mode-auto",
+      "route": "prompt tool",
+      "permission_mode": "auto",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt",
+        "tier0-unlisted",
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier3-denied.txt"
+      ],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "auto",
+      "wall_s": 14.61
+    },
+    {
+      "case": "mode-bypass",
+      "route": "prompt tool",
+      "permission_mode": "bypassPermissions",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [
+        "tier0-allowed.txt",
+        "tier0-unlisted",
+        "tier2-asked.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-asked.txt"
+      ],
+      "permission_denials": [
+        "touch tier3-denied.txt"
+      ],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "bypassPermissions",
+      "wall_s": 12.95
+    },
+    {
+      "case": "mode-plan",
+      "route": "prompt tool",
+      "permission_mode": "plan",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-allowed.txt",
+          "2. touch tier2-asked.txt",
+          "3. touch tier3-denied.txt",
+          "4. mkdir tier0-unlisted"
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "plan",
+      "wall_s": 7.13
+    },
+    {
+      "case": "latency-5",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "tiers",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "1. touch tier0-a.txt",
+          "2. touch tier2-a.txt",
+          "3. touch tier2-b.txt",
+          "4. touch tier2-c.txt",
+          "5. touch tier2-d.txt",
+          "6. touch tier2-e.txt",
+          "7. touch tier0-b.txt"
+        ]
+      ],
+      "files_created": [
+        "tier0-a.txt",
+        "tier0-b.txt",
+        "tier2-a.txt",
+        "tier2-b.txt",
+        "tier2-c.txt",
+        "tier2-d.txt",
+        "tier2-e.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-a.txt",
+        "touch tier2-b.txt",
+        "touch tier2-c.txt",
+        "touch tier2-d.txt",
+        "touch tier2-e.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "(Bash completed with no output)",
+        "(Bash completed with no output)"
+      ],
+      "init_tools": [
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 18.2
+    },
+    {
+      "case": "tools-fence",
+      "route": "-",
+      "permission_mode": "dontAsk",
+      "guard": "tiers",
+      "route_answer": "-",
+      "commands_asked": [
+        [
+          "1. Use the Write tool to create notes.txt containing hi. 2. Use the Read tool to read notes.txt. 3. Use the Agent tool to start a subagent that says hi. Use only those tools; if one does not exist or is denied, say so and go on. Then list the tool names you have."
+        ]
+      ],
+      "files_created": [],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [],
+      "permission_denials": [],
+      "model_saw": [],
+      "init_tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 7.02
+    },
+    {
+      "case": "subagent",
+      "route": "prompt tool",
+      "permission_mode": "dontAsk",
+      "guard": "tiers (Agent allowed)",
+      "route_answer": "allow",
+      "commands_asked": [
+        [
+          "Use the Agent tool once to start one general-purpose subagent with this task: \"Run these two shell commands with the Bash tool, one call each, in order: touch tier2-sub.txt, then touch tier3-sub.txt. Do not retry a denied call. Report which ran.\" Do not run the commands yourself. Then report what the subagent said."
+        ]
+      ],
+      "files_created": [
+        "tier2-sub.txt"
+      ],
+      "exit_code": 0,
+      "killed_by_runner": false,
+      "approve_calls": [
+        "touch tier2-sub.txt"
+      ],
+      "permission_denials": [],
+      "model_saw": [
+        "Async agent launched successfully. (This tool result is internal metadata - never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a4b5d3d73a46aead0 (internal ID - do not mention to user.)\nThe agent is working in the background. You will be notified aut",
+        "(Bash completed with no output)",
+        "PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)"
+      ],
+      "init_tools": [
+        "Task",
+        "Bash"
+      ],
+      "init_permission_mode": "dontAsk",
+      "wall_s": 27.37
+    }
+  ]
+}

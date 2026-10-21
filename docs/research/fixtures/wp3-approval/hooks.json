@@ -1,0 +1,292 @@
+{
+  "pre_tool_use_ask": {
+    "path": "/v1/hooks/claude/pre-tool-use",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEPTALLOW",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\a3b57c79-73b3-485d-8511-c5ae9b1cdac5.jsonl",
+      "cwd": "<runs>\\pt-allow\\proj",
+      "prompt_id": "5361e38f-1a85-4137-b989-dd39764c3d14",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "touch tier2-asked.txt",
+        "description": "Create empty file tier2-asked.txt"
+      },
+      "tool_use_id": "toolu_01RoL4SGHmKKGragXFts7H5p"
+    },
+    "reply_status": 200,
+    "reply": {
+      "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": "Eileen: tier 2, asking the user (appr_01TEST)"
+      }
+    }
+  },
+  "pre_tool_use_deny": {
+    "path": "/v1/hooks/claude/pre-tool-use",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEGUARDDENY",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "0f71a134-4ee7-44de-bd8d-42b2c13a52c7",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\0f71a134-4ee7-44de-bd8d-42b2c13a52c7.jsonl",
+      "cwd": "<runs>\\guard-deny\\proj",
+      "prompt_id": "1cb52d4f-c3c6-4d3b-8808-50bb35419af7",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "touch tier3-denied.txt",
+        "description": "Create empty file tier3-denied.txt"
+      },
+      "tool_use_id": "toolu_01BUAWis45bYchXjZgxUTqVZ"
+    },
+    "reply_status": 200,
+    "reply": {
+      "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "Eileen: tier 3, blocked (test guard)"
+      }
+    }
+  },
+  "pre_tool_use_no_decision": {
+    "path": "/v1/hooks/claude/pre-tool-use",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEMODEDONTAS",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "b8ad830c-2d64-4b0b-b7f1-48ccbbd056b8",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\b8ad830c-2d64-4b0b-b7f1-48ccbbd056b8.jsonl",
+      "cwd": "<runs>\\mode-dontAsk\\proj",
+      "prompt_id": "12cec9aa-9110-4427-acc4-e1fda9029fd8",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "touch tier0-allowed.txt",
+        "description": "Create tier0-allowed.txt file"
+      },
+      "tool_use_id": "toolu_01D4AuWHiHDSUhkSLoWUUhN8"
+    },
+    "reply_status": 200,
+    "reply": {}
+  },
+  "pre_tool_use_in_subagent": {
+    "path": "/v1/hooks/claude/pre-tool-use",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKESUBAGENT",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "865b44ba-ec66-41d2-93bc-c01cb64a5bfc",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\865b44ba-ec66-41d2-93bc-c01cb64a5bfc.jsonl",
+      "cwd": "<runs>\\subagent\\proj",
+      "prompt_id": "ffba7d48-b30e-4345-9a82-c2fbcc770ccc",
+      "permission_mode": "dontAsk",
+      "agent_id": "a4b5d3d73a46aead0",
+      "agent_type": "general-purpose",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "touch tier2-sub.txt",
+        "description": "Create tier2-sub.txt file"
+      },
+      "tool_use_id": "toolu_017zbQJJWoYyuoWegr36Uvok"
+    },
+    "reply_status": 200,
+    "reply": {
+      "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": "Eileen: tier 2, asking the user (appr_01TEST)"
+      }
+    }
+  },
+  "permission_request": {
+    "path": "/v1/hooks/claude/permission-request",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEPRUNLISTED",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "db9c15ee-f120-4b1b-92ad-badad206af82",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\db9c15ee-f120-4b1b-92ad-badad206af82.jsonl",
+      "cwd": "<runs>\\pr-unlisted-manual\\proj",
+      "prompt_id": "a31bc009-e387-4454-9ae1-c63253ca323d",
+      "permission_mode": "default",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PermissionRequest",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "mkdir tier0-unlisted",
+        "description": "Create directory tier0-unlisted"
+      },
+      "permission_suggestions": [
+        {
+          "type": "addDirectories",
+          "directories": [
+            "<runs>\\pr-unlisted-manual\\proj"
+          ],
+          "destination": "session"
+        },
+        {
+          "type": "setMode",
+          "mode": "acceptEdits",
+          "destination": "session"
+        }
+      ]
+    },
+    "reply_status": 200,
+    "reply": {
+      "hookSpecificOutput": {
+        "hookEventName": "PermissionRequest",
+        "decision": {
+          "behavior": "allow"
+        }
+      }
+    }
+  },
+  "post_tool_use": {
+    "path": "/v1/hooks/claude/post-tool-use",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEPTALLOW",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\a3b57c79-73b3-485d-8511-c5ae9b1cdac5.jsonl",
+      "cwd": "<runs>\\pt-allow\\proj",
+      "prompt_id": "5361e38f-1a85-4137-b989-dd39764c3d14",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "touch tier2-asked.txt",
+        "description": "Create empty file tier2-asked.txt"
+      },
+      "tool_response": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": true
+      },
+      "tool_use_id": "toolu_01RoL4SGHmKKGragXFts7H5p",
+      "duration_ms": 13136
+    },
+    "reply_status": 200,
+    "reply": {}
+  },
+  "stop": {
+    "path": "/v1/hooks/claude/stop",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKEPTALLOW",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "a3b57c79-73b3-485d-8511-c5ae9b1cdac5",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\a3b57c79-73b3-485d-8511-c5ae9b1cdac5.jsonl",
+      "cwd": "<runs>\\pt-allow\\proj",
+      "prompt_id": "5361e38f-1a85-4137-b989-dd39764c3d14",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "Stop",
+      "stop_hook_active": false,
+      "last_assistant_message": "1. `touch tier2-asked.txt` - ran (completed with no output).",
+      "background_tasks": [],
+      "session_crons": []
+    },
+    "reply_status": 200,
+    "reply": {}
+  },
+  "subagent_start": {
+    "path": "/v1/hooks/claude/subagent-start",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKESUBAGENT",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "865b44ba-ec66-41d2-93bc-c01cb64a5bfc",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\865b44ba-ec66-41d2-93bc-c01cb64a5bfc.jsonl",
+      "cwd": "<runs>\\subagent\\proj",
+      "prompt_id": "ffba7d48-b30e-4345-9a82-c2fbcc770ccc",
+      "agent_id": "a4b5d3d73a46aead0",
+      "agent_type": "general-purpose",
+      "hook_event_name": "SubagentStart"
+    },
+    "reply_status": 200,
+    "reply": {}
+  },
+  "subagent_stop": {
+    "path": "/v1/hooks/claude/subagent-stop",
+    "headers_seen": {
+      "X-Eileen-Session": "ws_01SPIKESUBAGENT",
+      "User-Agent": "axios/1.15.2",
+      "Authorization": "Bearer <token> (matched)"
+    },
+    "body": {
+      "session_id": "865b44ba-ec66-41d2-93bc-c01cb64a5bfc",
+      "transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\865b44ba-ec66-41d2-93bc-c01cb64a5bfc.jsonl",
+      "cwd": "<runs>\\subagent\\proj",
+      "prompt_id": "ffba7d48-b30e-4345-9a82-c2fbcc770ccc",
+      "permission_mode": "dontAsk",
+      "agent_id": "a4b5d3d73a46aead0",
+      "agent_type": "general-purpose",
+      "effort": {
+        "level": "low"
+      },
+      "hook_event_name": "SubagentStop",
+      "stop_hook_active": false,
+      "agent_transcript_path": "<home>\\.claude\\projects\\<encoded cwd>\\<session_id>\\subagents\\agent-a4b5d3d73a46aead0.jsonl",
+      "last_assistant_message": "Both commands were run in order, with one call each.\n\n- **`touch tier2-sub.txt`**: ran successfully, no output.\n- **`touch tier3-sub.txt`**: blocked before running. The PreToolUse hook returned `Eileen: tier 3, blocked (test guard)`. I did not retry it, per your instructions.",
+      "background_tasks": [
+        {
+          "id": "a4b5d3d73a46aead0",
+          "type": "subagent",
+          "status": "running",
+          "description": "Run two touch commands",
+          "agent_type": "general-purpose"
+        }
+      ],
+      "session_crons": []
+    },
+    "reply_status": 200,
+    "reply": {}
+  }
+}

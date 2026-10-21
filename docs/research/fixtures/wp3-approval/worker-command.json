@@ -1,0 +1,244 @@
+{
+  "argv_after_exe": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-hook-events",
+    "--model",
+    "haiku",
+    "--effort",
+    "low",
+    "--append-system-prompt",
+    "You are a test worker in a permissions experiment. Use only the tools the user names. Never retry a denied call and never work around a denial.",
+    "--setting-sources",
+    "",
+    "--settings",
+    "<runs>\\pt-allow\\settings.json",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "<runs>\\pt-allow\\mcp.json",
+    "--tools",
+    "Bash",
+    "--allowedTools",
+    "Bash(touch *)",
+    "--permission-mode",
+    "dontAsk",
+    "--no-session-persistence",
+    "--no-chrome",
+    "--disallowedTools",
+    "Task,Agent",
+    "--permission-prompt-tool",
+    "mcp__eileen__approve"
+  ],
+  "settings_file": {
+    "disableSkillShellExecution": true,
+    "hooks": {
+      "PreToolUse": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/pre-tool-use",
+              "timeout": 10,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ],
+              "onFailure": "block"
+            }
+          ]
+        }
+      ],
+      "PermissionDenied": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/permission-denied",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/post-tool-use",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/post-tool-use-failure",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "Notification": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/notification",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "SubagentStart": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/subagent-start",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "SubagentStop": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/subagent-stop",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/stop",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ],
+      "StopFailure": [
+        {
+          "hooks": [
+            {
+              "type": "http",
+              "url": "http://127.0.0.1:55016/v1/hooks/claude/stop-failure",
+              "timeout": 5,
+              "headers": {
+                "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+                "X-Eileen-Session": "$EILEEN_SESSION_ID"
+              },
+              "allowedEnvVars": [
+                "EILEEN_HOOK_TOKEN",
+                "EILEEN_SESSION_ID"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "mcp_config": {
+    "mcpServers": {
+      "eileen": {
+        "type": "stdio",
+        "command": "<home>\\anaconda3\\python.exe",
+        "args": [
+          "-I",
+          "<spike>\\tools\\approve_mcp.py"
+        ],
+        "env": {
+          "APPROVE_LOG": "<runs>\\pt-allow\\approve.jsonl",
+          "APPROVE_MODE": "allow",
+          "APPROVE_MODE_FILE": "<runs>\\pt-allow\\approve-mode.txt"
+        }
+      }
+    }
+  },
+  "first_user_line": {
+    "type": "user",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<prompt>"
+        }
+      ]
+    },
+    "parent_tool_use_id": null,
+    "session_id": ""
+  }
+}
