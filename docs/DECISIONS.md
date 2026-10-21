@@ -531,7 +531,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D50. A reusable, fully cited engineering playbook
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20)
+- Status: accepted (owner direction of 2026-10-20); amended by D75
 - Decision: `docs/PLAYBOOK.md` documents how this repository is built in a project-agnostic way, with Eileen as the worked example: the modular layout, everything pulled in and why, the CI/CD design, the testing tactics, code maps, guidance for people and agents, observability and replay, the learning loop, how parts stay swappable, and the working methods. Every section cites the research reports, the decision records or primary sources with links and dates. `templates/` holds files another project can copy (guidance files, CI workflows, the xtask checks, pull request and issue templates, the scenario schema), generated from the live files where they mirror them.
 - Why: Owner direction: other projects using this style of development should be able to adopt the discoveries.
 - Consequences: Check 29 enforces citations and links; check 30 makes a change to this decision log update the playbook in the same pull request. WP0 writes the first version; later changes arrive through amendment pull requests, and WP9 adds the measured results.
@@ -776,3 +776,13 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Why: Owner answers 6, 9, 10, 15 and 21, and the owner's entries after them. Scenario capture ships with WP2 in W1 and W2 and the consent record with WP4, so a hash that only WP9's fleet runner computed in W6 could not appear "in every result and scenario from that machine"; without normalisation, Windows' GUID form and Linux's plain form would follow two rules; a results channel that took only pull requests left out the owner's "commits" and his relays; and a job kind added in v0.2 would change a pinned contract that v0.1 can reserve now.
 - Consequences: WP0 acceptance 12, WP1 acceptance 14, WP2 acceptance 8 and 13, WP3 acceptance 6, WP6 acceptance 1 and WP9 acceptance 4 test them; `eileen-runtime` may depend on `eileen-platform`, which its memory sampler already needed.
 - Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md), "Owner answers to BUILD.md's open questions" and the entries after it; BUILD.md sections 2.5, 2.7, 2.8, 2.15, 3.3.1, 3.3.2, 3.3.8, 3.3.14, 3.3.16, 3.4, 4.2, 4.6, 4.7, 4.8 and 7.
+
+## D75. The playbook check accepts a stated reason
+
+- Date: 2026-10-21
+- Status: accepted (architect, from the suggested guidance changes of pull request #12; the owner's standing rule applies)
+- Amends: D50 (its consequence that check 30 makes every change to this log update the playbook in the same pull request)
+- Decision: Check 30 passes a pull request that changes this decision log when the pull request also changes `docs/PLAYBOOK.md`, or when its description says under "Playbook" why the playbook is unaffected, and in both cases only if the generated `templates/` copies are current (check 9). The rest of D50 stands.
+- Why: Check 30 in BUILD.md section 4b.3 reads this way, and the playbook describes it so; D50's consequence named only the first way and left out the templates. A change that leaves everything the playbook says true, such as a status line that only points forward, can give a reason instead of an edit.
+- Consequences: Nothing changes in the build: WP0 phase B implements check 30 as section 4b.3 writes it. The playbook cites this record beside D50.
+- Source: BUILD.md section 4b.3, check 30; the description of pull request #12, "Suggested guidance changes"; [PLAYBOOK.md](PLAYBOOK.md) section 1.7.
