@@ -1,7 +1,7 @@
 //! The core process's platform implementations on Linux: what `eileen-shell-win` does on
 //! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L0 starts with the machine
-//! profile's facts (BUILD.md section 2.16): [`LinuxMachineProbe`] reads what the PC is from
-//! `/proc`, `/sys` and `/etc`.
+//! profile's facts (BUILD.md section 2.16), which [`LinuxMachineProbe`] reads from `/proc`,
+//! `/sys` and `/etc`, and the memory sample of section 2.5, which [`LinuxSystemMemory`] takes.
 //!
 //! # Owns
 //!
@@ -9,17 +9,22 @@
 //!   GPUs and NPUs, the data folder's volume, the OS, power and the monitor count.
 //! - [`facts`]: their shapes, field for field as BUILD.md section 3.3.17 gives them, until
 //!   `eileen-contracts::machine` exists.
+//! - Sampling memory on Linux into `eileen_contracts::jobs::MemoryPressure`: available memory,
+//!   commit headroom under Linux's overcommit policy, the major-fault paging rate and the
+//!   largest process outside Eileen's tree.
 //! - [`SysRoot`]: the file-system root the reads are under (`/` on a real machine, a fixture
 //!   tree in tests).
 //! - [`default_data_dir`]: where Eileen's data folder lives on Linux (docs/LINUX.md section 5).
 //!
 //! # Does not own
 //!
-//! - The `MachineProbe` trait (`eileen-platform`, WP0) and the fact types' final home
-//!   (`eileen-contracts::machine`, WP0 phase B's `wp0/machine-contracts`). When those land,
-//!   [`LinuxMachineProbe`] implements the trait and [`facts`] becomes re-exports.
-//! - The plan that reads the facts (`eileen_core::fit`, WP1) and the memory sampler (the build
-//!   guard already reads Linux memory; the runtime samples it, WP2).
+//! - The `MachineProbe` and `SystemMemory` traits (`eileen-platform`, WP0) and the fact types'
+//!   final home (`eileen-contracts::machine`, WP0 phase B's `wp0/machine-contracts`). When those
+//!   land, [`LinuxMachineProbe`] and [`LinuxSystemMemory`] implement the traits and [`facts`]
+//!   becomes re-exports.
+//! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler that turns
+//!   samples into `Input::Memory` every 5 s, fills the effective paging limit and keeps the 30 s
+//!   windows (WP2); and the build guard's own memory readings (WP0).
 //! - The audio endpoints and the execution providers: their own components report them.
 //!
 //! # Invariants
@@ -86,15 +91,19 @@
 mod adapters;
 mod cpu;
 mod disk;
+mod error;
 pub mod facts;
 mod memory;
 mod monitors;
 mod os;
 mod pci;
 mod power;
+mod pressure;
 mod probe;
 mod root;
 
 pub use disk::{Volume, read_volume};
-pub use probe::{FactsError, LinuxMachineProbe, default_data_dir};
+pub use error::ReadError;
+pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
+pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;

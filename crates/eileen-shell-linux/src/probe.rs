@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use eileen_contracts::connectors::Platform;
 
-use crate::SysRoot;
 use crate::adapters::read_adapters;
 use crate::cpu::read_cpu;
 use crate::disk::{Volume, read_media, read_volume};
@@ -16,21 +15,7 @@ use crate::memory::{kb_to_mb, parse_meminfo};
 use crate::monitors::read_monitors;
 use crate::os::{is_wsl, read_os};
 use crate::power::read_power;
-
-/// Why no facts could be read at all: a file every Linux kernel provides is missing or
-/// unreadable. Everything else that cannot be read is a `degraded` entry, not an error. It
-/// becomes `PlatformError::Io` when the probe implements `MachineProbe`.
-#[derive(Debug, thiserror::Error)]
-pub enum FactsError {
-    /// The file could not be read, or lacks the line the facts need.
-    #[error("{what} is unreadable: {detail}")]
-    Unreadable {
-        /// The file, such as `/proc/meminfo`.
-        what: &'static str,
-        /// What went wrong.
-        detail: String,
-    },
-}
+use crate::{ReadError, SysRoot};
 
 /// Reads the machine's facts on Linux (BUILD.md section 2.16).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,24 +38,20 @@ impl LinuxMachineProbe {
     }
 
     /// Reads every fact. The data folder's volume is measured on the real file system.
-    pub fn facts(&self) -> Result<MachineFacts, FactsError> {
+    pub fn facts(&self) -> Result<MachineFacts, ReadError> {
         self.facts_on(read_volume(&self.data_dir))
     }
 
     /// Reads every fact under the root, with the data folder's volume as given: a fixture tree
     /// has no volume of its own to measure.
-    pub fn facts_on(&self, volume: io::Result<Volume>) -> Result<MachineFacts, FactsError> {
+    pub fn facts_on(&self, volume: io::Result<Volume>) -> Result<MachineFacts, ReadError> {
         let root = &self.root;
-        let unreadable = |what: &'static str| {
-            move |err: io::Error| FactsError::Unreadable { what, detail: err.kind().to_string() }
-        };
-        let meminfo = root.read("proc/meminfo").map_err(unreadable("/proc/meminfo"))?;
-        let cpuinfo = root.read("proc/cpuinfo").map_err(unreadable("/proc/cpuinfo"))?;
+        let meminfo = root.read("proc/meminfo").map_err(ReadError::io("/proc/meminfo"))?;
+        let cpuinfo = root.read("proc/cpuinfo").map_err(ReadError::io("/proc/cpuinfo"))?;
         let totals = parse_meminfo(&meminfo);
-        let total_kb = totals.total_kb.ok_or_else(|| FactsError::Unreadable {
-            what: "/proc/meminfo",
-            detail: "no MemTotal line".to_owned(),
-        })?;
+        let total_kb = totals
+            .total_kb
+            .ok_or(ReadError::Missing { what: "/proc/meminfo", field: "MemTotal" })?;
         let mut degraded = Vec::new();
         let (os_build, kernel) = read_os(root, &mut degraded);
         let wsl = is_wsl(&kernel);

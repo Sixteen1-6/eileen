@@ -131,3 +131,85 @@ PlatformDriver=platform_profile
 Profile=power-saver
 battery_aware=true
 >>>
+
+# The memory sample: paging counters, the overcommit policy and a process tree. Eileen (5000)
+# and everything under it (speech, a Claude session and its node child, the biggest process
+# of all) are Eileen's own; the largest other process is the browser.
+<<< proc/vmstat
+pgpgin 812345
+pgpgout 402211
+pswpin 0
+pswpout 0
+pgfault 91234567
+pgmajfault 48213
+>>>
+proc/sys/vm/overcommit_memory = 0
+<<< proc/1/status
+Name:	systemd
+State:	S (sleeping)
+Pid:	1
+PPid:	0
+VmRSS:	   14212 kB
+>>>
+<<< proc/2/status
+Name:	kthreadd
+State:	S (sleeping)
+Pid:	2
+PPid:	0
+>>>
+<<< proc/1600/status
+Name:	systemd
+State:	S (sleeping)
+Pid:	1600
+PPid:	1
+VmRSS:	   11808 kB
+>>>
+<<< proc/1890/status
+Name:	gnome-shell
+State:	S (sleeping)
+Pid:	1890
+PPid:	1600
+VmRSS:	  412000 kB
+>>>
+<<< proc/4120/status
+Name:	firefox
+State:	S (sleeping)
+Pid:	4120
+PPid:	1600
+VmRSS:	 1254000 kB
+>>>
+<<< proc/4300/status
+Name:	Isolated Web Co
+State:	S (sleeping)
+Pid:	4300
+PPid:	4120
+VmRSS:	  610000 kB
+>>>
+<<< proc/5000/status
+Name:	eileen
+State:	S (sleeping)
+Pid:	5000
+PPid:	1600
+VmRSS:	  180000 kB
+>>>
+<<< proc/5010/status
+Name:	eileen-speech
+State:	S (sleeping)
+Pid:	5010
+PPid:	5000
+VmRSS:	 1650000 kB
+>>>
+<<< proc/5020/status
+Name:	claude
+State:	S (sleeping)
+Pid:	5020
+PPid:	5000
+VmRSS:	  420000 kB
+>>>
+<<< proc/5030/status
+Name:	node
+State:	S (sleeping)
+Pid:	5030
+PPid:	5020
+VmRSS:	 1900000 kB
+>>>

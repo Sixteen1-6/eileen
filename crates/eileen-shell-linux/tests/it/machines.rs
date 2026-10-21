@@ -10,7 +10,7 @@ use eileen_shell_linux::facts::{
     AdapterFacts, AdapterKind, CoreClass, CpuFacts, CpuFeature, CpuVendor, DiskFacts, DiskMedia,
     MachineFacts, PowerState,
 };
-use eileen_shell_linux::{FactsError, LinuxMachineProbe, SysRoot, Volume};
+use eileen_shell_linux::{LinuxMachineProbe, ReadError, SysRoot, Volume};
 
 use crate::tree;
 
@@ -302,7 +302,7 @@ fn a_root_without_meminfo_is_an_error_and_an_unreadable_volume_is_degraded() {
     std::fs::remove_file(empty.join("proc/meminfo")).unwrap();
     let probe = LinuxMachineProbe::new(SysRoot::at(&empty), "/unused");
     let err = probe.facts_on(Ok(volume(DATA, 252, 0))).unwrap_err();
-    assert!(matches!(err, FactsError::Unreadable { what: "/proc/meminfo", .. }), "{err}");
+    assert!(matches!(err, ReadError::Io { what: "/proc/meminfo", .. }), "{err}");
 
     let root = tree::build("intel-hybrid-laptop", "unreadable_volume");
     let probe = LinuxMachineProbe::new(SysRoot::at(root), "/unused");

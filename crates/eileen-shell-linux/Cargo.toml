@@ -1,6 +1,6 @@
 [package]
 name = "eileen-shell-linux"
-description = "The core process's platform implementations on Linux, starting with the machine profile's facts"
+description = "The core process's platform implementations on Linux, starting with the machine profile's facts and the memory sample"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
