@@ -507,7 +507,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "SimRegression": {
-      "description": "A minimised simulator failure, in `crates/eileen-sim/regressions/<name>.toml`.",
+      "description": "A minimised simulator failure, in `crates/eileen-sim/regressions/<name>.toml`. TOML has no\n`null` and no integer above `i64::MAX`, so two fields are written in forms it can hold: each\ninput as one line of JSON (an `InputRecord`, as `replay/inputs.jsonl` writes it), and the\nseed as a decimal string.",
       "properties": {
         "faults": {
           "description": "Each injected fault as an explicit record, never a buggify site ordinal.",
@@ -521,9 +521,13 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "string"
         },
         "inputs": {
-          "description": "Decoded inputs, never a buffer of random bytes.",
+          "description": "Decoded inputs, never a buffer of random bytes: each one line of JSON.",
           "items": {
-            "$ref": "#/$defs/InputRecord"
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "$ref": "#/$defs/InputRecord"
+            },
+            "type": "string"
           },
           "type": "array"
         },
@@ -536,11 +540,11 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "string"
         },
         "seed": {
-          "description": "The seed that found it.",
-          "format": "uint64",
-          "minimum": 0,
+          "default": null,
+          "description": "The seed that found it, as a decimal string.",
+          "pattern": "^[0-9]{1,20}$",
           "type": [
-            "integer",
+            "string",
             "null"
           ]
         }

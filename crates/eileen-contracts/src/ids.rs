@@ -326,7 +326,8 @@ fn is_machine_hash(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(is_lower_hex)
 }
 
-const fn is_lower_hex(b: u8) -> bool {
+/// True for a lower-case hex digit.
+pub(crate) const fn is_lower_hex(b: u8) -> bool {
     b.is_ascii_digit() || matches!(b, b'a'..=b'f')
 }
 

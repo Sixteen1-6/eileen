@@ -637,7 +637,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         "blobs": {
           "description": "Blobs.",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/BlobRef"
           },
           "type": "array"
         },

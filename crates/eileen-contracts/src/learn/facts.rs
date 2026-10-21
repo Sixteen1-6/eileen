@@ -9,6 +9,7 @@ use crate::ids::{
     IncidentId, JobId, Personal, RecordingId, ScenarioId, SkillId, ToolName, TurnId, WallTime,
     WorkerSessionId,
 };
+use crate::record::BlobRef;
 use crate::schema::Registry;
 
 use super::trajectory::Provenance;
@@ -217,7 +218,7 @@ pub struct ForgetPlan {
     /// Turns.
     pub turns: Vec<TurnId>,
     /// Blobs.
-    pub blobs: Vec<String>,
+    pub blobs: Vec<BlobRef>,
     /// Incidents.
     pub incidents: Vec<IncidentId>,
     /// Recordings.
