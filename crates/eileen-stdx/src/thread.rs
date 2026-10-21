@@ -48,17 +48,13 @@ pub fn sleep(duration: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use super::{sleep, spawn_named, spawn_named_with_stack};
+    use super::{spawn_named, spawn_named_with_stack};
 
     #[test]
     fn threads_carry_their_name() {
-        let handle = spawn_named("eileen-test-worker", || {
-            sleep(Duration::from_millis(1));
-            std::thread::current().name().map(str::to_owned)
-        })
-        .unwrap();
+        let handle =
+            spawn_named("eileen-test-worker", || std::thread::current().name().map(str::to_owned))
+                .unwrap();
         assert_eq!(handle.join().unwrap().as_deref(), Some("eileen-test-worker"), "name");
     }
 

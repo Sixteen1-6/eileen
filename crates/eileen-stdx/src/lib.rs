@@ -22,6 +22,9 @@
 //!   `rng::tests::matches_the_reference_vectors`).
 //! - `buggify!` never fires unless [`buggify::enable`] was called on the same thread (unit test
 //!   `buggify::tests::off_unless_enabled`).
+//! - A fault site is the name written at it (`buggify!("store.write")`), never its file and
+//!   line, so a seed switches on the same sites on every OS and after unrelated edits (unit
+//!   test `buggify::tests::activation_is_pinned_for_a_seed_and_a_name`).
 //!
 //! # Boundaries
 //!
@@ -50,7 +53,8 @@
 //!
 //! # Do not change without a decision record
 //!
-//! - The `CoreRng` algorithm and seeding (recorded seeds would replay differently).
+//! - The `CoreRng` algorithm and seeding, and the fault sites' activation hash (recorded seeds
+//!   would replay differently).
 //! - The list of `#[expect]`ed disallowed methods above.
 
 #![forbid(unsafe_code)]

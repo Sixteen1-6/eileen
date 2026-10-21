@@ -3,11 +3,17 @@
 //! A fault point marks a place where the real world can misbehave (a reply arrives late, a
 //! write fails, a queue fills). Outside a simulator run it is a thread-local check that always
 //! answers false. Inside one, each site is switched on for the whole run with probability
-//! `activate_per_mille / 1000`, decided from the run's seed and the site's location so the
-//! choice does not depend on which site is reached first, and an active site then fires on
-//! each evaluation with probability `fire_per_mille / 1000` from the run's own [`CoreRng`].
-//! This is a runtime switch, never a Cargo feature: the shipped binary contains the sites and
-//! never enables them.
+//! `activate_per_mille / 1000`, decided from the run's seed and the site's name so the choice
+//! does not depend on which site is reached first, and an active site then fires on each
+//! evaluation with probability `fire_per_mille / 1000` from the run's own [`CoreRng`]. This is
+//! a runtime switch, never a Cargo feature: the shipped binary contains the sites and never
+//! enables them.
+//!
+//! A site is named in the code, `buggify!("store.write")`, never located by file, line and
+//! column: a path is spelt with backslashes on Windows and slashes on Linux, and moves when an
+//! unrelated edit shifts lines, so a seed would switch on different sites on the owner's PC
+//! and on the Linux lane, and a recorded regression would not replay. The name is the one
+//! identity: the activation hash, [`fired`] and a recorded fault's `site` all use it.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -110,11 +116,16 @@ fn site_active(seed: u64, site: &str, per_mille: u32) -> bool {
     rng.below(1000) < u64::from(per_mille)
 }
 
-/// A fault point: true when the simulator decides this place should misbehave now.
+/// A fault point named `site`: true when the simulator decides this place should misbehave
+/// now.
+///
+/// The name, a string literal, is the site's identity on every OS and across edits: write it
+/// as `area.what` (`store.write`, `speech.reply_late`), one name per place. Two places that
+/// share a name are switched on and off together.
 ///
 /// ```
 /// fn write_reply() -> Result<(), &'static str> {
-///     if eileen_stdx::buggify!() {
+///     if eileen_stdx::buggify!("reply.write") {
 ///         return Err("injected: the write failed");
 ///     }
 ///     Ok(())
@@ -123,14 +134,8 @@ fn site_active(seed: u64, site: &str, per_mille: u32) -> bool {
 /// ```
 #[macro_export]
 macro_rules! buggify {
-    () => {
-        $crate::buggify::hit(::core::concat!(
-            ::core::file!(),
-            ":",
-            ::core::line!(),
-            ":",
-            ::core::column!()
-        ))
+    ($site:literal) => {
+        $crate::buggify::hit($site)
     };
 }
 
@@ -141,7 +146,38 @@ mod tests {
     #[test]
     fn off_unless_enabled() {
         assert!(!is_enabled(), "off by default");
-        assert!((0..1_000).all(|_| !crate::buggify!()), "never fires when off");
+        assert!((0..1_000).all(|_| !crate::buggify!("test.off")), "never fires when off");
+    }
+
+    #[test]
+    fn a_site_is_its_name() {
+        // Every site active and firing: what fires is reported under the name in the code.
+        let _scope = enable_with(3, 1000, 1000);
+        assert!(crate::buggify!("store.write"), "fires");
+        assert!(crate::buggify!("store.write"), "fires again");
+        assert_eq!(fired(), vec![("store.write", 2)], "reported by name");
+    }
+
+    #[test]
+    fn activation_is_pinned_for_a_seed_and_a_name() {
+        // Computed with an independent implementation of the hash and of CoreRng, so both CI
+        // lanes and the owner's PC check the same answer.
+        let active: Vec<u64> =
+            (0..64).filter(|seed| super::site_active(*seed, "store.write", 250)).collect();
+        assert_eq!(active, [1, 2, 7, 14, 19, 23, 24, 26, 30, 31, 36, 40, 60, 61], "seeds");
+        let sites = [
+            "store.write",
+            "store.read",
+            "pipe.send",
+            "pipe.recv",
+            "worker.reply_late",
+            "timer.fire_late",
+            "queue.full",
+            "speech.drop_frame",
+        ];
+        let on: Vec<&str> =
+            sites.into_iter().filter(|site| super::site_active(42, site, 250)).collect();
+        assert_eq!(on, ["timer.fire_late"], "seed 42");
     }
 
     #[test]
