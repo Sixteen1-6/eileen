@@ -8,8 +8,7 @@
 //! folders such as `C:\Users\<name>` and `/home/<name>`, machine names and token prefixes),
 //! and:
 //!
-//! - **Audio only with its consent record.** `scenario.toml` parses as a
-//!   [`Scenario`](eileen_contracts::scenario::Scenario) with
+//! - **Audio only with its consent record.** `scenario.toml` parses as a [`Scenario`] with
 //!   `origin = "contributed-consented-audio"`, its `intent.audio.file` names the audio file,
 //!   and the record at `intent.audio.consent` is in the folder. Any other audio file fails.
 //! - **Only placeholders in personal fields.** Every value in a position the contracts mark
