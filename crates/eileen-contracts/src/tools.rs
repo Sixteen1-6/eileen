@@ -8,6 +8,11 @@
 //! schemas the dispatcher serves ([`input_schemas`]); path fields carry the `x-eileen-path`
 //! extension and match-only fields `x-eileen-match`. Fields a model may leave out (lists,
 //! flags) default when missing.
+//!
+//! The shim and the dispatcher talk over the named pipe `\\.\pipe\eileen-dispatch-<session>`
+//! (`\\.\pipe\eileen-dispatch-owner` for the session role) in JSON lines of at most
+//! [`DISPATCH_MAX_LINE_BYTES`]: the shim writes [`ShimLine`]s and the dispatcher answers with
+//! [`DispatcherLine`]s.
 
 use std::collections::BTreeMap;
 
@@ -15,8 +20,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core_io::Rung;
-use crate::ids::{ConnectorId, ToolName};
+use crate::core_io::{Content, Rung, ShimRole};
+use crate::harness::SessionToken;
+use crate::ids::{ConnectorId, ToolName, Untrusted};
 use crate::jobs::{ObservedSource, Tier, Toolset};
 use crate::schema::Registry;
 
@@ -121,6 +127,84 @@ pub enum ObservesRule {
     reason = "MCP tool inputs are JSON objects; a unit struct would serialize as null"
 )]
 pub struct NoArgs {}
+
+/// The dispatcher protocol's version: the `v` of a [`ShimHello`].
+pub const DISPATCH_VERSION: u16 = 1;
+
+/// The longest line either side of the dispatcher pipe may write, in bytes (16 MiB, for
+/// images in results).
+pub const DISPATCH_MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// A line `eileen-shim` writes to the dispatcher pipe (section 3.3.9): JSON, one per line. The
+/// first is always a [`ShimHello`]; the dispatcher checks its token and the caller's process
+/// before it answers, and closes the pipe on a wrong one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ShimLine {
+    /// Who is calling.
+    Hello(ShimHello),
+    /// A tool call.
+    Call(CallLine),
+}
+
+/// A line the dispatcher writes back to a shim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatcherLine {
+    /// The answer to a hello: the tools for the role, which `tools/list` shows.
+    Welcome(Welcome),
+    /// A call's result.
+    Result(ResultLine),
+}
+
+/// A shim's first line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ShimHello {
+    /// The protocol version, [`DISPATCH_VERSION`].
+    pub v: u16,
+    /// The session's token, from the generated MCP config.
+    pub token: SessionToken,
+    /// The role the session was started with.
+    pub role: ShimRole,
+}
+
+/// The tools the dispatcher serves to one role.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Welcome {
+    /// The role's tools.
+    pub tools: Vec<ToolSpec>,
+}
+
+/// A tool call, as the shim forwards it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CallLine {
+    /// The shim's number for the call; its result carries the same.
+    pub id: u64,
+    /// The tool.
+    pub tool: ToolName,
+    /// Its arguments, as the model sent them.
+    pub args: Untrusted<Value>,
+    /// What the shim passes on from the request's `_meta`.
+    pub meta: CallMeta,
+}
+
+/// The part of an MCP request's `_meta` the shim passes on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CallMeta {
+    /// The caller's W3C `traceparent`, when it sent one.
+    pub traceparent: Option<String>,
+}
+
+/// A call's result, as the shim returns it to the model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ResultLine {
+    /// The call's number.
+    pub id: u64,
+    /// What the model sees.
+    pub content: Vec<Content>,
+    /// Whether the call failed.
+    pub is_error: bool,
+}
 
 /// One tool's input schema, as the dispatcher serves it.
 #[derive(Debug, Clone, PartialEq)]
@@ -290,4 +374,11 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<TierRule>();
     r.add::<ObservesRule>();
     r.add::<NoArgs>();
+    r.add::<ShimLine>();
+    r.add::<DispatcherLine>();
+    r.add::<ShimHello>();
+    r.add::<Welcome>();
+    r.add::<CallLine>();
+    r.add::<CallMeta>();
+    r.add::<ResultLine>();
 }

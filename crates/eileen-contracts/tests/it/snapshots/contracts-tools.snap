@@ -3,6 +3,80 @@ source: crates/eileen-contracts/tests/it/schemas.rs
 ---
 {
   "definitions": {
+    "CallLine": {
+      "description": "A tool call, as the shim forwards it.",
+      "properties": {
+        "args": {
+          "description": "Its arguments, as the model sent them.",
+          "x-eileen-text": "untrusted"
+        },
+        "id": {
+          "description": "The shim's number for the call; its result carries the same.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "meta": {
+          "$ref": "#/$defs/CallMeta",
+          "description": "What the shim passes on from the request's `_meta`."
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName",
+          "description": "The tool."
+        }
+      },
+      "required": [
+        "id",
+        "tool",
+        "args",
+        "meta"
+      ],
+      "type": "object"
+    },
+    "CallMeta": {
+      "description": "The part of an MCP request's `_meta` the shim passes on.",
+      "properties": {
+        "traceparent": {
+          "description": "The caller's W3C `traceparent`, when it sent one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DispatcherLine": {
+      "description": "A line the dispatcher writes back to a shim.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The answer to a hello: the tools for the role, which `tools/list` shows.",
+          "properties": {
+            "welcome": {
+              "$ref": "#/$defs/Welcome"
+            }
+          },
+          "required": [
+            "welcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A call's result.",
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/ResultLine"
+            }
+          },
+          "required": [
+            "result"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "NoArgs": {
       "description": "The arguments of a tool that takes none: an empty object.",
       "type": "object"
@@ -103,6 +177,91 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ],
       "type": "object"
     },
+    "ResultLine": {
+      "description": "A call's result, as the shim returns it to the model.",
+      "properties": {
+        "content": {
+          "description": "What the model sees.",
+          "items": {
+            "$ref": "#/$defs/Content"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "The call's number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "is_error": {
+          "description": "Whether the call failed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "content",
+        "is_error"
+      ],
+      "type": "object"
+    },
+    "ShimHello": {
+      "description": "A shim's first line.",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ShimRole",
+          "description": "The role the session was started with."
+        },
+        "token": {
+          "$ref": "#/$defs/SessionToken",
+          "description": "The session's token, from the generated MCP config."
+        },
+        "v": {
+          "description": "The protocol version, [`DISPATCH_VERSION`].",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "token",
+        "role"
+      ],
+      "type": "object"
+    },
+    "ShimLine": {
+      "description": "A line `eileen-shim` writes to the dispatcher pipe (section 3.3.9): JSON, one per line. The\nfirst is always a [`ShimHello`]; the dispatcher checks its token and the caller's process\nbefore it answers, and closes the pipe on a wrong one.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Who is calling.",
+          "properties": {
+            "hello": {
+              "$ref": "#/$defs/ShimHello"
+            }
+          },
+          "required": [
+            "hello"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool call.",
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/CallLine"
+            }
+          },
+          "required": [
+            "call"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "TierRule": {
       "description": "How an op's tier is decided.",
       "oneOf": [
@@ -187,6 +346,22 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         "input_schema",
         "schema_hash",
         "rung"
+      ],
+      "type": "object"
+    },
+    "Welcome": {
+      "description": "The tools the dispatcher serves to one role.",
+      "properties": {
+        "tools": {
+          "description": "The role's tools.",
+          "items": {
+            "$ref": "#/$defs/ToolSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools"
       ],
       "type": "object"
     }
