@@ -94,6 +94,7 @@ The product is Eileen, chosen by the owner on 2026-10-11 (decision D16 in [docs/
 - [docs/OWNER-DIRECTION.md](docs/OWNER-DIRECTION.md): what the owner asked for
 - [docs/research/](docs/research/): the October research reports
 - [docs/DEV-SETUP.md](docs/DEV-SETUP.md): getting a Windows machine ready to work on it
+- [docs/PLAYBOOK.md](docs/PLAYBOOK.md): how this repository is built, as a cited playbook any project can adopt
 
 ## License
 
