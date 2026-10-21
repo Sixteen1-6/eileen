@@ -1,0 +1,28 @@
+[package]
+name = "eileen-platform"
+description = "The traits every operating system implements for Eileen, their fakes, and the fleet's machine hash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "all"
+owns = "WP0"
+unsafe = "forbid"
+
+[features]
+# The fakes beside each trait, for other crates' tests. Never enabled by a shipped binary.
+fake = []
+
+[dependencies]
+blake3.workspace = true
+eileen-contracts.workspace = true
+secrecy.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
