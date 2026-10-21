@@ -23,13 +23,15 @@
 //! # Invariants
 //!
 //! - Every serialized type derives `serde` and `schemars`, and every module's schemas are pinned
-//!   by one insta snapshot (test `it::schemas::every_module_matches_its_snapshot`).
+//!   by one insta snapshot (the tests `it::schemas::<module>_matches_its_snapshot`, one per
+//!   module, which `it::schemas::every_module_has_a_snapshot_test` keeps complete).
 //! - Every definition the generator produces belongs to exactly one module, and schema names are
 //!   unique (test `it::schemas::every_definition_has_one_owner`).
 //! - Maps that reach an effect or a snapshot are `BTreeMap`; snapshots sort their keys, so they
 //!   do not depend on a feature-unified `preserve_order` (the `sort_maps` setting).
 //! - Every free-text string reachable from `Input`, `ToolResult` and `DesktopState` is wrapped
-//!   or listed in `text-allowlist.toml` with a reason (test `it::text::free_text_is_wrapped`).
+//!   or listed in `text-allowlist.toml` with a reason (test
+//!   `it::text::free_text_is_wrapped_or_allowlisted`).
 //! - `modules.toml` lists exactly the modules here, and a provisional module says so in its doc
 //!   (test `it::modules::modules_toml_matches_the_crate`).
 //!
