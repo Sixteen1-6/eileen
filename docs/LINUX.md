@@ -184,6 +184,7 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
    - Status on 2026-10-21: `crates/eileen-shell-linux` holds the machine facts' readers and the memory sampler.
      - The readers are tested over six fixture machines: one recorded under WSL2, plus synthetic trees for the owner's laptop shape, AMD on btrfs, NVIDIA on LVM, an Arm board and a QEMU virtual machine. Their types mirror BUILD.md 3.3.17 until the contracts land.
      - The sampler, `LinuxSystemMemory`, fills the contracts' `MemoryPressure`, and its live sample matches the kernel's figures.
+     - The no-sudo developer setup is section 11.
    - Acceptance:
      - Both lanes green on `ubuntu-24.04` and `ubuntu-26.04`.
      - A `SystemMemory` sample that matches recorded `/proc` fixtures exactly and a live reading within the kernel's own figures.
@@ -246,3 +247,42 @@ Running the PR lanes on Ubuntu 24.04 over the unmerged `wp0/base-crates` work (`
   - The fix that matches the kernel's policy is the one `LinuxSystemMemory` uses: under strict overcommit, keep `CommitLimit` minus `Committed_AS`; otherwise use `MemAvailable` plus `SwapFree`, the memory that can still be backed before the OOM killer acts. The guard and the runtime write the same machine-wide sample files, so both should use the same rule.
 
 `main` itself passes the whole lane on Ubuntu 24.04.
+
+## 11. Developer setup on Ubuntu, without sudo
+
+This is the setup the local Linux lane runs on: Ubuntu 24.04 under WSL2 on Windows 11, with every tool under the home folder and no `sudo`. It runs every check of CI's `hygiene` and `logic-linux` jobs. A native Ubuntu install or a virtual machine works the same way. Until `cargo xtask setup` and `cargo xtask ci` exist (WP0 phase B), these steps stand in for them.
+
+1. **Ubuntu.** On Windows 11, `wsl --install -d Ubuntu-24.04` in PowerShell (an administrator one the first time) gives a Linux shell in minutes. WSL2 runs the neutral crates and every PR lane, but it is not a Linux desktop (section 6). The desktop work of L1 and L2 needs an Ubuntu 26.04 desktop: a virtual machine (Hyper-V, VirtualBox, QEMU) or a spare PC.
+2. **Rust, as the repository pins it.** rustup installs into `~/.rustup` and `~/.cargo`. Then, inside the clone, `rustup toolchain install` reads `rust-toolchain.toml` (1.99.0 with rustfmt and clippy), as CI does:
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain none
+   . "$HOME/.cargo/env"            # once per shell, or add it to ~/.bashrc
+   git clone https://github.com/Sixteen1-6/eileen.git && cd eileen
+   rustup toolchain install
+   rustup default 1.99.0           # so cargo also runs outside the clone
+   ```
+
+3. **The CI tools, prebuilt, at CI's versions.** BUILD.md 4b's rule is never to `cargo install` from source:
+
+   ```sh
+   curl -sSfL https://github.com/cargo-bins/cargo-binstall/releases/download/v1.26.0/cargo-binstall-x86_64-unknown-linux-musl.tgz \
+     | tar -xz -C "$HOME/.cargo/bin"
+   cargo binstall --no-confirm cargo-nextest@0.9.148 cargo-deny@0.20.2 cargo-machete@0.9.2
+   ```
+
+4. **The lanes.** These are CI's `hygiene` and `logic-linux` steps, in order:
+
+   ```sh
+   cargo fmt --all --check
+   cargo deny --locked check
+   cargo machete
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo nextest run --workspace --locked --profile ci
+   cargo test --workspace --doc --locked
+   RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+   ```
+
+5. **Optional: Windows clippy from Linux.** `rustup target add x86_64-pc-windows-msvc` installs the Windows standard library. After that, `cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-msvc -- -D warnings` finds most Windows-only compile errors before a push, as long as no dependency compiles C. Test binaries cannot link without MSVC's `link.exe`, so `windows-test` still runs only in CI.
+
+Later phases need system packages, which do need `sudo`: `pkg-config`, `clang` and `libpipewire-0.3-dev` for PipeWire's bindings (L2), and `weston` for the headless desktop lane (L1).
