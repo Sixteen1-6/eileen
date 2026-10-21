@@ -59,45 +59,152 @@ fn assert_module_snapshot(module: &str) {
     settings.bind(|| insta::assert_json_snapshot!(snapshot_name(module), module_document(module)));
 }
 
-macro_rules! module_snapshots {
-    ($($test:ident => $module:literal),* $(,)?) => {
-        $(
-            #[test]
-            fn $test() {
-                assert_module_snapshot($module);
-            }
-        )*
+/// The modules the snapshot tests cover, in order.
+const SNAPSHOT_MODULES: &[&str] = &[
+    "ids",
+    "jobs",
+    "core_io",
+    "bus",
+    "desktop",
+    "hud",
+    "speech",
+    "harness",
+    "tools",
+    "tools/brain",
+    "tools/worker",
+    "tools/desktop",
+    "tools/apps",
+    "tools/learn",
+    "tools/session",
+    "tools/dev",
+    "intent",
+    "config",
+    "connectors",
+    "learn",
+    "scenario",
+    "record",
+    "fleet",
+    "ports",
+];
 
-        /// The modules the tests above cover, in order.
-        const SNAPSHOT_MODULES: &[&str] = &[$($module),*];
-    };
+#[test]
+fn ids_matches_its_snapshot() {
+    assert_module_snapshot("ids");
 }
 
-module_snapshots! {
-    ids_matches_its_snapshot => "ids",
-    jobs_matches_its_snapshot => "jobs",
-    core_io_matches_its_snapshot => "core_io",
-    bus_matches_its_snapshot => "bus",
-    desktop_matches_its_snapshot => "desktop",
-    hud_matches_its_snapshot => "hud",
-    speech_matches_its_snapshot => "speech",
-    harness_matches_its_snapshot => "harness",
-    tools_matches_its_snapshot => "tools",
-    tools_brain_matches_its_snapshot => "tools/brain",
-    tools_worker_matches_its_snapshot => "tools/worker",
-    tools_desktop_matches_its_snapshot => "tools/desktop",
-    tools_apps_matches_its_snapshot => "tools/apps",
-    tools_learn_matches_its_snapshot => "tools/learn",
-    tools_session_matches_its_snapshot => "tools/session",
-    tools_dev_matches_its_snapshot => "tools/dev",
-    intent_matches_its_snapshot => "intent",
-    config_matches_its_snapshot => "config",
-    connectors_matches_its_snapshot => "connectors",
-    learn_matches_its_snapshot => "learn",
-    scenario_matches_its_snapshot => "scenario",
-    record_matches_its_snapshot => "record",
-    fleet_matches_its_snapshot => "fleet",
-    ports_matches_its_snapshot => "ports",
+#[test]
+fn jobs_matches_its_snapshot() {
+    assert_module_snapshot("jobs");
+}
+
+#[test]
+fn core_io_matches_its_snapshot() {
+    assert_module_snapshot("core_io");
+}
+
+#[test]
+fn bus_matches_its_snapshot() {
+    assert_module_snapshot("bus");
+}
+
+#[test]
+fn desktop_matches_its_snapshot() {
+    assert_module_snapshot("desktop");
+}
+
+#[test]
+fn hud_matches_its_snapshot() {
+    assert_module_snapshot("hud");
+}
+
+#[test]
+fn speech_matches_its_snapshot() {
+    assert_module_snapshot("speech");
+}
+
+#[test]
+fn harness_matches_its_snapshot() {
+    assert_module_snapshot("harness");
+}
+
+#[test]
+fn tools_matches_its_snapshot() {
+    assert_module_snapshot("tools");
+}
+
+#[test]
+fn tools_brain_matches_its_snapshot() {
+    assert_module_snapshot("tools/brain");
+}
+
+#[test]
+fn tools_worker_matches_its_snapshot() {
+    assert_module_snapshot("tools/worker");
+}
+
+#[test]
+fn tools_desktop_matches_its_snapshot() {
+    assert_module_snapshot("tools/desktop");
+}
+
+#[test]
+fn tools_apps_matches_its_snapshot() {
+    assert_module_snapshot("tools/apps");
+}
+
+#[test]
+fn tools_learn_matches_its_snapshot() {
+    assert_module_snapshot("tools/learn");
+}
+
+#[test]
+fn tools_session_matches_its_snapshot() {
+    assert_module_snapshot("tools/session");
+}
+
+#[test]
+fn tools_dev_matches_its_snapshot() {
+    assert_module_snapshot("tools/dev");
+}
+
+#[test]
+fn intent_matches_its_snapshot() {
+    assert_module_snapshot("intent");
+}
+
+#[test]
+fn config_matches_its_snapshot() {
+    assert_module_snapshot("config");
+}
+
+#[test]
+fn connectors_matches_its_snapshot() {
+    assert_module_snapshot("connectors");
+}
+
+#[test]
+fn learn_matches_its_snapshot() {
+    assert_module_snapshot("learn");
+}
+
+#[test]
+fn scenario_matches_its_snapshot() {
+    assert_module_snapshot("scenario");
+}
+
+#[test]
+fn record_matches_its_snapshot() {
+    assert_module_snapshot("record");
+}
+
+#[test]
+fn fleet_matches_its_snapshot() {
+    assert_module_snapshot("fleet");
+}
+
+#[test]
+fn ports_matches_its_snapshot() {
+    assert_module_snapshot("ports");
 }
 
 #[test]
@@ -178,8 +285,13 @@ fn no_snapshot_file_is_unreferenced() {
     let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/it/snapshots");
     let expected: Vec<String> =
         SNAPSHOT_MODULES.iter().map(|module| format!("{}.snap", snapshot_name(module))).collect();
+    let mut found = Vec::new();
     for entry in std::fs::read_dir(&folder).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
         assert!(expected.contains(&name), "{name} in {} belongs to no test", folder.display());
+        found.push(name);
+    }
+    for name in &expected {
+        assert!(found.contains(name), "{name} is missing: a module has no snapshot test");
     }
 }
