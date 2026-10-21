@@ -113,8 +113,8 @@ pub(crate) struct Description {
 }
 
 impl Description {
-    /// Parses a description: line endings normalised, HTML comments removed (keeping line
-    /// numbers), and `## ` headings outside fenced code starting sections.
+    /// Parses a description: line endings normalised, HTML comments outside code removed
+    /// (keeping line numbers), and `## ` headings outside fenced code starting sections.
     pub(crate) fn parse(raw: &str) -> Self {
         let text = strip_comments(&raw.replace("\r\n", "\n").replace('\r', "\n"));
         let mut preamble = Vec::new();
@@ -151,27 +151,108 @@ impl Description {
     }
 }
 
-/// Removes `<!-- ... -->` comments, keeping their newlines so line numbers stay true. An
-/// unterminated comment runs to the end, as GitHub renders it.
+/// Removes `<!-- ... -->` comments outside fenced code blocks and inline code spans, where
+/// GitHub shows `<!--` as text, keeping every line so line numbers stay true. A comment may span
+/// lines, and an unterminated one runs to the end, as GitHub renders it. Inside a comment,
+/// fence markers and backticks mean nothing.
 fn strip_comments(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("<!--") {
-        let (before, comment) = rest.split_at(start);
-        out.push_str(before);
-        let comment = comment.strip_prefix("<!--").unwrap_or(comment);
-        let (inside, after) = match comment.find("-->") {
-            Some(end) => {
-                let (inside, tail) = comment.split_at(end);
-                (inside, tail.strip_prefix("-->").unwrap_or(tail))
-            }
-            None => (comment, ""),
-        };
-        out.extend(inside.chars().filter(|c| *c == '\n'));
-        rest = after;
+    let mut kept: Vec<String> = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
+    for line in text.split('\n') {
+        if in_comment {
+            let Some((_, after)) = line.split_once("-->") else {
+                kept.push(String::new());
+                continue;
+            };
+            let (text, open) = strip_inline_comments(after);
+            kept.push(text);
+            in_comment = open;
+        } else if step_fence(&mut fence, line) {
+            kept.push(line.to_owned());
+        } else {
+            let (text, open) = strip_inline_comments(line);
+            kept.push(text);
+            in_comment = open;
+        }
     }
-    out.push_str(rest);
-    out
+    kept.join("\n")
+}
+
+/// Removes the comments that start in one line outside code spans. Returns the text kept and
+/// whether a comment is still open at the end of the line.
+fn strip_inline_comments(line: &str) -> (String, bool) {
+    let mut kept = String::with_capacity(line.len());
+    let mut rest = line;
+    loop {
+        let tick = unescaped_backtick(rest);
+        let comment = rest.find("<!--");
+        match (tick, comment) {
+            (Some(tick), _) if comment.is_none_or(|comment| tick < comment) => {
+                // A code span runs from a run of backticks to the next run of the same length;
+                // a run with no partner is literal text.
+                let (before, from_tick) = rest.split_at(tick);
+                kept.push_str(before);
+                let run = from_tick.bytes().take_while(|byte| *byte == b'`').count();
+                let (ticks, after) = from_tick.split_at(run);
+                kept.push_str(ticks);
+                match closing_run(after, run) {
+                    Some(end) => {
+                        let (span, tail) = after.split_at(end);
+                        kept.push_str(span);
+                        rest = tail;
+                    }
+                    None => rest = after,
+                }
+            }
+            (_, Some(start)) => {
+                let (before, from_comment) = rest.split_at(start);
+                kept.push_str(before);
+                let inside = from_comment.strip_prefix("<!--").unwrap_or(from_comment);
+                match inside.split_once("-->") {
+                    Some((_, after)) => rest = after,
+                    None => return (kept, true),
+                }
+            }
+            (_, None) => {
+                kept.push_str(rest);
+                return (kept, false);
+            }
+        }
+    }
+}
+
+/// The byte index of the first backtick that is not escaped with a backslash.
+fn unescaped_backtick(text: &str) -> Option<usize> {
+    let mut chars = text.char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '`' => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The byte index just after the first run of exactly `run` backticks in `text`.
+fn closing_run(text: &str, run: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        if byte == b'`' {
+            let length = bytes.iter().skip(at).take_while(|byte| **byte == b'`').count();
+            if length == run {
+                return Some(at + length);
+            }
+            at += length;
+        } else {
+            at += 1;
+        }
+    }
+    None
 }
 
 /// Tracks fenced code blocks (three or more backticks or tildes). Returns whether `line` is a
