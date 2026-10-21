@@ -1,0 +1,30 @@
+# Weekly update pull requests for the Cargo workspace and the pinned action SHAs (BUILD.md
+# sections 4.6 and 4b.3). A new version waits 14 days before Dependabot proposes it, the
+# cooling-off period of check 13. The protocol and native-inference crates change weekly and are
+# updated by hand with the probe subcommands, so Dependabot leaves them alone.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: rmcp
+      - dependency-name: agent-client-protocol
+      - dependency-name: sherpa-onnx
+      - dependency-name: ort
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

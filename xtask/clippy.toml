@@ -1,0 +1,32 @@
+# The root clippy.toml without the std::process::Command::new, Instant::now, SystemTime::now and
+# thread::sleep entries: xtask runs and times cargo, git and the repository tools, and is never
+# shipped (BUILD.md section 4b.2). Clippy reads the nearest file and does not merge, so every other
+# entry is kept in step with the root file.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+avoid-breaking-exported-api = false
+too-many-lines-threshold = 80
+too-many-arguments-threshold = 6
+cognitive-complexity-threshold = 20
+
+disallowed-methods = [
+  { path = "std::thread::spawn", reason = "use eileen_stdx::thread::spawn_named: every thread has a name in logs and dumps" },
+  { path = "std::thread::Builder::spawn", reason = "use eileen_stdx::thread::spawn_named" },
+  { path = "std::env::set_var", reason = "process-global and unsound with threads" },
+  { path = "std::env::remove_var", reason = "process-global and unsound with threads" },
+  { path = "tokio::process::Command::new", reason = "start children through eileen_supervisor", allow-invalid = true },
+  { path = "std::process::exit", reason = "skips destructors and log flushing; return from main" },
+  { path = "ulid::Ulid::generate", reason = "IDs come from the Ids port so replay is deterministic", allow-invalid = true },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "every queue has a maximum", allow-invalid = true },
+  { path = "tokio::spawn", reason = "use eileen_rt::task::spawn: it names the task, keeps the span and registers it", allow-invalid = true },
+  { path = "tokio::task::spawn", reason = "use eileen_rt::task::spawn", allow-invalid = true },
+  { path = "tokio::task::spawn_blocking", reason = "use eileen_rt::task::spawn_blocking (named, bounded pool)", allow-invalid = true },
+]
+disallowed-types = [
+  { path = "std::sync::mpsc::Sender", reason = "use bounded tokio::sync channels" },
+]
+disallowed-names = ["foo", "bar", "baz", "tmp", "data2"]

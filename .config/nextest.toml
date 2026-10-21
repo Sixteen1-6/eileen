@@ -1,0 +1,39 @@
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 3 }
+leak-timeout = { period = "500ms", result = "fail" }   # a test that leaves a child process running fails
+default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+
+[profile.ci]
+fail-fast = false
+retries = 0
+failure-output = "immediate-final"
+slow-timeout = { period = "15s", terminate-after = 4 }
+default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.nightly]
+retries = 2
+flaky-result = "fail"
+fail-fast = false
+
+[profile.owner]                     # cargo xtask nightly-local and cargo xtask test --owner
+default-filter = "all()"
+fail-fast = false
+
+[test-groups]
+desktop = { max-threads = 1 }
+
+# BUILD.md section 4b.3 also names packages in these two filters: package(eileen-desktop-win),
+# package(eileen-apps-win), package(eileen-shell-win), package(eileen-hud-win) and
+# package(eileen-e2e) in the first, package(eileen-sim) in the second. nextest refuses a package()
+# or binary_id() term that matches no workspace member, so wp0/stubs, which creates every crate,
+# adds those terms back.
+[[profile.default.overrides]]
+filter = "test(/::desktop::/) | test(/::e2e::/)"
+test-group = "desktop"
+
+[[profile.default.overrides]]
+filter = "test(/turn::exhaustive/) | test(/::e2e::/)"
+slow-timeout = { period = "60s", terminate-after = 5 }

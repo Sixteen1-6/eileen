@@ -1,0 +1,52 @@
+# cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
+# allowed for jpeg-encoder, one license exception for webpki-roots, and the Linux target added so
+# the Linux lane is checked too.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = false
+
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive only; everything linked must be compatible with shipping one MIT binary.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "Unicode-3.0",
+  "Unlicense",
+  "CC0-1.0",
+  "BSL-1.0",
+  "IJG",                            # jpeg-encoder; attribution in NOTICE
+]
+confidence-threshold = 0.9
+exceptions = [
+  # Reaches the tree only through sherpa-onnx-sys's build-time download client (ureq's default TLS).
+  { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+  { crate = "openssl-sys", reason = "use rustls or SChannel" },
+  { crate = "native-tls", reason = "use rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
