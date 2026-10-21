@@ -1,0 +1,51 @@
+# The pull request's title, description and changed files (BUILD.md section 4b.3: checks 7, 8 and
+# the fix half of 19). A workflow of its own, so editing the description re-runs it without
+# re-running or skipping the heavy lanes. `pr-meta` is a required check on main.
+name: PR meta
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-meta-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-meta:
+    name: pr-meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the base commit and the merge base, for the changed files
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install && rustup show active-toolchain
+      - name: Check the title, description and changed files
+        # Everything from the event payload reaches the script through the environment, never
+        # as a template expression inside it.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          cargo --locked xtask pr-meta --body-file "$RUNNER_TEMP/pr-body.md" --title "$PR_TITLE" \
+            --author "$PR_AUTHOR" --base "$BASE_SHA" --head "$HEAD_SHA"

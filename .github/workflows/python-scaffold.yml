@@ -1,4 +1,4 @@
-name: CI
+name: Python scaffold (removed before this pull request merges)
 
 on:
   push:

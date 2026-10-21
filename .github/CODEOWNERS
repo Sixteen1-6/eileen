@@ -1,0 +1,3 @@
+# The owner reviews every change. Files no package owns (docs/BUILD.md, docs/DECISIONS.md,
+# docs/OWNER-DIRECTION.md) change only through `amendment` pull requests (BUILD.md section 6.1).
+* @Sixteen1-6

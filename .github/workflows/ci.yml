@@ -1,0 +1,215 @@
+# The pull request lane of BUILD.md section 4.6. `all-green` is the one required check from this
+# workflow: it fails unless every blocking job succeeded or was skipped. Jobs whose inputs do not
+# exist yet are absent; later work packages add them (scenarios, claude-plugin, mutants-diff).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists a pull request's files through the API
+    outputs:
+      docs_only: ${{ steps.classes.outputs.docs_only }}
+      scenarios_only: ${{ steps.classes.outputs.scenarios_only }}
+      rust: ${{ steps.classes.outputs.rust }}
+    steps:
+      # The path classes of BUILD.md section 4.6. `cargo xtask pr-meta` reads the same classes;
+      # the xtask test `ci_filters_match_the_classifier` fails if these filters drift from it.
+      - name: Files that select every class
+        id: every
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            every_class:
+              - 'Cargo.toml'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - '**/Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '**/rust-toolchain.toml'
+              - '.cargo/**'
+              - '.config/**'
+              - '.github/**'
+      - name: Files outside the docs and scenarios classes
+        id: outside
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: every
+          filters: |
+            not_docs:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+            not_scenarios:
+              - '**'
+              - '!scenarios/**'
+      - name: Decide the lanes
+        id: classes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVERY_CLASS: ${{ steps.every.outputs.every_class }}
+          NOT_DOCS: ${{ steps.outside.outputs.not_docs }}
+          NOT_SCENARIOS: ${{ steps.outside.outputs.not_scenarios }}
+        run: |
+          docs_only=false
+          scenarios_only=false
+          if [ "$EVENT_NAME" = pull_request ] && [ "$EVERY_CLASS" = false ]; then
+            if [ "$NOT_DOCS" = false ]; then docs_only=true; fi
+            if [ "$NOT_SCENARIOS" = false ]; then scenarios_only=true; fi
+          fi
+          rust=true
+          if [ "$docs_only" = true ] || [ "$scenarios_only" = true ]; then rust=false; fi
+          {
+            echo "docs_only=$docs_only"
+            echo "scenarios_only=$scenarios_only"
+            echo "rust=$rust"
+          } >> "$GITHUB_OUTPUT"
+          echo "docs-only: $docs_only; scenarios-only: $scenarios_only; Rust lanes: $rust"
+
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install && rustup show active-toolchain
+      - name: Formatting
+        run: cargo fmt --all --check
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny@0.20.2,cargo-machete@0.9.2
+      - name: Licenses, advisories, bans and sources (cargo-deny)
+        run: cargo deny --locked check
+      - name: Unused dependencies (cargo-machete)
+        run: cargo machete
+
+  logic-linux:
+    name: logic-linux
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Clippy, warnings denied
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo nextest run --workspace --locked --profile ci
+      - name: Doc tests
+        run: cargo test --workspace --doc --locked
+      - name: Docs, warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+      - name: Keep the test report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logic-linux-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+
+  windows-clippy:
+    name: windows-clippy
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: win-clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy, warnings denied
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  windows-test:
+    name: windows-test
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: win-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Tests
+        run: cargo nextest run --workspace --locked --profile ci
+      - name: Doc tests
+        run: cargo test --workspace --doc --locked
+      - name: Keep the test report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-test-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+
+  all-green:
+    name: all-green
+    needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every blocking job succeeded or was skipped
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }} # through the environment, never into the script
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS_JSON"
+          jq --exit-status 'all(.[]; .result == "success" or .result == "skipped")' <<< "$NEEDS_JSON"
