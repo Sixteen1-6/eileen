@@ -316,7 +316,6 @@ name = "eileen-supervisor"
 version = "0.0.0"
 dependencies = [
  "eileen-rt",
- "eileen-stdx",
  "eileen-trace",
  "process-wrap",
  "thiserror",
