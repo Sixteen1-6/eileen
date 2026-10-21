@@ -21,3 +21,7 @@
 *.drx binary
 *.drp binary
 *.pdb binary
+
+# Fuzz seeds and regressions are bytes, never normalised.
+fuzz/corpus/** binary
+fuzz/regressions/** binary

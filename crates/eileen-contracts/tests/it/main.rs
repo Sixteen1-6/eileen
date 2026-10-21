@@ -4,6 +4,8 @@
 //! allowances and `tests_outside_test_module`).
 
 #[cfg(test)]
+mod fuzz_corpus;
+#[cfg(test)]
 mod modules;
 #[cfg(test)]
 mod schemas;
