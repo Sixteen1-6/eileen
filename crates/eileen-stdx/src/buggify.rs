@@ -1,4 +1,4 @@
-//! [`buggify!`](crate::buggify): fault points that fire only under the simulator.
+//! [`buggify!`](crate::buggify!): fault points that fire only under the simulator.
 //!
 //! A fault point marks a place where the real world can misbehave (a reply arrives late, a
 //! write fails, a queue fills). Outside a simulator run it is a thread-local check that always

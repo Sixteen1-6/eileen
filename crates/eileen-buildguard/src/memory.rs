@@ -53,7 +53,8 @@ pub fn pages_to_kb_s(pages_per_sec: f64, page_size_bytes: u32) -> u32 {
 }
 
 /// Bytes to whole MB, saturating.
-pub(crate) fn mb(bytes: u64) -> u32 {
+#[cfg(windows)]
+fn mb(bytes: u64) -> u32 {
     u32::try_from(bytes / (1024 * 1024)).unwrap_or(u32::MAX)
 }
 

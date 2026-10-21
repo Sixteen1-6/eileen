@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_target_and_value() {
-        assert_eq!(u32_from_usize(usize::MAX).unwrap_err().target, "u32", "target named",);
+        assert_eq!(u32_from_usize(usize::MAX).unwrap_err().target, "u32", "target named");
         assert_eq!(
             u64_from_i64(-3),
             Err(OutOfRange { target: "u64", value: -3 }),
