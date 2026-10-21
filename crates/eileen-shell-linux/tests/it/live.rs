@@ -10,7 +10,10 @@ use eileen_shell_linux::LinuxMachineProbe;
 fn this_machine_reads_facts_that_hold_together() {
     // A folder that does not exist yet: the volume is measured at its nearest existing parent.
     let data_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("live").join("not-created");
-    let facts = LinuxMachineProbe::system(&data_dir).facts().unwrap();
+    let probe = LinuxMachineProbe::system(&data_dir);
+    let facts = probe.facts().unwrap();
+    let (busy_pct, _) = probe.load().unwrap();
+    assert!(busy_pct <= 100, "a share: {busy_pct}");
     assert_eq!(facts.os, Platform::Linux, "Linux");
     assert!(facts.os_build.contains(", kernel "), "the build names the kernel: {}", facts.os_build);
     assert!(facts.memory_total_mb > 0, "memory");

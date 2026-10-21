@@ -116,6 +116,7 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
   - Battery saver is the ACPI platform profile `low-power` or power-profiles-daemon's saved `power-saver` profile.
   - L1 reads the active profile over D-Bus, which also sees a program's hold.
 - **Monitors.** The DRM connectors whose status is `connected` and that are not `disabled`.
+- **Load.** `MachineProbe::load`'s CPU busy share comes from the `cpu` line of `/proc/stat`: busy ticks over all ticks since the previous call, as `GetSystemTimes` differences give it on Windows. The power state comes with it.
 
 Three licence notes, from the crates.io data:
 

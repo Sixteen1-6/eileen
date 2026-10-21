@@ -213,3 +213,10 @@ Pid:	5030
 PPid:	5020
 VmRSS:	 1900000 kB
 >>>
+
+# The load: the CPU line of /proc/stat (the tests rewrite it between calls).
+<<< proc/stat
+cpu  4705 356 584 3699 23 0 23 0 0 0
+cpu0 1393 280 307 2191 9 0 21 0 0 0
+intr 114930548
+>>>

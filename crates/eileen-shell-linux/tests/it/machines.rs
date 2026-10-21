@@ -314,3 +314,14 @@ fn a_root_without_meminfo_is_an_error_and_an_unreadable_volume_is_degraded() {
     );
     assert!(degraded(&facts).contains(&"disk"), "and named: {:?}", facts.degraded);
 }
+
+#[test]
+fn the_load_is_the_busy_share_since_the_previous_call_with_the_power_state() {
+    let root = tree::build("intel-hybrid-laptop", "load");
+    let probe = LinuxMachineProbe::new(SysRoot::at(&root), "/unused");
+    let on_battery_saver = PowerState { has_battery: true, on_battery: true, battery_saver: true };
+    assert_eq!(probe.load().unwrap(), (60, on_battery_saver), "since boot: 5,668 of 9,390 ticks");
+    std::fs::write(root.join("proc/stat"), "cpu  5705 356 784 4699 23 0 23 0 0 0\n").unwrap();
+    assert_eq!(probe.load().unwrap().0, 55, "1,200 busy of 2,200 ticks since the first call");
+    assert_eq!(probe.load().unwrap().0, 55, "no tick since: the previous share");
+}

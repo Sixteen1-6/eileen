@@ -4,37 +4,63 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use eileen_contracts::connectors::Platform;
 
 use crate::adapters::read_adapters;
 use crate::cpu::read_cpu;
 use crate::disk::{Volume, read_media, read_volume};
-use crate::facts::{DiskFacts, DiskMedia, MachineFacts};
+use crate::facts::{DiskFacts, DiskMedia, MachineFacts, PowerState};
+use crate::load::{CpuTimes, busy_pct, parse_proc_stat};
 use crate::memory::{kb_to_mb, parse_meminfo};
 use crate::monitors::read_monitors;
 use crate::os::{is_wsl, read_os};
 use crate::power::read_power;
 use crate::{ReadError, SysRoot};
 
-/// Reads the machine's facts on Linux (BUILD.md section 2.16).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Reads the machine's facts on Linux (BUILD.md section 2.16), and its load.
+#[derive(Debug)]
 pub struct LinuxMachineProbe {
     root: SysRoot,
     data_dir: PathBuf,
+    /// The CPU times at the previous [`load`](Self::load), and the share it reported.
+    cpu: Mutex<Option<(CpuTimes, u8)>>,
 }
 
 impl LinuxMachineProbe {
     /// A probe that reads under `root` and measures the volume of `data_dir`.
     #[must_use]
     pub fn new(root: SysRoot, data_dir: impl Into<PathBuf>) -> Self {
-        Self { root, data_dir: data_dir.into() }
+        Self { root, data_dir: data_dir.into(), cpu: Mutex::new(None) }
     }
 
     /// A probe of the real machine, measuring the volume of `data_dir`.
     #[must_use]
     pub fn system(data_dir: impl Into<PathBuf>) -> Self {
         Self::new(SysRoot::system(), data_dir)
+    }
+
+    /// The CPU's busy share since the previous call, in percent, and the power state: what
+    /// `MachineProbe::load` gives every 30 s. The first call's share covers the time since boot;
+    /// a call before another clock tick has passed repeats the previous share. Unreadable power
+    /// facts are not reported here: the facts' `degraded` list names them.
+    pub fn load(&self) -> Result<(u8, PowerState), ReadError> {
+        let text = self.root.read("proc/stat").map_err(ReadError::io("/proc/stat"))?;
+        let now = parse_proc_stat(&text)
+            .ok_or(ReadError::Missing { what: "/proc/stat", field: "cpu" })?;
+        let pct = {
+            let mut previous = self.cpu.lock().unwrap_or_else(PoisonError::into_inner);
+            let (before, last_pct) = previous.unwrap_or((CpuTimes { busy: 0, total: 0 }, 0));
+            match busy_pct(before, now) {
+                Some(pct) => {
+                    *previous = Some((now, pct));
+                    pct
+                }
+                None => last_pct,
+            }
+        };
+        Ok((pct, read_power(&self.root, false, &mut Vec::new())))
     }
 
     /// Reads every fact. The data folder's volume is measured on the real file system.

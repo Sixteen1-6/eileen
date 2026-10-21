@@ -6,7 +6,8 @@
 //! # Owns
 //!
 //! - Reading the machine's facts on Linux: the processor and its core classes, memory totals,
-//!   GPUs and NPUs, the data folder's volume, the OS, power and the monitor count.
+//!   GPUs and NPUs, the data folder's volume, the OS, power and the monitor count; and its load,
+//!   the CPU's busy share with the power state.
 //! - [`facts`]: their shapes, field for field as BUILD.md section 3.3.17 gives them, until
 //!   `eileen-contracts::machine` exists.
 //! - Sampling memory on Linux into `eileen_contracts::jobs::MemoryPressure`: available memory,
@@ -93,6 +94,7 @@ mod cpu;
 mod disk;
 mod error;
 pub mod facts;
+mod load;
 mod memory;
 mod monitors;
 mod os;
