@@ -61,7 +61,6 @@
 "WindowInfo.class" = "the window class name"
 "WindowInfo.exe_version" = "the executable's file version"
 "ElementInfo.control_type" = "a UI Automation control type name, enum-like"
-"ElementInfo.automation_id" = "a UI Automation id the app's developer set, an identifier"
 "ElementInfo.patterns[]" = "UI Automation pattern names, enum-like"
 "DesktopState.degraded[]" = "names of DesktopState fields that timed out"
 "MediaState.session" = "the media session's id from the OS"

@@ -153,8 +153,9 @@ pub struct ElementInfo {
     pub control_type: String,
     /// Its name.
     pub name: Untrusted<String>,
-    /// Its automation id, when the app set one.
-    pub automation_id: Option<String>,
+    /// Its automation id, when the app set one. Untrusted: in Chromium, Firefox and Electron
+    /// apps it is the DOM element's `id`, which any page sets.
+    pub automation_id: Option<Untrusted<String>>,
     /// Its bounds.
     pub rect: Rect,
     /// The UI Automation patterns it supports.
@@ -266,12 +267,12 @@ pub struct Selector {
     pub process: String,
     /// The window class.
     pub window_class: Option<String>,
-    /// The element's automation id.
-    pub automation_id: Option<String>,
+    /// The element's automation id (a page sets it in a browser).
+    pub automation_id: Option<Untrusted<String>>,
     /// The element's control type.
     pub control_type: Option<String>,
     /// The element's name.
-    pub name: Option<String>,
+    pub name: Option<Untrusted<String>>,
     /// Its ancestors, nearest first.
     #[serde(default)]
     pub ancestors: Vec<SelectorStep>,
@@ -284,9 +285,9 @@ pub struct SelectorStep {
     /// Its control type.
     pub control_type: Option<String>,
     /// Its name.
-    pub name: Option<String>,
-    /// Its automation id.
-    pub automation_id: Option<String>,
+    pub name: Option<Untrusted<String>>,
+    /// Its automation id (a page sets it in a browser).
+    pub automation_id: Option<Untrusted<String>>,
 }
 
 /// A media session (the system's media transport controls).

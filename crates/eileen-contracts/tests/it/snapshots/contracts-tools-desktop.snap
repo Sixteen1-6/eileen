@@ -1030,11 +1030,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": "array"
             },
             "automation_id": {
-              "description": "The element's automation id.",
+              "description": "The element's automation id (a page sets it in a browser).",
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "control_type": {
               "description": "The element's control type.",
@@ -1048,7 +1049,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "process": {
               "description": "The process name.",
@@ -1072,11 +1074,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "One ancestor of a selected element.",
           "properties": {
             "automation_id": {
-              "description": "Its automation id.",
+              "description": "Its automation id (a page sets it in a browser).",
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "control_type": {
               "description": "Its control type.",
@@ -1090,7 +1093,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             }
           },
           "type": "object"
@@ -1805,11 +1809,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": "array"
             },
             "automation_id": {
-              "description": "The element's automation id.",
+              "description": "The element's automation id (a page sets it in a browser).",
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "control_type": {
               "description": "The element's control type.",
@@ -1823,7 +1828,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "process": {
               "description": "The process name.",
@@ -1847,11 +1853,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "One ancestor of a selected element.",
           "properties": {
             "automation_id": {
-              "description": "Its automation id.",
+              "description": "Its automation id (a page sets it in a browser).",
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             },
             "control_type": {
               "description": "Its control type.",
@@ -1865,7 +1872,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "type": [
                 "string",
                 "null"
-              ]
+              ],
+              "x-eileen-text": "untrusted"
             }
           },
           "type": "object"

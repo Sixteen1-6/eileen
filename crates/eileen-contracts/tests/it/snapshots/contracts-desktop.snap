@@ -329,11 +329,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "description": "One UI Automation element.",
       "properties": {
         "automation_id": {
-          "description": "Its automation id, when the app set one.",
+          "description": "Its automation id, when the app set one. Untrusted: in Chromium, Firefox and Electron\napps it is the DOM element's `id`, which any page sets.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-eileen-text": "untrusted"
         },
         "control_type": {
           "description": "Its control type, for example `Edit`.",
@@ -730,11 +731,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "array"
         },
         "automation_id": {
-          "description": "The element's automation id.",
+          "description": "The element's automation id (a page sets it in a browser).",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-eileen-text": "untrusted"
         },
         "control_type": {
           "description": "The element's control type.",
@@ -748,7 +750,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-eileen-text": "untrusted"
         },
         "process": {
           "description": "The process name.",
@@ -772,11 +775,12 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "description": "One ancestor of a selected element.",
       "properties": {
         "automation_id": {
-          "description": "Its automation id.",
+          "description": "Its automation id (a page sets it in a browser).",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-eileen-text": "untrusted"
         },
         "control_type": {
           "description": "Its control type.",
@@ -790,7 +794,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-eileen-text": "untrusted"
         }
       },
       "type": "object"
