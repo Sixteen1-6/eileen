@@ -334,10 +334,15 @@ pub enum FieldCategory {
 }
 
 /// Turns text from UI Automation into contract text: valid UTF-8 (the `&str` already is),
-/// `\r\n` and lone `\r` turned into `\n`, every other control character except `\n` and `\t`
-/// removed, the bidirectional formatting characters (embeddings, overrides, isolates and the
-/// direction marks) removed, and at most `max_chars` characters kept. It reads the input only
-/// until the output is full, so a huge input costs no more than a short one.
+/// `\r\n`, a lone `\r` and the Unicode line and paragraph separators (U+2028, U+2029) turned
+/// into `\n`, every other control character except `\n` and `\t` removed, the bidirectional
+/// formatting characters (embeddings, overrides, isolates and the direction marks) removed, the
+/// invisible formatting characters a model still reads removed (the tag block U+E0000 to
+/// U+E007F, the byte order mark U+FEFF, the word joiner and invisible operators U+2060 to
+/// U+2064, the interlinear annotation marks U+FFF9 to U+FFFB), and at most `max_chars`
+/// characters kept. The zero-width joiner and non-joiner stay, because emoji and several
+/// scripts need them. It reads the input only until the output is full, so a huge input costs
+/// no more than a short one.
 #[must_use]
 pub fn sanitize(text: &str, max_chars: usize) -> Untrusted<String> {
     let mut out = String::with_capacity(text.len().min(max_chars.saturating_mul(4)));
@@ -352,8 +357,9 @@ pub fn sanitize(text: &str, max_chars: usize) -> Untrusted<String> {
                 }
                 '\n'
             }
+            '\u{2028}' | '\u{2029}' => '\n',
             '\n' | '\t' => c,
-            c if c.is_control() || is_bidi_control(c) => continue,
+            c if c.is_control() || is_bidi_control(c) || is_invisible_format(c) => continue,
             c => c,
         };
         out.push(c);
@@ -364,8 +370,15 @@ pub fn sanitize(text: &str, max_chars: usize) -> Untrusted<String> {
 
 /// The bidirectional formatting characters: ALM, LRM, RLM, the embeddings and overrides
 /// (U+202A to U+202E) and the isolates (U+2066 to U+2069).
-const fn is_bidi_control(c: char) -> bool {
+pub(crate) const fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Invisible formatting characters that hide text from a reader but not from a model: the tag
+/// block (U+E0000 to U+E007F), the byte order mark (U+FEFF), the word joiner and invisible
+/// operators (U+2060 to U+2064) and the interlinear annotation marks (U+FFF9 to U+FFFB).
+pub(crate) const fn is_invisible_format(c: char) -> bool {
+    matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{FEFF}' | '\u{2060}'..='\u{2064}' | '\u{FFF9}'..='\u{FFFB}')
 }
 
 pub(crate) fn register(r: &mut Registry) {
@@ -416,6 +429,32 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_removes_invisible_format_characters() {
+        let tagged = "ok\u{E0001}\u{E0069}\u{E0067}\u{E006E}\u{E007F}!";
+        assert_eq!(sanitize(tagged, 100).get(), "ok!", "the tag block");
+        let hidden = "\u{FEFF}a\u{2060}b\u{2061}\u{2064}c\u{FFF9}d\u{FFFA}\u{FFFB}";
+        assert_eq!(
+            sanitize(hidden, 100).get(),
+            "abcd",
+            "BOM, word joiner, invisible operators, annotations"
+        );
+        assert_eq!(
+            sanitize("👩\u{200D}💻 \u{200C}x", 100).get(),
+            "👩\u{200D}💻 \u{200C}x",
+            "ZWJ and ZWNJ stay"
+        );
+    }
+
+    #[test]
+    fn sanitize_turns_unicode_line_breaks_into_newlines() {
+        assert_eq!(
+            sanitize("one\u{2028}two\u{2029}three", 100).get(),
+            "one\ntwo\nthree",
+            "separators"
+        );
+    }
+
+    #[test]
     fn sanitize_bounds_the_output_in_characters() {
         assert_eq!(sanitize("東京東京", 3).get(), "東京東", "three characters");
         assert_eq!(sanitize("abc", 0).get(), "", "zero");
@@ -430,7 +469,9 @@ mod tests {
             prop_assert!(out.chars().count() <= max);
             prop_assert!(out.chars().all(|c| c == '\n' || c == '\t' || !c.is_control()));
             prop_assert!(!out.contains('\r'));
+            prop_assert!(!out.contains(['\u{2028}', '\u{2029}']), "a Unicode line break");
             prop_assert!(!out.chars().any(super::is_bidi_control));
+            prop_assert!(!out.chars().any(super::is_invisible_format));
             prop_assert_eq!(sanitize(&out, max).into_inner(), out, "idempotent");
         }
     }
