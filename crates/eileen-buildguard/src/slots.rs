@@ -213,19 +213,32 @@ pub struct Freed {
 
 /// Frees every slot whose holder is gone: its lock is free (the OS released it when the
 /// holder died) but its record is still there. Returns what it removed.
+///
+/// The record is read and removed only while this call holds the slot's lock, so a command
+/// that takes the slot meanwhile either waits for this call (its take refuses for that tick)
+/// or has already written a fresh record, which this call then leaves alone.
 pub fn kill_stale(root: &Path) -> io::Result<Vec<Freed>> {
     let mut freed = Vec::new();
     for slot in Slot::ALL {
-        let Some(holder) = slot_holder(root, slot) else { continue };
-        if is_held(root, slot.name())? {
+        if slot_holder(root, slot).is_none() {
             continue;
         }
-        let (_, holder_path) = paths(root, slot.name());
-        match fs::remove_file(holder_path) {
-            Ok(()) => freed.push(Freed { slot, holder }),
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+        let (lock_path, holder_path) = paths(root, slot.name());
+        let lock = open_lock(&lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => continue,
+            Err(TryLockError::Error(e)) => return Err(e),
         }
+        // Read again under the lock: this is the record of a holder that is gone.
+        if let Some(holder) = slot_holder(root, slot) {
+            match fs::remove_file(&holder_path) {
+                Ok(()) => freed.push(Freed { slot, holder }),
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        drop(lock);
     }
     Ok(freed)
 }
@@ -267,6 +280,18 @@ mod tests {
         drop(held);
         assert!(!is_held(&dir, "build-slot-0").unwrap(), "released");
         assert_eq!(holder(&dir, "build-slot-0"), None, "record removed");
+        let _ignored = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kill_stale_leaves_a_record_whose_lock_is_held() {
+        // A command that has just taken the slot holds its lock: its record is not stale, even
+        // when kill_stale read it a moment before the take.
+        let dir = root("stale-race");
+        let held = try_take_slot(&dir, Slot::One, &me()).unwrap().unwrap();
+        assert!(kill_stale(&dir).unwrap().is_empty(), "nothing freed");
+        assert_eq!(slot_holder(&dir, Slot::One), Some(me()), "the fresh record is kept");
+        drop(held);
         let _ignored = std::fs::remove_dir_all(&dir);
     }
 
