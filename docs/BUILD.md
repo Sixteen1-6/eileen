@@ -1164,7 +1164,7 @@ pub struct Envelope<E> { pub seq: u64, pub at: WallTime, pub mono: MonoTime, pub
 #[serde(transparent)] pub struct Personal<T>(T);
 ```
 
-`TraceCtx::traceparent()` renders W3C `00-<32 hex of the turn ULID, or the job ULID>-<16 hex span>-01`. Every free-text `String` reachable from `Input`, `ToolResult` and `DesktopState` is wrapped in `Untrusted` or `Personal`, or is listed in `contracts/text-allowlist.toml` with a reason (enum-like strings such as a tool name); a test walks the generated schemas (each wrapper carries an `x-eileen-text` schema extension) and fails otherwise.
+`TraceCtx::traceparent(span)` renders W3C `00-<32 hex of the turn ULID, or the job ULID>-<16 hex span>-01` for the span id it is given, and returns `None` when the context has neither a turn nor a job or when either id would be all zeros, which the W3C format forbids. Every free-text `String` reachable from `Input`, `ToolResult` and `DesktopState` is wrapped in `Untrusted` or `Personal`, or is listed in `contracts/text-allowlist.toml` with a reason (enum-like strings such as a tool name); a `serde_json::Value` counts as free text, since it can hold any, and so do the keys of a map; a test walks the generated schemas (each wrapper carries an `x-eileen-text` schema extension) and fails otherwise.
 
 #### 3.3.2 Shared enums and job types
 
@@ -1360,7 +1360,7 @@ pub enum WorkerEvent {
     MemoryLimit { limit_mb: u32 },        // the session's Job Object hit memory.worker_job_limit_mb
     TurnDone { cost: Cost, is_error: bool, summary: Untrusted<String> },
     RateLimit(PlanUsage),
-    AuthFailed { message: String },       // parsed from the result event, not the exit code
+    AuthFailed { message: Untrusted<String> },   // parsed from the result event, not the exit code; vendor text
     Malformed { line_len: u32 },
     Exited { code: Option<i32> },
 }
@@ -1372,7 +1372,7 @@ pub enum HookRequest {
     PermissionRequest { request: u64, tool_name: String, tool_input: Untrusted<serde_json::Value>, tool_use_id: String },
     Notification { kind: String, message: Untrusted<String> },
     PermissionDenied { tool_name: String }, PostToolUseFailure { tool_name: String, error: Untrusted<String> },
-    SubagentStart, SubagentStop, Stop { last_message: Option<Untrusted<String>> }, StopFailure { error: String },
+    SubagentStart, SubagentStop, Stop { last_message: Option<Untrusted<String>> }, StopFailure { error: Untrusted<String> },
 }
 /// Built by the runtime for each path argument of a file tool, of a shell command (from the tokenizer's path
 /// positions; access says whether the command reads or writes it) and of an Eileen tool field marked x-eileen-path.
@@ -1473,7 +1473,7 @@ pub enum Effect {
     Audio(AudioCmd),            // SetCapture(bool), Duck { db }, Unduck, Pause { speak }, Resume { speak }, Stop { speak },
                                 // PlayPhrase { key, voice }, Earcon(Earcon), Record { seconds, purpose }
     Brain(BrainCmd),            // Turn { slot, turn, message, authority }, Interrupt { slot }, Recycle { slot, summary },
-                                // Promote (the spare becomes the primary; the old primary is killed, a new spare
+                                // Promote { slot } (the spare becomes the primary; the old primary is killed, a new spare
                                 // starts), Start { slot }, Stop { slot } (the fallback slot: started on first need,
                                 // stopped after 10 idle minutes); every command names a BrainSlot
     Worker(WorkerSessionId, WorkerCmd),   // Start(SessionSpec), Bind(JobBinding), Prompt { text }, Interrupt, Cancel,
@@ -1496,7 +1496,9 @@ pub enum Effect {
                                 // PurgeJobs { jobs, turns } (a forget: the jobs' rows and every event of those turns)
     Emit(BusEvent),
     SetTimer { id: TimerId, at: MonoTime }, CancelTimer(TimerId),
-    Incident(IncidentTrigger),
+    Incident(IncidentTrigger),  // UserReport, Explain, Panic, Crash, WatchdogTrip, SupervisorKill, SoftAssertion (2.13,
+                                // 4.7); the runtime and the guard name the incidents they write the same way; WP1 adds
+                                // new triggers as new variants
     Notify(Toast),
 }
 pub enum HookDecision { None, Ask { reason: String }, Deny { reason: String } }   // never Allow
@@ -1568,6 +1570,8 @@ pub enum ApprovalSource {
     JobEnded,                              // the job was cancelled or failed while the question was open
 }
 pub struct UserError { pub kind: UserErrorKind, pub sentence: String, pub fix: Option<FixAction> }
+pub enum UserErrorKind { JobKindUnavailable, Unexpected }   // Unexpected: no template, offers "explain that" (2.13);
+                                                            // WP1 adds the other kinds with their sentences and fixes
 pub enum FixAction { OpenUri { uri: String }, Doctor { area: String }, Setting { change: SettingChange }, Retry { job: JobId },
                      Explain { incident: IncidentId } }
 ```
@@ -1588,7 +1592,9 @@ pub struct DesktopState {
                                          // other windows, and for a browser window whose bar could not be read; for a
                                          // private window it serves only the URL rule and is never shown or stored)
     pub foreground: Option<WindowRef>,
-    pub focused_element: Option<ElementInfo>, // control_type, name (Untrusted), automation_id, rect, patterns, is_password, window
+    pub focused_element: Option<ElementInfo>, // control_type, name (Untrusted), automation_id (Untrusted: in Chromium,
+                                         // Firefox and Electron apps it is the DOM id a page sets), rect, patterns,
+                                         // is_password, window
     pub selection: Option<Selection>,    // text (at most 4,000 chars, Untrusted), source: TextPattern | ClipboardFallback
     pub caret: Option<Rect>,
     pub recent_references: Vec<Reference>,   // at most 8, newest first
@@ -1639,7 +1645,7 @@ pub enum HudInput {
     SaveScenario, DismissPanel, ApproveSkillLine { skill: SkillId, line: u32 }, ApproveDraft { skill: SkillId },
     Answer { id: u64, option: u8 },      // Confirm panels, contact sheets, clarifying questions, route proposals
     RunHeardLine { turn: TurnId },       // "that was for you" by tap
-    SetSetting { key: String, value: serde_json::Value },   // goes through the normal settings flow
+    SetSetting { key: String, value: Personal<serde_json::Value> },   // goes through the normal settings flow
     FirstRun { choice: FirstRunChoice, consent_own_voice: bool },   // Tour | Skip | Surprise
     StartAnyway(JobId), Fix { error: u64 }, Back,   // admit a queued job; run an error's fix; return the foreground
     DropFile { path: Personal<String> }, // an audio clip dropped on the strip: starts voice enrollment
@@ -1823,7 +1829,8 @@ pub struct JobsControl { pub job: JobRef, pub action: JobAction }
     // Cancel | Interrupt | Steer { text } | Reroute { route, model, depth } | Focus | ShowChanges | Keep | Undo. Tier 1, Keep with cleanup tier 2
 pub struct DesktopStateArgs { pub detail: Detail, pub since_seq: Option<u64> }   // Summary | Full. Tier 0
 pub struct DesktopLook { pub target: LookTarget, pub max_edge_px: Option<u32> }  // Screen | Foreground | Window { hwnd }; default 1280. Tier 0
-pub struct Capabilities { pub scope: CapabilityScope }                   // FocusedApp | Everything. Tier 0
+pub struct Capabilities { pub scope: CapabilityScope }                   // FocusedApp | Everything. Tier 0; its schema is
+                                                                         // published as CapabilitiesArgs, beside intent's Capabilities
 pub struct SettingsGet { pub keys: Vec<String> }                         // empty: a short summary. Tier 0
 pub struct SettingsPropose { pub changes: Vec<SettingChange>, pub utterance: String }   // returns a Proposal (3.3.11). Tier 0
 pub struct SettingsApply { pub proposal: ProposalId }                    // tier per the proposal's risk; Safety keys need a UserInput approval
@@ -1881,8 +1888,9 @@ pub struct DesktopSelection { pub hwnd: Option<i64>, pub allow_clipboard: bool }
 pub struct DesktopInsertText { pub text: String, pub target: InsertTarget, pub category: Option<FieldCategory> }   // tier 1
 pub struct DesktopVolume { pub action: VolumeAction }    // Set { pct } | Step { delta_pct } | Mute(bool) | Get. Tier 1 (Get 0); inverse journaled;
     // served by eileen-desktop through the SystemVolume platform trait (section 3.4)
-pub struct Selector { pub process: String, pub window_class: Option<String>, pub automation_id: Option<String>,
-    pub control_type: Option<String>, pub name: Option<String>, pub ancestors: Vec<SelectorStep> }
+pub struct Selector { pub process: String, pub window_class: Option<String>, pub automation_id: Option<Untrusted<String>>,
+    pub control_type: Option<String>, pub name: Option<Untrusted<String>>, pub ancestors: Vec<SelectorStep> }
+    // a selector and its steps refuse unknown fields, so a misspelt field never widens the match
 
 // apps toolset
 pub struct AppsMedia { pub action: MediaAction, pub session: Option<String> }
@@ -1960,7 +1968,7 @@ pub struct DevIncidentRead { pub id: IncidentId, pub part: IncidentPart }
 pub struct DevReplayCore { pub id: String }
 ```
 
-Shim to core protocol: named pipe `\\.\pipe\eileen-dispatch-<session>` (for the session role, `\\.\pipe\eileen-dispatch-owner`), user-only ACL, JSON lines (at most 16 MiB per line, for images). First line `{"hello":{"v":1,"token":"...","role":"brain"|{"worker":"ws_..."}|"librarian"|"session"|"dev"}}`; the dispatcher checks the token, then the caller's process (an `eileen-shim.exe` from Eileen's install folder inside the matching session's Job Object for every role but `session`, and outside every Eileen-started Job Object for `session`, section 2.12), and answers `{"welcome":{"tools":[ToolSpec...]}}`; then `{"call":{"id":n,"tool":"...","args":{...},"meta":{...}}}` answered by `{"result":{"id":n,"content":[...],"is_error":false}}`. A wrong token or the wrong process closes the pipe and logs a security event. The shim never decides anything. WP0's stub shim already answers MCP `initialize` and an empty `tools/list`, so the claude CLI never waits `MCP_TIMEOUT` (30 s) on it during W1.
+Shim to core protocol: named pipe `\\.\pipe\eileen-dispatch-<session>` (for the session role, `\\.\pipe\eileen-dispatch-owner`), user-only ACL, JSON lines (at most 16 MiB per line, for images). First line `{"hello":{"v":1,"token":"...","role":"brain"|{"worker":"ws_..."}|"librarian"|"session"|"dev"}}`; the dispatcher checks the token, then the caller's process (an `eileen-shim.exe` from Eileen's install folder inside the matching session's Job Object for every role but `session`, and outside every Eileen-started Job Object for `session`, section 2.12), and answers `{"welcome":{"tools":[ToolSpec...]}}`; then `{"call":{"id":n,"tool":"...","args":{...},"meta":{...}}}` answered by `{"result":{"id":n,"content":[...],"is_error":false}}`. The lines are contract types in `eileen_contracts::tools`: the shim writes `ShimLine::{Hello(ShimHello { v, token: SessionToken, role: ShimRole }), Call(CallLine { id, tool, args: Untrusted<Value>, meta: CallMeta { traceparent } })}` and the dispatcher `DispatcherLine::{Welcome(Welcome { tools }), Result(ResultLine { id, content, is_error })}`. A wrong token or the wrong process closes the pipe and logs a security event. The shim never decides anything. WP0's stub shim already answers MCP `initialize` and an empty `tools/list`, so the claude CLI never waits `MCP_TIMEOUT` (30 s) on it during W1.
 
 #### 3.3.10 The intent resolver
 
@@ -2004,7 +2012,7 @@ pub enum Resolution {
     Hints(Vec<(SkillRef, u16)>),                                // L2: for the brain only
     Brain { depth: Option<Depth>, addressee_unsure: bool },     // L3, with any depth override
 }
-pub enum SlotValue { Resolved(serde_json::Value), Ambiguous { candidates: Vec<serde_json::Value> } }
+pub enum SlotValue { Resolved(Untrusted<serde_json::Value>), Ambiguous { candidates: Vec<Untrusted<serde_json::Value>> } }
 /// What a grammar entry of section 2.4 asks the core to do itself (entries that are plain tool calls resolve to
 /// Resolution::Tool instead). One variant per entry family; snapshot-tested with the grammar.
 pub enum CoreCommand {
@@ -2205,7 +2213,9 @@ pub struct RecipeStep { pub id: String, pub kind: StepKind, pub pre: Vec<Check>,
     pub timeout_ms: u32, pub on_fail: OnFail }
 /// A value in arguments, check arguments and expectations. Serialized as a plain JSON literal, {"$slot": "t"},
 /// {"$step": "id", "ptr": "/json/pointer"} or {"$len": <operand>} (the length of the array the inner operand resolves
-/// to); the linter types every pointer against the op's output_schema (a Delegate step's against the report schema).
+/// to); a literal of one of those shapes, or whose only key is "$lit", is written {"$lit": <literal>}, so it never reads
+/// back as a reference; the linter types every pointer against the op's output_schema (a Delegate step's against the
+/// report schema).
 pub enum Operand { Lit(serde_json::Value), Slot(String), Step { step: String, ptr: String }, Len(Box<Operand>) }
 pub enum StepKind {
     Call { tool: ToolName, op: Option<String>, args: serde_json::Value },   // values may be Operands
@@ -2299,7 +2309,7 @@ pub struct UseRecord { pub job: JobId, pub at: WallTime, pub verdict: Verdict, p
 /// answers: the answers-cache rows those jobs wrote; source_topics: SourceStat topics no other job contributed to.
 pub struct ForgetPlan { pub skills: Vec<SkillRef>, pub facts: Vec<String>, pub phrasings: Vec<String>,
     pub answers: Vec<String>, pub source_topics: Vec<String>, pub jobs: Vec<JobId>, pub turns: Vec<TurnId>,
-    pub blobs: Vec<String>, pub incidents: Vec<IncidentId>, pub recordings: Vec<RecordingId>, pub scenarios: Vec<ScenarioId>,
+    pub blobs: Vec<BlobRef>, pub incidents: Vec<IncidentId>, pub recordings: Vec<RecordingId>, pub scenarios: Vec<ScenarioId>,
     pub live_sessions: Vec<WorkerSessionId> }   // the jobs and turns also go to Persist(PurgeJobs) for eileen.db
 ```
 
@@ -2353,7 +2363,9 @@ pub enum Step {
     Say { utterance: u16 },              // index into intent.utterances
     Type { text: String }, Hotkey { keys: String }, Hud { input: HudInput },
     WaitFor { event: String, timeout_ms: u32 },   // a name from docs/reference/events.md
-    Approve, Deny, Pause { ms: u32 }, PhysicalInput,   // PhysicalInput simulates the user touching the mouse
+    Approve {}, Deny {}, Pause { ms: u32 }, PhysicalInput {},   // PhysicalInput simulates the user touching the mouse;
+                                         // a step with no fields is written as an empty table (approve = {}), which serde
+                                         // and the schema both read; steps, HUD inputs and selectors refuse unknown fields
 }
 pub enum Expectation {
     Event { pattern: String },           // matched against the event trace with [ANY], [ANYLINE], [UNORDERED] (3.3.16)
@@ -2491,7 +2503,11 @@ The simulator, the replayer, the flight recorder, the stub harness, scenarios an
 
 ```rust
 pub struct InputRecord { pub seq: u64, pub mono: MonoTime, pub at: WallTime, pub ctx: TraceCtx, pub input: Input }
-    // large values replaced by {"$blob": "b3:..."}; unaddressed speech replaced by a placeholder when written
+    // unaddressed speech replaced by a placeholder when written; any string over the writer's limit, wherever it sits
+    // (an image's base64, a large argument inside a Value), replaced by {"$blob": "b3:..."} (a BlobRef: b3: and the
+    // BLAKE3 hash in 64 lower-case hex), and an object that would read as a stub (its only key $blob or $lit) written
+    // {"$lit": <it>}; record::stub_blobs writes this form and record::resolve_blobs reads it back before the line is
+    // parsed, exact inverses for every JSON value
 /// One line of replay/inputs.jsonl and of the flight recorder's input lane.
 pub enum RecordLine { Input(InputRecord), HookAnswer(HookAnswerRecord) }
 /// The core's Effect::Hook answer to a gating hook input (PreToolUse or PermissionRequest), written by the recorder when
@@ -2518,8 +2534,10 @@ pub enum StubScriptLine {                     // tests/harness-scripts/*.ndjson,
     AwaitUser,                                // wait for the next user line before continuing
 }
 pub struct SimRegression {                    // crates/eileen-sim/regressions/<name>.toml
-    pub profile: String, pub seed: Option<u64>, pub found_at_commit: String,
-    pub inputs: Vec<InputRecord>,             // decoded inputs, never a buffer of random bytes
+    pub profile: String, pub seed: Option<u64>, pub found_at_commit: String,   // seed written as a decimal string: TOML
+                                              // holds no integer above i64::MAX
+    pub inputs: Vec<InputRecord>,             // decoded inputs, never a buffer of random bytes; each written as one string
+                                              // of JSON, because TOML has no null (a tool call's arguments, Calibration(None))
     pub faults: Vec<FaultRecord>,             // each injected fault as an explicit record, never a buggify site ordinal
     pub invariant: String,
 }
@@ -3998,3 +4016,4 @@ Open risks (each has an owner package that measures it):
   - A benchmark line reads the machine hash from the user's own data directory, never a benchmark's throwaway one, as the fleet runner already did, so one install gives one hash (4.7; D74).
   - WP7 acceptance 9 adds a case for the new `NotOnClaude` outcome: a fast-path command of three non-read steps (2.10 item 2; D70).
   - Section 7's risk line now separates what taint gates from what always asks, and names the five-variable exception; ARCHITECTURE.md's path-guard line says the same, names D74 and its revision date.
+- 2026-10-21, amendment from `wp0/contracts`, which pins the contracts of slice S1's path: the text now matches the shapes it pins where they differ from the first text. `TraceCtx::traceparent` takes the span id and returns `None` for an all-zero id (3.3.1); `WorkerEvent::AuthFailed.message` and `HookRequest::StopFailure.error` are `Untrusted<String>`, because they carry vendor text, and `BrainCmd::Promote` names its slot like every other brain command (3.3.3); `IncidentTrigger` and `UserErrorKind` hold only what sections 2.5, 2.13 and 4.7 name, and WP1 adds to them (3.3.3, 3.3.4); the text rule counts `serde_json::Value` fields and map keys, so slot values are `Untrusted` and the HUD's setting value `Personal`, and an element's automation id and a selector's name and automation id are `Untrusted`, because a page sets them in a browser (3.3.1, 3.3.5, 3.3.6, 3.3.9, 3.3.10); the `capabilities` tool's schema is published as `CapabilitiesArgs`, and the shim's pipe lines are contract types (3.3.9); an operand literal shaped like a reference is written `{"$lit": ...}` and a forget plan lists `BlobRef`s (3.3.13); field-less scenario steps are empty struct variants, so serde and the schema agree on `approve = {}`, and scenario tables refuse unknown fields (3.3.14); a written line's blob stubs have an escape that makes them lossless, and a `SimRegression` file writes its inputs as JSON strings and its seed as a decimal string, because TOML has no null and no integer above `i64::MAX` (3.3.16).
