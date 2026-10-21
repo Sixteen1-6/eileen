@@ -496,7 +496,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Amends: D32 and D33
 - Decision: `cargo xtask` admits a build slot by measured free memory per compile job, samples before admitting a second, runs cargo in a kill-on-close Job Object at below-normal priority, and records its holder; agents cannot run cargo directly. Native libraries appear only under Windows target tables, so neutral crates build and test on Linux. Pull requests lead with an Evidence section whose tests must exist, and fix pull requests are checked failing before and passing after where Linux can show it. The house-style denylist is stored as hashes so the names never enter the repository. Each crate's guidance stays its crate doc, with an added heading for what needs a decision record, and is also generated into path-scoped Claude rules. A check registry generates the documented list; each check is marked as a repository check or delegated to a tool.
 - Why: The first guard admitted builds on a single 2 GB reading on a PC whose free memory sits near 1 to 2 GB; the native dependencies would have broken the Linux lane, Windows test binaries and cargo-deny; the owner's evidence-first rule had no check.
-- Consequences: Twenty-eight checks, listed in BUILD.md section 4b.3 and generated into `CONTRIBUTING.md`.
+- Consequences: Thirty checks, listed in BUILD.md section 4b.3 and generated into `CONTRIBUTING.md`.
 - Source: BUILD.md sections 4.1, 4b and 6.1; [2026-10-engineering-practice.md](research/2026-10-engineering-practice.md) sections 4 and 6.
 
 ## D47. The HUD draws with DirectWrite and counts only physical clicks
@@ -527,3 +527,12 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Why: Owner direction: the moment that makes people understand what Eileen is.
 - Consequences: A state machine in the core, the choices and checkbox on the HUD strip, the clone and its timing check in the speech process, and a scenario that asserts no file is left after a decline.
 - Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md sections 2.8 and E18.
+
+## D50. A reusable, fully cited engineering playbook
+
+- Date: 2026-10-20
+- Status: accepted (owner direction of 2026-10-20)
+- Decision: `docs/PLAYBOOK.md` documents how this repository is built in a project-agnostic way, with Eileen as the worked example: the modular layout, everything pulled in and why, the CI/CD design, the testing tactics, code maps, guidance for people and agents, observability and replay, the learning loop, how parts stay swappable, and the working methods. Every section cites the research reports, the decision records or primary sources with links and dates. `templates/` holds files another project can copy (guidance files, CI workflows, the xtask checks, pull request and issue templates, the scenario schema), generated from the live files where they mirror them.
+- Why: Owner direction: other projects using this style of development should be able to adopt the discoveries.
+- Consequences: Check 29 enforces citations and links; check 30 makes a change to this decision log update the playbook in the same pull request. WP0 writes the first version; later changes arrive through amendment pull requests, and WP9 adds the measured results.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md section 4b.6.

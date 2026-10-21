@@ -2,7 +2,7 @@
 
 This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-20, after the reviews of the v0.1 specification.
 
-WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D49 record what replaced it.
+WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D50 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
 
 ## Bird's eye view
 
