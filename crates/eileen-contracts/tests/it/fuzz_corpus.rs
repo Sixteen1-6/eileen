@@ -20,7 +20,7 @@ fn files(folder: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn replay(target: &str, entry: fn(&[u8])) {
+fn replay(target: &str, entry: fn(&[u8]) -> Result<(), &'static str>) {
     let corpus = files(&fuzz_dir().join("corpus").join(target));
     assert!(!corpus.is_empty(), "fuzz/corpus/{target}/ has no seeds");
     for seed in &corpus {
@@ -28,7 +28,9 @@ fn replay(target: &str, entry: fn(&[u8])) {
         assert!(size <= MAX_SEED_BYTES, "{} is {size} bytes, over the cap", seed.display());
     }
     for seed in corpus.iter().chain(&files(&fuzz_dir().join("regressions").join(target))) {
-        entry(&std::fs::read(seed).unwrap());
+        if let Err(broken) = entry(&std::fs::read(seed).unwrap()) {
+            panic!("{}: {broken}", seed.display());
+        }
     }
 }
 
