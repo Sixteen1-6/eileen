@@ -22,7 +22,7 @@ records when they exist.
 | Order | Branch | State |
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
-| 2 | `wp0/contracts` | Not started |
+| 2 | `wp0/contracts` | Committed 2026-10-21, pull request to open |
 | 3 | `wp0/base-crates` | Not started |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
@@ -33,6 +33,16 @@ section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windo
 `all-green`), the first cut of `cargo xtask` with `pr-meta` and its fixture tests, `pr-meta.yml`,
 the pull request template, Dependabot and `CODEOWNERS`. The tag `python-scaffold-final` marks
 `main`'s last commit with the Python scaffold, `7694c44`, and is on GitHub.
+
+`wp0/contracts` adds `crates/eileen-contracts` (and `crates/*` to the members): every type of
+section 3.3 with serde and schemars, one module per producing area, the schema catalogue, one
+insta snapshot per module and per toolset (24 in `crates/eileen-contracts/tests/it/snapshots/`,
+keys sorted), `modules.toml` (the eight modules on slice S1's path pinned, the other sixteen
+provisional with the package that pins each), `text-allowlist.toml` with the text walk,
+`desktop::sanitize`, the scenario expiry rule, the speech frame header, the recording formats and
+the seed corpora of the `uia_text` and `desktop_state` fuzz targets, whose `fuzz_entry` functions
+the corpus replay test calls. The cargo-fuzz target files join with `wp0/stubs`, which creates
+`fuzz/Cargo.toml` with every target.
 
 ## Switching main's required checks
 
@@ -92,6 +102,20 @@ Python job, is checked by `wp0/contracts`.
   <version>` to its newest older release, or named in the description with the reason it stays.
 
 ## Surprises
+
+- schemars gives every instantiation of a generic type the same schema name and resolves the
+  clash with a numeric suffix (`Envelope2`, `Envelope3`), which would make snapshots depend on
+  registration order. `Envelope` carries `#[schemars(rename = "Envelope_{E}")]`, and the test
+  `every_definition_has_one_owner` fails on any definition no module registered.
+- Doc comments become schema descriptions, so editing a doc comment in a pinned module changes its
+  snapshot, which makes it an amendment like any other contract change.
+- clippy reads integration-test helpers as ordinary code (no test allowances, and
+  `tests_outside_test_module` fires) unless each module of `tests/it/main.rs` is `cfg(test)`.
+- The first lock of the contracts' dependencies took `pest` 2.9.4 (through `insta`'s
+  `redactions` feature), 2026-10-16, which also brought `stacker`, `psm`, `cc` 1.9.0 and
+  `find-msvc-tools` 0.1.15, all inside the 14-day window, and `libc` 0.2.191 (2026-10-16). They
+  are held back with `cargo update --precise` to `pest` 2.9.2 (2026-09-21) and `libc` 0.2.190
+  (2026-10-02); `pest` 2.9.2 needs none of the four build crates.
 
 - Cargo refuses a workspace member path or glob that matches nothing, so the root manifest lists
   only `xtask` for now. `crates/*` joins with the first crate (`wp0/contracts`) and
@@ -153,6 +177,36 @@ Python job, is checked by `wp0/contracts`.
   heading to be absent or empty for other types.
 - The title check reads "imperative" as: the first word is not a gerund, a past tense or a
   third-person form, judged by its ending with short lists of base verbs that share those endings.
+
+- Contracts, `wp0/contracts`: a type that appears only in another crate's own signatures (driver
+  and platform errors, `HarnessConfig`, the brain benchmark's suite and result, the platform
+  handles of section 3.4) is that crate's. Types the plan writes under another crate's heading but
+  that a contract type or a port names (`SessionSpec`, `JobBinding`, `BrainSlot` under
+  `eileen-harness`; `ResolveCtx` and `Resolution` under `eileen-intent`; `SettingChange`,
+  `Proposal` and `SettingsVersion` under `eileen-config`) are contracts, because
+  `eileen-contracts` may depend on nothing.
+- Contracts: `contracts/modules.toml` and `contracts/text-allowlist.toml` in section 3.3 are read
+  as the crate's own folder, `crates/eileen-contracts/` (section 3.1 has no root `contracts/`).
+- Contracts: one snapshot per module holds that module's own definitions, with other modules'
+  types as `$ref`s, so a field added in one module changes one file; a toolset's snapshot also
+  holds each tool's self-contained input schema, which does change when a type it uses changes,
+  because that is what the model sees.
+- Contracts: `Option` fields serialize as `null` and read a missing field as `None`; a list or
+  flag a model or a person may leave out (tool arguments, scenario files, the configuration)
+  defaults when missing; wire types between Eileen's own processes require everything else.
+  Scenario files refuse unknown fields.
+- Contracts: the plan's names are kept. The `capabilities` tool's argument struct keeps the
+  name `Capabilities` beside the resolver's `intent::Capabilities` and publishes its schema as
+  `CapabilitiesArgs`; `config::Component` (a component a setting restarts) and the
+  `ports::Component` trait share a name in separate modules. Large enum payloads are boxed
+  (`Effect::Hud`, `Record::JobUpsert`, `WorkerCmd::Start`, `SidecarEvent::Ready`,
+  `LearnEvent::RouteProposed`, `RecordLine::Input` and a few more), which leaves the wire unchanged.
+- Contracts: two plain strings of the plan carry vendor text and are wrapped as `Untrusted`
+  (`WorkerEvent::AuthFailed.message`, `HookRequest::StopFailure.error`); every other plain string
+  reachable from `Input`, `ToolResult` and `DesktopState` is in the allowlist with its reason.
+- Contracts: `TraceCtx::traceparent` takes the span id as an argument, and returns `None` when the
+  context has neither turn nor job or an id would be all zeros (the W3C rule); `BrainCmd::Promote`
+  names the slot it promotes, so every brain command names a slot.
 
 ## Measurements
 
