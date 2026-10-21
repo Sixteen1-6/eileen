@@ -7,3 +7,5 @@
 mod modules;
 #[cfg(test)]
 mod schemas;
+#[cfg(test)]
+mod text;
