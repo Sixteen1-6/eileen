@@ -23,7 +23,7 @@ records when they exist.
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
-| 3 | `wp0/base-crates` | Not started |
+| 3 | `wp0/base-crates` | Branch built and tested locally, 2026-10-21: 288 workspace tests pass on Windows; not pushed yet |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
@@ -43,6 +43,21 @@ provisional with the package that pins each), `text-allowlist.toml` with the tex
 the seed corpora of the `uia_text` and `desktop_state` fuzz targets, whose `fuzz_entry` functions
 the corpus replay test calls. The cargo-fuzz target files join with `wp0/stubs`, which creates
 `fuzz/Cargo.toml` with every target.
+
+`wp0/base-crates` adds the six base crates and their `[workspace.dependencies]` lines:
+`eileen-stdx` (the clock and ID ports with `SystemClock` and `OsIds`, `ManualClock` and `SeqIds`
+for tests, `thread::spawn_named` and `thread::sleep`, the seeded `CoreRng`, `always!`, `never!`,
+`buggify!` and `num`), `eileen-trace` (init per process kind, the JSON-lines file, console,
+flight recorder ring and slow-span layers, `names` with the span-parent table and its checker,
+the `pii.` policy, the `Redactor`, `privacy`, the Chrome converter, `traceparent`,
+`test_support`), `eileen-rt` (`task::spawn`, `task::spawn_blocking`, `task::dump`, named bounded
+channels, `runtime::build`), `eileen-platform` (every trait of section 3.4 with a fake beside
+it, and the `machine` module), `eileen-supervisor` (supervised children in kill-on-close Job
+Objects, the guard's detached spawn, deadlines, heartbeats, restart backoff, `qos`) and
+`eileen-buildguard` (slots, admission, the samples module, the baseline, `spawn_cargo`,
+`desktop.lock`). Acceptance 4 (all but the owner's-PC measurements), 5, 6 and 12 are covered
+by tests in those crates; the owner's-PC half of acceptance 4 waits for `wp0/xtask`'s
+`slots --baseline`.
 
 ## Switching main's required checks
 
@@ -102,6 +117,17 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   days that no section 4.1 pin names is held back with `cargo update -p <name> --precise
   <version>` to its newest older release, or named in the description with the reason it stays.
 
+- `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
+  `SystemMemory::new()`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
+  `EILEEN_BUILD_SLOT_HELD` from the environment; the ticket's `env()` on every cargo it starts
+  through `spawn_cargo`; `Ticket::recheck` before each invocation and `Ticket::sample` as the
+  10 s tick of `CargoChild::wait_ticking`; the reason and holders printed by the `report`
+  callback; exit code 75 from `Refusal::exit_code`. `slots` prints `slots::list`, `--kill-stale`
+  runs `slots::kill_stale`, `--baseline` samples every 5 s into the store and writes
+  `compute_baseline`'s result with `Store::write_baseline` (warning below four hours from
+  `baseline::hours_covered`), `--pressure` calls `pressure::pressure`, and `desktop-lock --hold`
+  takes `acquire_desktop`.
+
 ## Surprises
 
 - schemars gives every instantiation of a generic type the same schema name and resolves the
@@ -149,6 +175,37 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - `cargo deny check` passes on the current tree with one warning per allowed license the tree does
   not use yet, IJG and the `webpki-roots` exception included. Whether `ring`'s `Apache-2.0 AND
   ISC` passes is confirmed when `wp0/stubs` brings it into the tree.
+
+- Base crates: Windows file locks are mandatory, so no other process can read a record written
+  inside a locked file. Each build slot's holder record (PID, worktree, command, start) lives
+  beside its lock, `build-slot-0.holder` next to `build-slot-0.lock`, and is removed on release;
+  `slots --kill-stale` removes the record of a slot whose lock the OS released when its holder
+  died.
+- Base crates: process-wrap's `job-object` feature turns on the `windows` features
+  `Win32_System_IO` and `std`, which the union of section 4.1 lacked, so a build with the
+  supervisor and a build without it would have compiled `windows` twice. Both joined the union.
+  `windows-sys` 0.61.2 has the same shape through tokio, mio, socket2 and parking_lot (their
+  features reach the workspace build but not xtask's), which `wp0/xtask`'s feature-union check
+  should settle.
+- Base crates: `tracing` reuses a span's id once it closes, so the flight recorder and the test
+  capture give every span a record id of their own, and a remote parent is matched by span id
+  among the spans open at the child's start.
+- Base crates: in `tracing`'s event macros a dotted field name (`pii.title = ...`) straight after
+  `target:` is ambiguous, and a quoted one in that place is read as the message. Put another
+  field first.
+- Base crates: tokio's `test-util` (paused time) is not in the tokio union, so the supervisor's
+  heartbeat and backoff logic takes explicit instants and the deadline test waits 20 ms of real
+  time. WP2's concurrency tests will want `test-util`; adding it is a one-line amendment.
+- Base crates: the first lock of the base crates' dependencies took `cc` 1.9.0 and
+  `find-msvc-tools` 0.1.15 (2026-10-19, through `blake3`'s build script), `deranged` 0.5.9
+  (2026-10-13, through `tracing-appender`'s `time`) and `smallvec` 1.16.3 (2026-10-10), all
+  inside the 14-day window. They are held back with `cargo update --precise` to `cc` 1.6.0
+  (2026-10-03), `find-msvc-tools` 0.1.14 (2026-09-25), `deranged` 0.5.8 (2026-02-21) and
+  `smallvec` 1.16.2 (2026-09-25). `tokio` 1.54.0 (2026-10-19) is young too, but section 4.1 pins
+  it, so it stays. The other 82 new entries were published on or before 2026-10-07.
+- Base crates: clippy 1.99 wants `Duration::from_mins` and `from_hours` and the renamed
+  `AtomicU64::try_update`, and rustfmt can leave a trailing comma in a macro call it joins onto
+  one line, which clippy then refuses.
 
 ## Decisions
 
@@ -247,6 +304,65 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - Contracts: the fuzz entry points return `Result` instead of asserting, because every Eileen
   binary links the crate; the corpus test and the cargo-fuzz targets fail on an `Err`.
 
+- Base crates, platform: the handle and value types only the traits use are
+  `eileen-platform`'s, by the contracts rule above: `PlatformError`, `Deadline` (a budget, since
+  the crate may depend on `eileen-contracts` only), `Subscription`, `ThreadTicket`,
+  `PowerRequest`, `RgbaImage`, the element, input, insertion, tray and draw-list values, and
+  `AppOp` (the contracts' Office, Explorer and Photoshop ops). `ForegroundOutcome::Taken` carries
+  the `RestoreToken` that `Input::restore` takes. An owning package moves a type into the
+  contracts by amendment when it starts crossing a process.
+- Base crates, platform: `machine_hash` normalises its OS id itself, so an empty, malformed,
+  all-zero or `uninitialized` id gives the install-id-only hash. The normalised id enters the
+  hash as its 32 ASCII characters and the install id as its 16 bytes, each after an 8-byte
+  little-endian length. The golden vectors were computed with a from-scratch BLAKE3 before the
+  code ran. `FileMachineIdentity` treats a missing, non-UTF-8 or unusable file as absent and
+  reports any other read error, so a transient failure never changes the hash silently.
+- Base crates, stdx: soft assertions panic in debug builds and report in release builds, and
+  `eileen_trace::init` switches every product process to reporting (its hook logs
+  `soft_assert.failed` and asks for a ring dump); `soft_assert::with_mode` sets a per-thread
+  mode, which the simulator and `test_support::capture` use. `buggify!` activates a site for a
+  run with probability 1/4 from a hash of the seed and the site, so the choice does not depend on
+  which site runs first, and an active site fires with probability 1/4 from the run's
+  `CoreRng`. `CoreRng` is xoshiro256** seeded through SplitMix64, with Lemire's unbiased range.
+- Base crates, buildguard: paging is judged as the 30 s average, because the baseline's limits
+  are percentiles of 30 s averages; the headroom rule uses the lowest headroom in the window;
+  slot 1 applies the headroom rule as well as its memory requirement; exclusive work takes both
+  slots under slot 0's rules, slot 1's requirement and the 8-job ceiling. Samples cover the last
+  30 s when the oldest in the window is at least 25 s old (one 5 s interval of slack) and the
+  newest is under 10 s old. Percentiles are nearest-rank; "plus 25 percent" rounds to the
+  nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is `<slots>:<jobs>:<holder pid>` and counts only while
+  that holder's record names the PID and its lock is held, so a stale variable inherited by a
+  shell cannot bypass the guard. Low disk refuses at once with exit 75. Off Windows the machine
+  root falls back to `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads
+  `/proc` (`MemAvailable`, `CommitLimit` minus `Committed_AS`, major faults times 4 KB).
+- Base crates, buildguard: `spawn_cargo` creates cargo suspended, puts it in a fresh
+  kill-on-close Job Object, then resumes its threads (process-wrap's technique), so nothing it
+  starts escapes the job; the guard's process holds the only handle. Its process tests run the
+  test binary again as stand-ins for xtask, cargo and rustc, which block on a lock the test holds
+  instead of sleeping.
+- Base crates, trace: the JSON file layer is Eileen's own rather than `fmt`'s JSON, because
+  `fmt` formats an event's fields itself and the `pii.` policy could not apply to them; the line
+  keeps `fmt`'s field names (`timestamp`, `level`, `target`, `filename`, `line_number`,
+  `threadName`, `fields`, `span`, `spans`) and adds `process`. A span's `traceparent` field
+  records a parent in another process. The Redactor's card rule takes 15, 16 or 19 digits
+  starting with 2 to 6 that pass the Luhn check (so timestamps and other IDs are left alone),
+  and fills a card standing as a bare JSON number with zeros so the line stays JSON. The PII scan
+  accepts the reserved example domains and generic user folders (`Public`, `Default`, the CI
+  runner's); a scenario's text files are capped at 256 KiB, consented audio at 5 MiB and the
+  folder at 8 MiB.
+- Base crates, rt: a spawned task also carries the caller's subscriber (and a blocking task its
+  dispatcher), so a scoped subscriber in a test or a tool sees what the task logs; a panic
+  message loses any backtick-quoted text before it is logged, as the observability report asks
+  of the panic hook.
+- Base crates, supervisor: it uses `windows` rather than `windows-sys`, because process-wrap's
+  `CreationFlags` takes `windows`' flag type (the root manifest's comment on `windows-sys` names
+  the supervisor too, which is now out of date). Children are of class `Sidecar`,
+  `ClaudeSession` (below normal priority) or `Tool`; stderr lines are forwarded at INFO, cut at
+  4 KB; restarts default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset after 2
+  stable minutes. The detached spawn falls back to a plain spawn only on access denied, and a
+  supervised child's own detached spawn cannot leave its job (the test checks `broke_away` is
+  false there).
+
 ## Measurements
 
 To record from the first CI runs and the owner's PC (acceptance 4 and 10): the Windows job times
@@ -268,6 +384,11 @@ itself compiled; `windows-clippy` found no cache and built cold. `plan` 4 s, `hy
 `logic-linux` 91 s, `windows-clippy` 153 s, `windows-test` 184 s, `all-green` 3 s; 195 s from the
 first job's start to `all-green`'s end, and `pr-meta` 19 s. Locally, on the owner's PC with 3.9 GB
 free and 4 jobs, the warm `cargo nextest run --workspace` ran 165 tests in 11 s.
+
+Locally for `wp0/base-crates` on 2026-10-21 (the owner's PC with 2.8 to 4.5 GB free, 2 to 4
+jobs, below-normal priority): the warm `cargo nextest run --workspace --profile ci` ran 288 tests
+in 4.7 to 7.0 s, the process tests included; clippy with `-D warnings`, the doc tests, `cargo doc`
+with `-D warnings`, cargo-deny and cargo-machete passed on Windows. The Linux lane is CI's.
 
 ## Outcome
 
