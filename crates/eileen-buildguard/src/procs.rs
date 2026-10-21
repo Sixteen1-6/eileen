@@ -53,4 +53,17 @@ mod tests {
         assert!(process_alive(std::process::id()), "this process");
         assert!(!process_alive(u32::MAX - 1), "no such process");
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_process_that_exited_with_259_is_not_alive() {
+        use crate::spawn::{CargoInvocation, spawn_cargo};
+
+        // 259 is STILL_ACTIVE, which an exit-code check would read as "still running".
+        let mut child =
+            spawn_cargo(&CargoInvocation::program("cmd", ["/c", "exit", "259"]).quiet()).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(259), "exited with 259");
+        // `child` still holds the process handle, so the exited process can still be opened.
+        assert!(!process_alive(child.id()), "an exited process is not alive");
+    }
 }

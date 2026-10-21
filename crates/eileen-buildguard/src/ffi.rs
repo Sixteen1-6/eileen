@@ -1,6 +1,6 @@
 //! The build guard's only unsafe code: the Win32 calls for memory, paging, disk, the cargo
-//! Job Object, process liveness and waiting for a process to end. Every function here is safe to call; each unsafe block
-//! holds one operation and says why its preconditions hold.
+//! Job Object, process liveness and waiting for a process to end. Every function here is safe
+//! to call; each unsafe block holds one operation and says why its preconditions hold.
 
 use std::ffi::OsStr;
 use std::io;
@@ -9,7 +9,7 @@ use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle, Ra
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -31,8 +31,8 @@ use windows_sys::Win32::System::SystemInformation::{
     GetSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
+    OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, ResumeThread,
+    THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 
 /// The size of `T` as the `u32` Win32 structure headers take.
@@ -267,19 +267,14 @@ fn resume_thread(tid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether the process `pid` is still running.
+/// Whether the process `pid` is still running: waiting on it times out at once. An exit code
+/// is never read for this, because a process may exit with 259, which is `STILL_ACTIVE`.
 pub(crate) fn process_alive(pid: u32) -> bool {
-    // SAFETY: query-only access to a process id, with no handle inheritance.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    let Ok(process) = owned(handle) else {
-        // A process we may not query still exists; a missing one gives ERROR_INVALID_PARAMETER.
-        return io::Error::last_os_error().raw_os_error()
-            == i32::try_from(ERROR_ACCESS_DENIED).ok();
-    };
-    let mut code: u32 = 0;
-    // SAFETY: the handle is open with query access and `code` is writable.
-    let ok = unsafe { GetExitCodeProcess(process.as_raw_handle(), &raw mut code) };
-    ok != 0 && i32::try_from(code).ok() == Some(STILL_ACTIVE)
+    match open_for_wait(pid) {
+        Ok(process) => matches!(wait_exit(&process, std::time::Duration::ZERO), Ok(false)),
+        // A process we may not open still exists; a missing one gives ERROR_INVALID_PARAMETER.
+        Err(e) => e.raw_os_error() == i32::try_from(ERROR_ACCESS_DENIED).ok(),
+    }
 }
 
 /// Opens `pid` with the right to wait for it.
