@@ -22,7 +22,7 @@ records when they exist.
 | Order | Branch | State |
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
-| 2 | `wp0/contracts` | Committed 2026-10-21, pull request to open |
+| 2 | `wp0/contracts` | Committed 2026-10-21 with the review's fixes; pull request to open with its amendment `wp0/contracts-amendment` |
 | 3 | `wp0/base-crates` | Not started |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
@@ -194,7 +194,12 @@ Python job, is checked by `wp0/contracts`.
 - Contracts: `Option` fields serialize as `null` and read a missing field as `None`; a list or
   flag a model or a person may leave out (tool arguments, scenario files, the configuration)
   defaults when missing; wire types between Eileen's own processes require everything else.
-  Scenario files refuse unknown fields.
+  Scenario files refuse unknown fields in every table they write (steps, HUD inputs and
+  selectors included), and a step with no fields is an empty struct variant (`Approve {}`), so
+  `approve = {}` reads the same in serde and in the generated schema. A unit test holds the
+  plan's example, extended with every such shape, against that schema with a small checker of
+  the keywords the contracts use (no validator crate is pinned); phase B's check 18 uses a real
+  validator.
 - Contracts: the plan's names are kept. The `capabilities` tool's argument struct keeps the
   name `Capabilities` beside the resolver's `intent::Capabilities` and publishes its schema as
   `CapabilitiesArgs`; `config::Component` (a component a setting restarts) and the
@@ -204,9 +209,42 @@ Python job, is checked by `wp0/contracts`.
 - Contracts: two plain strings of the plan carry vendor text and are wrapped as `Untrusted`
   (`WorkerEvent::AuthFailed.message`, `HookRequest::StopFailure.error`); every other plain string
   reachable from `Input`, `ToolResult` and `DesktopState` is in the allowlist with its reason.
+  The text walk also counts a schema that accepts any value (a `serde_json::Value`) and the keys
+  of a map. Of what that found, slot values are `Untrusted` (the user's words or a model's
+  dispatch), the HUD's setting value is `Personal` (the user's own input), and the rest (tool
+  and op schemas Eileen generates, recipe arguments the linter traces, slot names, engine
+  names) is allowlisted. `ElementInfo.automation_id` and a selector's name and automation id
+  are `Untrusted`, because in Chromium, Firefox and Electron apps the automation id is the DOM
+  `id` a page sets.
 - Contracts: `TraceCtx::traceparent` takes the span id as an argument, and returns `None` when the
   context has neither turn nor job or an id would be all zeros (the W3C rule); `BrainCmd::Promote`
   names the slot it promotes, so every brain command names a slot.
+- Contracts: every shape above that differs from BUILD.md's text, in pinned and provisional
+  modules alike, is written into BUILD.md by the one-file amendment `wp0/contracts-amendment`,
+  which merges first or together with `wp0/contracts`, so the spec of record and the pinned
+  contract agree.
+- Contracts: pinned modules hold only the vocabulary the plan states. `UserErrorKind` is
+  `JobKindUnavailable` and `Unexpected` (WP1 adds the kinds with their sentences and fixes);
+  `IncidentTrigger` lists the triggers of sections 2.13 and 4.7 as unit variants (WP1 adds
+  more). The speech pipe's PCM framing (how the JSON header ends) and the cap on command and
+  event bodies are code, not schema, and WP4 settles both with its `speech_frame` parser.
+- Contracts: the shim's pipe lines of section 3.3.9 are contract types in the provisional
+  `tools` module (`ShimLine`, `DispatcherLine` and their bodies), which WP2 pins with the
+  dispatcher.
+- Contracts: a written recording line may hold `{"$blob": "b3:..."}` in place of any string over
+  the writer's limit, and escapes an object that would read as one as `{"$lit": ...}`;
+  `record::stub_blobs` and `record::resolve_blobs` are exact inverses (a property test), so
+  `RecordLine` itself never holds a stub. An operand literal shaped like a reference is written
+  `{"$lit": ...}` the same way.
+- Contracts: a `SimRegression` TOML file writes each input as a string of JSON and the seed as a
+  decimal string, because TOML has no `null` (a tool call's arguments, `Calibration(None)`,
+  `Foreground(None)`) and no integer above `i64::MAX`; the struct's fields are as the plan writes
+  them.
+- Contracts: `SessionToken` keeps its text private (`new`, `expose`), compares every byte
+  whatever the first difference, and has no `Hash`; the dispatcher and the hook endpoint (WP2)
+  own verification.
+- Contracts: the fuzz entry points return `Result` instead of asserting, because every Eileen
+  binary links the crate; the corpus test and the cargo-fuzz targets fail on an `Err`.
 
 ## Measurements
 
