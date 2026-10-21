@@ -6,7 +6,7 @@ use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::samples::{PAGING_FILE, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
 
-use crate::support::{TempRoot, helper, wait_for};
+use crate::support::{TempRoot, helper, read_ready, ready_helper, wait_until_free};
 
 /// Holds `block.lock`, which keeps the blocking helpers alive until it is dropped.
 fn hold_block(root: &TempRoot) -> slots::Held {
@@ -47,12 +47,9 @@ fn two_processes_appending_one_window_leave_one_line() {
 fn kill_stale_frees_a_dead_holders_slot() {
     let root = TempRoot::new("stale");
     let block = hold_block(&root);
-    let mut holder = helper("hold-slot", &root, &[]);
+    let (mut holder, mut stdout) = ready_helper("hold-slot", &root);
+    assert_eq!(read_ready(&mut stdout), "slot 0", "the helper took slot 0");
     let machine = root.machine();
-    assert!(
-        wait_for(Duration::from_secs(20), || slots::slot_holder(&machine, Slot::Zero).is_some()),
-        "the helper took slot 0"
-    );
     assert_eq!(
         slots::slot_holder(&machine, Slot::Zero).unwrap().pid,
         holder.id(),
@@ -61,10 +58,8 @@ fn kill_stale_frees_a_dead_holders_slot() {
     assert!(slots::is_slot_held(&machine, Slot::Zero).unwrap(), "held");
     holder.kill().unwrap();
     holder.wait().unwrap();
-    assert!(
-        wait_for(Duration::from_secs(10), || !slots::is_slot_held(&machine, Slot::Zero).unwrap()),
-        "the OS released the lock"
-    );
+    wait_until_free(&machine, "build-slot-0.lock");
+    assert!(!slots::is_slot_held(&machine, Slot::Zero).unwrap(), "the OS released the lock");
     let listed = slots::list(&machine).unwrap();
     assert_eq!(listed[0].holder_alive, Some(false), "the record names a dead holder");
     let freed = slots::kill_stale(&machine).unwrap();
@@ -75,34 +70,32 @@ fn kill_stale_frees_a_dead_holders_slot() {
         "slot 0, the dead holder"
     );
     assert!(slots::slot_holder(&machine, Slot::Zero).is_none(), "record removed");
+    drop(stdout);
     drop(block);
 }
 
 #[cfg(windows)]
 #[test]
 fn killing_xtask_mid_build_leaves_no_rustc_running() {
-    use eileen_buildguard::procs::process_alive;
+    use eileen_buildguard::procs::{Watched, process_alive};
 
     let root = TempRoot::new("kill-xtask");
     let block = hold_block(&root);
-    let mut xtask = helper("fake-xtask", &root, &[]);
-    let pids_file = root.path().join("pids");
-    assert!(
-        wait_for(Duration::from_secs(30), || pids_file.exists()),
-        "the stand-in cargo started rustc"
-    );
-    let pids: Vec<u32> = std::fs::read_to_string(&pids_file)
-        .unwrap()
-        .split_whitespace()
-        .map(|p| p.parse().unwrap())
-        .collect();
+    let (mut xtask, mut stdout) = ready_helper("fake-xtask", &root);
+    // The stand-in cargo is in xtask's job; its stand-in rustc is a plain child of cargo's,
+    // with no job of its own, as real cargo starts rustc.
+    let pids: Vec<u32> =
+        read_ready(&mut stdout).split_whitespace().map(|p| p.parse().unwrap()).collect();
+    assert_eq!(pids.len(), 2, "cargo and rustc: {pids:?}");
     assert!(pids.iter().all(|pid| process_alive(*pid)), "cargo and rustc run");
+    // Opened while they run, so their ends are waited on rather than polled for.
+    let watched: Vec<Watched> = pids.iter().map(|pid| Watched::open(*pid).unwrap()).collect();
     // Kill only the xtask process, as a crash or an agent's kill would; its job takes the rest.
     xtask.kill_root().unwrap();
     xtask.wait().unwrap();
-    assert!(
-        wait_for(Duration::from_secs(10), || pids.iter().all(|pid| !process_alive(*pid))),
-        "no cargo or rustc left running"
-    );
+    for (pid, process) in pids.iter().zip(&watched) {
+        assert!(process.wait_exit(Duration::from_secs(10)).unwrap(), "{pid} was left running");
+    }
+    drop(stdout);
     drop(block);
 }

@@ -1,5 +1,5 @@
 //! The build guard's only unsafe code: the Win32 calls for memory, paging, disk, the cargo
-//! Job Object and process liveness. Every function here is safe to call; each unsafe block
+//! Job Object, process liveness and waiting for a process to end. Every function here is safe to call; each unsafe block
 //! holds one operation and says why its preconditions hold.
 
 use std::ffi::OsStr;
@@ -9,7 +9,7 @@ use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle, Ra
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE,
+    ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -31,8 +31,8 @@ use windows_sys::Win32::System::SystemInformation::{
     GetSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread,
-    THREAD_SUSPEND_RESUME,
+    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 
 /// The size of `T` as the `u32` Win32 structure headers take.
@@ -280,4 +280,21 @@ pub(crate) fn process_alive(pid: u32) -> bool {
     // SAFETY: the handle is open with query access and `code` is writable.
     let ok = unsafe { GetExitCodeProcess(process.as_raw_handle(), &raw mut code) };
     ok != 0 && i32::try_from(code).ok() == Some(STILL_ACTIVE)
+}
+
+/// Opens `pid` with the right to wait for it.
+pub(crate) fn open_for_wait(pid: u32) -> io::Result<OwnedHandle> {
+    // SAFETY: synchronize and query access to a process id, with no handle inheritance.
+    owned(unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })
+}
+
+/// Waits up to `timeout` for the process behind `process` to end; true once it has.
+pub(crate) fn wait_exit(process: &OwnedHandle, timeout: std::time::Duration) -> io::Result<bool> {
+    let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+    // SAFETY: the handle is open with synchronize access for as long as `process` lives.
+    match unsafe { WaitForSingleObject(process.as_raw_handle(), ms) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        _ => Err(io::Error::last_os_error()),
+    }
 }

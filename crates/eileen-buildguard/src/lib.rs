@@ -22,6 +22,10 @@
 //! - The job count never falls as available memory rises (property test
 //!   `admission::tests::jobs_never_fall_as_memory_rises`).
 //! - A fake memory source never writes the machine-wide files (`guard::take_sample`).
+//! - The rule a build is admitted under depends on whether another build holds a slot, never
+//!   on which index is free, and a refused attempt takes no lock and writes no record
+//!   (`it::admission::a_second_build_on_slot0_meets_slot1s_requirement_while_slot1_runs`,
+//!   `guard::tests::a_refused_attempt_takes_no_lock_and_writes_no_record`).
 //! - The only `#[expect(clippy::disallowed_methods)]`: [`spawn_cargo`] and the sampling clock
 //!   and sleep in [`clock`] (check 14).
 //!
@@ -48,6 +52,12 @@
 //!   `LOCALAPPDATA`, never from `EILEEN_DATA_DIR`.
 //! - The paging rate is judged as a 30 s average against limits measured on this PC; a
 //!   number from elsewhere means nothing.
+//! - [`SystemMemory`] is not `Send` on any OS (its Windows PDH query stays on the thread that
+//!   opened it), and its first reading waits until its rate covers at least
+//!   [`memory::MIN_RATE_INTERVAL`] since it opened.
+//! - A probe of a slot lock ([`slots::is_slot_held`], [`samples::Store::slot_held`]) holds it
+//!   for an instant, so a take that meets a probe refuses for that tick and decides again on
+//!   the next.
 //!
 //! # Logs and tracing
 //!

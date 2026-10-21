@@ -3,16 +3,20 @@
 //! entry returns at once, so in an ordinary run it is an empty test.
 //!
 //! Helpers that must stay alive block on `block.lock`, which the test holds, instead of
-//! sleeping; the test kills them or releases the lock.
+//! sleeping; the test kills them or releases the lock. A helper the test must wait for says
+//! `ready ...` on its stdout, which the test reads, so nothing polls.
 
 use std::fs::OpenOptions;
+use std::io::{BufReader, Write as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::samples::{self, PagingWindow, Sample, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
-use eileen_buildguard::{CargoChild, CargoInvocation, spawn_cargo};
+use eileen_buildguard::{CargoInvocation, spawn_cargo};
+
+use crate::support::read_ready;
 
 fn dir() -> PathBuf {
     PathBuf::from(std::env::var_os("EILEEN_BG_DIR").unwrap())
@@ -29,14 +33,18 @@ fn block() {
     lock.lock().unwrap();
 }
 
-/// Starts this binary again as the helper `mode`, in a kill-on-close job of this process.
-fn child(mode: &str) -> CargoChild {
+/// Says `ready <text>` on stdout, where the test (or the stand-in xtask) is reading.
+fn say_ready(text: &str) {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "ready {text}").unwrap();
+    out.flush().unwrap();
+}
+
+/// This binary run again as the helper `mode`.
+fn invocation(mode: &str) -> CargoInvocation {
     let exe = std::env::current_exe().unwrap();
-    let invocation =
-        CargoInvocation::program(exe, ["helper::entry", "--exact", "--nocapture", "--quiet"])
-            .with_env([("EILEEN_BG_HELPER", mode)])
-            .quiet();
-    spawn_cargo(&invocation).unwrap()
+    CargoInvocation::program(exe, ["helper::entry", "--exact", "--nocapture", "--quiet"])
+        .with_env([("EILEEN_BG_HELPER", mode)])
 }
 
 #[test]
@@ -80,19 +88,23 @@ fn entry() {
                 started_ms: RealClock.now_ms(),
             };
             let _held = slots::try_take_slot(store.root(), Slot::Zero, &holder).unwrap().unwrap();
+            say_ready("slot 0");
             block();
         }
-        // `cargo xtask` running a build: starts a stand-in cargo in its kill-on-close job.
+        // `cargo xtask` running a build: starts a stand-in cargo in its kill-on-close job, as
+        // `spawn_cargo` starts real cargo, and passes on the stand-in's ready line.
         "fake-xtask" => {
-            let _cargo = child("fake-cargo");
+            let mut cargo = spawn_cargo(&invocation("fake-cargo").piped_stdout()).unwrap();
+            let mut cargo_out = BufReader::new(cargo.take_stdout().unwrap());
+            say_ready(&read_ready(&mut cargo_out));
             block();
         }
-        // The stand-in cargo: starts a stand-in rustc, writes both process ids, and waits.
+        // The stand-in cargo: starts a stand-in rustc the way real cargo does, as a plain child
+        // with no job of its own (so only xtask's job can take it), says both process ids, and
+        // waits.
         "fake-cargo" => {
-            let rustc = child("fake-rustc");
-            let pids = format!("{} {}", std::process::id(), rustc.id());
-            std::fs::write(dir().join("pids.tmp"), pids).unwrap();
-            std::fs::rename(dir().join("pids.tmp"), dir().join("pids")).unwrap();
+            let rustc = spawn_cargo(&invocation("fake-rustc").quiet().in_caller_job()).unwrap();
+            say_ready(&format!("{} {}", std::process::id(), rustc.id()));
             block();
             drop(rustc);
         }

@@ -7,11 +7,15 @@
 //! The guard's process holds the only handle to the job, so when it ends, however it ends,
 //! Windows closes the handle and terminates everything in the job. Off Windows (CI and
 //! contributors) cargo is an ordinary child.
+//!
+//! [`CargoInvocation::in_caller_job`] starts an ordinary child instead, which stays in the
+//! caller's own job the way real cargo's rustc does; only a process already inside a guard's
+//! job uses it (the guard's tests, for their stand-in rustc).
 
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use crate::clock::{Clock, millis};
@@ -33,6 +37,11 @@ pub struct CargoInvocation {
     pub cwd: Option<PathBuf>,
     /// Null standard handles instead of the inherited ones.
     pub quiet: bool,
+    /// A pipe for stdout ([`CargoChild::take_stdout`]), with null stdin and stderr.
+    pub piped_stdout: bool,
+    /// On Windows, an ordinary child that stays in the caller's Job Object instead of one in a
+    /// fresh kill-on-close job of its own (see [`Self::in_caller_job`]).
+    pub in_caller_job: bool,
 }
 
 impl CargoInvocation {
@@ -57,6 +66,8 @@ impl CargoInvocation {
             env: Vec::new(),
             cwd: None,
             quiet: false,
+            piped_stdout: false,
+            in_caller_job: false,
         }
     }
 
@@ -77,14 +88,34 @@ impl CargoInvocation {
         self.quiet = true;
         self
     }
+
+    /// Pipes the child's stdout to this process, with null stdin and stderr, so a caller can
+    /// block on a line the child writes (a helper saying it is ready) instead of polling.
+    #[must_use]
+    pub const fn piped_stdout(mut self) -> Self {
+        self.piped_stdout = true;
+        self
+    }
+
+    /// Starts the program as an ordinary child at below-normal priority, the way real cargo
+    /// starts rustc: on Windows it stays in the caller's own Job Object and gets none of its
+    /// own, so the caller's kill-on-close job is what takes it. Only for a process that already
+    /// runs inside a guard's job (the build guard's tests use it for their stand-in rustc, to
+    /// prove the guard's job takes cargo's plain children); a guard never starts cargo this way.
+    #[must_use]
+    pub const fn in_caller_job(mut self) -> Self {
+        self.in_caller_job = true;
+        self
+    }
 }
 
 /// A running cargo (or stand-in), killed with everything it started when dropped.
 #[derive(Debug)]
 pub struct CargoChild {
     child: Child,
+    /// Its own kill-on-close job; `None` for a child started in the caller's job.
     #[cfg(windows)]
-    job: crate::ffi::Job,
+    job: Option<crate::ffi::Job>,
 }
 
 /// Starts `invocation` in a kill-on-close Job Object at below-normal priority.
@@ -99,19 +130,31 @@ pub fn spawn_cargo(invocation: &CargoInvocation) -> io::Result<CargoChild> {
     if let Some(cwd) = &invocation.cwd {
         command.current_dir(cwd);
     }
-    if invocation.quiet {
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if invocation.quiet || invocation.piped_stdout {
+        let stdout = if invocation.piped_stdout { Stdio::piped() } else { Stdio::null() };
+        command.stdin(Stdio::null()).stdout(stdout).stderr(Stdio::null());
     }
-    start(command)
+    #[cfg(windows)]
+    {
+        start(command, !invocation.in_caller_job)
+    }
+    #[cfg(not(windows))]
+    {
+        start(command)
+    }
 }
 
 #[cfg(windows)]
-fn start(mut command: Command) -> io::Result<CargoChild> {
+fn start(mut command: Command, own_job: bool) -> io::Result<CargoChild> {
     use std::os::windows::io::AsRawHandle as _;
     use std::os::windows::process::CommandExt as _;
 
     use windows_sys::Win32::System::Threading::{BELOW_NORMAL_PRIORITY_CLASS, CREATE_SUSPENDED};
 
+    if !own_job {
+        command.creation_flags(BELOW_NORMAL_PRIORITY_CLASS);
+        return Ok(CargoChild { child: command.spawn()?, job: None });
+    }
     command.creation_flags(CREATE_SUSPENDED | BELOW_NORMAL_PRIORITY_CLASS);
     let job = crate::ffi::Job::kill_on_close()?;
     let mut child = command.spawn()?;
@@ -122,7 +165,7 @@ fn start(mut command: Command) -> io::Result<CargoChild> {
         let _reaped: io::Result<ExitStatus> = child.wait();
         return Err(e);
     }
-    Ok(CargoChild { child, job })
+    Ok(CargoChild { child, job: Some(job) })
 }
 
 #[cfg(not(windows))]
@@ -135,6 +178,12 @@ impl CargoChild {
     #[must_use]
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// Its stdout, the first time it is asked for, when it was started with
+    /// [`CargoInvocation::piped_stdout`].
+    pub const fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
     }
 
     /// The exit status, if it has exited.
@@ -168,11 +217,15 @@ impl CargoChild {
         }
     }
 
-    /// Kills the child and everything it started.
+    /// Kills the child and everything it started (its job, or for a child in the caller's job
+    /// the child alone).
     pub fn kill(&mut self) -> io::Result<()> {
         #[cfg(windows)]
         {
-            self.job.terminate()
+            match &self.job {
+                Some(job) => job.terminate(),
+                None => self.child.kill(),
+            }
         }
         #[cfg(not(windows))]
         {

@@ -1,9 +1,11 @@
-//! Temporary roots, prefilled samples and the helper launcher.
+//! Temporary roots, prefilled samples, the helper launcher, and waits that block on a pipe or
+//! a lock instead of polling.
 
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::ChildStdout;
 
-use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::samples::{Sample, Source, Store};
 use eileen_buildguard::{CargoChild, CargoInvocation, spawn_cargo};
 
@@ -57,8 +59,8 @@ pub(crate) fn prefill(
     }
 }
 
-/// Starts this test binary as a helper in `mode`, with its machine root under `root`.
-pub(crate) fn helper(mode: &str, root: &TempRoot, extra: &[(&str, String)]) -> CargoChild {
+/// The helper `mode` as an invocation, with its machine root under `root`.
+fn helper_invocation(mode: &str, root: &TempRoot, extra: &[(&str, String)]) -> CargoInvocation {
     let exe = std::env::current_exe().unwrap();
     let mut env: Vec<(String, String)> = vec![
         ("EILEEN_BG_HELPER".to_owned(), mode.to_owned()),
@@ -66,24 +68,40 @@ pub(crate) fn helper(mode: &str, root: &TempRoot, extra: &[(&str, String)]) -> C
         ("LOCALAPPDATA".to_owned(), root.path().display().to_string()),
     ];
     env.extend(extra.iter().map(|(k, v)| ((*k).to_owned(), v.clone())));
-    let invocation =
-        CargoInvocation::program(exe, ["helper::entry", "--exact", "--nocapture", "--quiet"])
-            .with_env(env)
-            .quiet();
-    spawn_cargo(&invocation).unwrap()
+    CargoInvocation::program(exe, ["helper::entry", "--exact", "--nocapture", "--quiet"])
+        .with_env(env)
 }
 
-/// Polls `condition` until it holds or `limit` passes; never a fixed delay.
-pub(crate) fn wait_for(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let clock = RealClock;
-    let deadline = clock.mono_ms() + u64::try_from(limit.as_millis()).unwrap();
+/// Starts this test binary as a helper in `mode`, with null standard handles.
+pub(crate) fn helper(mode: &str, root: &TempRoot, extra: &[(&str, String)]) -> CargoChild {
+    spawn_cargo(&helper_invocation(mode, root, extra).quiet()).unwrap()
+}
+
+/// Starts a helper that says `ready ...` on its stdout, with the reader of that stdout, which
+/// the test keeps for as long as the helper runs.
+pub(crate) fn ready_helper(mode: &str, root: &TempRoot) -> (CargoChild, BufReader<ChildStdout>) {
+    let mut child = spawn_cargo(&helper_invocation(mode, root, &[]).piped_stdout()).unwrap();
+    let stdout = BufReader::new(child.take_stdout().unwrap());
+    (child, stdout)
+}
+
+/// Blocks until a helper writes its `ready ...` line, skipping the test harness's own lines,
+/// and returns the rest of it. A helper that ends without one fails the test.
+pub(crate) fn read_ready(stdout: &mut impl BufRead) -> String {
+    let mut line = String::new();
     loop {
-        if condition() {
-            return true;
+        line.clear();
+        assert!(stdout.read_line(&mut line).unwrap() > 0, "the helper ended without saying ready");
+        if let Some(rest) = line.trim_end().strip_prefix("ready") {
+            return rest.trim().to_owned();
         }
-        if clock.mono_ms() >= deadline {
-            return false;
-        }
-        clock.sleep(Duration::from_millis(20));
     }
+}
+
+/// Blocks until the lock file `name` under `dir` is free (the OS releases a dead holder's lock
+/// on its own schedule), then lets go of it.
+pub(crate) fn wait_until_free(dir: &Path, name: &str) {
+    let file = OpenOptions::new().read(true).write(true).open(dir.join(name)).unwrap();
+    file.lock().unwrap();
+    file.unlock().unwrap();
 }
