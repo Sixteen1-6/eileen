@@ -432,7 +432,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D40. What contains a worker in v0.1, and what waits for v0.2
 
 - Date: 2026-10-20
-- Status: accepted (owner answer of 2026-10-20); amended by D62
+- Status: accepted (owner answer of 2026-10-20); amended by D62 and D71
 - Amends: D14 (its "sandbox by default" and "encrypt at rest" consequences)
 - Decision: In v0.1 a Claude worker is contained by: its own repository or worktree; a path guard that tiers every read and write by canonicalised path (Eileen's data folder, credential stores and browser profiles are tier 3; anything outside the job's folder and toolchains is tier 2); a shell policy that parses commands and allows only a list of build, test and local git commands without asking; per-job taint that makes network egress tier 2 once a job has both seen untrusted content and read private data; the `PreToolUse` guard failing closed; per-app consent for desktop input; and its Job Object. The CLI's own `--restricted` mode (on 2.1.304 it drops code-running tools and WebFetch unless named, confines file tools to the working folders and ignores user and project settings) becomes a second fence for every session if WP3's test shows workers still work under it; other sandbox and Windows container options are measured in WP3 and recorded. A real sandbox and encryption at rest (a DPAPI-wrapped key with an AEAD cipher) are v0.2; v0.1 gives the learning folder a user-only ACL and keeps it out of Windows Search.
 - Why: The safety review showed a worker with web tools and file reads could exfiltrate private data with nothing in the way. Encryption at rest adds a crypto dependency and key handling for little gain over the profile's own permissions on a single-user PC.
@@ -680,7 +680,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D65. The learning loop, fourth revision
 
 - Date: 2026-10-21
-- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies); amended by D70
 - Amends: D61 (shadow agreement, distillation events, provenance of recipe text, facts and phrasings), D41 (when the brain is recycled, and how a paraphrase may run a brain action without a model)
 - Decision: Shadow agreement is one table-tested function with a rule per case: asked slots from the user's answer to the worker's question, unobserved reads, shadow checks the core issues for postconditions that call a check op, fallbacks taken where a replay would take them, a delegate's span of worker calls checked by the `call` after it, extra worker calls, and three verdicts. Delegate goals and ask and confirm questions are literals for provenance and the deny patterns, and are held for approval when they trace nowhere. Ops are named the same way whether a tool selects them through `op` or `action`. A job is distilled at most once, `--wait` reads the recorded outcome after subscribing, and every attempt ends in drafted, rejected, skipped (with a typed reason) or deferred. An `Act` job starts with the taint its brain turn's context held, and an approved third-party server's tool names count as provenance `Tool`. "X means Y" lives only in the phrasing store with a subject key, so a correction replaces every alias of that subject; feedback facts take their object as subject and the answer's topic as scope only when they refer to it; the statements-only tests read slot text; a complaint lexicon keeps complaints as requests. An L2 paraphrase of a confirmed phrasing runs only above a measured similarity and when its entity names match the target's. The brain is recycled only on its context threshold, a forget of something it saw, or a crash.
 - Why: The third verification round found that shadow agreement could not decide a delegated or fallback run, worked recipes contradicted the eligibility rule, `--wait` could miss an outcome or time out without a cause, brain actions escaped taint, corrections left two live aliases, and a paraphrase could launch the wrong app.
@@ -690,7 +690,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D66. Containment and route proposals, third revision
 
 - Date: 2026-10-21
-- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies); amended by D71
 - Amends: D62 (git internals and the order of path classes, the observed-read table, the URL rule), D59 (how a route proposal names its publisher)
 - Decision: Any `.git` path component is git internals, path classes are tried in one fixed order with credentials first and git internals before the job's folders, the global git options that choose another repository or configuration are tier 2, workers pin `safe.bareRepository=explicit`, and every git command carries the repository it will use and whether that repository has hooks; after taint a git command outside the job's own repository asks. One URL function vouches for URLs everywhere: built by Eileen's code, a host the user named with nothing added, or a full URL the user visited, never a host whose page is in the current turn's own context. A dispatched job whose task repeats ledger lines or out-of-scope facts starts as having read private data. The observed-read table covers window lists, waits, action verification hints, media status, recent work and the ledger, and a free-text op must declare a source or a listed reason. A route proposal names its publisher by the registry-verified namespace of the server name, says whether that namespace belongs to the app's maker by Eileen's own vendor table, never reads the registry's metadata as an endorsement and never says "official".
 - Why: Nested repositories, rewritten worktree pointers and in-place `.git` folders escaped the git rules; data split across short path segments, or sent to the visited page that asked for it, passed the URL rule; several reads returning third-party text set no taint; and the registry has no endorsement flag, so the spoken "official" could have been a squatter's.
@@ -710,7 +710,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D68. Evidence, scenario replay and the slice, revised
 
 - Date: 2026-10-21
-- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies); amended by D72
 - Amends: D63 (the type rule, the bot rule, the reviewed label, test paths, scenario replay rules and keys, the expiry contract), D64 (what slice S1 needs in W1)
 - Decision: A pull request's type must fit its changed files, Dependabot's pull requests are recognised by their author, the `evidence-reviewed` label counts only when applied after the head commit arrived, and integration tests are named by their test target. Every brain and worker event has a replay rule, the replayer mints brain instance numbers, hooks are replayed inside the worker's sequence and a changed decision fails the replay, the expiry rule's types are defined with dates written into the scenario file, and reactive keys use transcript digests and occurrences instead of ordinals. The minimal core includes barge-in, slice S1 gets a minimal real resolver in WP2 that WP7 replaces, and the live run takes the desktop lock.
 - Why: A code change typed as docs skipped evidence, the bot template could not exist, a label survived later pushes, several events had no replay rule, the expiry function could not be written from its signature, and S1's fast-path command and barge-in had no owner in W1.
@@ -720,9 +720,49 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D69. Memory thresholds are machine-wide
 
 - Date: 2026-10-21
-- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies); amended by D73
 - Amends: D64 (the build guard's re-check and floor, where the paging history lives, the clamp, when WP3's admission record is taken), D54 (the paging limit's source)
 - Decision: The build guard's baseline ignores samples taken during its own builds, its re-check limit is the 95th percentile plus 25 percent and never under twice the admission limit, one headroom floor between 1 and 2 GB applies after the build's own estimated commit, and its re-check wait is bounded. Memory samples and the 30 s paging averages behind the `auto` paging limit live in a machine-wide folder with one defined format and writer, seeded from the guard's baseline, so a fresh data directory uses what the PC has learned. The clamp ceiling rises to 40,000 KB/s, and WP3's admission record is taken in W2 on the full runtime.
 - Why: The re-check limits were undefined and could stall builds on this PC, the floor could admit a build with under 1 GB of headroom, and the M6 demo, benchmarks and tests would have used a 5,000 KB/s fallback against typical paging near 19,400 KB/s.
 - Consequences: WP0 acceptance 4, WP3 acceptance 3 and WP9 acceptance 6 carry the checks.
 - Source: BUILD.md sections 2.5, 2.15, 3.1, 4.1 and 6.1; the third verification round (items a1129a-1 and a1129a-7).
+
+## D70. The learning loop, fifth revision
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the fourth verification round; the owner's standing rule applies)
+- Amends: D65 (delegate spans, question matching and call assignment in shadow agreement, distillation outcomes, what a tainted step keeps, fact retirement)
+- Decision: A selector tool's recorded arguments keep the fields outside the selector. A delegate's span starts after the latest match of the steps before it in its own list and holds only calls no other rule accounts for; a question with no options agrees with any question the worker asked in the same interval; shadow agreement searches for one consistent assignment of worker calls to steps, within a stated bound. A rejected job is never distilled again, rows left by a stopped runtime or a crashed librarian become deferred outcomes with their event, jobs that never ran on Claude get a stated outcome, and benchmarks judge distillation outcomes by run index, expecting statistics-only or too-short skips after the drafting run. A tainted step keeps vocabulary literals, slots and pointers into fields no outside party wrote, plus match-only pointers, so the worked recipes compile from their own evidence; job status reads carry their jobs' taint; an approved server's tool list is read once after its install. Refinement words take their dimension as subject, and a statement retires its subject's facts in its own scope and in no scope (in every scope when it has none).
+- Why: The fourth verification round found that selector steps lost their window or session, a delegate with no pointer had no span start, the ladder table sent drafts with held lines straight to level 1, two identical calls could be matched wrongly, rejected and orphaned jobs had contradictory or missing outcomes, benchmarks would have recorded expected skips as failures, the worked recipes could not compile from their own tainted evidence, and corrections either retired too much or left two contradicting facts active.
+- Consequences: WP1 acceptance 6 and 12, WP7 acceptance 3, 5, 8 and 9 and WP9 acceptance 2 test the rules; WP7 records the assignment search's largest count (BUILD.md section 7, "Carried into packages").
+- Source: BUILD.md sections 2.4, 2.5, 2.10, 2.12, 3.3.4, 3.3.9, 3.3.10, 3.3.13 and 4.7; the fourth verification round (items a6a62e-1, -3, -5 and -8).
+
+## D71. Git internals, environment assignments and the URL rule's inputs
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the fourth verification round; the owner's standing rule applies)
+- Amends: D66 (where git internals apply, the URL rule's inputs, private reads in dispatched jobs), D40 (the shell policy)
+- Decision: A `.git` path component is git internals only inside the job's own folders, besides the job's own git directories; anywhere else it keeps its class for reads and makes writes ask on the HUD, and the component is recognised the way git's own NTFS protection recognises it. Any environment assignment in a command line makes the command ask on the HUD, except for five variables that name no program, file or folder. The URL rule reads a fact the runtime attaches per URL (whether it is in the media history or recent-work index, and whether the user visited it, from the ledger's browser lines, which now keep the address-bar URL) and a context the core builds (including the address-bar hosts of the pages in the deciding context); an unreadable address bar makes the visited rule vouch for nothing. A dispatched job starts as having read private data whenever its turn held ledger lines.
+- Why: The any-`.git` rule had made other repositories' configuration readable without asking, environment prefixes let a worker-written configuration or program run inside an allowed command, the URL function named inputs no contract carried, and the overlap test let a paraphrased ledger line through.
+- Consequences: WP1 acceptance 6, WP2 acceptance 10 and WP5 acceptance 13 test them; WP2 and WP5 settle the two measured questions (BUILD.md section 7, "Carried into packages"); section 7 names the paraphrased-fact limit.
+- Source: BUILD.md sections 2.6, 2.10, 2.12, 3.3.3 and 3.3.5; the fourth verification round (items ab65bc-1 and ab65bc-5).
+
+## D72. Hook answers are part of a recording
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the fourth verification round; the owner's standing rule applies)
+- Amends: D68 (scenario replay of hooks, reactive keys, the expiry check)
+- Decision: The recorder writes the core's answer to every gating hook as its own line beside the hook input, strict replay compares it, scenario replay fails on a changed answer, and trimming keeps it. A brain turn sent again with an unchanged transcript keeps its key and is told apart by its send ordinal. The expiry check fails a `since` date later than the commit that introduced it.
+- Why: The hook-divergence rule compared against a recorded decision that no format stored, one acceptance line still described the old key, re-sends had no defined key, and the commit-date comparison had no pass condition.
+- Consequences: WP0 acceptance 8 and WP1 acceptance 13 test them.
+- Source: BUILD.md sections 3.3.14, 3.3.16 and 4b.3; the fourth verification round (item a184cd-4).
+
+## D73. The machine-wide memory files have one module
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the fourth verification round; the owner's standing rule applies)
+- Amends: D69 (the paging history's format and writer, the baseline's keys, the tests)
+- Decision: `eileen_buildguard::samples` owns the memory samples, the 30 s paging windows (with a mark for windows a build slot held, which the learned limit leaves out, and a rule that keeps two runtimes from writing one window twice), the keys of the guard's baseline file and the computation of the learned paging limit, so the runtime still depends on that one module. Its root comes from `LOCALAPPDATA`, so tests run against a temporary folder, and a runtime with a fake memory source writes nothing there.
+- Why: The runtime read a baseline file whose keys and reader were undefined, the paging history had no format, lock or build mark, and no test covered the fallback chain, the clamp or a test runtime writing into the PC's learned history.
+- Consequences: WP0 acceptance 4 and WP2 acceptance 12 test them.
+- Source: BUILD.md sections 2.5, 2.15, 3.1, 3.3.11 and 6.1; the fourth verification round (item a1129a-7).
