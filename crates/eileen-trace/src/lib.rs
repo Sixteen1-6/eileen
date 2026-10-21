@@ -1,0 +1,77 @@
+//! Tracing for every Eileen process (BUILD.md section 2.13, observability report sections 2
+//! to 4 and 8): the subscriber stack, span and event names with their parent table, the
+//! `pii.` policy, the Redactor, the flight recorder, Perfetto timelines, `traceparent`, and
+//! the scenario privacy rules.
+//!
+//! # Owns
+//!
+//! - [`init()`] per [`ProcessKind`]: JSON files, the console, the [`ring`] and the [`slow`]
+//!   layer.
+//! - [`names`] and the span-parent check ([`schema`]); the `pii.` policy ([`pii`]), the
+//!   [`redact::Redactor`] and the scenario privacy rules and PII scan ([`privacy`]).
+//! - The [`chrome`] converter, [`traceparent`] parsing, and [`test_support`].
+//!
+//! # Does not own
+//!
+//! - Spawning tasks (`eileen-rt`), the panic hook and minidumps (`eileen-crash`), assembling
+//!   incidents and the log janitor (`eileen-runtime`), OpenTelemetry export (v0.2).
+//!
+//! # Invariants
+//!
+//! - Every span and event name is a constant in [`names`] with a row in [`names::ALL`]
+//!   (test `names::tests::every_named_parent_is_a_declared_span`; check 21 scans the code).
+//! - No secret reaches a file or a ring dump raw (test
+//!   `it::canary::fake_secrets_never_reach_disk_or_a_dump`).
+//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in.
+//!
+//! # Boundaries
+//!
+//! - Called by every Eileen crate; `tools/repo-tools` uses [`redact`] and [`privacy`].
+//! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
+//!   and error crates, `serde_json`, `blake3`; no async runtime, no OpenTelemetry.
+//! - Wire types: the JSON-lines log and ring formats, documented in [`file`](mod@file) and
+//!   [`ring`].
+//!
+//! # Testing
+//!
+//! - Fast command: `cargo xtask test -p eileen-trace` (until `wp0/xtask` merges,
+//!   `cargo nextest run -p eileen-trace`).
+//! - Layers: unit tests per module; integration tests for the canary and the whole stack.
+//! - A bug here starts as a log line without its turn id, a span under the wrong parent, or
+//!   a secret on disk.
+//!
+//! # Traps
+//!
+//! - [`init()`] can run once per process; tests use [`init::build`] with `with_default`.
+//! - Span ids are reused after a span closes; records carry their own ids for that reason.
+//! - User content goes in `pii.` fields only, never in a span name or a message.
+//!
+//! # Logs and tracing
+//!
+//! - Emits `span.slow` and `soft_assert.failed` (target `eileen_trace`); owns no spans.
+//! - Read back with `eileen trace <id>`, or open an incident's `timeline.json` in Perfetto.
+//!
+//! # Do not change without a decision record
+//!
+//! - The line formats, the `pii.` prefix and the reduced form `{len, h}`, the replacement
+//!   text `[redacted:<kind>]`, and the span-parent rules of a span another package owns.
+
+#![forbid(unsafe_code)]
+
+pub mod chrome;
+pub mod file;
+pub mod init;
+pub mod names;
+pub mod pii;
+pub mod privacy;
+pub mod record;
+pub mod redact;
+pub mod ring;
+pub mod schema;
+pub mod slow;
+pub mod test_support;
+pub mod traceparent;
+
+pub use init::{Console, ProcessKind, TraceConfig, TraceError, TraceGuard, build, init};
+pub use record::{EventRecord, SpanRecord};
+pub use redact::Redactor;
