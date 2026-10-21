@@ -442,7 +442,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D41. The brain may act through deterministic tools; workers bind to warm sessions
 
 - Date: 2026-10-20
-- Status: accepted (owner answer of 2026-10-20); amended by D52 and D54
+- Status: accepted (owner answer of 2026-10-20); amended by D52, D54 and D65
 - Amends: D19 (the driver starts sessions, and jobs are bound to them) and D20 (the brain is no longer limited to answering and dispatching)
 - Decision: The brain gets an `act` toolset of tier-0 and tier-1 tools that never move the mouse or type (launch an app, move or snap a window, volume, open a URL, URI or file, media control, recent work, Resolve navigation), only in turns that began with the user's own addressed input. Clicks, typing, drags and every edit stay with workers. A worker driver starts a session first and binds a job to it later; one computer-use session and one deep session are kept warm when memory allows, and a memory admission rule in the core decides what may start. Personality travels in each turn, so renames and style changes need no restart, and the brain is recycled only on context size, a skill change or a crash.
 - Why: Anything outside the exact grammar otherwise waited for a cold worker (34.5 s to a usable session measured under load, 39 to 48 s for a cold brain), which broke "intent, not commands".
@@ -570,7 +570,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D54. Memory admission and the build guard read available memory, commit headroom and paging
 
 - Date: 2026-10-20
-- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D64
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D64 and D69
 - Amends: D41 (admission and the warm pool), D46 (the build guard's numbers)
 - Decision: Admission reads available memory (free plus standby), commit headroom and the paging rate. A job starts if commit headroom stays above 1 GB and either available memory stays above the reserve (10 percent of RAM, 768 MB to 2 GB), or paging has been low for 30 s, or the user says "start it anyway"; a queued job names the biggest process and asks again after ten minutes. The warm pool starts only by the reserve rule. A per-job memory limit is a Job Object limit that fails the job by name. The build guard admits its first slot by headroom and paging with two compile jobs under 2 GB available, its second only with real room, and waits then exits with code 75 when refused. Eileen's own coding workers run no language server in v0.1.
 - Why: With 1 to 2 GB usually available on the owner's PC, the old rules would have admitted no worker and no build at all, contradicting the M6 demo and the owner's answer that one build slot runs on normal days.
@@ -590,7 +590,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D56. The first run, revised
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20); amended by D61
+- Status: accepted (owner direction of 2026-10-20); amended by D61 and D67
 - Amends: D49 (the fallback and what the recording does)
 - Decision: When cloning is too slow, the first run gives the normal tour and offers the surprise later, as the owner wrote; an unticked box runs the demo in the default voice and records nothing. The prompt asks the user to start with "Hi Eileen", which teaches the name without spoiling the surprise; echo cancellation is calibrated from Eileen's own prompt; the clip sets the mic level, measures the recognizer's confidence and, if adopted, enrols the speaker check; no model is adapted. The choices and consent work by voice. A declined clone deletes the clip and the clone; the listening calibration, which holds no audio, is kept, said aloud, and removed by "forget my voice". The "faster the second time" moment uses the exact-repeat rule of D52.
 - Why: The earlier text promised name, accent and echo calibration from a clip that could not provide them, and its fallback did not match the owner's.
@@ -620,7 +620,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D59. App routes: discovery by Eileen's own tool, remembered per app, and shown without hijacking
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20, "the app's own AI route first"); amended by D62
+- Status: accepted (owner direction of 2026-10-20, "the app's own AI route first"); amended by D62 and D66
 - Amends: D21 (the page-structure rung and showing), D22 (route discovery), D48 (undo per Resolve route and ResolveMCP first)
 - Decision: Route discovery is Eileen's own `routes_lookup`, which queries the official MCP registry from the apps sidecar, so no worker needs web tools for it; proposals are stored, shown on the HUD and accepted only as a tier-2 Safety setting. A `route_stats` table remembers which route worked per app and task and feeds workers and introspection, and a vision or UI Automation step is never compiled for an app with a higher declared route. The page-structure rung is on-demand UI Automation of a browser window's web content. The screen lease is always announced and handed back, and a window comes forward only when the user should look. Resolve undo follows the route (Eileen's composition deleted and the previous one loaded, or the previous color version), and Resolve's own MCP server serves each op it covers once the owner is on 21.1 or later.
 - Why: Discovery was assigned to workers that had no web tools, "remembers the best route" had no store or reader, page structure depended on an optional extension, and color versions do not remove a Fusion composition.
@@ -640,7 +640,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D61. The learning loop, third revision
 
 - Date: 2026-10-20
-- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies); amended by D65
 - Amends: D52 (recipe typing, facts, distillation events, provenance precedence), D56 (the first run's gates and its phrasing)
 - Decision: Recipes type every operand, with `$len` for array lengths; a fallback step may point to earlier steps of its own fallback; `call` and `delegate` steps need postconditions while `ask` and `confirm` steps have implicit ones; an `ask` fills a declared, asked slot (kind `Pick` when its options come from an earlier step); a delegate's own check is the worker's report and the objective check is the next `call`; `apps_open_url` can reuse a session already playing the video. The fact patterns match only single declarative statements with a known subject, are said back with "Noted" and are undoable; `CoreCommand` and `FactCommand` are contracts; a correction retires facts by subject key; only `Corrected` and `Forgotten` retirements queue repairs. Which sources gave accepted answers is a statistics table fed by the user's own signals, not a fact kind. Phrasings record their source turn and job, forget plans include them, and first-run phrasings are ephemeral; no-learn never suppresses a phrasing. "Learn from that now" closes the regret window, and every distillation ends in one drafted (with its hold), rejected or skipped event. Provenance and the deny-scan follow one table by literal class. The first run checks setup's clone timing before recording and deletes the clip if rendering misses its limit afterwards.
 - Why: The second verification round found the worked recipes broke the linter's own rules, ordinary requests would have been stored as facts, phrasings survived "forget that", `--wait` could time out on a held draft, the deny-scan contradicted provenance, and the first run's clip could outlive a fallback to the tour.
@@ -650,7 +650,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D62. Containment, calls and the brain's slots, revised
 
 - Date: 2026-10-20
-- Status: accepted (architect, after the second verification round; owner answer 19 for calls)
+- Status: accepted (architect, after the second verification round; owner answer 19 for calls); amended by D66 and D67
 - Amends: D40 (git internals, path class order, egress after taint), D51 (the follow-up feature and calls), D53 (how the fallback brain is addressed), D59 (route proposals and installs)
 - Decision: Writes to a repository's git directory and git configuration are tier 2 and HUD only, workers run with `core.fsmonitor` off, and hook-running git commands become tier 2 after taint in a repository with hooks. Path classes match most specific first, so a job's own folders and snapshot inside Eileen's data folder are not tier 3 for that job. Apps Eileen opens for the user are started by the shell, outside every Eileen job. One table decides which reads are observed and of which kind, covering the browser and mail trees, Claude in Chrome, third-party MCP servers, egress commands and `routes_lookup`. After taint and a private read, queries to vouched hosts, browser input and files a browser opens are tier 2, and hosts in a brain-dispatched task must pass the brain's URL rule. A route proposal must match a registry entry and is shown and spoken only from registry fields; an approved server is installed once at its exact version. During a call only name-led utterances are addressed and Eileen stays silent. A conversation-window follow-up counts only when it resolves against Eileen's last turn. Brain commands name their slot and brain events carry their process instance, so a stalled brain's late answer is dropped.
 - Why: Each closes a gap the second verification round found: git hooks bypassed the taint rule, the data folder contradicted job folders inside it, launched apps inherited a kill-on-close job, poisoned pages read through UI Automation escaped the whole-draft hold, the brain could hand an attacker's URL to a worker, a worker could propose any server in Eileen's voice, calls contradicted owner answer 19, and the core could not tell two answers to one turn apart.
@@ -660,7 +660,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D63. Evidence has a grammar and its own required check; Dependabot updates cargo; scenario keys are stable
 
 - Date: 2026-10-20
-- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies); amended by D68
 - Amends: D57 (the evidence job's home and the bot rule; scenario replay keys and expiry)
 - Decision: The Evidence section has field lines (`tests:`, `scenarios:`, `numbers:`, `replay:`, `incident:`, `owner-run:`, `override:`) and only `tests:` and `scenarios:` are read as ids; tests resolve in any workspace member, `xtask` and `repo-tools` included; `type:` sits under its own heading. The evidence job moves to `evidence.yml`, re-runs on description and label edits, and becomes a required check from phase B; cases Linux cannot show fail until the owner labels them reviewed. Dependabot opens the cargo and action update pull requests with a 14-day cooldown, and no workflow creates pull requests. Scenario replay keys reactive families without digesting composed prompts, feeds the brain's and workers' tool calls inside their turn's sequence, schedules environment events, and one shared function applies the stale and quarantine expiry in both checks.
 - Why: Ids could not be parsed from prose, W0's own tests could not be named, an edited description kept a stale evidence result, a pull request opened with the workflow token never runs the required checks, and prompt rewording would have made every brain scenario stale.
@@ -670,9 +670,59 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D64. The slice in W1, and memory thresholds from this PC's own measurements
 
 - Date: 2026-10-20
-- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies); amended by D68 and D69
 - Amends: D54 (the thresholds and the pool), D57 (when WP4's slice pull requests run)
 - Decision: WP4's two slice pull requests run in W1, sharing the desktop lock with WP6's spike, so S1 can pass while WP1 deepens the simulator. The build guard's thresholds come from a baseline day measured on the owner's PC in W0, its job count never falls as memory rises, and guard processes share their samples. Memory admission's paging limit defaults to `auto`, learned from the PC's own week of paging, and WP3's W1 record must show a cold worker admitted on a typical day. The deep pool session is kept first and may start on a quiet minute; deep answers that start cold are a named v0.1 limit with B6 targets. Benchmarks are stratified by how their jobs were admitted instead of excluded below a fixed free-memory figure, and the M6 demo must start its three agents without "start it anyway".
 - Why: A live read with several agent sessions showed about 19,400 KB/s of paging and 275 MB available, under which the fixed defaults would refuse every build and admission, and the old exclusions would have discarded most benchmark runs on this PC.
 - Consequences: WP0 acceptance 4, WP3 acceptance 3 and WP9 acceptance 2 and 6 carry the checks; section 7 lists the remaining risks.
 - Source: BUILD.md sections 0, 2.5, 4.3, 4.6, 4.7 and 6.1; the second verification round (items aedf46-10, a1129a-1, a1129a-5 and a1129a-7).
+
+## D65. The learning loop, fourth revision
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Amends: D61 (shadow agreement, distillation events, provenance of recipe text, facts and phrasings), D41 (when the brain is recycled, and how a paraphrase may run a brain action without a model)
+- Decision: Shadow agreement is one table-tested function with a rule per case: asked slots from the user's answer to the worker's question, unobserved reads, shadow checks the core issues for postconditions that call a check op, fallbacks taken where a replay would take them, a delegate's span of worker calls checked by the `call` after it, extra worker calls, and three verdicts. Delegate goals and ask and confirm questions are literals for provenance and the deny patterns, and are held for approval when they trace nowhere. Ops are named the same way whether a tool selects them through `op` or `action`. A job is distilled at most once, `--wait` reads the recorded outcome after subscribing, and every attempt ends in drafted, rejected, skipped (with a typed reason) or deferred. An `Act` job starts with the taint its brain turn's context held, and an approved third-party server's tool names count as provenance `Tool`. "X means Y" lives only in the phrasing store with a subject key, so a correction replaces every alias of that subject; feedback facts take their object as subject and the answer's topic as scope only when they refer to it; the statements-only tests read slot text; a complaint lexicon keeps complaints as requests. An L2 paraphrase of a confirmed phrasing runs only above a measured similarity and when its entity names match the target's. The brain is recycled only on its context threshold, a forget of something it saw, or a crash.
+- Why: The third verification round found that shadow agreement could not decide a delegated or fallback run, worked recipes contradicted the eligibility rule, `--wait` could miss an outcome or time out without a cause, brain actions escaped taint, corrections left two live aliases, and a paraphrase could launch the wrong app.
+- Consequences: WP7 acceptance 3, 5, 8, 9 and 11, WP1 acceptance 6 and 12 and WP9 acceptance 6 test the rules; WP1 issues shadow checks through `SkillEngine::shadow_checks`.
+- Source: BUILD.md sections 2.4, 2.10, 2.12, 3.3.4, 3.3.9, 3.3.10, 3.3.13 and 3.3.15; the third verification round (items a6a62e-1, -3, -5, -8 and aedf46-1).
+
+## D66. Containment and route proposals, third revision
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Amends: D62 (git internals and the order of path classes, the observed-read table, the URL rule), D59 (how a route proposal names its publisher)
+- Decision: Any `.git` path component is git internals, path classes are tried in one fixed order with credentials first and git internals before the job's folders, the global git options that choose another repository or configuration are tier 2, workers pin `safe.bareRepository=explicit`, and every git command carries the repository it will use and whether that repository has hooks; after taint a git command outside the job's own repository asks. One URL function vouches for URLs everywhere: built by Eileen's code, a host the user named with nothing added, or a full URL the user visited, never a host whose page is in the current turn's own context. A dispatched job whose task repeats ledger lines or out-of-scope facts starts as having read private data. The observed-read table covers window lists, waits, action verification hints, media status, recent work and the ledger, and a free-text op must declare a source or a listed reason. A route proposal names its publisher by the registry-verified namespace of the server name, says whether that namespace belongs to the app's maker by Eileen's own vendor table, never reads the registry's metadata as an endorsement and never says "official".
+- Why: Nested repositories, rewritten worktree pointers and in-place `.git` folders escaped the git rules; data split across short path segments, or sent to the visited page that asked for it, passed the URL rule; several reads returning third-party text set no taint; and the registry has no endorsement flag, so the spoken "official" could have been a squatter's.
+- Consequences: WP1 acceptance 6, WP2 acceptance 10, WP6 acceptance 8 and WP7 acceptance 9 test them; WP6 maintains `app-vendors.toml`; section 7 names the git exposure that remains for an untainted job.
+- Source: BUILD.md sections 2.5, 2.12, 3.3.3, 3.3.9 and 3.3.13; the third verification round (items ab65bc-1, ab65bc-5, ab65bc-11 and a6a62e-5).
+
+## D67. The follow-up rule and the speech level are contracts
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Amends: D62 (the conversation window's follow-up feature), D56 (what the first run's calibration feeds)
+- Decision: The core fills a record of what its own last turn mentioned and asks the intent resolver whether an unnamed utterance follows up on it; WP7 owns that rule with golden cases, and the slice's resolver answers no until then. Every end of turn carries its speech level, the first run's calibration reaches the core as a typed record, and the addressee score is a defined function whose speech-level check rejects a voice much quieter than the user's reference; without a calibration the reference is the median level of name-led turns.
+- Why: The follow-up rule named the slot resolvers, which the core cannot reach except through a port that carried none of the needed data, and the first run's level reference was written to disk with no path into the score.
+- Consequences: WP1 acceptance 12, WP4 acceptance 12 and WP7 acceptance 3 test them; section 7 keeps the limit that an equally loud second voice is not greyed without the speaker check.
+- Source: BUILD.md sections 2.8, 3.3.3, 3.3.10, 3.3.11 and 3.3.15; the third verification round (items aedf46-2, L1 and L8).
+
+## D68. Evidence, scenario replay and the slice, revised
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Amends: D63 (the type rule, the bot rule, the reviewed label, test paths, scenario replay rules and keys, the expiry contract), D64 (what slice S1 needs in W1)
+- Decision: A pull request's type must fit its changed files, Dependabot's pull requests are recognised by their author, the `evidence-reviewed` label counts only when applied after the head commit arrived, and integration tests are named by their test target. Every brain and worker event has a replay rule, the replayer mints brain instance numbers, hooks are replayed inside the worker's sequence and a changed decision fails the replay, the expiry rule's types are defined with dates written into the scenario file, and reactive keys use transcript digests and occurrences instead of ordinals. The minimal core includes barge-in, slice S1 gets a minimal real resolver in WP2 that WP7 replaces, and the live run takes the desktop lock.
+- Why: A code change typed as docs skipped evidence, the bot template could not exist, a label survived later pushes, several events had no replay rule, the expiry function could not be written from its signature, and S1's fast-path command and barge-in had no owner in W1.
+- Consequences: WP0 acceptance 11, WP1 acceptance 13 and WP2 acceptance 1 and 11 test them.
+- Source: BUILD.md sections 3.3.1, 3.3.14, 3.3.16, 3.5, 4.6, 4b.3, 6.1 and 6.2 to 6.4; the third verification round (items a184cd-2, a184cd-4, aedf46-10 and L8).
+
+## D69. Memory thresholds are machine-wide
+
+- Date: 2026-10-21
+- Status: accepted (architect, after the third verification round; the owner's standing rule applies)
+- Amends: D64 (the build guard's re-check and floor, where the paging history lives, the clamp, when WP3's admission record is taken), D54 (the paging limit's source)
+- Decision: The build guard's baseline ignores samples taken during its own builds, its re-check limit is the 95th percentile plus 25 percent and never under twice the admission limit, one headroom floor between 1 and 2 GB applies after the build's own estimated commit, and its re-check wait is bounded. Memory samples and the 30 s paging averages behind the `auto` paging limit live in a machine-wide folder with one defined format and writer, seeded from the guard's baseline, so a fresh data directory uses what the PC has learned. The clamp ceiling rises to 40,000 KB/s, and WP3's admission record is taken in W2 on the full runtime.
+- Why: The re-check limits were undefined and could stall builds on this PC, the floor could admit a build with under 1 GB of headroom, and the M6 demo, benchmarks and tests would have used a 5,000 KB/s fallback against typical paging near 19,400 KB/s.
+- Consequences: WP0 acceptance 4, WP3 acceptance 3 and WP9 acceptance 6 carry the checks.
+- Source: BUILD.md sections 2.5, 2.15, 3.1, 4.1 and 6.1; the third verification round (items a1129a-1 and a1129a-7).
