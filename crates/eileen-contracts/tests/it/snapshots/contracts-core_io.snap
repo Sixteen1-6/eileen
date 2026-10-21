@@ -988,100 +988,42 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "IncidentTrigger": {
-      "description": "Why an incident is captured.",
+      "description": "Why an incident is captured: the triggers section 2.13 names (and the soft assertions of\nsection 4.7, which dump the flight recorder). The core emits the ones it decides; the runtime\nand the guard write the others' manifests under the same names. WP1 owns the policy and adds\na trigger as a new variant.",
       "oneOf": [
         {
           "const": "user_report",
-          "description": "The user said \"something went wrong\" or pressed the report hotkey.",
+          "description": "\"Eileen, something went wrong\", the report hotkey or the tray's item.",
           "type": "string"
         },
         {
-          "additionalProperties": false,
+          "const": "explain",
+          "description": "\"Explain that\", after an error with no template.",
+          "type": "string"
+        },
+        {
+          "const": "panic",
+          "description": "A panic.",
+          "type": "string"
+        },
+        {
+          "const": "crash",
+          "description": "A process crashed.",
+          "type": "string"
+        },
+        {
+          "const": "watchdog_trip",
+          "description": "A watchdog tripped.",
+          "type": "string"
+        },
+        {
+          "const": "supervisor_kill",
+          "description": "The supervisor killed a process.",
+          "type": "string"
+        },
+        {
+          "const": "soft_assertion",
           "description": "A `never!` or `always!` soft assertion failed.",
-          "properties": {
-            "soft_assertion": {
-              "properties": {
-                "site": {
-                  "description": "The assertion's site name.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "site"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "soft_assertion"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A component stopped answering.",
-          "properties": {
-            "hang": {
-              "properties": {
-                "component": {
-                  "description": "The component.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "component"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "hang"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A component crashed.",
-          "properties": {
-            "crash": {
-              "properties": {
-                "component": {
-                  "description": "The component.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "component"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "crash"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A job failed.",
-          "properties": {
-            "job_failed": {
-              "properties": {
-                "job": {
-                  "$ref": "#/$defs/JobId",
-                  "description": "The job."
-                }
-              },
-              "required": [
-                "job"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "job_failed"
-          ],
-          "type": "object"
+          "type": "string"
         }
       ]
     },

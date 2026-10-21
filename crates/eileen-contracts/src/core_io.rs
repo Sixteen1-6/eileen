@@ -592,32 +592,27 @@ pub struct JournalRow {
     pub at: WallTime,
 }
 
-/// Why an incident is captured.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Why an incident is captured: the triggers section 2.13 names (and the soft assertions of
+/// section 4.7, which dump the flight recorder). The core emits the ones it decides; the runtime
+/// and the guard write the others' manifests under the same names. WP1 owns the policy and adds
+/// a trigger as a new variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum IncidentTrigger {
-    /// The user said "something went wrong" or pressed the report hotkey.
+    /// "Eileen, something went wrong", the report hotkey or the tray's item.
     UserReport,
+    /// "Explain that", after an error with no template.
+    Explain,
+    /// A panic.
+    Panic,
+    /// A process crashed.
+    Crash,
+    /// A watchdog tripped.
+    WatchdogTrip,
+    /// The supervisor killed a process.
+    SupervisorKill,
     /// A `never!` or `always!` soft assertion failed.
-    SoftAssertion {
-        /// The assertion's site name.
-        site: String,
-    },
-    /// A component stopped answering.
-    Hang {
-        /// The component.
-        component: String,
-    },
-    /// A component crashed.
-    Crash {
-        /// The component.
-        component: String,
-    },
-    /// A job failed.
-    JobFailed {
-        /// The job.
-        job: JobId,
-    },
+    SoftAssertion,
 }
 
 /// A Windows toast.

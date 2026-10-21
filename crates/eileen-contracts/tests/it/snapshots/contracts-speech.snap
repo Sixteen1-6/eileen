@@ -97,7 +97,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         {
           "const": "pcm",
-          "description": "4, speech to core: JSON [`PcmHeader`], a newline, then `i16` samples; at most 1 MiB.",
+          "description": "4, speech to core: JSON [`PcmHeader`], then `i16` samples; at most 1 MiB.",
           "type": "string"
         },
         {

@@ -6,6 +6,11 @@
 //! checked against the kind's maximum before anything is allocated ([`FrameHeader::decode`]).
 //! VAD, ASR and barge-in state are keyed by `source`. PCM goes straight to the audio driver; the
 //! core only sees `ClauseReady`, `Played` and `Paused`.
+//!
+//! Two framing details are WP0 placeholders that WP4 settles with its `speech_frame` parser,
+//! since the plan leaves them open: how the JSON [`PcmHeader`] of a PCM frame ends (a newline
+//! here) and the cap on command and event bodies ([`FrameKind::max_len`], 256 KiB here). Both
+//! are code, not schema, so settling them changes no snapshot.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -45,7 +50,7 @@ pub enum FrameKind {
     Command,
     /// 3, speech to core: JSON [`SpeechEventFrame`].
     Event,
-    /// 4, speech to core: JSON [`PcmHeader`], a newline, then `i16` samples; at most 1 MiB.
+    /// 4, speech to core: JSON [`PcmHeader`], then `i16` samples; at most 1 MiB.
     Pcm,
     /// 5, a heartbeat every second.
     Ping,
@@ -85,7 +90,8 @@ impl FrameKind {
         }
     }
 
-    /// The largest body this kind may carry, in bytes.
+    /// The largest body this kind may carry, in bytes. The 256 KiB for commands and events is a
+    /// placeholder WP4 settles (see the module doc).
     #[must_use]
     pub const fn max_len(self) -> u32 {
         match self {

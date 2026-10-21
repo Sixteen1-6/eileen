@@ -1387,71 +1387,16 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "UserErrorKind": {
-      "description": "The stable kinds of user error.",
+      "description": "The stable kinds of user error. The plan names one kind; WP1 owns the rest and adds each\nwith its sentence and fix (section 2.13).",
       "oneOf": [
         {
           "const": "job_kind_unavailable",
-          "description": "A job kind v0.1 does not run (`ml_project`).",
+          "description": "A job kind v0.1 does not run (`ml_project`, section 2.5).",
           "type": "string"
         },
         {
-          "const": "route_unavailable",
-          "description": "A route v0.1 does not build.",
-          "type": "string"
-        },
-        {
-          "const": "signed_out",
-          "description": "The vendor CLI is not signed in.",
-          "type": "string"
-        },
-        {
-          "const": "plan_limit",
-          "description": "The plan's limit is reached.",
-          "type": "string"
-        },
-        {
-          "const": "memory_low",
-          "description": "Not enough memory to start the job.",
-          "type": "string"
-        },
-        {
-          "const": "app_not_found",
-          "description": "No app matches the name.",
-          "type": "string"
-        },
-        {
-          "const": "app_unreachable",
-          "description": "An app's scripting interface is off or unreachable.",
-          "type": "string"
-        },
-        {
-          "const": "mic_unavailable",
-          "description": "The microphone is unavailable.",
-          "type": "string"
-        },
-        {
-          "const": "speech_model_missing",
-          "description": "A speech model is missing or failed its check.",
-          "type": "string"
-        },
-        {
-          "const": "tool_failed",
-          "description": "A tool call failed.",
-          "type": "string"
-        },
-        {
-          "const": "setting_refused",
-          "description": "A setting change was refused.",
-          "type": "string"
-        },
-        {
-          "const": "network_unavailable",
-          "description": "The network is unreachable.",
-          "type": "string"
-        },
-        {
-          "const": "internal",
-          "description": "Something inside Eileen failed; an incident was captured.",
+          "const": "unexpected",
+          "description": "An unexpected failure with no template: the sentence says what failed and offers\n\"explain that\" (section 2.13).",
           "type": "string"
         }
       ]

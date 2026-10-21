@@ -404,36 +404,16 @@ pub struct UserError {
     pub fix: Option<FixAction>,
 }
 
-/// The stable kinds of user error.
+/// The stable kinds of user error. The plan names one kind; WP1 owns the rest and adds each
+/// with its sentence and fix (section 2.13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UserErrorKind {
-    /// A job kind v0.1 does not run (`ml_project`).
+    /// A job kind v0.1 does not run (`ml_project`, section 2.5).
     JobKindUnavailable,
-    /// A route v0.1 does not build.
-    RouteUnavailable,
-    /// The vendor CLI is not signed in.
-    SignedOut,
-    /// The plan's limit is reached.
-    PlanLimit,
-    /// Not enough memory to start the job.
-    MemoryLow,
-    /// No app matches the name.
-    AppNotFound,
-    /// An app's scripting interface is off or unreachable.
-    AppUnreachable,
-    /// The microphone is unavailable.
-    MicUnavailable,
-    /// A speech model is missing or failed its check.
-    SpeechModelMissing,
-    /// A tool call failed.
-    ToolFailed,
-    /// A setting change was refused.
-    SettingRefused,
-    /// The network is unreachable.
-    NetworkUnavailable,
-    /// Something inside Eileen failed; an incident was captured.
-    Internal,
+    /// An unexpected failure with no template: the sentence says what failed and offers
+    /// "explain that" (section 2.13).
+    Unexpected,
 }
 
 /// A fix the user can run from an error.
