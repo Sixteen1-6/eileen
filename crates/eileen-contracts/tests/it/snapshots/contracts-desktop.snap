@@ -718,7 +718,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ]
     },
     "Selector": {
-      "description": "How an element is found again: by its process, window and its own identity.",
+      "additionalProperties": false,
+      "description": "How an element is found again: by its process, window and its own identity. Unknown fields\nare refused, so a misspelt field never widens the match.",
       "properties": {
         "ancestors": {
           "default": [],
@@ -767,6 +768,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "SelectorStep": {
+      "additionalProperties": false,
       "description": "One ancestor of a selected element.",
       "properties": {
         "automation_id": {

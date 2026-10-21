@@ -1,10 +1,12 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     Expectation, ExpectedOutcome, Lane, Quarantine, Scenario, ScenarioMeta, ScenarioOrigin,
     ScenarioStatus, StatusKind, StatusProblem, Step, status_problems,
 };
 use crate::ids::{Date, ScenarioId};
+
+mod validate;
 
 /// The example of BUILD.md section 3.3.14, verbatim.
 const EXAMPLE: &str = r#"
@@ -95,19 +97,76 @@ fn the_plan_s_example_scenario_parses() {
     assert_eq!(budget.max_ms, 2500, "timing");
 }
 
+/// The plan's example with one step of each kind that has no fields, a HUD step and a
+/// field-text expectation, whose selector is the deepest type a scenario names.
+fn example_with_every_shape() -> String {
+    format!(
+        "{EXAMPLE}
+[[steps]]
+approve = {{}}
+
+[[steps]]
+deny = {{}}
+
+[[steps]]
+physical_input = {{}}
+
+[[steps]]
+hud = {{ input = {{ answer = {{ id = 4, option = 1 }} }} }}
+
+[[expect]]
+kind = \"field_text\"
+selector = {{ process = \"notepad.exe\", automation_id = \"15\", ancestors = [{{ name = \"Text editor\" }}] }}
+contains = \"hello\"
+"
+    )
+}
+
+/// The scenario schema as `scenarios/_schema/scenario.schema.json` will hold it.
+fn scenario_schema() -> Value {
+    crate::schema::settings().into_generator().into_root_schema_for::<Scenario>().to_value()
+}
+
 #[test]
 fn steps_without_fields_are_written_as_empty_tables() {
-    let text =
-        format!("{EXAMPLE}\n[[steps]]\napprove = {{}}\n\n[[steps]]\nphysical_input = {{}}\n");
-    let scenario: Scenario = toml::from_str(&text).unwrap();
-    assert_eq!(scenario.steps.get(2), Some(&Step::Approve), "approve");
-    assert_eq!(scenario.steps.get(3), Some(&Step::PhysicalInput), "physical input");
+    let scenario: Scenario = toml::from_str(&example_with_every_shape()).unwrap();
+    assert_eq!(scenario.steps.get(2), Some(&Step::Approve {}), "approve");
+    assert_eq!(scenario.steps.get(3), Some(&Step::Deny {}), "deny");
+    assert_eq!(scenario.steps.get(4), Some(&Step::PhysicalInput {}), "physical input");
+    let written = serde_json::to_value(&scenario.steps).unwrap();
+    assert_eq!(written[2], json!({ "approve": {} }), "written back as an empty table");
+}
+
+#[test]
+fn a_scenario_file_matches_the_generated_schema() {
+    let schema = scenario_schema();
+    let text = example_with_every_shape();
+    let file: Value = toml::from_str(&text).unwrap();
+    assert_eq!(validate::errors(&schema, &file), Vec::<String>::new(), "the file as written");
+    let parsed: Scenario = toml::from_str(&text).unwrap();
+    let written = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(validate::errors(&schema, &written), Vec::<String>::new(), "the parsed file");
+}
+
+/// The example with one misspelt field in each kind of nested table.
+fn typos() -> [(&'static str, String); 4] {
+    let every = example_with_every_shape();
+    [
+        ("a top-level field", EXAMPLE.replace("tags = ", "tag = ")),
+        ("a step's field", EXAMPLE.replace("utterance = 0 }", "utterance = 0, utterence = 1 }")),
+        ("a HUD input's field", every.replace("option = 1 }", "option = 1, opton = 2 }")),
+        ("a selector's field", every.replace("automation_id = ", "automation_ID = ")),
+    ]
 }
 
 #[test]
 fn unknown_fields_and_origins_are_refused() {
-    let typo = EXAMPLE.replace("tags = ", "tag = ");
-    assert!(toml::from_str::<Scenario>(&typo).is_err(), "a misspelt field");
+    let schema = scenario_schema();
+    for (what, text) in typos() {
+        assert!(toml::from_str::<Scenario>(&text).is_err(), "serde refuses {what}");
+        let file: Value = toml::from_str(&text).unwrap();
+        assert!(!validate::errors(&schema, &file).is_empty(), "the schema refuses {what}");
+    }
     let user = EXAMPLE.replace("origin = \"synthetic\"", "origin = \"user\"");
     assert!(toml::from_str::<Scenario>(&user).is_err(), "origin user");
     let shared = EXAMPLE.replace("origin = \"synthetic\"", "origin = \"synthetic-from-user\"");

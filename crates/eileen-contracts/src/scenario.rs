@@ -3,8 +3,9 @@
 //!
 //! Provisional: WP2 pins this module in its first pull request (BUILD.md section 3.3).
 //!
-//! A file is valid when it deserializes into [`Scenario`] (unknown fields are refused) and
-//! matches the JSON Schema generated from it into `scenarios/_schema/scenario.schema.json`.
+//! A file is valid when it deserializes into [`Scenario`] and matches the JSON Schema generated
+//! from it into `scenarios/_schema/scenario.schema.json`. Both refuse an unknown field in every
+//! table a scenario writes, the steps, HUD inputs and selectors included.
 //! [`status_problems`] is the one expiry rule, shared by `cargo xtask scenarios check` and
 //! `eileen scenario check`.
 
@@ -260,9 +261,10 @@ pub struct FixtureWindow {
     pub zone: Option<String>,
 }
 
-/// One step of a scenario.
+/// One step of a scenario. A step with no fields is an empty struct variant, so the file writes
+/// it as an empty table (`approve = {}` under `[[steps]]`) and serde and the schema agree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Step {
     /// Say an utterance.
     Say {
@@ -292,16 +294,16 @@ pub enum Step {
         timeout_ms: u32,
     },
     /// Approve the pending question.
-    Approve,
+    Approve {},
     /// Deny the pending question.
-    Deny,
+    Deny {},
     /// Wait.
     Pause {
         /// How long, ms.
         ms: u32,
     },
     /// The user touches the mouse.
-    PhysicalInput,
+    PhysicalInput {},
 }
 
 /// What must be true after a scenario. Sim-lane expectations are the ones the simulator can

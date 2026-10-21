@@ -1018,7 +1018,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
     "desktop_click_element": {
       "$defs": {
         "Selector": {
-          "description": "How an element is found again: by its process, window and its own identity.",
+          "additionalProperties": false,
+          "description": "How an element is found again: by its process, window and its own identity. Unknown fields\nare refused, so a misspelt field never widens the match.",
           "properties": {
             "ancestors": {
               "default": [],
@@ -1067,6 +1068,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "object"
         },
         "SelectorStep": {
+          "additionalProperties": false,
           "description": "One ancestor of a selected element.",
           "properties": {
             "automation_id": {
@@ -1791,7 +1793,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
     "desktop_wait_for": {
       "$defs": {
         "Selector": {
-          "description": "How an element is found again: by its process, window and its own identity.",
+          "additionalProperties": false,
+          "description": "How an element is found again: by its process, window and its own identity. Unknown fields\nare refused, so a misspelt field never widens the match.",
           "properties": {
             "ancestors": {
               "default": [],
@@ -1840,6 +1843,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "object"
         },
         "SelectorStep": {
+          "additionalProperties": false,
           "description": "One ancestor of a selected element.",
           "properties": {
             "automation_id": {

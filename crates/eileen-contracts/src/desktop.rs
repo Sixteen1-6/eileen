@@ -257,8 +257,10 @@ pub struct Point {
     pub y: i32,
 }
 
-/// How an element is found again: by its process, window and its own identity.
+/// How an element is found again: by its process, window and its own identity. Unknown fields
+/// are refused, so a misspelt field never widens the match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Selector {
     /// The process name.
     pub process: String,
@@ -277,6 +279,7 @@ pub struct Selector {
 
 /// One ancestor of a selected element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelectorStep {
     /// Its control type.
     pub control_type: Option<String>,

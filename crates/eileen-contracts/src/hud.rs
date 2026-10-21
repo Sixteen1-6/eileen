@@ -414,9 +414,9 @@ pub struct Indicators {
 
 /// What a HUD click or text box sends. Every variant a click can send has a grammar entry or a
 /// hotkey; spoken first-run choices and consent are recognised by the core from the microphone,
-/// never accepted from a HUD line.
+/// never accepted from a HUD line. Unknown fields are refused.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum HudInput {
     /// Toggle mute.
     ToggleMute,

@@ -200,7 +200,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "HudInput": {
-      "description": "What a HUD click or text box sends. Every variant a click can send has a grammar entry or a\nhotkey; spoken first-run choices and consent are recognised by the core from the microphone,\nnever accepted from a HUD line.",
+      "description": "What a HUD click or text box sends. Every variant a click can send has a grammar entry or a\nhotkey; spoken first-run choices and consent are recognised by the core from the microphone,\nnever accepted from a HUD line. Unknown fields are refused.",
       "oneOf": [
         {
           "const": "toggle_mute",
@@ -271,6 +271,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Approve one held line of a draft.",
           "properties": {
             "approve_skill_line": {
+              "additionalProperties": false,
               "properties": {
                 "line": {
                   "description": "The line.",
@@ -300,6 +301,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Approve a whole draft.",
           "properties": {
             "approve_draft": {
+              "additionalProperties": false,
               "properties": {
                 "skill": {
                   "$ref": "#/$defs/SkillId",
@@ -322,6 +324,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Answer a confirm panel, a contact sheet, a clarifying question or a route proposal.",
           "properties": {
             "answer": {
+              "additionalProperties": false,
               "properties": {
                 "id": {
                   "description": "The question's id.",
@@ -354,6 +357,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "\"That was for you\", by tap.",
           "properties": {
             "run_heard_line": {
+              "additionalProperties": false,
               "properties": {
                 "turn": {
                   "$ref": "#/$defs/TurnId",
@@ -376,6 +380,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Change a setting, through the normal settings flow.",
           "properties": {
             "set_setting": {
+              "additionalProperties": false,
               "properties": {
                 "key": {
                   "description": "The key.",
@@ -402,6 +407,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "A first-run choice.",
           "properties": {
             "first_run": {
+              "additionalProperties": false,
               "properties": {
                 "choice": {
                   "$ref": "#/$defs/FirstRunChoice",
@@ -442,6 +448,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Run an error's fix.",
           "properties": {
             "fix": {
+              "additionalProperties": false,
               "properties": {
                 "error": {
                   "description": "The error's id.",
@@ -471,6 +478,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "An audio clip dropped on the strip: starts voice enrollment.",
           "properties": {
             "drop_file": {
+              "additionalProperties": false,
               "properties": {
                 "path": {
                   "description": "The file.",

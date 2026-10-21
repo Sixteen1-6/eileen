@@ -1094,13 +1094,14 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ]
     },
     "Step": {
-      "description": "One step of a scenario.",
+      "description": "One step of a scenario. A step with no fields is an empty struct variant, so the file writes\nit as an empty table (`approve = {}` under `[[steps]]`) and serde and the schema agree.",
       "oneOf": [
         {
           "additionalProperties": false,
           "description": "Say an utterance.",
           "properties": {
             "say": {
+              "additionalProperties": false,
               "properties": {
                 "utterance": {
                   "description": "Its index into `intent.utterances`.",
@@ -1126,6 +1127,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Type text.",
           "properties": {
             "type": {
+              "additionalProperties": false,
               "properties": {
                 "text": {
                   "description": "The text.",
@@ -1148,6 +1150,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Press a hotkey.",
           "properties": {
             "hotkey": {
+              "additionalProperties": false,
               "properties": {
                 "keys": {
                   "description": "The chord.",
@@ -1170,6 +1173,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Click on the HUD.",
           "properties": {
             "hud": {
+              "additionalProperties": false,
               "properties": {
                 "input": {
                   "$ref": "#/$defs/HudInput",
@@ -1192,6 +1196,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "Wait for an event.",
           "properties": {
             "wait_for": {
+              "additionalProperties": false,
               "properties": {
                 "event": {
                   "description": "A name from `docs/reference/events.md`.",
@@ -1217,20 +1222,39 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "object"
         },
         {
-          "const": "approve",
+          "additionalProperties": false,
           "description": "Approve the pending question.",
-          "type": "string"
+          "properties": {
+            "approve": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "approve"
+          ],
+          "type": "object"
         },
         {
-          "const": "deny",
+          "additionalProperties": false,
           "description": "Deny the pending question.",
-          "type": "string"
+          "properties": {
+            "deny": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
         },
         {
           "additionalProperties": false,
           "description": "Wait.",
           "properties": {
             "pause": {
+              "additionalProperties": false,
               "properties": {
                 "ms": {
                   "description": "How long, ms.",
@@ -1251,9 +1275,18 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "object"
         },
         {
-          "const": "physical_input",
+          "additionalProperties": false,
           "description": "The user touches the mouse.",
-          "type": "string"
+          "properties": {
+            "physical_input": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "physical_input"
+          ],
+          "type": "object"
         }
       ]
     },
