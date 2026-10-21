@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Text Editor
+Name[de]=Texteditor
+Name[pt_BR]=Editor de texto
+Keywords=text;editor;notes\;plain;
+Keywords[de]=Text;Editor;Notizen;
+Exec=gnome-text-editor %U
+DBusActivatable=true
+Type=Application

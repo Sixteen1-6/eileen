@@ -193,6 +193,7 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
 2. **L1, during W2 to W4.**
    - Builds: the D-Bus backends (`MediaSessions`, toasts, `keep_awake`, the lock state, the power facts, `SecretStore`, `Apps`, `RecentSources`) and the nightly Linux desktop lane.
    - Acceptance: each passes its trait's conformance suite against a fake service in CI and against the real service on Ubuntu 26.04.
+   - Status on 2026-10-21: `Apps::index` is built in `crates/eileen-apps-linux`. It reads the desktop entries with Eileen's own parser and follows the specification's precedence, masking (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`, `TryExec`) and locales; Flatpak and Snap apps count as packaged. It is tested over a fixture session. Launch waits for the supervisor's Linux process model.
 3. **L2, toward v0.2.**
    - Builds:
      - audio on PipeWire;
