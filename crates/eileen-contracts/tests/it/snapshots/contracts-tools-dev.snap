@@ -1,0 +1,320 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "DevCrateDoc": {
+      "description": "`dev_crate_doc`: one crate's guidance.",
+      "properties": {
+        "crate": {
+          "description": "The crate, for example `eileen-core`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "crate"
+      ],
+      "type": "object"
+    },
+    "DevEventMap": {
+      "description": "`dev_event_map`: where an event is produced and consumed.",
+      "properties": {
+        "event": {
+          "description": "The dotted event name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "type": "object"
+    },
+    "DevIncidentRead": {
+      "description": "`dev_incident_read`: one part of an incident.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/IncidentId",
+          "description": "The incident."
+        },
+        "part": {
+          "$ref": "#/$defs/IncidentPart",
+          "description": "Which part."
+        }
+      },
+      "required": [
+        "id",
+        "part"
+      ],
+      "type": "object"
+    },
+    "DevLogsQuery": {
+      "description": "`dev_logs_query`.",
+      "properties": {
+        "filter": {
+          "description": "The filter, in the logs' own syntax.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "At most this many lines.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since_minutes": {
+          "description": "How far back, minutes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "filter"
+      ],
+      "type": "object"
+    },
+    "DevReplayCore": {
+      "description": "`dev_replay_core`: replay a recording or incident at the core level.",
+      "properties": {
+        "id": {
+          "description": "A recording or incident id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "DevTraceGet": {
+      "description": "`dev_trace_get`: one trace, at most 400 lines.",
+      "properties": {
+        "id": {
+          "description": "A turn, job or call id.",
+          "type": "string"
+        },
+        "max_lines": {
+          "description": "At most this many lines.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "IncidentPart": {
+      "description": "The parts of an incident bundle.",
+      "oneOf": [
+        {
+          "const": "manifest",
+          "description": "Its manifest.",
+          "type": "string"
+        },
+        {
+          "const": "logs",
+          "description": "Its log lines.",
+          "type": "string"
+        },
+        {
+          "const": "trace",
+          "description": "Its trace.",
+          "type": "string"
+        },
+        {
+          "const": "inputs",
+          "description": "Its recorded inputs.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "tool_inputs": {
+    "dev_codemap": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "dev_crate_doc": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_crate_doc`: one crate's guidance.",
+      "properties": {
+        "crate": {
+          "description": "The crate, for example `eileen-core`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "crate"
+      ],
+      "title": "DevCrateDoc",
+      "type": "object"
+    },
+    "dev_event_map": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_event_map`: where an event is produced and consumed.",
+      "properties": {
+        "event": {
+          "description": "The dotted event name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event"
+      ],
+      "title": "DevEventMap",
+      "type": "object"
+    },
+    "dev_incident_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "dev_incident_read": {
+      "$defs": {
+        "IncidentId": {
+          "description": "A ULID with the prefix `inc_`, upper-case Crockford base32",
+          "pattern": "^inc_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "IncidentPart": {
+          "description": "The parts of an incident bundle.",
+          "oneOf": [
+            {
+              "const": "manifest",
+              "description": "Its manifest.",
+              "type": "string"
+            },
+            {
+              "const": "logs",
+              "description": "Its log lines.",
+              "type": "string"
+            },
+            {
+              "const": "trace",
+              "description": "Its trace.",
+              "type": "string"
+            },
+            {
+              "const": "inputs",
+              "description": "Its recorded inputs.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_incident_read`: one part of an incident.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/IncidentId",
+          "description": "The incident."
+        },
+        "part": {
+          "$ref": "#/$defs/IncidentPart",
+          "description": "Which part."
+        }
+      },
+      "required": [
+        "id",
+        "part"
+      ],
+      "title": "DevIncidentRead",
+      "type": "object"
+    },
+    "dev_logs_query": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_logs_query`.",
+      "properties": {
+        "filter": {
+          "description": "The filter, in the logs' own syntax.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "At most this many lines.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since_minutes": {
+          "description": "How far back, minutes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "filter"
+      ],
+      "title": "DevLogsQuery",
+      "type": "object"
+    },
+    "dev_replay_core": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_replay_core`: replay a recording or incident at the core level.",
+      "properties": {
+        "id": {
+          "description": "A recording or incident id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DevReplayCore",
+      "type": "object"
+    },
+    "dev_scenario_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "dev_trace_get": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`dev_trace_get`: one trace, at most 400 lines.",
+      "properties": {
+        "id": {
+          "description": "A turn, job or call id.",
+          "type": "string"
+        },
+        "max_lines": {
+          "description": "At most this many lines.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DevTraceGet",
+      "type": "object"
+    }
+  }
+}

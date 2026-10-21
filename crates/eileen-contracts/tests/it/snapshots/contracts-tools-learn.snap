@@ -1,0 +1,859 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "LearnFactPropose": {
+      "description": "`learn_fact_propose`: never with observed provenance.",
+      "properties": {
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/FactKind",
+          "description": "The kind of fact."
+        },
+        "text": {
+          "description": "The fact.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "LearnSkillHistory": {
+      "description": "`learn_skill_history`: a skill's versions.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "LearnSkillPropose": {
+      "description": "`learn_skill_propose`: returns a `ProposeOutcome` (`Committed`, `PendingApproval`,\n`PendingReview` for a whole draft with free-text taint, or `Rejected` with lint errors).",
+      "properties": {
+        "doc": {
+          "$ref": "#/$defs/SkillDoc",
+          "description": "The skill's files."
+        },
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/CommitReason",
+          "description": "Why it changes."
+        }
+      },
+      "required": [
+        "doc",
+        "reason",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "LearnSkillRead": {
+      "description": "`learn_skill_read`: a skill's current version.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "LearnTrajectoryRead": {
+      "description": "`learn_trajectory_read`: one job's redacted trajectory.",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        }
+      },
+      "required": [
+        "job"
+      ],
+      "type": "object"
+    }
+  },
+  "tool_inputs": {
+    "learn_fact_propose": {
+      "$defs": {
+        "FactKind": {
+          "description": "The kinds of fact. Sources are `SourceStat`s, not facts; `Phrasing` names the kind in\ncommands and queries and is stored as a `PhrasingFact`.",
+          "oneOf": [
+            {
+              "const": "user",
+              "description": "About the user.",
+              "type": "string"
+            },
+            {
+              "const": "feedback",
+              "description": "The user's feedback on answers.",
+              "type": "string"
+            },
+            {
+              "const": "project",
+              "description": "About a project.",
+              "type": "string"
+            },
+            {
+              "const": "reference",
+              "description": "A reference the user keeps.",
+              "type": "string"
+            },
+            {
+              "const": "vocabulary",
+              "description": "The user's vocabulary.",
+              "type": "string"
+            },
+            {
+              "const": "phrasing",
+              "description": "How the user phrases things.",
+              "type": "string"
+            }
+          ]
+        },
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learn_fact_propose`: never with observed provenance.",
+      "properties": {
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/FactKind",
+          "description": "The kind of fact."
+        },
+        "text": {
+          "description": "The fact.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "evidence"
+      ],
+      "title": "LearnFactPropose",
+      "type": "object"
+    },
+    "learn_skill_history": {
+      "$defs": {
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learn_skill_history`: a skill's versions.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "LearnSkillHistory",
+      "type": "object"
+    },
+    "learn_skill_list": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "learn_skill_propose": {
+      "$defs": {
+        "Check": {
+          "description": "A check. Checks may only call ops that are read-only and tier 0; the linter enforces it\nagainst the connector manifests. With `tool` `None`, the check reads the step's own output.",
+          "properties": {
+            "args": {
+              "description": "Its arguments."
+            },
+            "expect": {
+              "$ref": "#/$defs/Expect",
+              "description": "What the value must be."
+            },
+            "op": {
+              "description": "The op's tag.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "description": "A JSON pointer into the result.",
+              "type": "string"
+            },
+            "tool": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ToolName"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The tool to call, or `None` for the step's own output."
+            }
+          },
+          "required": [
+            "args",
+            "path",
+            "expect"
+          ],
+          "type": "object"
+        },
+        "CommitReason": {
+          "description": "Why a skill version was committed.",
+          "oneOf": [
+            {
+              "const": "distill",
+              "description": "Distilled by the librarian.",
+              "type": "string"
+            },
+            {
+              "const": "repair",
+              "description": "Repaired after a failure or a retired fact.",
+              "type": "string"
+            },
+            {
+              "const": "user_edit",
+              "description": "Edited by the user.",
+              "type": "string"
+            },
+            {
+              "const": "user_correction",
+              "description": "Corrected by the user.",
+              "type": "string"
+            },
+            {
+              "const": "rollback",
+              "description": "Rolled back.",
+              "type": "string"
+            },
+            {
+              "const": "promote",
+              "description": "Promoted.",
+              "type": "string"
+            },
+            {
+              "const": "demote",
+              "description": "Demoted.",
+              "type": "string"
+            }
+          ]
+        },
+        "Expect": {
+          "description": "What a checked value must be. `AtLeast`, `AtLeastRel`, `Within` and `Count` take numeric\noperands only (an array is wrapped in `Len`); `Count` compares the length of the array at\n`path` with its bounds.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Equal to.",
+              "properties": {
+                "equals": {
+                  "$ref": "#/$defs/Operand"
+                }
+              },
+              "required": [
+                "equals"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Contains.",
+              "properties": {
+                "contains": {
+                  "$ref": "#/$defs/Operand"
+                }
+              },
+              "required": [
+                "contains"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "At least.",
+              "properties": {
+                "at_least": {
+                  "$ref": "#/$defs/Operand"
+                }
+              },
+              "required": [
+                "at_least"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "At least a factor of another value.",
+              "properties": {
+                "at_least_rel": {
+                  "properties": {
+                    "factor": {
+                      "description": "The factor.",
+                      "format": "double",
+                      "type": "number"
+                    },
+                    "of": {
+                      "$ref": "#/$defs/Operand",
+                      "description": "The other value."
+                    }
+                  },
+                  "required": [
+                    "of",
+                    "factor"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "at_least_rel"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Within a tolerance of another value.",
+              "properties": {
+                "within": {
+                  "properties": {
+                    "of": {
+                      "$ref": "#/$defs/Operand",
+                      "description": "The other value."
+                    },
+                    "tol": {
+                      "description": "The tolerance.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "of",
+                    "tol"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "within"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "An array's length between bounds.",
+              "properties": {
+                "count": {
+                  "properties": {
+                    "max": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Operand"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The greatest length."
+                    },
+                    "min": {
+                      "$ref": "#/$defs/Operand",
+                      "description": "The least length."
+                    }
+                  },
+                  "required": [
+                    "min"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "count"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "exists",
+              "description": "Present.",
+              "type": "string"
+            },
+            {
+              "const": "truthy",
+              "description": "Truthy.",
+              "type": "string"
+            }
+          ]
+        },
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "OnFail": {
+          "description": "What happens when a step fails. `Fallback`: run these steps (no fallbacks of their own),\nthen re-run the failed step once and re-check it; a second failure hands off. A fallback\nstep may point to earlier main steps and earlier steps of its own fallback; no main step and\nno other fallback may point into it.",
+          "oneOf": [
+            {
+              "const": "handoff",
+              "description": "Hand the job to a worker.",
+              "type": "string"
+            },
+            {
+              "const": "retry_once",
+              "description": "Retry once (idempotent ops only).",
+              "type": "string"
+            },
+            {
+              "const": "abort",
+              "description": "Stop.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Run these steps, then re-run the failed step once.",
+              "properties": {
+                "fallback": {
+                  "items": {
+                    "$ref": "#/$defs/RecipeStep"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "fallback"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Operand": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "$slot": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "$slot"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "$step": {
+                  "type": "string"
+                },
+                "ptr": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "$step",
+                "ptr"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "$len": {
+                  "$ref": "#/$defs/Operand"
+                }
+              },
+              "required": [
+                "$len"
+              ],
+              "type": "object"
+            },
+            true
+          ],
+          "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer} or {\"$len\": operand}"
+        },
+        "Recipe": {
+          "description": "A skill's model-free procedure.",
+          "properties": {
+            "pre": {
+              "description": "Checks before the first step.",
+              "items": {
+                "$ref": "#/$defs/Check"
+              },
+              "type": "array"
+            },
+            "skill": {
+              "$ref": "#/$defs/SkillRef",
+              "description": "The skill."
+            },
+            "steps": {
+              "description": "The steps.",
+              "items": {
+                "$ref": "#/$defs/RecipeStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "skill",
+            "pre",
+            "steps"
+          ],
+          "type": "object"
+        },
+        "RecipeStep": {
+          "description": "One step of a recipe. `post` is required (non-empty) on `Call` and `Delegate` steps and\nempty on `Ask` and `Confirm`, whose postconditions are implicit (the slot resolved; the user\nsaid yes). Every `Delegate` is followed by a `Call` step with a postcondition, which is its\nobjective check in shadow mode.",
+          "properties": {
+            "id": {
+              "description": "Its id, for pointers.",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/StepKind",
+              "description": "What it does."
+            },
+            "on_fail": {
+              "$ref": "#/$defs/OnFail",
+              "description": "What happens when it fails."
+            },
+            "post": {
+              "description": "Checks after it.",
+              "items": {
+                "$ref": "#/$defs/Check"
+              },
+              "type": "array"
+            },
+            "pre": {
+              "description": "Checks before it.",
+              "items": {
+                "$ref": "#/$defs/Check"
+              },
+              "type": "array"
+            },
+            "timeout_ms": {
+              "description": "How long it may take.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "pre",
+            "post",
+            "timeout_ms",
+            "on_fail"
+          ],
+          "type": "object"
+        },
+        "SkillDoc": {
+          "description": "A skill's files: the full content of `SKILL.md`, its references and its recipe.",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/SkillId",
+              "description": "The skill."
+            },
+            "recipe": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Recipe"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`recipe.json`."
+            },
+            "references": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Reference files, by path inside the skill folder.",
+              "type": "object"
+            },
+            "skill_md": {
+              "description": "`SKILL.md`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "skill_md",
+            "references"
+          ],
+          "type": "object"
+        },
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        },
+        "SkillRef": {
+          "description": "One version of one skill.",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/SkillId",
+              "description": "The skill."
+            },
+            "version": {
+              "description": "Its version.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "type": "object"
+        },
+        "StepKind": {
+          "description": "What a recipe step does. `Ask.question`, `Delegate.goal` and `Confirm.question` are literals\nfor tracing, overlap and the deny patterns (section 2.10 item 9).",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Call a tool; argument values may be operands.",
+              "properties": {
+                "call": {
+                  "properties": {
+                    "args": {
+                      "description": "Its arguments, one flat object."
+                    },
+                    "op": {
+                      "description": "The op's tag.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "tool": {
+                      "$ref": "#/$defs/ToolName",
+                      "description": "The tool."
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "args"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "call"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "The core's clarifying question; `slot` names a slot spec with `asked = true` (kind\n`Pick` when `options` is set); never skipped.",
+              "properties": {
+                "ask": {
+                  "properties": {
+                    "options": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Operand"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The options, from an earlier step."
+                    },
+                    "question": {
+                      "description": "The question.",
+                      "type": "string"
+                    },
+                    "slot": {
+                      "description": "The slot it fills.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "slot"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "ask"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A narrow worker sub-job; its output is the sub-job's report.",
+              "properties": {
+                "delegate": {
+                  "properties": {
+                    "goal": {
+                      "description": "What the sub-job does.",
+                      "type": "string"
+                    },
+                    "inputs": {
+                      "description": "Its inputs."
+                    }
+                  },
+                  "required": [
+                    "goal",
+                    "inputs"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "delegate"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Ask the user to confirm; never skipped by replay.",
+              "properties": {
+                "confirm": {
+                  "properties": {
+                    "question": {
+                      "description": "The question.",
+                      "type": "string"
+                    },
+                    "show": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Operand"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "What to show with it."
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "confirm"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ToolName": {
+          "description": "a lower-case letter, then 2 to 62 lower-case letters, digits and underscores",
+          "pattern": "^[a-z][a-z0-9_]{2,62}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learn_skill_propose`: returns a `ProposeOutcome` (`Committed`, `PendingApproval`,\n`PendingReview` for a whole draft with free-text taint, or `Rejected` with lint errors).",
+      "properties": {
+        "doc": {
+          "$ref": "#/$defs/SkillDoc",
+          "description": "The skill's files."
+        },
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/CommitReason",
+          "description": "Why it changes."
+        }
+      },
+      "required": [
+        "doc",
+        "reason",
+        "evidence"
+      ],
+      "title": "LearnSkillPropose",
+      "type": "object"
+    },
+    "learn_skill_read": {
+      "$defs": {
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learn_skill_read`: a skill's current version.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "LearnSkillRead",
+      "type": "object"
+    },
+    "learn_trajectory_read": {
+      "$defs": {
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learn_trajectory_read`: one job's redacted trajectory.",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        }
+      },
+      "required": [
+        "job"
+      ],
+      "title": "LearnTrajectoryRead",
+      "type": "object"
+    }
+  }
+}

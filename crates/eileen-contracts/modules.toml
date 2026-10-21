@@ -1,0 +1,120 @@
+# The modules of eileen-contracts (BUILD.md section 3.3) and whether their snapshots are pinned.
+#
+# The modules on slice S1's path are pinned from WP0 on: a change to their snapshot is an
+# amendment to BUILD.md. A provisional module compiles and is snapshot-tested from WP0 on, but
+# the package named in `pinned_by` may change it without an amendment until its first pull
+# request pins it (it then sets `provisional = false` and removes the module doc's
+# "Provisional:" line). The test `it::modules::modules_toml_matches_the_crate` keeps this file,
+# the schema catalogue and the module docs in step.
+
+[modules.ids]
+file = "src/ids.rs"
+provisional = false
+
+[modules.jobs]
+file = "src/jobs.rs"
+provisional = false
+
+[modules.core_io]
+file = "src/core_io.rs"
+provisional = false
+
+[modules.bus]
+file = "src/bus.rs"
+provisional = false
+
+[modules.desktop]
+file = "src/desktop.rs"
+provisional = true
+pinned_by = "WP5"
+
+[modules.hud]
+file = "src/hud.rs"
+provisional = true
+pinned_by = "WP8"
+
+[modules.speech]
+file = "src/speech.rs"
+provisional = false
+
+[modules.harness]
+file = "src/harness.rs"
+provisional = false
+
+[modules.tools]
+file = "src/tools.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules."tools/brain"]
+file = "src/tools/brain.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules."tools/worker"]
+file = "src/tools/worker.rs"
+provisional = true
+pinned_by = "WP3"
+
+[modules."tools/desktop"]
+file = "src/tools/desktop.rs"
+provisional = true
+pinned_by = "WP5"
+
+[modules."tools/apps"]
+file = "src/tools/apps.rs"
+provisional = true
+pinned_by = "WP6"
+
+[modules."tools/learn"]
+file = "src/tools/learn.rs"
+provisional = true
+pinned_by = "WP7"
+
+[modules."tools/session"]
+file = "src/tools/session.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules."tools/dev"]
+file = "src/tools/dev.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules.intent]
+file = "src/intent.rs"
+provisional = true
+pinned_by = "WP7"
+
+[modules.config]
+file = "src/config.rs"
+provisional = true
+pinned_by = "WP7"
+
+[modules.connectors]
+file = "src/connectors.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules.learn]
+file = "src/learn.rs"
+provisional = true
+pinned_by = "WP7"
+
+[modules.scenario]
+file = "src/scenario.rs"
+provisional = true
+pinned_by = "WP2"
+
+[modules.record]
+file = "src/record.rs"
+provisional = false
+
+[modules.fleet]
+file = "src/fleet.rs"
+provisional = true
+pinned_by = "WP9"
+
+[modules.ports]
+file = "src/ports.rs"
+provisional = false

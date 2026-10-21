@@ -1,0 +1,1512 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ContactItem": {
+      "description": "One image on a contact sheet.",
+      "properties": {
+        "image": {
+          "$ref": "#/$defs/BlobRef",
+          "description": "The image."
+        },
+        "label": {
+          "description": "Its label.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Corner": {
+      "description": "A screen corner.",
+      "oneOf": [
+        {
+          "const": "top_left",
+          "description": "Top left.",
+          "type": "string"
+        },
+        {
+          "const": "top_right",
+          "description": "Top right.",
+          "type": "string"
+        },
+        {
+          "const": "bottom_left",
+          "description": "Bottom left.",
+          "type": "string"
+        },
+        {
+          "const": "bottom_right",
+          "description": "Bottom right.",
+          "type": "string"
+        }
+      ]
+    },
+    "Credit": {
+      "description": "One credits line.",
+      "properties": {
+        "attribution": {
+          "description": "Its attribution line.",
+          "type": "string"
+        },
+        "component": {
+          "description": "The component or model.",
+          "type": "string"
+        },
+        "licence": {
+          "description": "Its licence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "licence",
+        "attribution"
+      ],
+      "type": "object"
+    },
+    "FirstRunChoice": {
+      "description": "The first run's choices.",
+      "oneOf": [
+        {
+          "const": "tour",
+          "description": "The guided tour.",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "Skip it.",
+          "type": "string"
+        },
+        {
+          "const": "surprise",
+          "description": "The surprise path.",
+          "type": "string"
+        }
+      ]
+    },
+    "FirstRunView": {
+      "description": "The first run's view.",
+      "properties": {
+        "choices": {
+          "description": "The choices on offer.",
+          "items": {
+            "$ref": "#/$defs/FirstRunChoice"
+          },
+          "type": "array"
+        },
+        "consent_own_voice": {
+          "description": "Whether the own-voice consent box is ticked.",
+          "type": "boolean"
+        },
+        "progress_pct": {
+          "description": "Progress, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reveal": {
+          "description": "Whether the reveal is showing.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "choices",
+        "consent_own_voice",
+        "reveal"
+      ],
+      "type": "object"
+    },
+    "HeardLine": {
+      "description": "What was heard.",
+      "properties": {
+        "addressed": {
+          "description": "Whether it was addressed to Eileen, once decided.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "is_final": {
+          "description": "Whether it is final.",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "The transcript.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "turn": {
+          "$ref": "#/$defs/TurnId",
+          "description": "Its turn, for \"that was for you\"."
+        }
+      },
+      "required": [
+        "text",
+        "is_final",
+        "turn"
+      ],
+      "type": "object"
+    },
+    "HudApproval": {
+      "description": "An approval question on the HUD.",
+      "properties": {
+        "deadline": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it is declined by default."
+        },
+        "id": {
+          "$ref": "#/$defs/ApprovalId",
+          "description": "The question."
+        },
+        "seconds_left_voice": {
+          "description": "Seconds left to answer by voice.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "What the user is shown.",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The tier of the call."
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceApproval",
+          "description": "Whether and how it can be answered by voice."
+        }
+      },
+      "required": [
+        "id",
+        "summary",
+        "tier",
+        "deadline",
+        "voice"
+      ],
+      "type": "object"
+    },
+    "HudInput": {
+      "description": "What a HUD click or text box sends. Every variant a click can send has a grammar entry or a\nhotkey; spoken first-run choices and consent are recognised by the core from the microphone,\nnever accepted from a HUD line.",
+      "oneOf": [
+        {
+          "const": "toggle_mute",
+          "description": "Toggle mute.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Approve a question.",
+          "properties": {
+            "approve": {
+              "$ref": "#/$defs/ApprovalId"
+            }
+          },
+          "required": [
+            "approve"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Deny a question.",
+          "properties": {
+            "deny": {
+              "$ref": "#/$defs/ApprovalId"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cancel a job.",
+          "properties": {
+            "cancel_job": {
+              "$ref": "#/$defs/JobId"
+            }
+          },
+          "required": [
+            "cancel_job"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "pause_desktop_jobs",
+          "description": "Pause every desktop job.",
+          "type": "string"
+        },
+        {
+          "const": "continue_desktop_jobs",
+          "description": "Continue desktop jobs.",
+          "type": "string"
+        },
+        {
+          "const": "save_scenario",
+          "description": "Save the last request as a scenario.",
+          "type": "string"
+        },
+        {
+          "const": "dismiss_panel",
+          "description": "Close the panel.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Approve one held line of a draft.",
+          "properties": {
+            "approve_skill_line": {
+              "properties": {
+                "line": {
+                  "description": "The line.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "line"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approve_skill_line"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Approve a whole draft.",
+          "properties": {
+            "approve_draft": {
+              "properties": {
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approve_draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Answer a confirm panel, a contact sheet, a clarifying question or a route proposal.",
+          "properties": {
+            "answer": {
+              "properties": {
+                "id": {
+                  "description": "The question's id.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "option": {
+                  "description": "The chosen option.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "option"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "\"That was for you\", by tap.",
+          "properties": {
+            "run_heard_line": {
+              "properties": {
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "run_heard_line"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Change a setting, through the normal settings flow.",
+          "properties": {
+            "set_setting": {
+              "properties": {
+                "key": {
+                  "description": "The key.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value."
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set_setting"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A first-run choice.",
+          "properties": {
+            "first_run": {
+              "properties": {
+                "choice": {
+                  "$ref": "#/$defs/FirstRunChoice",
+                  "description": "The choice."
+                },
+                "consent_own_voice": {
+                  "description": "Whether the own-voice consent box is ticked.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "choice",
+                "consent_own_voice"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "first_run"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Admit a queued job.",
+          "properties": {
+            "start_anyway": {
+              "$ref": "#/$defs/JobId"
+            }
+          },
+          "required": [
+            "start_anyway"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run an error's fix.",
+          "properties": {
+            "fix": {
+              "properties": {
+                "error": {
+                  "description": "The error's id.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "fix"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "back",
+          "description": "Return the foreground.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An audio clip dropped on the strip: starts voice enrollment.",
+          "properties": {
+            "drop_file": {
+              "properties": {
+                "path": {
+                  "description": "The file.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "drop_file"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HudInputLine": {
+      "description": "One HUD-to-core line.",
+      "properties": {
+        "input": {
+          "$ref": "#/$defs/HudInput",
+          "description": "What was clicked or typed."
+        },
+        "physical": {
+          "description": "Whether the click came with a Raw Input device handle.",
+          "type": "boolean"
+        },
+        "v": {
+          "description": "The protocol version, [`PROTOCOL_VERSION`].",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "input",
+        "physical"
+      ],
+      "type": "object"
+    },
+    "HudIntent": {
+      "description": "Where the next click will land.",
+      "properties": {
+        "label": {
+          "description": "What it is.",
+          "type": "string"
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "The target."
+        }
+      },
+      "required": [
+        "rect",
+        "label"
+      ],
+      "type": "object"
+    },
+    "HudJob": {
+      "description": "A job on the HUD.",
+      "properties": {
+        "focus": {
+          "description": "Whether the user is focused on it.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        },
+        "line": {
+          "description": "Its last line.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "untrusted"
+        },
+        "name": {
+          "description": "Its spoken name.",
+          "type": "string"
+        },
+        "ordinal": {
+          "description": "Its ordinal.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "paused": {
+          "description": "Whether it is paused.",
+          "type": "boolean"
+        },
+        "pct": {
+          "description": "Progress, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "route": {
+          "description": "Its route's display name.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus",
+          "description": "Where it is."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "route",
+        "status",
+        "focus",
+        "paused"
+      ],
+      "type": "object"
+    },
+    "HudLayout": {
+      "description": "Where and how the HUD is drawn.",
+      "properties": {
+        "corner": {
+          "$ref": "#/$defs/Corner",
+          "description": "The screen corner."
+        },
+        "high_contrast": {
+          "description": "High contrast.",
+          "type": "boolean"
+        },
+        "opacity_pct": {
+          "description": "Opacity, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale_pct": {
+          "description": "Scale, percent.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "show_transcript": {
+          "description": "Whether the transcript line shows.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "corner",
+        "scale_pct",
+        "opacity_pct",
+        "show_transcript",
+        "high_contrast"
+      ],
+      "type": "object"
+    },
+    "HudLease": {
+      "description": "A foreground lease.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A job holds the foreground.",
+          "properties": {
+            "active": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "seconds_left": {
+                  "description": "Seconds left.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "job",
+                "seconds_left"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "active"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user took over.",
+          "properties": {
+            "took_over": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job that stopped."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "took_over"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HudPanel": {
+      "description": "The HUD's open panel.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The brain's `---hud---` part.",
+          "properties": {
+            "markdown": {
+              "type": "string",
+              "x-eileen-text": "untrusted"
+            }
+          },
+          "required": [
+            "markdown"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What Eileen has learned.",
+          "properties": {
+            "learned": {
+              "properties": {
+                "lines": {
+                  "description": "One line per skill.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "lines"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "learned"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What Eileen knows about the user.",
+          "properties": {
+            "facts": {
+              "properties": {
+                "lines": {
+                  "description": "One line per fact.",
+                  "items": {
+                    "type": "string",
+                    "x-eileen-text": "personal"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "lines"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "facts"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The files a scenario share would send, with redactions highlighted.",
+          "properties": {
+            "scenario_preview": {
+              "properties": {
+                "files": {
+                  "description": "The files.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "redactions": {
+                  "description": "How many values were redacted.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "files",
+                "redactions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "scenario_preview"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A question with options and an optional image.",
+          "properties": {
+            "confirm": {
+              "properties": {
+                "id": {
+                  "description": "The question's id, for the answer.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "image": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BlobRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The image."
+                },
+                "options": {
+                  "description": "The options.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "question": {
+                  "description": "The question.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "options",
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "confirm"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Images to pick from.",
+          "properties": {
+            "contact_sheet": {
+              "properties": {
+                "id": {
+                  "description": "The sheet's id, for the answer.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "items": {
+                  "description": "The images.",
+                  "items": {
+                    "$ref": "#/$defs/ContactItem"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items",
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "contact_sheet"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job's changes.",
+          "properties": {
+            "diff": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "stat": {
+                  "description": "The diff stat.",
+                  "type": "string"
+                },
+                "tests": {
+                  "description": "The test summary.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "job",
+                "stat",
+                "tests"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "diff"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A settings proposal.",
+          "properties": {
+            "settings": {
+              "$ref": "#/$defs/SettingsPanel"
+            }
+          },
+          "required": [
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A drafted skill held for review.",
+          "properties": {
+            "draft_review": {
+              "properties": {
+                "held_lines": {
+                  "description": "The lines held for approval.",
+                  "items": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                },
+                "text": {
+                  "description": "Its text.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "skill",
+                "text",
+                "held_lines"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "draft_review"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A route proposal, shown only from registry fields.",
+          "properties": {
+            "route_proposal": {
+              "properties": {
+                "app": {
+                  "description": "The app.",
+                  "type": "string"
+                },
+                "from_app_vendor": {
+                  "description": "The namespace is a domain listed for this app.",
+                  "type": "boolean"
+                },
+                "note": {
+                  "description": "The worker's note, fenced.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "package": {
+                  "description": "The package.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-eileen-text": "untrusted"
+                },
+                "proposal": {
+                  "$ref": "#/$defs/RouteProposalId",
+                  "description": "The proposal."
+                },
+                "publisher": {
+                  "description": "The verified namespace's display.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "server": {
+                  "description": "The server's name.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "source_url": {
+                  "description": "The source repository.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "verified": {
+                  "description": "Matched to a registry entry.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "proposal",
+                "app",
+                "server",
+                "from_app_vendor",
+                "verified",
+                "source_url",
+                "note"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "route_proposal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Voices to pick from.",
+          "properties": {
+            "voice_picker": {
+              "properties": {
+                "samples": {
+                  "description": "A sample of each.",
+                  "items": {
+                    "$ref": "#/$defs/BlobRef"
+                  },
+                  "type": "array"
+                },
+                "voices": {
+                  "description": "The voices.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "voices",
+                "samples"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "voice_picker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A user error.",
+          "properties": {
+            "error": {
+              "properties": {
+                "fix_label": {
+                  "description": "The fix's button label.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sentence": {
+                  "description": "The sentence.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sentence"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The version and the credits.",
+          "properties": {
+            "about": {
+              "properties": {
+                "channel": {
+                  "description": "The release channel.",
+                  "type": "string"
+                },
+                "credits": {
+                  "description": "Each component and model with its licence and attribution line.",
+                  "items": {
+                    "$ref": "#/$defs/Credit"
+                  },
+                  "type": "array"
+                },
+                "version": {
+                  "description": "The version.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "channel",
+                "credits"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "about"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A question from the owner's own Claude session.",
+          "properties": {
+            "session_question": {
+              "properties": {
+                "id": {
+                  "description": "The question's id.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "question": {
+                  "description": "The question.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "repo": {
+                  "description": "The session's repository.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "id",
+                "question"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "session_question"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HudState": {
+      "description": "Everything the HUD shows, as one snapshot.",
+      "properties": {
+        "approvals": {
+          "description": "The open approval questions.",
+          "items": {
+            "$ref": "#/$defs/HudApproval"
+          },
+          "type": "array"
+        },
+        "conversation": {
+          "description": "Seconds left in the conversation window.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "first_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FirstRunView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The first run's view, while it runs."
+        },
+        "heard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeardLine"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What was heard."
+        },
+        "indicators": {
+          "$ref": "#/$defs/Indicators",
+          "description": "The small indicators."
+        },
+        "input_lock": {
+          "description": "The name of the job holding the mouse and keyboard.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HudIntent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the next click will land."
+        },
+        "jobs": {
+          "description": "The live jobs, at most 8.",
+          "items": {
+            "$ref": "#/$defs/HudJob"
+          },
+          "type": "array"
+        },
+        "layout": {
+          "$ref": "#/$defs/HudLayout",
+          "description": "Where and how the HUD is drawn."
+        },
+        "lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HudLease"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A foreground lease."
+        },
+        "mic": {
+          "$ref": "#/$defs/MicState",
+          "description": "The microphone."
+        },
+        "panel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HudPanel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The open panel."
+        },
+        "speaking": {
+          "description": "What Eileen says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suggestions": {
+          "description": "Suggestions, at most 3.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "v": {
+          "description": "The state's own version, bumped when its shape changes.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HudWatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The live thumbnail of a window a job works in."
+        }
+      },
+      "required": [
+        "v",
+        "layout",
+        "mic",
+        "jobs",
+        "approvals",
+        "suggestions",
+        "indicators"
+      ],
+      "type": "object"
+    },
+    "HudStateLine": {
+      "description": "One core-to-HUD line.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/HudState",
+          "description": "The full state."
+        },
+        "v": {
+          "description": "The protocol version, [`PROTOCOL_VERSION`].",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "state"
+      ],
+      "type": "object"
+    },
+    "HudWatch": {
+      "description": "The live thumbnail of a window a job works in.",
+      "properties": {
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "label": {
+          "description": "What to call it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Indicators": {
+      "description": "The small indicators.",
+      "properties": {
+        "brain_warming": {
+          "description": "The brain is warming up.",
+          "type": "boolean"
+        },
+        "desktop_jobs_paused": {
+          "description": "Desktop jobs are paused.",
+          "type": "boolean"
+        },
+        "learning": {
+          "description": "The learning loop is working.",
+          "type": "boolean"
+        },
+        "low_memory": {
+          "description": "Memory is low.",
+          "type": "boolean"
+        },
+        "off_the_record": {
+          "description": "Off the record.",
+          "type": "boolean"
+        },
+        "plan_usage_pct": {
+          "description": "Plan usage, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recording": {
+          "description": "Recording is on.",
+          "type": "boolean"
+        },
+        "rendering_voice": {
+          "description": "A voice is rendering.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "learning",
+        "recording",
+        "off_the_record",
+        "brain_warming",
+        "rendering_voice",
+        "low_memory",
+        "desktop_jobs_paused"
+      ],
+      "type": "object"
+    },
+    "MicState": {
+      "description": "The microphone, as the HUD shows it.",
+      "oneOf": [
+        {
+          "const": "loading_speech",
+          "description": "The speech models are loading.",
+          "type": "string"
+        },
+        {
+          "const": "listening",
+          "description": "Listening, nothing heard.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Hearing speech.",
+          "properties": {
+            "hearing": {
+              "properties": {
+                "level_pct": {
+                  "description": "The input level, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "level_pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hearing"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "muted",
+          "description": "Muted.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Dictating into a field.",
+          "properties": {
+            "dictating": {
+              "properties": {
+                "target": {
+                  "description": "The field's app.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "target"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "dictating"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "speech_restarting",
+          "description": "The speech process is restarting.",
+          "type": "string"
+        }
+      ]
+    },
+    "SettingsPanel": {
+      "description": "A settings proposal on the HUD.",
+      "properties": {
+        "confirm_sentence": {
+          "description": "The sentence Eileen confirms with.",
+          "type": "string"
+        },
+        "diff": {
+          "description": "What would change.",
+          "items": {
+            "$ref": "#/$defs/DiffLine"
+          },
+          "type": "array"
+        },
+        "needs_yes": {
+          "description": "Whether it needs a yes.",
+          "type": "boolean"
+        },
+        "proposal": {
+          "$ref": "#/$defs/ProposalId",
+          "description": "The proposal."
+        }
+      },
+      "required": [
+        "proposal",
+        "diff",
+        "confirm_sentence",
+        "needs_yes"
+      ],
+      "type": "object"
+    }
+  }
+}

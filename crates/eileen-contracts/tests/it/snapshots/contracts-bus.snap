@@ -1,0 +1,1514 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ApprovalSource": {
+      "description": "Which form of the user's input resolved an approval; recorded in the approvals table and on\nthe bus.",
+      "oneOf": [
+        {
+          "const": "hud_click",
+          "description": "Physical, from the strip's Raw Input check.",
+          "type": "string"
+        },
+        {
+          "const": "hotkey",
+          "description": "Physical, from the shell's Raw Input check.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The action word in the voice window.",
+          "properties": {
+            "voice": {
+              "properties": {
+                "action_word": {
+                  "description": "The word heard.",
+                  "type": "string"
+                },
+                "speaker_match": {
+                  "description": "`None` when the speaker check is not enrolled.",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "action_word"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "voice"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "deadline",
+          "description": "Declined when `approvals.deadline_min` passed.",
+          "type": "string"
+        },
+        {
+          "const": "job_ended",
+          "description": "The job was cancelled or failed while the question was open.",
+          "type": "string"
+        }
+      ]
+    },
+    "BusEvent": {
+      "description": "What happened, for everyone listening.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A turn began.",
+          "properties": {
+            "turn_started": {
+              "properties": {
+                "authority": {
+                  "$ref": "#/$defs/TurnAuthority",
+                  "description": "Whether it may use the full brain tools."
+                },
+                "source": {
+                  "$ref": "#/$defs/TurnSource",
+                  "description": "Where it came from."
+                }
+              },
+              "required": [
+                "source",
+                "authority"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn_started"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The final transcript, only once the turn is not ignored.",
+          "properties": {
+            "heard": {
+              "properties": {
+                "text": {
+                  "description": "The transcript.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "heard"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Where the turn went.",
+          "properties": {
+            "turn_routed": {
+              "properties": {
+                "reason": {
+                  "description": "Why, in a few words.",
+                  "type": "string"
+                },
+                "route": {
+                  "$ref": "#/$defs/TurnRoute",
+                  "description": "The route."
+                }
+              },
+              "required": [
+                "route",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn_routed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Eileen started speaking.",
+          "properties": {
+            "speaking": {
+              "properties": {
+                "cause": {
+                  "$ref": "#/$defs/SpeakCause",
+                  "description": "Why she speaks."
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                },
+                "text": {
+                  "description": "What she says.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "speak",
+                "cause",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speaking"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Eileen stopped speaking.",
+          "properties": {
+            "speaking_stopped": {
+              "properties": {
+                "heard_chars": {
+                  "description": "Characters the user heard.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "interrupted": {
+                  "description": "Whether the user interrupted.",
+                  "type": "boolean"
+                },
+                "resumed": {
+                  "description": "Whether she resumed after a backchannel.",
+                  "type": "boolean"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak",
+                "heard_chars",
+                "interrupted",
+                "resumed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speaking_stopped"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The microphone was muted or unmuted.",
+          "properties": {
+            "mute_changed": {
+              "properties": {
+                "muted": {
+                  "description": "Whether it is muted now.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "muted"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "mute_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The conversation window opened or closed.",
+          "properties": {
+            "conversation_window": {
+              "properties": {
+                "open": {
+                  "description": "Whether it is open.",
+                  "type": "boolean"
+                },
+                "until_ms": {
+                  "description": "How long it stays open, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "open",
+                "until_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "conversation_window"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The brain is ready.",
+          "properties": {
+            "brain_ready": {
+              "properties": {
+                "model": {
+                  "description": "The resolved model id.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "brain_ready"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job was accepted.",
+          "properties": {
+            "job_accepted": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "kind": {
+                  "$ref": "#/$defs/JobKind",
+                  "description": "Its kind."
+                },
+                "model": {
+                  "description": "The resolved model id.",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Its spoken name.",
+                  "type": "string"
+                },
+                "ordinal": {
+                  "description": "Its ordinal among live jobs.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "reason": {
+                  "description": "Why this route and model.",
+                  "type": "string"
+                },
+                "route": {
+                  "$ref": "#/$defs/Route",
+                  "description": "Its route."
+                }
+              },
+              "required": [
+                "job",
+                "name",
+                "kind",
+                "route",
+                "model",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_accepted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job is waiting.",
+          "properties": {
+            "job_queued": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "reason": {
+                  "$ref": "#/$defs/QueueReason",
+                  "description": "What it waits for."
+                }
+              },
+              "required": [
+                "job",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_queued"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job started.",
+          "properties": {
+            "job_started": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "warm": {
+                  "description": "Whether it took a warm pooled session.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "job",
+                "warm"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_started"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job's narration line.",
+          "properties": {
+            "job_narration": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "line": {
+                  "description": "The line.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "job",
+                "line"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_narration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job made progress.",
+          "properties": {
+            "job_progressed": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "line": {
+                  "description": "The progress line.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "pct": {
+                  "description": "Progress in percent, when known.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "job",
+                "line"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_progressed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job is blocked.",
+          "properties": {
+            "job_blocked": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "reason": {
+                  "description": "On what.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "job",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_blocked"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A question for the user.",
+          "properties": {
+            "approval_requested": {
+              "properties": {
+                "approval": {
+                  "$ref": "#/$defs/ApprovalId",
+                  "description": "The question."
+                },
+                "deadline": {
+                  "$ref": "#/$defs/WallTime",
+                  "description": "When it is declined by default."
+                },
+                "job": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JobId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The job that asks, if any."
+                },
+                "summary": {
+                  "description": "What the user is shown.",
+                  "type": "string"
+                },
+                "tier": {
+                  "$ref": "#/$defs/Tier",
+                  "description": "The tier of the call."
+                },
+                "voice": {
+                  "$ref": "#/$defs/VoiceApproval",
+                  "description": "Whether and how it can be answered by voice."
+                }
+              },
+              "required": [
+                "approval",
+                "tier",
+                "summary",
+                "voice",
+                "deadline"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approval_requested"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A question was answered.",
+          "properties": {
+            "approval_resolved": {
+              "properties": {
+                "allowed": {
+                  "description": "The answer.",
+                  "type": "boolean"
+                },
+                "approval": {
+                  "$ref": "#/$defs/ApprovalId",
+                  "description": "The question."
+                },
+                "by": {
+                  "$ref": "#/$defs/ApprovalSource",
+                  "description": "Which form of the user's input answered it."
+                }
+              },
+              "required": [
+                "approval",
+                "allowed",
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approval_resolved"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A question expired.",
+          "properties": {
+            "approval_expired": {
+              "properties": {
+                "approval": {
+                  "$ref": "#/$defs/ApprovalId",
+                  "description": "The question."
+                }
+              },
+              "required": [
+                "approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approval_expired"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job finished.",
+          "properties": {
+            "job_completed": {
+              "properties": {
+                "artifacts": {
+                  "description": "Files it made.",
+                  "items": {
+                    "type": "string",
+                    "x-eileen-text": "personal"
+                  },
+                  "type": "array"
+                },
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "summary": {
+                  "description": "Its summary.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "job",
+                "summary",
+                "artifacts"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_completed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job failed.",
+          "properties": {
+            "job_failed": {
+              "properties": {
+                "error": {
+                  "description": "Why.",
+                  "type": "string"
+                },
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job",
+                "error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job was cancelled.",
+          "properties": {
+            "job_cancelled": {
+              "properties": {
+                "by": {
+                  "$ref": "#/$defs/CancelSource",
+                  "description": "By whom."
+                },
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job",
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_cancelled"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job was interrupted by a core restart.",
+          "properties": {
+            "job_interrupted": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_interrupted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Where the next click will land, shown before it happens.",
+          "properties": {
+            "desktop_intent": {
+              "properties": {
+                "label": {
+                  "description": "What it is.",
+                  "type": "string"
+                },
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "The target, in physical virtual-screen pixels."
+                },
+                "until_ms": {
+                  "description": "How long it is shown, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rect",
+                "label",
+                "until_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "desktop_intent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Who holds the mouse and keyboard.",
+          "properties": {
+            "input_lock": {
+              "properties": {
+                "holder": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JobId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The job, or `None` when released."
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "input_lock"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job holds the foreground.",
+          "properties": {
+            "foreground_lease": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "seconds_left": {
+                  "description": "Seconds left.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "job",
+                "seconds_left"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "foreground_lease"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user's own hands moved during a lease.",
+          "properties": {
+            "user_took_over": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job that stopped."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "user_took_over"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Desktop jobs were paused or continued.",
+          "properties": {
+            "desktop_jobs_paused": {
+              "properties": {
+                "paused": {
+                  "description": "Whether they are paused now.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "paused"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "desktop_jobs_paused"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The plan usage changed.",
+          "properties": {
+            "plan_usage": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "plan_usage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the learning loop.",
+          "properties": {
+            "learn": {
+              "$ref": "#/$defs/LearnBusEvent"
+            }
+          },
+          "required": [
+            "learn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One plain sentence and an optional fix (section 2.13).",
+          "properties": {
+            "user_error": {
+              "$ref": "#/$defs/UserError"
+            }
+          },
+          "required": [
+            "user_error"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A setting changed.",
+          "properties": {
+            "setting_changed": {
+              "properties": {
+                "from": {
+                  "description": "The old value, as TOML.",
+                  "type": "string"
+                },
+                "key": {
+                  "description": "The key.",
+                  "type": "string"
+                },
+                "to": {
+                  "description": "The new value, as TOML.",
+                  "type": "string"
+                },
+                "version": {
+                  "description": "The new settings version.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "key",
+                "from",
+                "to",
+                "version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "setting_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The first run moved on.",
+          "properties": {
+            "first_run": {
+              "$ref": "#/$defs/FirstRunPhase"
+            }
+          },
+          "required": [
+            "first_run"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Recording started or stopped.",
+          "properties": {
+            "recording_changed": {
+              "properties": {
+                "on": {
+                  "description": "Whether it records now.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "on"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "recording_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An incident was captured.",
+          "properties": {
+            "incident_captured": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/IncidentId",
+                  "description": "The incident."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "incident_captured"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A sidecar was restarted.",
+          "properties": {
+            "sidecar_restarted": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                },
+                "which": {
+                  "$ref": "#/$defs/SidecarId",
+                  "description": "Which."
+                }
+              },
+              "required": [
+                "which",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "sidecar_restarted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A slow subscriber missed events.",
+          "properties": {
+            "lagged": {
+              "properties": {
+                "missed": {
+                  "description": "How many.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "missed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "lagged"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CancelSource": {
+      "description": "Who cancelled a job.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "The user, by voice.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "The user, on the HUD.",
+          "type": "string"
+        },
+        {
+          "const": "hotkey",
+          "description": "The user, with a hotkey.",
+          "type": "string"
+        },
+        {
+          "const": "tray",
+          "description": "The user, from the tray.",
+          "type": "string"
+        },
+        {
+          "const": "cli",
+          "description": "The user, from the command line.",
+          "type": "string"
+        },
+        {
+          "const": "parent",
+          "description": "Its fan-out parent was cancelled.",
+          "type": "string"
+        },
+        {
+          "const": "shutdown",
+          "description": "Eileen is shutting down.",
+          "type": "string"
+        }
+      ]
+    },
+    "FirstRunPhase": {
+      "description": "Where the first run is.",
+      "oneOf": [
+        {
+          "const": "welcome",
+          "description": "The welcome and the three choices.",
+          "type": "string"
+        },
+        {
+          "const": "tour",
+          "description": "The guided tour.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "The surprise path: recording the user's clip.",
+          "type": "string"
+        },
+        {
+          "const": "rendering",
+          "description": "The surprise path: rendering the clone.",
+          "type": "string"
+        },
+        {
+          "const": "reveal",
+          "description": "The surprise path: the reveal.",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "Skipped.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Finished.",
+          "type": "string"
+        }
+      ]
+    },
+    "FixAction": {
+      "description": "A fix the user can run from an error.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Open a URI (a settings page, a help page).",
+          "properties": {
+            "open_uri": {
+              "properties": {
+                "uri": {
+                  "description": "The URI.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uri"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "open_uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a doctor check.",
+          "properties": {
+            "doctor": {
+              "properties": {
+                "area": {
+                  "description": "The area, for example `claude` or `resolve`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "area"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "doctor"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Change a setting, through the normal settings flow.",
+          "properties": {
+            "setting": {
+              "properties": {
+                "change": {
+                  "$ref": "#/$defs/SettingChange",
+                  "description": "The change."
+                }
+              },
+              "required": [
+                "change"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "setting"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Retry a job.",
+          "properties": {
+            "retry": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "retry"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Explain an incident.",
+          "properties": {
+            "explain": {
+              "properties": {
+                "incident": {
+                  "$ref": "#/$defs/IncidentId",
+                  "description": "The incident."
+                }
+              },
+              "required": [
+                "incident"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "explain"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HudOnlyReason": {
+      "description": "Why an approval is HUD only.",
+      "oneOf": [
+        {
+          "const": "other_audio",
+          "description": "Other audio is playing.",
+          "type": "string"
+        },
+        {
+          "const": "mic_in_use",
+          "description": "Another app uses the microphone.",
+          "type": "string"
+        },
+        {
+          "const": "unparsed",
+          "description": "The call could not be parsed into a summary.",
+          "type": "string"
+        },
+        {
+          "const": "runs_code",
+          "description": "The call runs code.",
+          "type": "string"
+        },
+        {
+          "const": "fleet",
+          "description": "A fleet run, where tier 2 is auto-denied.",
+          "type": "string"
+        }
+      ]
+    },
+    "QueueReason": {
+      "description": "What a job waits for.",
+      "oneOf": [
+        {
+          "const": "memory",
+          "description": "Memory admission.",
+          "type": "string"
+        },
+        {
+          "const": "build_slot",
+          "description": "A build slot.",
+          "type": "string"
+        },
+        {
+          "const": "plan",
+          "description": "The plan's limits.",
+          "type": "string"
+        }
+      ]
+    },
+    "SpeakCause": {
+      "description": "Why Eileen speaks.",
+      "oneOf": [
+        {
+          "const": "reply",
+          "description": "An answer to the user's turn.",
+          "type": "string"
+        },
+        {
+          "const": "announcement",
+          "description": "A job announcement.",
+          "type": "string"
+        },
+        {
+          "const": "narration",
+          "description": "A job's narration, read aloud.",
+          "type": "string"
+        },
+        {
+          "const": "approval",
+          "description": "An approval question.",
+          "type": "string"
+        },
+        {
+          "const": "clarification",
+          "description": "A clarifying question.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "A user error's sentence.",
+          "type": "string"
+        },
+        {
+          "const": "first_run",
+          "description": "The first run.",
+          "type": "string"
+        },
+        {
+          "const": "session_say",
+          "description": "A line from the owner's own Claude session.",
+          "type": "string"
+        }
+      ]
+    },
+    "TurnRoute": {
+      "description": "Where a turn went.",
+      "oneOf": [
+        {
+          "const": "fast_path",
+          "description": "The deterministic fast path.",
+          "type": "string"
+        },
+        {
+          "const": "act",
+          "description": "The brain's `act` tools.",
+          "type": "string"
+        },
+        {
+          "const": "replay",
+          "description": "A learned recipe.",
+          "type": "string"
+        },
+        {
+          "const": "brain",
+          "description": "The brain.",
+          "type": "string"
+        },
+        {
+          "const": "clarify",
+          "description": "A clarifying question.",
+          "type": "string"
+        },
+        {
+          "const": "ignored",
+          "description": "Not addressed to Eileen.",
+          "type": "string"
+        },
+        {
+          "const": "dictation",
+          "description": "Dictation into a field.",
+          "type": "string"
+        }
+      ]
+    },
+    "UserError": {
+      "description": "An error a user can meet: a stable kind, one plain sentence built from a template in Eileen's\nown code, and a fix when one exists.",
+      "properties": {
+        "fix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FixAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The fix, when one exists."
+        },
+        "kind": {
+          "$ref": "#/$defs/UserErrorKind",
+          "description": "The stable kind."
+        },
+        "sentence": {
+          "description": "The sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "sentence"
+      ],
+      "type": "object"
+    },
+    "UserErrorKind": {
+      "description": "The stable kinds of user error.",
+      "oneOf": [
+        {
+          "const": "job_kind_unavailable",
+          "description": "A job kind v0.1 does not run (`ml_project`).",
+          "type": "string"
+        },
+        {
+          "const": "route_unavailable",
+          "description": "A route v0.1 does not build.",
+          "type": "string"
+        },
+        {
+          "const": "signed_out",
+          "description": "The vendor CLI is not signed in.",
+          "type": "string"
+        },
+        {
+          "const": "plan_limit",
+          "description": "The plan's limit is reached.",
+          "type": "string"
+        },
+        {
+          "const": "memory_low",
+          "description": "Not enough memory to start the job.",
+          "type": "string"
+        },
+        {
+          "const": "app_not_found",
+          "description": "No app matches the name.",
+          "type": "string"
+        },
+        {
+          "const": "app_unreachable",
+          "description": "An app's scripting interface is off or unreachable.",
+          "type": "string"
+        },
+        {
+          "const": "mic_unavailable",
+          "description": "The microphone is unavailable.",
+          "type": "string"
+        },
+        {
+          "const": "speech_model_missing",
+          "description": "A speech model is missing or failed its check.",
+          "type": "string"
+        },
+        {
+          "const": "tool_failed",
+          "description": "A tool call failed.",
+          "type": "string"
+        },
+        {
+          "const": "setting_refused",
+          "description": "A setting change was refused.",
+          "type": "string"
+        },
+        {
+          "const": "network_unavailable",
+          "description": "The network is unreachable.",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "description": "Something inside Eileen failed; an incident was captured.",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceApproval": {
+      "description": "Whether an approval can be answered by voice.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "By saying the action word in the voice window.",
+          "properties": {
+            "action_word": {
+              "properties": {
+                "speaker_match_required": {
+                  "description": "Whether the enrolled speaker must match.",
+                  "type": "boolean"
+                },
+                "word": {
+                  "description": "The word.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "word",
+                "speaker_match_required"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "action_word"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Only on the HUD.",
+          "properties": {
+            "hud_only": {
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/HudOnlyReason",
+                  "description": "Why not by voice."
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hud_only"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

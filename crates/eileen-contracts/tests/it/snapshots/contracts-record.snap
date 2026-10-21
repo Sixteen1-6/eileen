@@ -1,0 +1,690 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AudioLane": {
+      "description": "One audio lane of a recording.",
+      "properties": {
+        "consent": {
+          "description": "Its consent record, when the audio is a person's own voice.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The file.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The audio source.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "file"
+      ],
+      "type": "object"
+    },
+    "BlobRef": {
+      "description": "A content-addressed blob: b3: and its BLAKE3 hash",
+      "pattern": "^b3:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Checkpoint": {
+      "description": "A point strict replay can start from.",
+      "properties": {
+        "core": {
+          "$ref": "#/$defs/CoreSnapshotV1",
+          "description": "The core's state."
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "Monotonic time then."
+        },
+        "rng_state": {
+          "description": "The core RNG's state.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "seq": {
+          "description": "The last input applied.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "mono",
+        "rng_state",
+        "core"
+      ],
+      "type": "object"
+    },
+    "CoreSnapshotV1": {
+      "description": "Every field the core needs to resume. `eileen-core` converts to and from it; a new field is\nadded with a default, so old checkpoints still load.",
+      "properties": {
+        "approvals": {
+          "default": [],
+          "description": "The open approval questions.",
+          "items": {
+            "$ref": "#/$defs/ApprovalRow"
+          },
+          "type": "array"
+        },
+        "conversation_until": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the conversation window closes, if it is open."
+        },
+        "counters": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "description": "The core's counters (timers, requests, questions), by name.",
+          "type": "object"
+        },
+        "first_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FirstRunPhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The first run's phase, while it runs."
+        },
+        "input_lock": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The job holding the mouse and keyboard."
+        },
+        "jobs": {
+          "default": [],
+          "description": "The jobs.",
+          "items": {
+            "$ref": "#/$defs/Job"
+          },
+          "type": "array"
+        },
+        "muted": {
+          "default": false,
+          "description": "Whether the microphone is muted.",
+          "type": "boolean"
+        },
+        "plan_usage": {
+          "$ref": "#/$defs/PlanUsage",
+          "default": {
+            "five_hour_pct": null,
+            "resets_at": null,
+            "seven_day_pct": null
+          },
+          "description": "The plan usage."
+        },
+        "settings_version": {
+          "default": 0,
+          "description": "The settings version.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skill_versions": {
+          "default": [],
+          "description": "The skill versions the core has loaded.",
+          "items": {
+            "$ref": "#/$defs/SkillRef"
+          },
+          "type": "array"
+        },
+        "v": {
+          "default": 0,
+          "description": "The snapshot's version, 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FaultRecord": {
+      "description": "One injected fault.",
+      "properties": {
+        "fault": {
+          "description": "What was injected.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "The input's `seq` it was injected at.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "site": {
+          "description": "The fault site's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "site",
+        "fault"
+      ],
+      "type": "object"
+    },
+    "HookAnswerRecord": {
+      "description": "The core's `Effect::Hook` answer to a gating hook input (`PreToolUse` or\n`PermissionRequest`), written by the recorder when the core emits it; `input` is the `seq`\nof the `Input::Hook` record it answers. Scenario mode compares the live answer with it,\nstrict mode compares it like a bus event, and `record trim` keeps it with its input.",
+      "properties": {
+        "input": {
+          "description": "The `seq` of the hook input it answers.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "When the core answered."
+        },
+        "reply": {
+          "$ref": "#/$defs/HookReply",
+          "description": "The answer."
+        }
+      },
+      "required": [
+        "input",
+        "mono",
+        "reply"
+      ],
+      "type": "object"
+    },
+    "IncidentManifest": {
+      "description": "An incident bundle's manifest (the observability report's section 4.3 fields).",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When."
+        },
+        "build_profile": {
+          "description": "The build profile.",
+          "type": "string"
+        },
+        "contains_audio": {
+          "description": "Whether it holds audio.",
+          "type": "boolean"
+        },
+        "contains_personal": {
+          "description": "Whether it holds personal data.",
+          "type": "boolean"
+        },
+        "cpu_load_pct": {
+          "description": "CPU load, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dumps": {
+          "description": "Minidumps in it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "eileen_version": {
+          "description": "The version of Eileen.",
+          "type": "string"
+        },
+        "free_ram_mb": {
+          "description": "Free memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/IncidentId",
+          "description": "Its id."
+        },
+        "jobs": {
+          "description": "The jobs it holds.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "note": {
+          "description": "The user's note.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "os": {
+          "description": "The operating system.",
+          "type": "string"
+        },
+        "processes": {
+          "description": "The processes running.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recorded_at_commit": {
+          "description": "The commit.",
+          "type": "string"
+        },
+        "redactions": {
+          "description": "How many values were redacted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The core session."
+        },
+        "trigger": {
+          "description": "What triggered it.",
+          "type": "string"
+        },
+        "turns": {
+          "description": "The turns it holds.",
+          "items": {
+            "$ref": "#/$defs/TurnId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "trigger",
+        "at",
+        "session",
+        "turns",
+        "jobs",
+        "eileen_version",
+        "recorded_at_commit",
+        "build_profile",
+        "os",
+        "cpu_load_pct",
+        "free_ram_mb",
+        "processes",
+        "contains_personal",
+        "contains_audio",
+        "redactions",
+        "dumps"
+      ],
+      "type": "object"
+    },
+    "InputRecord": {
+      "description": "One recorded input.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "Wall time."
+        },
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Correlation."
+        },
+        "input": {
+          "$ref": "#/$defs/Input",
+          "description": "The input."
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "Monotonic time."
+        },
+        "seq": {
+          "description": "The core-wide replay order.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "mono",
+        "at",
+        "ctx",
+        "input"
+      ],
+      "type": "object"
+    },
+    "Origin": {
+      "description": "What made a recording.",
+      "oneOf": [
+        {
+          "const": "record",
+          "description": "`eileen record`.",
+          "type": "string"
+        },
+        {
+          "const": "incident",
+          "description": "An incident capture.",
+          "type": "string"
+        },
+        {
+          "const": "scenario",
+          "description": "`eileen scenario save`.",
+          "type": "string"
+        },
+        {
+          "const": "fleet",
+          "description": "A fleet run.",
+          "type": "string"
+        }
+      ]
+    },
+    "RecordLine": {
+      "description": "One line of `replay/inputs.jsonl` and of the flight recorder's input lane.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An input.",
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/InputRecord"
+            }
+          },
+          "required": [
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The core's answer to a gating hook input.",
+          "properties": {
+            "hook_answer": {
+              "$ref": "#/$defs/HookAnswerRecord"
+            }
+          },
+          "required": [
+            "hook_answer"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RecordingManifest": {
+      "description": "A recording's manifest.",
+      "properties": {
+        "audio": {
+          "description": "The audio lanes (opt in).",
+          "items": {
+            "$ref": "#/$defs/AudioLane"
+          },
+          "type": "array"
+        },
+        "config_hash": {
+          "description": "A hash of the configuration.",
+          "type": "string"
+        },
+        "eileen_version": {
+          "description": "The version of Eileen that recorded it.",
+          "type": "string"
+        },
+        "ended": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it ended."
+        },
+        "id": {
+          "$ref": "#/$defs/RecordingId",
+          "description": "Its id."
+        },
+        "jobs": {
+          "description": "The jobs it holds.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin",
+          "description": "What made it."
+        },
+        "recorded_at_commit": {
+          "description": "The commit that recorded it.",
+          "type": "string"
+        },
+        "started": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it started."
+        },
+        "turns": {
+          "description": "The turns it holds.",
+          "items": {
+            "$ref": "#/$defs/TurnId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "started",
+        "ended",
+        "eileen_version",
+        "recorded_at_commit",
+        "config_hash",
+        "audio",
+        "turns",
+        "jobs"
+      ],
+      "type": "object"
+    },
+    "SimRegression": {
+      "description": "A minimised simulator failure, in `crates/eileen-sim/regressions/<name>.toml`.",
+      "properties": {
+        "faults": {
+          "description": "Each injected fault as an explicit record, never a buggify site ordinal.",
+          "items": {
+            "$ref": "#/$defs/FaultRecord"
+          },
+          "type": "array"
+        },
+        "found_at_commit": {
+          "description": "The commit that found it.",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Decoded inputs, never a buffer of random bytes.",
+          "items": {
+            "$ref": "#/$defs/InputRecord"
+          },
+          "type": "array"
+        },
+        "invariant": {
+          "description": "The invariant that failed.",
+          "type": "string"
+        },
+        "profile": {
+          "description": "The sim profile.",
+          "type": "string"
+        },
+        "seed": {
+          "description": "The seed that found it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "profile",
+        "found_at_commit",
+        "inputs",
+        "faults",
+        "invariant"
+      ],
+      "type": "object"
+    },
+    "StubScriptLine": {
+      "description": "One line of `tests/harness-scripts/*.ndjson`, played by `eileen-stub-harness`.",
+      "oneOf": [
+        {
+          "description": "One stream-json line, emitted as is.",
+          "properties": {
+            "json": {
+              "description": "The line."
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "json"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Wait.",
+          "properties": {
+            "kind": {
+              "const": "delay",
+              "type": "string"
+            },
+            "ms": {
+              "description": "How long, ms.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "ms"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Exit with a code.",
+          "properties": {
+            "code": {
+              "description": "The code.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "kind": {
+              "const": "crash",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Emit bytes that do not parse.",
+          "properties": {
+            "bytes": {
+              "description": "The bytes, as text.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "malformed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Ask for permission, as the CLI's hook would.",
+          "properties": {
+            "kind": {
+              "const": "permission_request",
+              "type": "string"
+            },
+            "tool_input": {
+              "description": "Its input."
+            },
+            "tool_name": {
+              "description": "The tool.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool_name",
+            "tool_input"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Emit a narration line.",
+          "properties": {
+            "kind": {
+              "const": "narration",
+              "type": "string"
+            },
+            "line": {
+              "description": "The line.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "line"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Wait for the next user line before continuing.",
+          "properties": {
+            "kind": {
+              "const": "await_user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

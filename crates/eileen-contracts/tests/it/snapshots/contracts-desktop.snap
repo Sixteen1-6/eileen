@@ -1,0 +1,917 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "DesktopChange": {
+      "description": "One change to the desktop.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A window opened.",
+          "properties": {
+            "window_opened": {
+              "$ref": "#/$defs/WindowInfo"
+            }
+          },
+          "required": [
+            "window_opened"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window changed (moved, renamed, minimized, cloaked).",
+          "properties": {
+            "window_changed": {
+              "$ref": "#/$defs/WindowInfo"
+            }
+          },
+          "required": [
+            "window_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window closed.",
+          "properties": {
+            "window_closed": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window_closed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The foreground window changed.",
+          "properties": {
+            "foreground": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WindowRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "foreground"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The focused element changed.",
+          "properties": {
+            "focus": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ElementInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "focus"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The selection changed.",
+          "properties": {
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Selection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "selection"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The caret moved.",
+          "properties": {
+            "caret": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rect"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "caret"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The monitors changed.",
+          "properties": {
+            "monitors": {
+              "items": {
+                "$ref": "#/$defs/Monitor"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "monitors"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The presentation state changed.",
+          "properties": {
+            "presentation": {
+              "$ref": "#/$defs/PresentationState"
+            }
+          },
+          "required": [
+            "presentation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Another app started or stopped using the microphone.",
+          "properties": {
+            "mic_in_use_elsewhere": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "mic_in_use_elsewhere"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user referred to something.",
+          "properties": {
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            }
+          },
+          "required": [
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DesktopDelta": {
+      "description": "A change to the desktop, from the desktop server's event hooks.",
+      "properties": {
+        "changes": {
+          "description": "The changes, in order.",
+          "items": {
+            "$ref": "#/$defs/DesktopChange"
+          },
+          "type": "array"
+        },
+        "seq": {
+          "description": "The desktop server's own order.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "changes"
+      ],
+      "type": "object"
+    },
+    "DesktopState": {
+      "description": "A snapshot of the desktop.",
+      "properties": {
+        "captured_at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was captured."
+        },
+        "caret": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The text caret."
+        },
+        "degraded": {
+          "description": "Fields that timed out or are stale: unknown, not empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "focused_element": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElementInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The focused element."
+        },
+        "foreground": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The foreground window."
+        },
+        "mic_in_use_elsewhere": {
+          "description": "Whether another app is using the microphone.",
+          "type": "boolean"
+        },
+        "monitors": {
+          "description": "The monitors.",
+          "items": {
+            "$ref": "#/$defs/Monitor"
+          },
+          "type": "array"
+        },
+        "now_playing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Merged in by the core from `pc.apps`."
+        },
+        "presentation": {
+          "$ref": "#/$defs/PresentationState",
+          "description": "Whether the user is presenting, recording or in quiet hours."
+        },
+        "recent_references": {
+          "description": "What the user referred to recently, at most 8, newest first.",
+          "items": {
+            "$ref": "#/$defs/Reference"
+          },
+          "type": "array"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The user's selection."
+        },
+        "windows": {
+          "description": "The top-level windows, in z-order.",
+          "items": {
+            "$ref": "#/$defs/WindowInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "captured_at",
+        "monitors",
+        "windows",
+        "recent_references",
+        "presentation",
+        "mic_in_use_elsewhere",
+        "degraded"
+      ],
+      "type": "object"
+    },
+    "ElementInfo": {
+      "description": "One UI Automation element.",
+      "properties": {
+        "automation_id": {
+          "description": "Its automation id, when the app set one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "control_type": {
+          "description": "Its control type, for example `Edit`.",
+          "type": "string"
+        },
+        "is_password": {
+          "description": "Whether it is a password field.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Its name.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "patterns": {
+          "description": "The UI Automation patterns it supports.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "Its bounds."
+        },
+        "window": {
+          "$ref": "#/$defs/WindowRef",
+          "description": "Its window."
+        }
+      },
+      "required": [
+        "control_type",
+        "name",
+        "rect",
+        "patterns",
+        "is_password",
+        "window"
+      ],
+      "type": "object"
+    },
+    "FieldCategory": {
+      "description": "What kind of field text goes into, for dictation and insertion.",
+      "oneOf": [
+        {
+          "const": "plain",
+          "description": "Plain text.",
+          "type": "string"
+        },
+        {
+          "const": "email",
+          "description": "An e-mail.",
+          "type": "string"
+        },
+        {
+          "const": "chat",
+          "description": "A chat message.",
+          "type": "string"
+        },
+        {
+          "const": "document",
+          "description": "A document.",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "Source code.",
+          "type": "string"
+        },
+        {
+          "const": "terminal",
+          "description": "A terminal.",
+          "type": "string"
+        },
+        {
+          "const": "search",
+          "description": "A search box.",
+          "type": "string"
+        },
+        {
+          "const": "form",
+          "description": "A form field.",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaState": {
+      "description": "A media session (the system's media transport controls).",
+      "properties": {
+        "app": {
+          "description": "The app that owns it.",
+          "type": "string"
+        },
+        "artist": {
+          "description": "Who made it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "untrusted"
+        },
+        "duration_s": {
+          "description": "The length, seconds.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "playing": {
+          "description": "Whether it is playing.",
+          "type": "boolean"
+        },
+        "position_s": {
+          "description": "The position, seconds.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "session": {
+          "description": "The session's id.",
+          "type": "string"
+        },
+        "title": {
+          "description": "What is playing.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "session",
+        "app",
+        "title",
+        "playing"
+      ],
+      "type": "object"
+    },
+    "Monitor": {
+      "description": "One monitor.",
+      "properties": {
+        "device_path": {
+          "description": "Its device path, for example `\\\\.\\DISPLAY1`.",
+          "type": "string"
+        },
+        "dpi": {
+          "description": "Its DPI.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "friendly_name": {
+          "description": "Its name from the display's own data.",
+          "type": "string"
+        },
+        "is_primary": {
+          "description": "Whether it is the primary monitor.",
+          "type": "boolean"
+        },
+        "ordinal": {
+          "description": "\"screen two\": its ordinal, left to right from 1.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "Its bounds."
+        },
+        "work_rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "Its bounds without the taskbar."
+        }
+      },
+      "required": [
+        "ordinal",
+        "device_path",
+        "friendly_name",
+        "rect",
+        "work_rect",
+        "dpi",
+        "is_primary"
+      ],
+      "type": "object"
+    },
+    "Point": {
+      "description": "A point in physical virtual-screen pixels.",
+      "properties": {
+        "x": {
+          "description": "Horizontal position.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Vertical position.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "PresentationState": {
+      "description": "Whether the user is presenting, recording or in quiet hours.",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Nothing special.",
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "The shell reports the user busy.",
+          "type": "string"
+        },
+        {
+          "const": "full_screen",
+          "description": "A full-screen app.",
+          "type": "string"
+        },
+        {
+          "const": "presentation",
+          "description": "Presentation mode.",
+          "type": "string"
+        },
+        {
+          "const": "recording",
+          "description": "An app of the recorder category runs.",
+          "type": "string"
+        },
+        {
+          "const": "quiet_hours",
+          "description": "Quiet hours.",
+          "type": "string"
+        }
+      ]
+    },
+    "Rect": {
+      "description": "A rectangle in physical virtual-screen pixels.",
+      "properties": {
+        "h": {
+          "description": "Height.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "w": {
+          "description": "Width.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "description": "Left edge.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Top edge.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "type": "object"
+    },
+    "Reference": {
+      "description": "Something the user referred to.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When the user referred to it."
+        },
+        "kind": {
+          "$ref": "#/$defs/ReferenceKind",
+          "description": "What kind of thing."
+        },
+        "label": {
+          "description": "What it is called on screen.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "path": {
+          "description": "Its path, for a file.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WindowRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its window, when it has one."
+        }
+      },
+      "required": [
+        "kind",
+        "label",
+        "at"
+      ],
+      "type": "object"
+    },
+    "ReferenceKind": {
+      "description": "The kinds of thing a reference names.",
+      "oneOf": [
+        {
+          "const": "window",
+          "description": "A window.",
+          "type": "string"
+        },
+        {
+          "const": "element",
+          "description": "An element.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "A file.",
+          "type": "string"
+        },
+        {
+          "const": "selection",
+          "description": "A selection.",
+          "type": "string"
+        },
+        {
+          "const": "media",
+          "description": "Media.",
+          "type": "string"
+        }
+      ]
+    },
+    "Selection": {
+      "description": "The user's selection.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/SelectionSource",
+          "description": "Where it came from."
+        },
+        "text": {
+          "description": "The text, at most 4,000 characters.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "text",
+        "source"
+      ],
+      "type": "object"
+    },
+    "SelectionSource": {
+      "description": "Where a selection's text came from.",
+      "oneOf": [
+        {
+          "const": "text_pattern",
+          "description": "The element's UI Automation text pattern.",
+          "type": "string"
+        },
+        {
+          "const": "clipboard_fallback",
+          "description": "The clipboard, only when the request refers to something copied, never from clipboard\ndata marked for exclusion from monitoring or history, and always after the Redactor.",
+          "type": "string"
+        }
+      ]
+    },
+    "Selector": {
+      "description": "How an element is found again: by its process, window and its own identity.",
+      "properties": {
+        "ancestors": {
+          "default": [],
+          "description": "Its ancestors, nearest first.",
+          "items": {
+            "$ref": "#/$defs/SelectorStep"
+          },
+          "type": "array"
+        },
+        "automation_id": {
+          "description": "The element's automation id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "control_type": {
+          "description": "The element's control type.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The element's name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process": {
+          "description": "The process name.",
+          "type": "string"
+        },
+        "window_class": {
+          "description": "The window class.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "process"
+      ],
+      "type": "object"
+    },
+    "SelectorStep": {
+      "description": "One ancestor of a selected element.",
+      "properties": {
+        "automation_id": {
+          "description": "Its automation id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "control_type": {
+          "description": "Its control type.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Its name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WindowInfo": {
+      "description": "One top-level window.",
+      "properties": {
+        "class": {
+          "description": "Its window class.",
+          "type": "string"
+        },
+        "exe_version": {
+          "description": "Its executable's file version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "frame_rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "Its frame."
+        },
+        "hwnd": {
+          "description": "Its handle (an `i64`, because `HWND` is not `Send`).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "is_cloaked": {
+          "description": "Whether it is cloaked (on another virtual desktop, or hidden by the shell).",
+          "type": "boolean"
+        },
+        "is_eileen": {
+          "description": "Whether it is one of Eileen's own windows.",
+          "type": "boolean"
+        },
+        "is_foreground": {
+          "description": "Whether it is the foreground window.",
+          "type": "boolean"
+        },
+        "is_minimized": {
+          "description": "Whether it is minimized.",
+          "type": "boolean"
+        },
+        "is_private": {
+          "description": "Whether it is a private browser window or a private app.",
+          "type": "boolean"
+        },
+        "monitor_ordinal": {
+          "description": "The monitor it is mostly on.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pid": {
+          "description": "Its process id.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process": {
+          "description": "Its process name.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Its title.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "url_host": {
+          "description": "A browser window's page host from its address bar over UI Automation; `None` for other\nwindows, and for a browser window whose bar could not be read. For a private window it\nserves only the URL rule and is never shown or stored.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "z_order": {
+          "description": "Its z-order, 0 at the top.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "pid",
+        "process",
+        "title",
+        "class",
+        "frame_rect",
+        "z_order",
+        "is_minimized",
+        "is_cloaked",
+        "is_foreground",
+        "is_eileen",
+        "is_private"
+      ],
+      "type": "object"
+    },
+    "WindowRef": {
+      "description": "A window, by handle and process.",
+      "properties": {
+        "hwnd": {
+          "description": "Its handle.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "pid": {
+          "description": "Its process id.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "pid"
+      ],
+      "type": "object"
+    }
+  }
+}

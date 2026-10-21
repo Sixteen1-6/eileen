@@ -1,0 +1,37 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "Cleaned": {
+      "description": "A cleaned dictation.",
+      "properties": {
+        "corrections": {
+          "description": "Self-corrections applied (\"no, Tuesday\").",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fillers_removed": {
+          "description": "Fillers removed.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "The text to insert.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "text",
+        "fillers_removed",
+        "corrections"
+      ],
+      "type": "object"
+    }
+  }
+}

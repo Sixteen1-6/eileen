@@ -1,0 +1,2450 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ActivityEvent": {
+      "description": "What the user and the PC are doing.",
+      "oneOf": [
+        {
+          "const": "physical_input",
+          "description": "From Raw Input; at most one per 250 ms; carries no key or position.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Loopback energy Eileen's own stream does not explain, or a media session playing.",
+          "properties": {
+            "other_audio": {
+              "properties": {
+                "playing": {
+                  "description": "Whether other audio is playing.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "playing"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "other_audio"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Another app is using the microphone.",
+          "properties": {
+            "mic_in_use_elsewhere": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "mic_in_use_elsewhere"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session is locked.",
+          "properties": {
+            "session_locked": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "session_locked"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The presentation state changed.",
+          "properties": {
+            "presentation": {
+              "$ref": "#/$defs/PresentationState"
+            }
+          },
+          "required": [
+            "presentation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ApprovalRow": {
+      "description": "One approval question and how it was resolved, in the `approvals` table.",
+      "properties": {
+        "allowed": {
+          "description": "The answer; `None` while open.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "approval": {
+          "$ref": "#/$defs/ApprovalId",
+          "description": "The question."
+        },
+        "asked": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was asked."
+        },
+        "by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which form of the user's input resolved it."
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job that asked, if any."
+        },
+        "resolved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When it was resolved."
+        },
+        "summary": {
+          "description": "What the user was shown.",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The tier of the call."
+        }
+      },
+      "required": [
+        "approval",
+        "tier",
+        "summary",
+        "asked"
+      ],
+      "type": "object"
+    },
+    "AudioCmd": {
+      "description": "To the audio driver.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Start or stop sending microphone audio to the speech process.",
+          "properties": {
+            "set_capture": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "set_capture"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Duck other audio by this many decibels (negative).",
+          "properties": {
+            "duck": {
+              "properties": {
+                "db": {
+                  "description": "The gain change, dB.",
+                  "format": "int8",
+                  "maximum": 127,
+                  "minimum": -128,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "db"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "duck"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "unduck",
+          "description": "Undo the duck.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Pause an utterance.",
+          "properties": {
+            "pause": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pause"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Resume an utterance.",
+          "properties": {
+            "resume": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "resume"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stop an utterance.",
+          "properties": {
+            "stop": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "stop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Play a cached phrase.",
+          "properties": {
+            "play_phrase": {
+              "properties": {
+                "key": {
+                  "description": "The phrase cache key.",
+                  "type": "string"
+                },
+                "voice": {
+                  "description": "The voice it was rendered in.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "voice"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "play_phrase"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Play an earcon.",
+          "properties": {
+            "earcon": {
+              "$ref": "#/$defs/Earcon"
+            }
+          },
+          "required": [
+            "earcon"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Record from the microphone.",
+          "properties": {
+            "record": {
+              "properties": {
+                "purpose": {
+                  "$ref": "#/$defs/RecordPurpose",
+                  "description": "What for."
+                },
+                "seconds": {
+                  "description": "How long.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "seconds",
+                "purpose"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Caller": {
+      "description": "Where a tool call's reply goes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A shim connection to the dispatcher pipe.",
+          "properties": {
+            "shim": {
+              "properties": {
+                "connection": {
+                  "description": "The connection, numbered by the dispatcher.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "role": {
+                  "$ref": "#/$defs/ShimRole",
+                  "description": "The role its hello named."
+                }
+              },
+              "required": [
+                "connection",
+                "role"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "shim"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "internal",
+          "description": "The core itself, a replay or the fast path.",
+          "type": "string"
+        }
+      ]
+    },
+    "Content": {
+      "description": "One block of a tool result. Never structured content beside an image: models see `output`\nas one JSON text block.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Text.",
+          "properties": {
+            "text": {
+              "type": "string",
+              "x-eileen-text": "untrusted"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An image.",
+          "properties": {
+            "image": {
+              "properties": {
+                "base64": {
+                  "description": "Its bytes, base64.",
+                  "type": "string"
+                },
+                "mime": {
+                  "description": "Its media type, for example `image/jpeg`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mime",
+                "base64"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "image"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Earcon": {
+      "description": "A short non-speech sound.",
+      "oneOf": [
+        {
+          "const": "routed",
+          "description": "The request was routed to the brain or a job.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "Something finished.",
+          "type": "string"
+        },
+        {
+          "const": "attention",
+          "description": "Something needs the user.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "Something failed.",
+          "type": "string"
+        },
+        {
+          "const": "muted",
+          "description": "The microphone was muted.",
+          "type": "string"
+        },
+        {
+          "const": "unmuted",
+          "description": "The microphone was unmuted.",
+          "type": "string"
+        }
+      ]
+    },
+    "Effect": {
+      "description": "Everything the core asks the drivers to do.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "To the speech process.",
+          "properties": {
+            "speech": {
+              "$ref": "#/$defs/SpeechCmd"
+            }
+          },
+          "required": [
+            "speech"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the audio driver.",
+          "properties": {
+            "audio": {
+              "$ref": "#/$defs/AudioCmd"
+            }
+          },
+          "required": [
+            "audio"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the brain driver; every command names a slot.",
+          "properties": {
+            "brain": {
+              "$ref": "#/$defs/BrainCmd"
+            }
+          },
+          "required": [
+            "brain"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To a worker session.",
+          "properties": {
+            "worker": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/WorkerSessionId"
+                },
+                {
+                  "$ref": "#/$defs/WorkerCmd"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "worker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The answer to a gating hook request.",
+          "properties": {
+            "hook": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/WorkerSessionId"
+                },
+                {
+                  "$ref": "#/$defs/HookReply"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "hook"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Forward a call to a connector.",
+          "properties": {
+            "tool_forward": {
+              "properties": {
+                "args": {
+                  "description": "The arguments, rebuilt by the dispatcher."
+                },
+                "call": {
+                  "$ref": "#/$defs/CallId",
+                  "description": "The call."
+                },
+                "connector": {
+                  "$ref": "#/$defs/ConnectorId",
+                  "description": "Where it goes."
+                },
+                "deadline_ms": {
+                  "description": "How long the connector has.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "call",
+                "connector",
+                "tool",
+                "args",
+                "deadline_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_forward"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reply to a caller.",
+          "properties": {
+            "tool_reply": {
+              "properties": {
+                "call": {
+                  "$ref": "#/$defs/CallId",
+                  "description": "The call."
+                },
+                "caller": {
+                  "$ref": "#/$defs/Caller",
+                  "description": "Who asked."
+                },
+                "result": {
+                  "$ref": "#/$defs/ToolResult",
+                  "description": "The result."
+                }
+              },
+              "required": [
+                "caller",
+                "call",
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_reply"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To a sidecar's client.",
+          "properties": {
+            "sidecar": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/SidecarId"
+                },
+                {
+                  "$ref": "#/$defs/SidecarCmd"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "sidecar"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A full HUD snapshot; the driver rate-limits to 10 per second.",
+          "properties": {
+            "hud": {
+              "$ref": "#/$defs/HudState"
+            }
+          },
+          "required": [
+            "hud"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the learning store.",
+          "properties": {
+            "learn": {
+              "$ref": "#/$defs/LearnCmd"
+            }
+          },
+          "required": [
+            "learn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the settings driver.",
+          "properties": {
+            "settings": {
+              "$ref": "#/$defs/SettingsCmd"
+            }
+          },
+          "required": [
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the store.",
+          "properties": {
+            "persist": {
+              "$ref": "#/$defs/Record"
+            }
+          },
+          "required": [
+            "persist"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Publish on the bus.",
+          "properties": {
+            "emit": {
+              "$ref": "#/$defs/BusEvent"
+            }
+          },
+          "required": [
+            "emit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set a timer.",
+          "properties": {
+            "set_timer": {
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/MonoTime",
+                  "description": "When it fires."
+                },
+                "id": {
+                  "$ref": "#/$defs/TimerId",
+                  "description": "The timer."
+                }
+              },
+              "required": [
+                "id",
+                "at"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set_timer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cancel a timer.",
+          "properties": {
+            "cancel_timer": {
+              "$ref": "#/$defs/TimerId"
+            }
+          },
+          "required": [
+            "cancel_timer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Capture an incident.",
+          "properties": {
+            "incident": {
+              "$ref": "#/$defs/IncidentTrigger"
+            }
+          },
+          "required": [
+            "incident"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Show a toast.",
+          "properties": {
+            "notify": {
+              "$ref": "#/$defs/Toast"
+            }
+          },
+          "required": [
+            "notify"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EffectFamily": {
+      "description": "The families of [`Effect`] a component can accept (`Component::accepts`).",
+      "oneOf": [
+        {
+          "const": "speech",
+          "description": "`Effect::Speech`.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "`Effect::Audio`.",
+          "type": "string"
+        },
+        {
+          "const": "brain",
+          "description": "`Effect::Brain`.",
+          "type": "string"
+        },
+        {
+          "const": "worker",
+          "description": "`Effect::Worker`.",
+          "type": "string"
+        },
+        {
+          "const": "hook",
+          "description": "`Effect::Hook`.",
+          "type": "string"
+        },
+        {
+          "const": "tool_forward",
+          "description": "`Effect::ToolForward`.",
+          "type": "string"
+        },
+        {
+          "const": "tool_reply",
+          "description": "`Effect::ToolReply`.",
+          "type": "string"
+        },
+        {
+          "const": "sidecar",
+          "description": "`Effect::Sidecar`.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "`Effect::Hud`.",
+          "type": "string"
+        },
+        {
+          "const": "learn",
+          "description": "`Effect::Learn`.",
+          "type": "string"
+        },
+        {
+          "const": "settings",
+          "description": "`Effect::Settings`.",
+          "type": "string"
+        },
+        {
+          "const": "persist",
+          "description": "`Effect::Persist`.",
+          "type": "string"
+        },
+        {
+          "const": "emit",
+          "description": "`Effect::Emit`.",
+          "type": "string"
+        },
+        {
+          "const": "timer",
+          "description": "`Effect::SetTimer` and `Effect::CancelTimer`.",
+          "type": "string"
+        },
+        {
+          "const": "incident",
+          "description": "`Effect::Incident`.",
+          "type": "string"
+        },
+        {
+          "const": "notify",
+          "description": "`Effect::Notify`.",
+          "type": "string"
+        }
+      ]
+    },
+    "Envelope_BusEvent": {
+      "description": "Every bus event, input and effect travels in this envelope. `seq` is the core-wide replay\norder.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "Wall-clock time when it was made."
+        },
+        "body": {
+          "$ref": "#/$defs/BusEvent",
+          "description": "What it carries."
+        },
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Its correlation."
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "Monotonic time when it was made."
+        },
+        "seq": {
+          "description": "The core-wide replay order.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "mono",
+        "ctx",
+        "body"
+      ],
+      "type": "object"
+    },
+    "Envelope_Effect": {
+      "description": "Every bus event, input and effect travels in this envelope. `seq` is the core-wide replay\norder.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "Wall-clock time when it was made."
+        },
+        "body": {
+          "$ref": "#/$defs/Effect",
+          "description": "What it carries."
+        },
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Its correlation."
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "Monotonic time when it was made."
+        },
+        "seq": {
+          "description": "The core-wide replay order.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "mono",
+        "ctx",
+        "body"
+      ],
+      "type": "object"
+    },
+    "Envelope_Input": {
+      "description": "Every bus event, input and effect travels in this envelope. `seq` is the core-wide replay\norder.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "Wall-clock time when it was made."
+        },
+        "body": {
+          "$ref": "#/$defs/Input",
+          "description": "What it carries."
+        },
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Its correlation."
+        },
+        "mono": {
+          "$ref": "#/$defs/MonoTime",
+          "description": "Monotonic time when it was made."
+        },
+        "seq": {
+          "description": "The core-wide replay order.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "mono",
+        "ctx",
+        "body"
+      ],
+      "type": "object"
+    },
+    "GitFact": {
+      "description": "The repository a git command will use (section 2.12, \"Git runs code too\"), found by the\nruntime by walking up from the command's working folder to the first `.git` entry, never by\nrunning git.",
+      "properties": {
+        "command": {
+          "description": "The index of the git command within the command line.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "git_dir": {
+          "description": "The git directory.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "has_hooks": {
+          "description": "Whether it has hooks.",
+          "type": "boolean"
+        },
+        "job_repo": {
+          "description": "Whether it is the job's own repository.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "command",
+        "git_dir",
+        "job_repo",
+        "has_hooks"
+      ],
+      "type": "object"
+    },
+    "IncidentTrigger": {
+      "description": "Why an incident is captured.",
+      "oneOf": [
+        {
+          "const": "user_report",
+          "description": "The user said \"something went wrong\" or pressed the report hotkey.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `never!` or `always!` soft assertion failed.",
+          "properties": {
+            "soft_assertion": {
+              "properties": {
+                "site": {
+                  "description": "The assertion's site name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "site"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "soft_assertion"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A component stopped answering.",
+          "properties": {
+            "hang": {
+              "properties": {
+                "component": {
+                  "description": "The component.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "component"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hang"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A component crashed.",
+          "properties": {
+            "crash": {
+              "properties": {
+                "component": {
+                  "description": "The component.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "component"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "crash"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job failed.",
+          "properties": {
+            "job_failed": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job_failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Input": {
+      "description": "Everything that reaches the core.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "From the speech process.",
+          "properties": {
+            "voice": {
+              "$ref": "#/$defs/VoiceEvent"
+            }
+          },
+          "required": [
+            "voice"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the audio driver's playback accounting.",
+          "properties": {
+            "playback": {
+              "$ref": "#/$defs/PlaybackEvent"
+            }
+          },
+          "required": [
+            "playback"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the brain driver.",
+          "properties": {
+            "brain": {
+              "$ref": "#/$defs/BrainEvent"
+            }
+          },
+          "required": [
+            "brain"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From a worker session.",
+          "properties": {
+            "worker": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/WorkerSessionId"
+                },
+                {
+                  "$ref": "#/$defs/WorkerEvent"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "worker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A hook request from a worker session.",
+          "properties": {
+            "hook": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/WorkerSessionId"
+                },
+                {
+                  "$ref": "#/$defs/HookRequest"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "hook"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From a shim (caller verified by PID and Job Object), a replay or the core.",
+          "properties": {
+            "tool_call": {
+              "$ref": "#/$defs/ToolCallRequest"
+            }
+          },
+          "required": [
+            "tool_call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From a sidecar or the core-side executor.",
+          "properties": {
+            "tool_result": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/CallId"
+                },
+                {
+                  "$ref": "#/$defs/ToolResult"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "tool_result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From a sidecar's client.",
+          "properties": {
+            "sidecar": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/SidecarId"
+                },
+                {
+                  "$ref": "#/$defs/SidecarEvent"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "required": [
+            "sidecar"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the learning store.",
+          "properties": {
+            "learn": {
+              "$ref": "#/$defs/LearnEvent"
+            }
+          },
+          "required": [
+            "learn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Hotkeys, the HUD, the tray, typed text and `Cli`; never screen or model text.",
+          "properties": {
+            "user": {
+              "$ref": "#/$defs/UserInput"
+            }
+          },
+          "required": [
+            "user"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What the user and the PC are doing.",
+          "properties": {
+            "activity": {
+              "$ref": "#/$defs/ActivityEvent"
+            }
+          },
+          "required": [
+            "activity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every 5 s.",
+          "properties": {
+            "memory": {
+              "$ref": "#/$defs/MemoryPressure"
+            }
+          },
+          "required": [
+            "memory"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the settings driver.",
+          "properties": {
+            "settings": {
+              "$ref": "#/$defs/SettingsEvent"
+            }
+          },
+          "required": [
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the store.",
+          "properties": {
+            "store": {
+              "$ref": "#/$defs/StoreEvent"
+            }
+          },
+          "required": [
+            "store"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A timer the core set has fired.",
+          "properties": {
+            "timer": {
+              "$ref": "#/$defs/TimerId"
+            }
+          },
+          "required": [
+            "timer"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JournalRow": {
+      "description": "One reversible call in the journal, so \"undo that\" can reverse it.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it ran."
+        },
+        "call": {
+          "$ref": "#/$defs/CallId",
+          "description": "The call."
+        },
+        "inverse": {
+          "description": "How to reverse it, from the op's `inverse`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job it ran in."
+        },
+        "op": {
+          "description": "The op's tag, for tools with ops.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "description": "The call's output, which carries the inputs the inverse needs.",
+          "x-eileen-text": "untrusted"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName",
+          "description": "The tool."
+        }
+      },
+      "required": [
+        "job",
+        "call",
+        "tool",
+        "at"
+      ],
+      "type": "object"
+    },
+    "KeyEdge": {
+      "description": "One edge of a key.",
+      "oneOf": [
+        {
+          "const": "down",
+          "description": "Pressed.",
+          "type": "string"
+        },
+        {
+          "const": "up",
+          "description": "Released.",
+          "type": "string"
+        }
+      ]
+    },
+    "PathAccess": {
+      "description": "How a call uses a path.",
+      "oneOf": [
+        {
+          "const": "read",
+          "description": "It reads the path.",
+          "type": "string"
+        },
+        {
+          "const": "write",
+          "description": "It writes the path.",
+          "type": "string"
+        },
+        {
+          "const": "open",
+          "description": "It opens the path with its handler.",
+          "type": "string"
+        }
+      ]
+    },
+    "PathClass": {
+      "description": "The class of a path, tried in this order, first match wins (section 2.12): `Credential`,\n`BrowserProfile`, `GitInternals`, `SkillSnapshot`, `JobFolder`, `JobTemp`, `EileenData`,\n`Toolchain`, `Elsewhere`.",
+      "oneOf": [
+        {
+          "const": "job_folder",
+          "description": "The job's own folders.",
+          "type": "string"
+        },
+        {
+          "const": "job_temp",
+          "description": "The job's temporary folder.",
+          "type": "string"
+        },
+        {
+          "const": "git_internals",
+          "description": "A `.git` path component inside the job's own folders, and the job's own git and common\ndirectories.",
+          "type": "string"
+        },
+        {
+          "const": "skill_snapshot",
+          "description": "The session's learned-skill snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "toolchain",
+          "description": "A toolchain folder.",
+          "type": "string"
+        },
+        {
+          "const": "eileen_data",
+          "description": "Eileen's own data folder.",
+          "type": "string"
+        },
+        {
+          "const": "credential",
+          "description": "A credential file or folder.",
+          "type": "string"
+        },
+        {
+          "const": "browser_profile",
+          "description": "A browser profile.",
+          "type": "string"
+        },
+        {
+          "const": "elsewhere",
+          "description": "Anywhere else.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A glob or an unresolved variable: the command is unparseable.",
+          "type": "string"
+        }
+      ]
+    },
+    "PathFact": {
+      "description": "Built by the runtime for each path argument of a file tool, of a shell command (from the\ntokenizer's path positions; `access` says whether the command reads or writes it) and of an\nEileen tool field marked `x-eileen-path`.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/PathAccess",
+          "description": "How the call uses it."
+        },
+        "arg": {
+          "description": "The argument it came from.",
+          "type": "string"
+        },
+        "canonical": {
+          "description": "The canonical path.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "class": {
+          "$ref": "#/$defs/PathClass",
+          "description": "Its class, most specific first."
+        },
+        "git_component": {
+          "description": "A component is a git directory or pointer file by the `protectNTFS` rule of section\n2.12; outside `GitInternals` it keeps its class and raises a write to tier 2, HUD only.",
+          "type": "boolean"
+        },
+        "opens_web": {
+          "description": "Its registered handler is a web browser, or it is a `.url` or `.website` file.",
+          "type": "boolean"
+        },
+        "runs_code": {
+          "description": "An executable, script, installer or a shortcut to one.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "arg",
+        "class",
+        "access",
+        "canonical",
+        "runs_code",
+        "opens_web",
+        "git_component"
+      ],
+      "type": "object"
+    },
+    "PlaybackEvent": {
+      "description": "Playback accounting from the audio driver.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Samples handed to the device, at most every 50 ms.",
+          "properties": {
+            "played": {
+              "properties": {
+                "clause": {
+                  "description": "Its clause.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "samples_played": {
+                  "description": "Samples of that clause played so far.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak",
+                "clause",
+                "samples_played"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "played"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Playback paused.",
+          "properties": {
+            "paused": {
+              "properties": {
+                "clause": {
+                  "description": "Its clause.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "samples_played": {
+                  "description": "Samples of that clause played before the pause.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak",
+                "clause",
+                "samples_played"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "paused"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Playback stopped.",
+          "properties": {
+            "stopped": {
+              "properties": {
+                "clause": {
+                  "description": "Its clause.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "samples_played": {
+                  "description": "Samples of that clause played before the stop.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak",
+                "clause",
+                "samples_played"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "stopped"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every queued sample of the utterance was played.",
+          "properties": {
+            "drained": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "drained"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "device_changed",
+          "description": "The output device changed.",
+          "type": "string"
+        },
+        {
+          "const": "stalled",
+          "description": "The device stopped taking samples.",
+          "type": "string"
+        }
+      ]
+    },
+    "Record": {
+      "description": "A row for the store.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Insert or update a job.",
+          "properties": {
+            "job_upsert": {
+              "$ref": "#/$defs/Job"
+            }
+          },
+          "required": [
+            "job_upsert"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Append a bus event to the `events` table.",
+          "properties": {
+            "event_append": {
+              "$ref": "#/$defs/Envelope_BusEvent"
+            }
+          },
+          "required": [
+            "event_append"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An approval question and its answer.",
+          "properties": {
+            "approval_row": {
+              "$ref": "#/$defs/ApprovalRow"
+            }
+          },
+          "required": [
+            "approval_row"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A journaled reversible call.",
+          "properties": {
+            "journal_row": {
+              "$ref": "#/$defs/JournalRow"
+            }
+          },
+          "required": [
+            "journal_row"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A settings version.",
+          "properties": {
+            "settings_version": {
+              "$ref": "#/$defs/SettingsVersion"
+            }
+          },
+          "required": [
+            "settings_version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The latest plan usage.",
+          "properties": {
+            "plan_usage": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "plan_usage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A forget: the jobs' rows and every event of those turns.",
+          "properties": {
+            "purge_jobs": {
+              "properties": {
+                "jobs": {
+                  "description": "The jobs.",
+                  "items": {
+                    "$ref": "#/$defs/JobId"
+                  },
+                  "type": "array"
+                },
+                "turns": {
+                  "description": "The turns.",
+                  "items": {
+                    "$ref": "#/$defs/TurnId"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "jobs",
+                "turns"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "purge_jobs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RecordPurpose": {
+      "description": "Why the microphone is recorded.",
+      "oneOf": [
+        {
+          "const": "first_run",
+          "description": "The first run's clip, for the listening calibration and the optional clone.",
+          "type": "string"
+        },
+        {
+          "const": "enrollment",
+          "description": "Voice enrollment for the speaker check.",
+          "type": "string"
+        },
+        {
+          "const": "clone",
+          "description": "A voice to clone, with its consent sentence.",
+          "type": "string"
+        }
+      ]
+    },
+    "Rung": {
+      "description": "The route a tool or call takes to an app, from the most direct to the last resort.",
+      "oneOf": [
+        {
+          "const": "app_api",
+          "description": "The app's own scripting interface.",
+          "type": "string"
+        },
+        {
+          "const": "app_mcp",
+          "description": "The app's own MCP server.",
+          "type": "string"
+        },
+        {
+          "const": "deep_link",
+          "description": "A deep link or URI scheme.",
+          "type": "string"
+        },
+        {
+          "const": "app_actions",
+          "description": "The app's own actions (menus, commands) through automation.",
+          "type": "string"
+        },
+        {
+          "const": "uia",
+          "description": "UI Automation.",
+          "type": "string"
+        },
+        {
+          "const": "dom",
+          "description": "A web page's DOM.",
+          "type": "string"
+        },
+        {
+          "const": "vision",
+          "description": "Screenshots and pointer input.",
+          "type": "string"
+        }
+      ]
+    },
+    "ShimRole": {
+      "description": "The role a shim's hello names (section 3.3.9).",
+      "oneOf": [
+        {
+          "const": "brain",
+          "description": "The brain's session.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A worker session.",
+          "properties": {
+            "worker": {
+              "$ref": "#/$defs/WorkerSessionId"
+            }
+          },
+          "required": [
+            "worker"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "librarian",
+          "description": "The librarian's session.",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "The owner's own Claude session, through the plugin.",
+          "type": "string"
+        },
+        {
+          "const": "dev",
+          "description": "A coding worker's developer tools.",
+          "type": "string"
+        }
+      ]
+    },
+    "StoreEvent": {
+      "description": "From the store.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The store loaded at start.",
+          "properties": {
+            "loaded": {
+              "properties": {
+                "jobs": {
+                  "description": "The jobs it holds.",
+                  "items": {
+                    "$ref": "#/$defs/Job"
+                  },
+                  "type": "array"
+                },
+                "settings_version": {
+                  "description": "The current settings version.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "jobs",
+                "settings_version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "loaded"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A purge finished.",
+          "properties": {
+            "purged": {
+              "properties": {
+                "jobs": {
+                  "description": "The jobs purged.",
+                  "items": {
+                    "$ref": "#/$defs/JobId"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "description": "Rows removed.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "jobs",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "purged"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimerId": {
+      "description": "A timer the core set, numbered by the core.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Toast": {
+      "description": "A Windows toast.",
+      "properties": {
+        "body": {
+          "description": "The body.",
+          "type": "string"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job it is about, if any."
+        },
+        "title": {
+          "description": "The title line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "ToolCallRequest": {
+      "description": "A tool call on its way to the dispatcher.",
+      "properties": {
+        "args": {
+          "description": "Its arguments, as sent.",
+          "x-eileen-text": "untrusted"
+        },
+        "caller": {
+          "$ref": "#/$defs/Caller",
+          "description": "Which shim session or internal origin, to route the reply."
+        },
+        "origin": {
+          "$ref": "#/$defs/CallOrigin",
+          "description": "Who made the call."
+        },
+        "paths": {
+          "description": "Added by the runtime before the core sees the call.",
+          "items": {
+            "$ref": "#/$defs/PathFact"
+          },
+          "type": "array"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName",
+          "description": "The tool."
+        },
+        "traceparent": {
+          "description": "The caller's W3C `traceparent`, when it sent one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urls": {
+          "description": "Likewise, for every URL in the arguments (section 2.12, \"One URL rule\").",
+          "items": {
+            "$ref": "#/$defs/UrlFact"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "caller",
+        "origin",
+        "tool",
+        "args",
+        "paths",
+        "urls"
+      ],
+      "type": "object"
+    },
+    "ToolResult": {
+      "description": "What a tool call returned.",
+      "properties": {
+        "content": {
+          "description": "What the model sees.",
+          "items": {
+            "$ref": "#/$defs/Content"
+          },
+          "type": "array"
+        },
+        "duration_ms": {
+          "description": "How long it took.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "is_error": {
+          "description": "Whether the call failed.",
+          "type": "boolean"
+        },
+        "output": {
+          "description": "The op's structured result, matching its `OpSpec.output_schema`; recipes point into it.",
+          "x-eileen-text": "untrusted"
+        },
+        "rung": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rung"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route the call took."
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the server checked the effect, when it did."
+        }
+      },
+      "required": [
+        "content",
+        "is_error",
+        "duration_ms"
+      ],
+      "type": "object"
+    },
+    "UrlCtx": {
+      "description": "What the core supplies from its own state for each URL check.",
+      "properties": {
+        "built_by_eileen": {
+          "description": "The core's own code built the URL: a grammar entry or resolver, the video URL builder, a\nreplay step's pointer into an `apps_recent` url.",
+          "type": "boolean"
+        },
+        "context_complete": {
+          "description": "False when a browser window there had no readable address bar.",
+          "type": "boolean"
+        },
+        "context_hosts": {
+          "description": "Hosts whose pages are in the deciding context (section 2.12).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "The job's dispatched task, subtasks and subquestions, once it passed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "transcript": {
+          "description": "The authorizing turn's normalised final transcript.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "untainted_args": {
+          "description": "The string arguments of the job's untainted steps.",
+          "items": {
+            "type": "string",
+            "x-eileen-text": "personal"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "built_by_eileen",
+        "transcript",
+        "untainted_args",
+        "context_hosts",
+        "context_complete"
+      ],
+      "type": "object"
+    },
+    "UrlFact": {
+      "description": "Built by the runtime for each URL in a call, the way it builds `PathFact`s, so the URL rule\nneeds no IO.",
+      "properties": {
+        "arg": {
+          "description": "The argument it came from.",
+          "type": "string"
+        },
+        "host": {
+          "description": "Its host, when it parsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "in_index": {
+          "description": "Verbatim in the media history or the recent-work index (rule 1).",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "The URL.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "visited": {
+          "description": "The full URL, path and query included, is in the media history or the ledger's browser\nlines (rule 3).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "arg",
+        "url",
+        "in_index",
+        "visited"
+      ],
+      "type": "object"
+    },
+    "UrlRefusal": {
+      "description": "Why a URL is not vouched for.",
+      "oneOf": [
+        {
+          "const": "unparsed",
+          "description": "It did not parse.",
+          "type": "string"
+        },
+        {
+          "const": "host_not_named",
+          "description": "The user did not name its host.",
+          "type": "string"
+        },
+        {
+          "const": "not_verbatim",
+          "description": "It does not appear verbatim where it must.",
+          "type": "string"
+        },
+        {
+          "const": "visited_host_only",
+          "description": "Only its host was visited, not the URL.",
+          "type": "string"
+        },
+        {
+          "const": "context_host",
+          "description": "Its host is a page in the deciding context.",
+          "type": "string"
+        },
+        {
+          "const": "context_incomplete",
+          "description": "The deciding context is incomplete.",
+          "type": "string"
+        }
+      ]
+    },
+    "UrlVerdict": {
+      "description": "The URL rule's answer.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The URL may be opened, by this rule.",
+          "properties": {
+            "vouched": {
+              "$ref": "#/$defs/VouchRule"
+            }
+          },
+          "required": [
+            "vouched"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The URL is not vouched for, for this reason.",
+          "properties": {
+            "not_vouched": {
+              "$ref": "#/$defs/UrlRefusal"
+            }
+          },
+          "required": [
+            "not_vouched"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UserInput": {
+      "description": "Input from the user's own hands and keyboard, never from screen or model text. The shell\nemits `Approve`, `Deny` and an unmuting `SetMute` or `ToggleMute` from a hotkey or the tray\nonly when Raw Input saw the keys or the click come from a device.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Mute or unmute.",
+          "properties": {
+            "set_mute": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "set_mute"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "toggle_mute",
+          "description": "Toggle mute.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Approve a question.",
+          "properties": {
+            "approve": {
+              "$ref": "#/$defs/ApprovalId"
+            }
+          },
+          "required": [
+            "approve"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Deny a question.",
+          "properties": {
+            "deny": {
+              "$ref": "#/$defs/ApprovalId"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cancel a job.",
+          "properties": {
+            "cancel_job": {
+              "$ref": "#/$defs/JobId"
+            }
+          },
+          "required": [
+            "cancel_job"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "pause_desktop_jobs",
+          "description": "Pause every desktop job.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Admit one job queued for memory (rule 4 of section 2.5).",
+          "properties": {
+            "start_anyway": {
+              "$ref": "#/$defs/JobId"
+            }
+          },
+          "required": [
+            "start_anyway"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Typing in Eileen's own UI.",
+          "properties": {
+            "typed": {
+              "properties": {
+                "text": {
+                  "description": "The text.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "typed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`eileen say` and other command-line input.",
+          "properties": {
+            "cli": {
+              "properties": {
+                "text": {
+                  "description": "The text.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "cli"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A HUD line.",
+          "properties": {
+            "hud": {
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/HudInput",
+                  "description": "What was clicked."
+                },
+                "physical": {
+                  "description": "Whether the click came with a Raw Input device handle.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "input",
+                "physical"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hud"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The dictation key went down or up.",
+          "properties": {
+            "dictation_key": {
+              "$ref": "#/$defs/KeyEdge"
+            }
+          },
+          "required": [
+            "dictation_key"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "save_incident",
+          "description": "Save an incident.",
+          "type": "string"
+        },
+        {
+          "const": "save_scenario",
+          "description": "Save the last request as a scenario.",
+          "type": "string"
+        }
+      ]
+    },
+    "Verification": {
+      "description": "How a server checked a call's effect.",
+      "properties": {
+        "kind": {
+          "description": "What was checked, for example `value_read_back`.",
+          "type": "string"
+        },
+        "observed": {
+          "description": "What it saw.",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "kind",
+        "observed"
+      ],
+      "type": "object"
+    },
+    "VouchRule": {
+      "description": "Why a URL is vouched for.",
+      "oneOf": [
+        {
+          "const": "built_by_eileen",
+          "description": "Eileen's own code built it.",
+          "type": "string"
+        },
+        {
+          "const": "in_index",
+          "description": "It is in the media history or the recent-work index.",
+          "type": "string"
+        },
+        {
+          "const": "named_host",
+          "description": "The user named its host.",
+          "type": "string"
+        },
+        {
+          "const": "visited",
+          "description": "The user visited it.",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

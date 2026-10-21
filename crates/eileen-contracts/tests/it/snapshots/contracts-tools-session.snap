@@ -1,0 +1,226 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "SessionAsk": {
+      "description": "`session_ask`: at most 200 characters, one per 30 s; shown on the HUD and spoken as \"Your\nClaude session asks: ...\" (HUD only in a call). Tier 0.",
+      "properties": {
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "SessionAskOutput": {
+      "description": "What `session_ask` returns within 120 s: the user's next addressed reply, typed answer or\npanel text, which starts nothing and approves nothing.",
+      "properties": {
+        "answer": {
+          "description": "The answer, if the user gave one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SessionHandoff": {
+      "description": "`session_handoff`: creates a pending handoff the user confirms by voice or on the HUD\n(naming the repository and the summary); never starts a job alone.",
+      "properties": {
+        "cwd": {
+          "description": "Its working folder.",
+          "type": "string",
+          "x-eileen-path": true
+        },
+        "next": {
+          "description": "What comes next.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session to continue.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What it did.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "cwd",
+        "summary",
+        "next"
+      ],
+      "type": "object"
+    },
+    "SessionMute": {
+      "description": "`session_mute`.",
+      "properties": {
+        "muted": {
+          "description": "Mute or unmute.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "muted"
+      ],
+      "type": "object"
+    },
+    "SessionSay": {
+      "description": "`session_say`: at most 200 characters, at most one per 30 s, spoken as \"From your Claude\nsession: ...\".",
+      "properties": {
+        "text": {
+          "description": "The line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionSkills": {
+      "description": "`session_skills`: only with `claude_plugin.share_skills` on; learned skills at level 2 or\nabove whose every line is Eileen-authored, user-provenance or approved; never a pending\ndraft. Tier 0.",
+      "properties": {
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  "tool_inputs": {
+    "session_ask": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`session_ask`: at most 200 characters, one per 30 s; shown on the HUD and spoken as \"Your\nClaude session asks: ...\" (HUD only in a call). Tier 0.",
+      "properties": {
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "title": "SessionAsk",
+      "type": "object"
+    },
+    "session_handoff": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`session_handoff`: creates a pending handoff the user confirms by voice or on the HUD\n(naming the repository and the summary); never starts a job alone.",
+      "properties": {
+        "cwd": {
+          "description": "Its working folder.",
+          "type": "string",
+          "x-eileen-path": true
+        },
+        "next": {
+          "description": "What comes next.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session to continue.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What it did.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "cwd",
+        "summary",
+        "next"
+      ],
+      "title": "SessionHandoff",
+      "type": "object"
+    },
+    "session_jobs": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    },
+    "session_mute": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`session_mute`.",
+      "properties": {
+        "muted": {
+          "description": "Mute or unmute.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "muted"
+      ],
+      "title": "SessionMute",
+      "type": "object"
+    },
+    "session_say": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`session_say`: at most 200 characters, at most one per 30 s, spoken as \"From your Claude\nsession: ...\".",
+      "properties": {
+        "text": {
+          "description": "The line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "SessionSay",
+      "type": "object"
+    },
+    "session_skills": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`session_skills`: only with `claude_plugin.share_skills` on; learned skills at level 2 or\nabove whose every line is Eileen-authored, user-provenance or approved; never a pending\ndraft. Tier 0.",
+      "properties": {
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "SessionSkills",
+      "type": "object"
+    },
+    "session_status": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The arguments of a tool that takes none: an empty object.",
+      "title": "NoArgs",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,2015 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AnnounceMode": {
+      "description": "How an event is announced.",
+      "oneOf": [
+        {
+          "const": "interrupt",
+          "description": "Speak at once, interrupting.",
+          "type": "string"
+        },
+        {
+          "const": "when_idle",
+          "description": "Speak when the conversation is idle.",
+          "type": "string"
+        },
+        {
+          "const": "silent",
+          "description": "Do not speak.",
+          "type": "string"
+        },
+        {
+          "const": "hud_only",
+          "description": "Show on the HUD only.",
+          "type": "string"
+        }
+      ]
+    },
+    "AnnouncementsConfig": {
+      "description": "How each event kind is announced.",
+      "properties": {
+        "events": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AnnounceMode"
+          },
+          "default": {},
+          "description": "Per dotted event name.",
+          "type": "object"
+        },
+        "job_kinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AnnounceMode"
+          },
+          "default": {},
+          "description": "Per job kind, overriding the event's mode.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "AnticipationConfig": {
+      "description": "Anticipated deep answers.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether it is on.",
+          "type": "boolean"
+        },
+        "max_plan_pct": {
+          "default": 50,
+          "description": "Only below this plan usage, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ApplyMode": {
+      "description": "When a setting change takes effect.",
+      "oneOf": [
+        {
+          "const": "next_turn",
+          "description": "From the next turn.",
+          "type": "string"
+        },
+        {
+          "const": "live",
+          "description": "At once.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "After a component restarts.",
+          "properties": {
+            "restart": {
+              "$ref": "#/$defs/Component"
+            }
+          },
+          "required": [
+            "restart"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ApprovalsConfig": {
+      "description": "Approvals.",
+      "properties": {
+        "action_word_tier2": {
+          "default": true,
+          "description": "Tier 2 needs the action word by voice.",
+          "type": "boolean"
+        },
+        "deadline_min": {
+          "default": 30,
+          "description": "When an open question is declined, minutes.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hook_hold_s": {
+          "default": 120,
+          "description": "How long a hook waits for an answer, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "voice_window_s": {
+          "default": 20,
+          "description": "How long a question can be answered by voice, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AssistantConfig": {
+      "description": "The assistant's name and manner.",
+      "properties": {
+        "humor": {
+          "$ref": "#/$defs/Humor",
+          "default": "light",
+          "description": "How playful it is."
+        },
+        "name": {
+          "default": "Eileen",
+          "description": "The name it answers to; a change runs the `NameRecognisable` check.",
+          "type": "string"
+        },
+        "personality": {
+          "default": "",
+          "description": "Free text, at most 400 characters.",
+          "type": "string"
+        },
+        "verbosity": {
+          "$ref": "#/$defs/Verbosity",
+          "default": "normal",
+          "description": "How much it says."
+        }
+      },
+      "type": "object"
+    },
+    "AutoOr_uint32": {
+      "anyOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "BackendChoice": {
+      "description": "A backend and a model name.",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Route",
+          "description": "The route."
+        },
+        "model": {
+          "description": "A name from `models`, or a full id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "model"
+      ],
+      "type": "object"
+    },
+    "CheckKind": {
+      "description": "A check a setting change runs before it applies.",
+      "oneOf": [
+        {
+          "const": "name_recognisable",
+          "description": "The recognizer can pick the new name out of speech.",
+          "type": "string"
+        },
+        {
+          "const": "hotkey_free",
+          "description": "No other app owns the hotkey.",
+          "type": "string"
+        },
+        {
+          "const": "voice_realtime",
+          "description": "The voice renders faster than real time.",
+          "type": "string"
+        },
+        {
+          "const": "brain_benchmark",
+          "description": "The brain benchmark passes for the new backend.",
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "No check.",
+          "type": "string"
+        }
+      ]
+    },
+    "CheckResult": {
+      "description": "One check's result.",
+      "properties": {
+        "detail": {
+          "description": "What it found, in one sentence.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CheckKind",
+          "description": "The check."
+        },
+        "passed": {
+          "description": "Whether it passed.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "passed",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "ClaudePluginConfig": {
+      "description": "The `eileen` Claude plugin.",
+      "properties": {
+        "share_skills": {
+          "default": false,
+          "description": "Offer learned skills to the owner's own sessions.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Component": {
+      "description": "A component a setting change restarts.",
+      "oneOf": [
+        {
+          "const": "speech",
+          "description": "The speech process.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "The HUD.",
+          "type": "string"
+        },
+        {
+          "const": "harness",
+          "description": "The harness and its sessions.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "The desktop sidecar.",
+          "type": "string"
+        },
+        {
+          "const": "apps",
+          "description": "The apps sidecar.",
+          "type": "string"
+        },
+        {
+          "const": "shell",
+          "description": "The shell (tray and hotkeys).",
+          "type": "string"
+        }
+      ]
+    },
+    "Config": {
+      "description": "The whole configuration.",
+      "properties": {
+        "announcements": {
+          "$ref": "#/$defs/AnnouncementsConfig",
+          "default": {
+            "events": {},
+            "job_kinds": {}
+          },
+          "description": "How each event kind is announced."
+        },
+        "anticipation": {
+          "$ref": "#/$defs/AnticipationConfig",
+          "default": {
+            "enabled": false,
+            "max_plan_pct": 50
+          },
+          "description": "Anticipated deep answers."
+        },
+        "approvals": {
+          "$ref": "#/$defs/ApprovalsConfig",
+          "default": {
+            "action_word_tier2": true,
+            "deadline_min": 30,
+            "hook_hold_s": 120,
+            "voice_window_s": 20
+          },
+          "description": "Approvals."
+        },
+        "assistant": {
+          "$ref": "#/$defs/AssistantConfig",
+          "default": {
+            "humor": "light",
+            "name": "Eileen",
+            "personality": "",
+            "verbosity": "normal"
+          },
+          "description": "The assistant's name and manner."
+        },
+        "claude_plugin": {
+          "$ref": "#/$defs/ClaudePluginConfig",
+          "default": {
+            "share_skills": false
+          },
+          "description": "The `eileen` Claude plugin."
+        },
+        "conversation": {
+          "$ref": "#/$defs/ConversationConfig",
+          "default": {
+            "addressee_min_points": 2,
+            "alone_scoring": true,
+            "follow_up_s": 8,
+            "level_margin_db": 6,
+            "window_s": 45
+          },
+          "description": "The conversation window and the addressee score."
+        },
+        "desktop": {
+          "$ref": "#/$defs/DesktopConfig",
+          "default": {
+            "lease_idle_s": 5,
+            "visible_intent_ms": 400,
+            "web_tree": true
+          },
+          "description": "Desktop control."
+        },
+        "dictation": {
+          "$ref": "#/$defs/DictationConfig",
+          "default": {
+            "categories": {},
+            "key": null,
+            "languages": [],
+            "polish": true
+          },
+          "description": "Dictation."
+        },
+        "first_run": {
+          "$ref": "#/$defs/FirstRunConfig",
+          "default": {
+            "done": false,
+            "max_clone_ttfa_ms": 3000
+          },
+          "description": "The first run."
+        },
+        "fleet": {
+          "$ref": "#/$defs/FleetConfig",
+          "default": {
+            "mode": "recorded",
+            "opt_in": false,
+            "schedule": null,
+            "turn_budget": 0,
+            "upload": false
+          },
+          "description": "The test fleet."
+        },
+        "flight": {
+          "$ref": "#/$defs/FlightConfig",
+          "default": {
+            "minutes": 10
+          },
+          "description": "The flight recorder."
+        },
+        "focus": {
+          "$ref": "#/$defs/FocusConfig",
+          "default": {
+            "quiet_during_calls": true,
+            "quiet_full_screen": true,
+            "quiet_recording": true
+          },
+          "description": "When Eileen keeps quiet."
+        },
+        "hotkeys": {
+          "$ref": "#/$defs/HotkeysConfig",
+          "default": {
+            "approve": null,
+            "deny": null,
+            "dictation": null,
+            "hands_off": null,
+            "mute": "ctrl+alt+m",
+            "report": "ctrl+alt+shift+b"
+          },
+          "description": "Hotkeys."
+        },
+        "hud": {
+          "$ref": "#/$defs/HudConfig",
+          "default": {
+            "corner": "bottom_right",
+            "opacity_pct": 90,
+            "scale_pct": 100,
+            "show_transcript": true,
+            "suggestions": true
+          },
+          "description": "The HUD."
+        },
+        "incidents": {
+          "$ref": "#/$defs/IncidentsConfig",
+          "default": {
+            "keep_days": 30,
+            "max_mb": 1024
+          },
+          "description": "Incident bundles."
+        },
+        "learning": {
+          "$ref": "#/$defs/LearningConfig",
+          "default": {
+            "distill": "claude",
+            "enabled": true,
+            "ladder": {
+              "archive_idle_days": 30,
+              "demote_failures_in_last5": 2,
+              "light": {
+                "l2_distinct_slot_values": 1,
+                "l2_successes": 1,
+                "l3_agreeing_shadows": 1,
+                "l4_clean_pct_last_20": 0,
+                "l4_clean_replays": 3
+              },
+              "standard": {
+                "l2_distinct_slot_values": 2,
+                "l2_successes": 3,
+                "l3_agreeing_shadows": 3,
+                "l4_clean_pct_last_20": 95,
+                "l4_clean_replays": 10
+              }
+            },
+            "librarian_max_plan_pct": 50,
+            "phrasing_min_similarity": 0.85,
+            "phrasing_paraphrase_uses": 2,
+            "regret_window_s": 120,
+            "snapshot_k": 12
+          },
+          "description": "The learning loop."
+        },
+        "logging": {
+          "$ref": "#/$defs/LoggingConfig",
+          "default": {
+            "keep_days": 14,
+            "level": "info"
+          },
+          "description": "Logs."
+        },
+        "mcp": {
+          "$ref": "#/$defs/McpConfig",
+          "default": {
+            "servers": {}
+          },
+          "description": "Approved third-party MCP servers."
+        },
+        "memory": {
+          "$ref": "#/$defs/MemoryConfig",
+          "default": {
+            "max_build_heavy_jobs": 1,
+            "max_paging_kb_s": "auto",
+            "pool_computer_use": 1,
+            "pool_deep": 1,
+            "pool_order": [
+              "deep",
+              "computer_use"
+            ],
+            "profile": "auto",
+            "queue_ask_min": 10,
+            "reserve_mb": "auto",
+            "worker_job_limit_mb": 0
+          },
+          "description": "Memory admission and the pools."
+        },
+        "permissions": {
+          "$ref": "#/$defs/PermissionsConfig",
+          "default": {
+            "desktop_apps": [],
+            "grants": [],
+            "private_apps": [],
+            "uri_schemes": []
+          },
+          "description": "Standing grants and app permissions."
+        },
+        "privacy": {
+          "$ref": "#/$defs/PrivacyConfig",
+          "default": {
+            "keep_unaddressed": false,
+            "ledger_days": 14,
+            "location": null,
+            "off_the_record": false
+          },
+          "description": "Privacy."
+        },
+        "recording": {
+          "$ref": "#/$defs/RecordingConfig",
+          "default": {
+            "audio": false,
+            "keep_days": 7,
+            "max_mb": 2048
+          },
+          "description": "Recordings."
+        },
+        "routing": {
+          "$ref": "#/$defs/RoutingConfig",
+          "default": {
+            "brain": {
+              "backend": "claude",
+              "model": "fast"
+            },
+            "deep": {
+              "backend": "claude",
+              "model": "strong"
+            },
+            "fallback_brain": {
+              "backend": "claude",
+              "model": "fast"
+            },
+            "hot_spare": true,
+            "kinds": {},
+            "models": {
+              "fast": "haiku",
+              "mid": "sonnet",
+              "strong": "opus"
+            },
+            "recycle": {
+              "context_tokens": 60000
+            },
+            "speculative": false
+          },
+          "description": "Models, backends and routes."
+        },
+        "speech": {
+          "$ref": "#/$defs/SpeechConfig",
+          "default": {
+            "asr": null,
+            "low_memory_models": false,
+            "pin_working_set": false,
+            "turn": null,
+            "vad": null
+          },
+          "description": "Speech engines."
+        },
+        "voice": {
+          "$ref": "#/$defs/VoiceConfig",
+          "default": {
+            "announcements": null,
+            "engines": {},
+            "fallback": null,
+            "live": null,
+            "narration": null,
+            "rate_pct": 100,
+            "watermark_exports": true
+          },
+          "description": "Voices."
+        }
+      },
+      "type": "object"
+    },
+    "ConfigGrant": {
+      "description": "A grant that lasts.",
+      "properties": {
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The logged decision, required for tier 2."
+        },
+        "matcher": {
+          "$ref": "#/$defs/GrantMatcher",
+          "description": "What it matches."
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The highest tier it allows."
+        }
+      },
+      "required": [
+        "matcher",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "ConversationConfig": {
+      "description": "The conversation window and the addressee score.",
+      "properties": {
+        "addressee_min_points": {
+          "default": 2,
+          "description": "The points an unnamed utterance needs to be addressed.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "alone_scoring": {
+          "default": true,
+          "description": "Score unnamed speech when the user is alone.",
+          "type": "boolean"
+        },
+        "follow_up_s": {
+          "default": 8,
+          "description": "How long an unnamed follow-up counts, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "level_margin_db": {
+          "default": 6,
+          "description": "How far under the reference level a turn may be, dB.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_s": {
+          "default": 45,
+          "description": "How long the window stays open after Eileen's last turn, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "DesktopConfig": {
+      "description": "Desktop control.",
+      "properties": {
+        "lease_idle_s": {
+          "default": 5,
+          "description": "A lease ends after this much idle time, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "visible_intent_ms": {
+          "default": 400,
+          "description": "How long the next click's target shows first, ms.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "web_tree": {
+          "default": true,
+          "description": "Read web pages' trees.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DictationConfig": {
+      "description": "Dictation.",
+      "properties": {
+        "categories": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {},
+          "description": "Whether to polish, per field category.",
+          "type": "object"
+        },
+        "key": {
+          "default": null,
+          "description": "The dictation key; the `dictation` hotkey when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "languages": {
+          "default": [],
+          "description": "Languages to dictate in, as BCP 47 tags; the recognizer's own when empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "polish": {
+          "default": true,
+          "description": "Clean up fillers and self-corrections.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DiffLine": {
+      "description": "One line of a settings diff.",
+      "properties": {
+        "from": {
+          "description": "The old value, as TOML; `None` when it was unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "The dotted key.",
+          "type": "string"
+        },
+        "to": {
+          "description": "The new value, as TOML.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Distill": {
+      "description": "Who distills skills.",
+      "oneOf": [
+        {
+          "const": "claude",
+          "description": "The librarian, on Claude.",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Nobody.",
+          "type": "string"
+        }
+      ]
+    },
+    "FirstRunConfig": {
+      "description": "The first run.",
+      "properties": {
+        "done": {
+          "default": false,
+          "description": "Whether it has run.",
+          "type": "boolean"
+        },
+        "max_clone_ttfa_ms": {
+          "default": 3000,
+          "description": "The clone's longest time to first audio, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FleetConfig": {
+      "description": "The test fleet.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/FleetMode",
+          "default": "recorded",
+          "description": "Recorded (no model) or live."
+        },
+        "opt_in": {
+          "default": false,
+          "description": "The contributor opted in.",
+          "type": "boolean"
+        },
+        "schedule": {
+          "default": null,
+          "description": "A nightly schedule, as `HH:MM` local time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_budget": {
+          "default": 0,
+          "description": "Model turns a live run may spend.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upload": {
+          "default": false,
+          "description": "Offer to upload results after a run.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "FlightConfig": {
+      "description": "The flight recorder.",
+      "properties": {
+        "minutes": {
+          "default": 10,
+          "description": "How many minutes it keeps.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FocusConfig": {
+      "description": "When Eileen keeps quiet.",
+      "properties": {
+        "quiet_during_calls": {
+          "default": true,
+          "description": "During calls.",
+          "type": "boolean"
+        },
+        "quiet_full_screen": {
+          "default": true,
+          "description": "While an app is full screen.",
+          "type": "boolean"
+        },
+        "quiet_recording": {
+          "default": true,
+          "description": "While the screen is recorded.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "HotkeysConfig": {
+      "description": "Hotkeys, as chords such as `ctrl+alt+m`; `None` is unbound.",
+      "properties": {
+        "approve": {
+          "default": null,
+          "description": "Approve the pending question.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deny": {
+          "default": null,
+          "description": "Deny the pending question.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dictation": {
+          "default": null,
+          "description": "Hold to dictate.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hands_off": {
+          "default": null,
+          "description": "Hands off: stop every desktop job.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mute": {
+          "default": "ctrl+alt+m",
+          "description": "Mute and unmute.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report": {
+          "default": "ctrl+alt+shift+b",
+          "description": "Save an incident report.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "HudConfig": {
+      "description": "The HUD.",
+      "properties": {
+        "corner": {
+          "$ref": "#/$defs/Corner",
+          "default": "bottom_right",
+          "description": "The screen corner."
+        },
+        "opacity_pct": {
+          "default": 90,
+          "description": "Opacity, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale_pct": {
+          "default": 100,
+          "description": "Scale, percent.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "show_transcript": {
+          "default": true,
+          "description": "Show what was heard.",
+          "type": "boolean"
+        },
+        "suggestions": {
+          "default": true,
+          "description": "Show suggestions.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Humor": {
+      "description": "How playful the assistant is.",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "None.",
+          "type": "string"
+        },
+        {
+          "const": "light",
+          "description": "A little.",
+          "type": "string"
+        },
+        {
+          "const": "playful",
+          "description": "Playful.",
+          "type": "string"
+        }
+      ]
+    },
+    "IncidentsConfig": {
+      "description": "Incident bundles (retention, section 2.15).",
+      "properties": {
+        "keep_days": {
+          "default": 30,
+          "description": "How long they are kept, days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_mb": {
+          "default": 1024,
+          "description": "Their total size cap, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "KindRouting": {
+      "description": "Routing for one job kind.",
+      "properties": {
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Depth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The depth."
+        },
+        "model": {
+          "default": null,
+          "description": "A name from `models`, or a full id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The route."
+        }
+      },
+      "type": "object"
+    },
+    "LearningConfig": {
+      "description": "The learning loop.",
+      "properties": {
+        "distill": {
+          "$ref": "#/$defs/Distill",
+          "default": "claude",
+          "description": "Who distills skills."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether it is on.",
+          "type": "boolean"
+        },
+        "ladder": {
+          "$ref": "#/$defs/LadderPolicy",
+          "default": {
+            "archive_idle_days": 30,
+            "demote_failures_in_last5": 2,
+            "light": {
+              "l2_distinct_slot_values": 1,
+              "l2_successes": 1,
+              "l3_agreeing_shadows": 1,
+              "l4_clean_pct_last_20": 0,
+              "l4_clean_replays": 3
+            },
+            "standard": {
+              "l2_distinct_slot_values": 2,
+              "l2_successes": 3,
+              "l3_agreeing_shadows": 3,
+              "l4_clean_pct_last_20": 95,
+              "l4_clean_replays": 10
+            }
+          },
+          "description": "The promotion ladder."
+        },
+        "librarian_max_plan_pct": {
+          "default": 50,
+          "description": "The librarian runs only below this plan usage, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phrasing_min_similarity": {
+          "default": 0.85,
+          "description": "The similarity a confirmed phrasing needs, 0 to 1 (0.85 until WP7 measures it).",
+          "format": "double",
+          "type": "number"
+        },
+        "phrasing_paraphrase_uses": {
+          "default": 2,
+          "description": "Uses before a paraphrase becomes a phrasing.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "regret_window_s": {
+          "default": 120,
+          "description": "How long \"no\" or \"undo that\" counts against a job, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_k": {
+          "default": 12,
+          "description": "Skills in a session's snapshot.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "LoggingConfig": {
+      "description": "Logs.",
+      "properties": {
+        "keep_days": {
+          "default": 14,
+          "description": "How long log files are kept, days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "level": {
+          "default": "info",
+          "description": "The filter, in `tracing`'s syntax.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "McpConfig": {
+      "description": "Approved third-party MCP servers.",
+      "properties": {
+        "servers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/McpServerConfig"
+          },
+          "default": {},
+          "description": "Per app.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "McpServerConfig": {
+      "description": "One approved server, installed once at its exact version in\n`%LOCALAPPDATA%\\eileen\\mcp\\<app>\\`. The tool names it lists go to `cache\\mcp-tools.json`,\nnot here.",
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Its arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "The command.",
+          "type": "string"
+        },
+        "digest": {
+          "description": "The install's lockfile or file digest.",
+          "type": "string"
+        },
+        "job_kinds": {
+          "description": "The job kinds that get it.",
+          "items": {
+            "$ref": "#/$defs/JobKind"
+          },
+          "type": "array"
+        },
+        "observes": {
+          "$ref": "#/$defs/ObservedSource",
+          "description": "What its results count as (web by default, section 2.12)."
+        },
+        "package_type": {
+          "$ref": "#/$defs/PackageType",
+          "description": "The package type."
+        },
+        "registry_id": {
+          "description": "The registry's id for it.",
+          "type": "string"
+        },
+        "rung": {
+          "$ref": "#/$defs/Rung",
+          "description": "Its rung: `app_mcp` or `dom`."
+        },
+        "version": {
+          "description": "The exact version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_id",
+        "package_type",
+        "version",
+        "command",
+        "digest",
+        "job_kinds",
+        "rung",
+        "observes"
+      ],
+      "type": "object"
+    },
+    "MemoryConfig": {
+      "description": "Memory admission and the pools (section 2.5).",
+      "properties": {
+        "max_build_heavy_jobs": {
+          "default": 1,
+          "description": "Build-heavy jobs at once.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_paging_kb_s": {
+          "$ref": "#/$defs/AutoOr_uint32",
+          "default": "auto",
+          "description": "The paging limit, KB/s; `auto` is the 75th percentile plus 25 percent of 7 days of\nmachine-wide 30 s averages outside build slots, clamped to 2,000 to 40,000; the build\nguard's baseline until a day exists; 5,000 when there is neither\n(`samples::auto_paging_limit`)."
+        },
+        "pool_computer_use": {
+          "default": 1,
+          "description": "Warm computer-use sessions.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pool_deep": {
+          "default": 1,
+          "description": "Warm deep-answer sessions.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pool_order": {
+          "default": [
+            "deep",
+            "computer_use"
+          ],
+          "description": "Which pool fills first.",
+          "items": {
+            "$ref": "#/$defs/PoolClass"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "$ref": "#/$defs/MemoryProfile",
+          "default": "auto",
+          "description": "The memory profile."
+        },
+        "queue_ask_min": {
+          "default": 10,
+          "description": "Ask before queueing for longer than this, minutes.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserve_mb": {
+          "$ref": "#/$defs/AutoOr_uint32",
+          "default": "auto",
+          "description": "Memory kept free, MB; `auto` is 10 percent of RAM, 768 to 2048."
+        },
+        "worker_job_limit_mb": {
+          "default": 0,
+          "description": "A worker's Job Object memory limit, MB; 0 is off.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "MemoryProfile": {
+      "description": "The memory profile.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Chosen from the PC's memory.",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "Every model at full size.",
+          "type": "string"
+        },
+        {
+          "const": "low",
+          "description": "The low-memory models.",
+          "type": "string"
+        }
+      ]
+    },
+    "PermissionsConfig": {
+      "description": "Standing grants and app permissions.",
+      "properties": {
+        "desktop_apps": {
+          "default": [],
+          "description": "Apps workers may drive.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "grants": {
+          "default": [],
+          "description": "Grants that last (tier 1, or tier 2 with a logged decision).",
+          "items": {
+            "$ref": "#/$defs/ConfigGrant"
+          },
+          "type": "array"
+        },
+        "private_apps": {
+          "default": [],
+          "description": "Apps whose windows are private.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "uri_schemes": {
+          "default": [],
+          "description": "App protocols the user approved for `apps_open_uri`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PrivacyConfig": {
+      "description": "Privacy.",
+      "properties": {
+        "keep_unaddressed": {
+          "default": false,
+          "description": "Keep unaddressed speech in persisted sinks.",
+          "type": "boolean"
+        },
+        "ledger_days": {
+          "default": 14,
+          "description": "How long the ledger keeps lines, days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "location": {
+          "default": null,
+          "description": "The user's location, as they said it, for \"near me\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "off_the_record": {
+          "default": false,
+          "description": "Off the record: nothing is learned or kept.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Proposal": {
+      "description": "A proposed set of changes, checked and ready to confirm.",
+      "properties": {
+        "changes": {
+          "description": "The changes.",
+          "items": {
+            "$ref": "#/$defs/SettingChange"
+          },
+          "type": "array"
+        },
+        "checks": {
+          "description": "The checks and their results.",
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          },
+          "type": "array"
+        },
+        "confirm_sentence": {
+          "description": "The sentence Eileen confirms with.",
+          "type": "string"
+        },
+        "diff": {
+          "description": "What would change, line by line.",
+          "items": {
+            "$ref": "#/$defs/DiffLine"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ProposalId",
+          "description": "Its id."
+        },
+        "needs_yes": {
+          "description": "Whether it needs a yes.",
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/SettingsSource",
+          "description": "Where it came from."
+        },
+        "utterance": {
+          "description": "What the user said.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "changes",
+        "diff",
+        "checks",
+        "confirm_sentence",
+        "needs_yes",
+        "utterance",
+        "source"
+      ],
+      "type": "object"
+    },
+    "RecordingConfig": {
+      "description": "Recordings (retention, section 2.15).",
+      "properties": {
+        "audio": {
+          "default": false,
+          "description": "Record the audio lanes too (opt in).",
+          "type": "boolean"
+        },
+        "keep_days": {
+          "default": 7,
+          "description": "How long they are kept, days.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_mb": {
+          "default": 2048,
+          "description": "Their total size cap, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RecycleThresholds": {
+      "description": "When the brain's session is recycled (section 2.3).",
+      "properties": {
+        "context_tokens": {
+          "default": 60000,
+          "description": "The context size reported in the `result` usage, tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Risk": {
+      "description": "A setting's risk.",
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "Harmless.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A change could misfire; this check runs first.",
+          "properties": {
+            "misfire": {
+              "$ref": "#/$defs/CheckKind"
+            }
+          },
+          "required": [
+            "misfire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A safety key, within this bound (section 2.11).",
+          "properties": {
+            "safety": {
+              "$ref": "#/$defs/SafetyBound"
+            }
+          },
+          "required": [
+            "safety"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RoutingConfig": {
+      "description": "Models, backends and routes.",
+      "properties": {
+        "brain": {
+          "$ref": "#/$defs/BackendChoice",
+          "default": {
+            "backend": "claude",
+            "model": "fast"
+          },
+          "description": "The brain."
+        },
+        "deep": {
+          "$ref": "#/$defs/BackendChoice",
+          "default": {
+            "backend": "claude",
+            "model": "strong"
+          },
+          "description": "Deep answers."
+        },
+        "fallback_brain": {
+          "$ref": "#/$defs/BackendChoice",
+          "default": {
+            "backend": "claude",
+            "model": "fast"
+          },
+          "description": "The brain's fallback slot."
+        },
+        "hot_spare": {
+          "default": true,
+          "description": "Keep a warm spare brain.",
+          "type": "boolean"
+        },
+        "kinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KindRouting"
+          },
+          "default": {},
+          "description": "Per job kind.",
+          "type": "object"
+        },
+        "models": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {
+            "fast": "haiku",
+            "mid": "sonnet",
+            "strong": "opus"
+          },
+          "description": "Model names to vendor aliases or full ids.",
+          "type": "object"
+        },
+        "recycle": {
+          "$ref": "#/$defs/RecycleThresholds",
+          "default": {
+            "context_tokens": 60000
+          },
+          "description": "When the brain's session is recycled."
+        },
+        "speculative": {
+          "default": false,
+          "description": "Start the brain on a partial transcript.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SafetyBound": {
+      "description": "How far a safety key may be changed.",
+      "oneOf": [
+        {
+          "const": "needs_user_approval",
+          "description": "Only with an approval from `UserInput`.",
+          "type": "string"
+        },
+        {
+          "const": "tier1_only",
+          "description": "Only to tier 1.",
+          "type": "string"
+        },
+        {
+          "const": "tier2_with_logged_decision",
+          "description": "To tier 2 only with a logged decision.",
+          "type": "string"
+        },
+        {
+          "const": "never",
+          "description": "Never by voice or by a model.",
+          "type": "string"
+        }
+      ]
+    },
+    "SettingChange": {
+      "description": "One change to a setting.",
+      "properties": {
+        "key": {
+          "description": "The dotted key.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The new value."
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SettingSpecView": {
+      "description": "A setting as the core sees it: the serializable view of `eileen_config::SettingSpec`.",
+      "properties": {
+        "apply": {
+          "$ref": "#/$defs/ApplyMode",
+          "description": "When a change takes effect."
+        },
+        "doc": {
+          "description": "Its documentation.",
+          "type": "string"
+        },
+        "hud": {
+          "description": "Whether it can be changed on the HUD.",
+          "type": "boolean"
+        },
+        "key": {
+          "description": "The dotted key, for example `assistant.name`.",
+          "type": "string"
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk",
+          "description": "Its risk."
+        },
+        "voice": {
+          "description": "Whether it can be changed by voice.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "doc",
+        "voice",
+        "hud",
+        "risk",
+        "apply"
+      ],
+      "type": "object"
+    },
+    "SettingsCmd": {
+      "description": "To the settings driver.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Run a proposal's checks.",
+          "properties": {
+            "run_checks": {
+              "properties": {
+                "proposal": {
+                  "$ref": "#/$defs/Proposal",
+                  "description": "The proposal."
+                }
+              },
+              "required": [
+                "proposal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "run_checks"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Write a new version to the file and the history.",
+          "properties": {
+            "write_version": {
+              "$ref": "#/$defs/SettingsVersion"
+            }
+          },
+          "required": [
+            "write_version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Apply these keys to the running components.",
+          "properties": {
+            "apply_live": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "apply_live"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SettingsEvent": {
+      "description": "From the settings driver.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The config file changed on disk.",
+          "properties": {
+            "file_changed": {
+              "properties": {
+                "error_line": {
+                  "description": "The first bad line.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "valid": {
+                  "description": "Whether it is still valid.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "valid"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "file_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A proposal's checks finished.",
+          "properties": {
+            "checks_done": {
+              "properties": {
+                "checks": {
+                  "description": "The results.",
+                  "items": {
+                    "$ref": "#/$defs/CheckResult"
+                  },
+                  "type": "array"
+                },
+                "proposal": {
+                  "$ref": "#/$defs/ProposalId",
+                  "description": "The proposal."
+                }
+              },
+              "required": [
+                "proposal",
+                "checks"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "checks_done"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SettingsSource": {
+      "description": "Where a settings change came from.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "By voice.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "On the HUD.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "An edit of the file.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A named profile.",
+          "properties": {
+            "profile": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "profile"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "undo",
+          "description": "An undo.",
+          "type": "string"
+        },
+        {
+          "const": "default",
+          "description": "The defaults.",
+          "type": "string"
+        },
+        {
+          "const": "brain_proposal",
+          "description": "The brain's `settings_propose`.",
+          "type": "string"
+        }
+      ]
+    },
+    "SettingsVersion": {
+      "description": "One version of the settings, for undo.",
+      "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The approval that allowed it."
+        },
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was written."
+        },
+        "diff": {
+          "description": "What changed.",
+          "items": {
+            "$ref": "#/$defs/DiffLine"
+          },
+          "type": "array"
+        },
+        "snapshot_toml": {
+          "description": "The whole file after the change.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SettingsSource",
+          "description": "Where the change came from."
+        },
+        "utterance": {
+          "description": "What the user said.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The version number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "at",
+        "source",
+        "diff",
+        "snapshot_toml"
+      ],
+      "type": "object"
+    },
+    "SpeechConfig": {
+      "description": "Speech engines, by their names in `models.toml`; `None` is the default there.",
+      "properties": {
+        "asr": {
+          "default": null,
+          "description": "Recognition.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "low_memory_models": {
+          "default": false,
+          "description": "Use the low-memory models.",
+          "type": "boolean"
+        },
+        "pin_working_set": {
+          "default": false,
+          "description": "Pin the speech process's working set.",
+          "type": "boolean"
+        },
+        "turn": {
+          "default": null,
+          "description": "End of turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vad": {
+          "default": null,
+          "description": "Voice activity detection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ValidationError": {
+      "description": "Why a proposed change is refused.",
+      "properties": {
+        "key": {
+          "description": "The key.",
+          "type": "string"
+        },
+        "line": {
+          "description": "The line of the file, for a file edit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What is wrong, in one sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Verbosity": {
+      "description": "How much the assistant says.",
+      "oneOf": [
+        {
+          "const": "brief",
+          "description": "As little as works.",
+          "type": "string"
+        },
+        {
+          "const": "normal",
+          "description": "A sentence or two.",
+          "type": "string"
+        },
+        {
+          "const": "detailed",
+          "description": "Fuller answers.",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceConfig": {
+      "description": "Voices.",
+      "properties": {
+        "announcements": {
+          "default": null,
+          "description": "The voice for announcements; the live voice when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engines": {
+          "additionalProperties": {
+            "$ref": "#/$defs/VoiceEngine"
+          },
+          "default": {},
+          "description": "The engine per cloned voice name.",
+          "type": "object"
+        },
+        "fallback": {
+          "default": null,
+          "description": "The voice to fall back to when a cloned voice cannot render in time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "live": {
+          "default": null,
+          "description": "The conversation's voice; `None` is the default voice in `models.toml`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "narration": {
+          "default": null,
+          "description": "The voice for narration; the live voice when unset.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rate_pct": {
+          "default": 100,
+          "description": "Speaking rate, percent.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "watermark_exports": {
+          "default": true,
+          "description": "Mark exported audio with the watermark.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "VoiceEngine": {
+      "description": "The engines a cloned voice can render with.",
+      "oneOf": [
+        {
+          "const": "pocket",
+          "description": "Pocket TTS.",
+          "type": "string"
+        },
+        {
+          "const": "chatterbox-turbo",
+          "description": "Chatterbox Turbo.",
+          "type": "string"
+        },
+        {
+          "const": "chatterbox-nano",
+          "description": "Chatterbox Nano.",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

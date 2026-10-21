@@ -1,0 +1,460 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AppCapability": {
+      "description": "What an app adapter can do.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "rungs": {
+          "description": "The routes it offers, best first.",
+          "items": {
+            "$ref": "#/$defs/Rung"
+          },
+          "type": "array"
+        },
+        "verbs": {
+          "description": "What it can do.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "The app's own version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "app",
+        "verbs",
+        "rungs"
+      ],
+      "type": "object"
+    },
+    "AppEvent": {
+      "description": "An app's own event.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A render started.",
+          "properties": {
+            "render_started": {
+              "properties": {
+                "render_job": {
+                  "description": "The render job.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "render_job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "render_started"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A render made progress.",
+          "properties": {
+            "render_progress": {
+              "properties": {
+                "pct": {
+                  "description": "Percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "render_job": {
+                  "description": "The render job.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "render_job",
+                "pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "render_progress"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A render finished.",
+          "properties": {
+            "render_done": {
+              "properties": {
+                "ok": {
+                  "description": "Whether it succeeded.",
+                  "type": "boolean"
+                },
+                "render_job": {
+                  "description": "The render job.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "render_job",
+                "ok"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "render_done"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The app's version changed.",
+          "properties": {
+            "version_changed": {
+              "properties": {
+                "version": {
+                  "description": "The new version.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "version_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Anything else the adapter reports.",
+          "properties": {
+            "other": {
+              "x-eileen-text": "untrusted"
+            }
+          },
+          "required": [
+            "other"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnectorEvent": {
+      "description": "An event a connector publishes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The desktop changed.",
+          "properties": {
+            "desktop": {
+              "$ref": "#/$defs/DesktopDelta"
+            }
+          },
+          "required": [
+            "desktop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A media session changed.",
+          "properties": {
+            "media": {
+              "$ref": "#/$defs/MediaState"
+            }
+          },
+          "required": [
+            "media"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An app's own event.",
+          "properties": {
+            "app": {
+              "properties": {
+                "app": {
+                  "description": "The app.",
+                  "type": "string"
+                },
+                "event": {
+                  "$ref": "#/$defs/AppEvent",
+                  "description": "The event."
+                }
+              },
+              "required": [
+                "app",
+                "event"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "app"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConnectorManifest": {
+      "description": "What a connector serves.",
+      "properties": {
+        "checks": {
+          "description": "The (tool, op) pairs recipes may use as checks; each op is read-only and tier 0.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/ToolName"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "events": {
+          "description": "The event kinds it publishes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ConnectorId",
+          "description": "Its id."
+        },
+        "platforms": {
+          "description": "The operating systems it runs on.",
+          "items": {
+            "$ref": "#/$defs/Platform"
+          },
+          "type": "array"
+        },
+        "requires_opt_in": {
+          "description": "Whether it needs the user to opt in.",
+          "type": "boolean"
+        },
+        "runs": {
+          "$ref": "#/$defs/RunsIn",
+          "description": "Where it runs."
+        },
+        "senses_room": {
+          "description": "Whether it senses the room (camera, room microphone): opt in per device, local only.",
+          "type": "boolean"
+        },
+        "tools": {
+          "description": "Its tools.",
+          "items": {
+            "$ref": "#/$defs/ToolSpec"
+          },
+          "type": "array"
+        },
+        "version": {
+          "description": "Its version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "runs",
+        "platforms",
+        "tools",
+        "events",
+        "checks",
+        "senses_room",
+        "requires_opt_in"
+      ],
+      "type": "object"
+    },
+    "Platform": {
+      "description": "An operating system.",
+      "oneOf": [
+        {
+          "const": "windows",
+          "description": "Windows.",
+          "type": "string"
+        },
+        {
+          "const": "linux",
+          "description": "Linux.",
+          "type": "string"
+        },
+        {
+          "const": "mac_os",
+          "description": "macOS.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunsIn": {
+      "description": "Where a connector runs.",
+      "oneOf": [
+        {
+          "const": "core_task",
+          "description": "A task inside the core.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A supervised child process.",
+          "properties": {
+            "sidecar": {
+              "properties": {
+                "binary": {
+                  "description": "The executable's name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "binary"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "sidecar"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SidecarCmd": {
+      "description": "To a sidecar's client.",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "Start it.",
+          "type": "string"
+        },
+        {
+          "const": "restart",
+          "description": "Restart it.",
+          "type": "string"
+        },
+        {
+          "const": "hang_dump_then_kill",
+          "description": "Write a hang dump, then kill it.",
+          "type": "string"
+        }
+      ]
+    },
+    "SidecarEvent": {
+      "description": "From a sidecar's client.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "It started and answered `connector_manifest`.",
+          "properties": {
+            "ready": {
+              "properties": {
+                "manifest": {
+                  "$ref": "#/$defs/ConnectorManifest",
+                  "description": "Its manifest."
+                }
+              },
+              "required": [
+                "manifest"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ready"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "heartbeat",
+          "description": "It is alive.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One of its events.",
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/ConnectorEvent"
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It exited.",
+          "properties": {
+            "exited": {
+              "properties": {
+                "code": {
+                  "description": "Its exit code.",
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "exited"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SidecarId": {
+      "description": "A supervised child process.",
+      "oneOf": [
+        {
+          "const": "speech",
+          "description": "`eileen-speech.exe`.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "`eileen-desktop.exe`.",
+          "type": "string"
+        },
+        {
+          "const": "apps",
+          "description": "`eileen-apps.exe`.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "`eileen-hud.exe`.",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

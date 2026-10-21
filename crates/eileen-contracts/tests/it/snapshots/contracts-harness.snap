@@ -1,0 +1,1625 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ApprovedMcpServer": {
+      "description": "A third-party MCP server the user approved for an app.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "args": {
+          "description": "Its arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "The command, inside `%LOCALAPPDATA%\\eileen\\mcp\\<app>\\`.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "name": {
+          "description": "Its name in the session's MCP config.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "name",
+        "command",
+        "args"
+      ],
+      "type": "object"
+    },
+    "BrainCmd": {
+      "description": "To the brain driver; every command names a slot.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Send a turn.",
+          "properties": {
+            "turn": {
+              "properties": {
+                "authority": {
+                  "$ref": "#/$defs/TurnAuthority",
+                  "description": "Whether the turn was addressed."
+                },
+                "message": {
+                  "description": "The composed message.",
+                  "type": "string"
+                },
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot."
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "slot",
+                "turn",
+                "message",
+                "authority"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Interrupt the turn in progress.",
+          "properties": {
+            "interrupt": {
+              "properties": {
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot."
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "interrupt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a fresh session carrying a summary of the old one.",
+          "properties": {
+            "recycle": {
+              "properties": {
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot."
+                },
+                "summary": {
+                  "description": "The summary.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slot",
+                "summary"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "recycle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The named slot's process (the spare) becomes the primary; the old primary is killed and\na new spare starts.",
+          "properties": {
+            "promote": {
+              "properties": {
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot being promoted."
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "promote"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a slot's process (the fallback, on first need).",
+          "properties": {
+            "start": {
+              "properties": {
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot."
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stop a slot's process (the fallback, after 10 idle minutes).",
+          "properties": {
+            "stop": {
+              "properties": {
+                "slot": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "The slot."
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "stop"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BrainEvent": {
+      "description": "From the brain driver. `instance` numbers every brain process the runtime starts\n(monotonic, never reused), so the core can tell a late delta from a stalled process apart\nfrom the fallback's answer to the same turn: it accepts `TextDelta` and `TurnDone` for a\nturn only from the instance it last sent that turn to, and drops (and counts) the rest.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A brain process is ready.",
+          "properties": {
+            "ready": {
+              "properties": {
+                "instance": {
+                  "description": "Its instance.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model": {
+                  "description": "The resolved full model id.",
+                  "type": "string"
+                },
+                "route": {
+                  "$ref": "#/$defs/Route",
+                  "description": "Its route."
+                },
+                "which": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "Its slot."
+                }
+              },
+              "required": [
+                "which",
+                "instance",
+                "route",
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ready"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Streamed text of a turn.",
+          "properties": {
+            "text_delta": {
+              "properties": {
+                "instance": {
+                  "description": "The instance that sent it.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "description": "The text.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "instance",
+                "turn",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "text_delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A turn finished.",
+          "properties": {
+            "turn_done": {
+              "properties": {
+                "context_tokens": {
+                  "description": "The session's context size after the turn.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "cost": {
+                  "$ref": "#/$defs/Cost",
+                  "description": "What it cost."
+                },
+                "instance": {
+                  "description": "The instance that answered.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "is_error": {
+                  "description": "Whether the vendor reported an error.",
+                  "type": "boolean"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "instance",
+                "turn",
+                "cost",
+                "context_tokens",
+                "is_error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn_done"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The vendor's rate-limit event.",
+          "properties": {
+            "rate_limit": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "rate_limit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A brain process exited.",
+          "properties": {
+            "exited": {
+              "properties": {
+                "code": {
+                  "description": "Its exit code.",
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "instance": {
+                  "description": "Its instance.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "which": {
+                  "$ref": "#/$defs/BrainSlot",
+                  "description": "Its slot."
+                }
+              },
+              "required": [
+                "which",
+                "instance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "exited"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "BrainSlot": {
+      "description": "The brain's process slots. The runtime holds up to three: `Primary` (`routing.brain`),\n`Spare` (the same route) and `Fallback` (`routing.fallback_brain`, started only when it\ndiffers from the primary).",
+      "oneOf": [
+        {
+          "const": "primary",
+          "description": "The brain that answers.",
+          "type": "string"
+        },
+        {
+          "const": "spare",
+          "description": "A warm copy, promoted when the primary stalls or crashes.",
+          "type": "string"
+        },
+        {
+          "const": "fallback",
+          "description": "The fallback route, started on first need and stopped after 10 idle minutes.",
+          "type": "string"
+        }
+      ]
+    },
+    "BuildSlotTicket": {
+      "description": "A build slot a build-heavy coding job holds.",
+      "properties": {
+        "cargo_jobs": {
+          "description": "The memory-scaled `CARGO_BUILD_JOBS`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slot": {
+          "description": "The slot, 0 or 1.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slot",
+        "cargo_jobs"
+      ],
+      "type": "object"
+    },
+    "Effort": {
+      "description": "A CLI's reasoning effort.",
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "`--effort low`.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "`--effort medium`.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "`--effort high`.",
+          "type": "string"
+        }
+      ]
+    },
+    "EnvPolicy": {
+      "description": "How a worker's environment is built (section 2.12).",
+      "oneOf": [
+        {
+          "const": "worker_denylist",
+          "description": "The user's environment minus the worker denylist.",
+          "type": "string"
+        },
+        {
+          "const": "constructed_allowlist",
+          "description": "Only the variables on the constructed allowlist.",
+          "type": "string"
+        }
+      ]
+    },
+    "HookDecision": {
+      "description": "The tier guard's answer before a tool runs. Never `Allow`.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No decision: the CLI's own rules apply.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ask the user.",
+          "properties": {
+            "ask": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ask"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Refuse.",
+          "properties": {
+            "deny": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HookEndpoint": {
+      "description": "Where a session's hooks post: the runtime's loopback endpoint.",
+      "properties": {
+        "path": {
+          "description": "The session's path on it.",
+          "type": "string"
+        },
+        "port": {
+          "description": "The loopback port.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token": {
+          "$ref": "#/$defs/SessionToken",
+          "description": "The session's token."
+        }
+      },
+      "required": [
+        "port",
+        "path",
+        "token"
+      ],
+      "type": "object"
+    },
+    "HookReply": {
+      "description": "The core's answer to a gating hook request.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The answer to a `PreToolUse`.",
+          "properties": {
+            "pre_tool_use": {
+              "properties": {
+                "decision": {
+                  "$ref": "#/$defs/HookDecision",
+                  "description": "The decision."
+                },
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "request",
+                "decision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pre_tool_use"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The answer to a `PermissionRequest`.",
+          "properties": {
+            "permission_request": {
+              "properties": {
+                "decision": {
+                  "$ref": "#/$defs/PermissionDecision",
+                  "description": "The decision."
+                },
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "request",
+                "decision"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "permission_request"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HookRequest": {
+      "description": "A hook request from a worker session.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Before a tool runs; the core answers with a [`HookDecision`].",
+          "properties": {
+            "pre_tool_use": {
+              "properties": {
+                "git": {
+                  "description": "Added by the runtime: one per git command in a shell command line.",
+                  "items": {
+                    "$ref": "#/$defs/GitFact"
+                  },
+                  "type": "array"
+                },
+                "paths": {
+                  "description": "Added by the runtime: each path argument canonicalised and classified.",
+                  "items": {
+                    "$ref": "#/$defs/PathFact"
+                  },
+                  "type": "array"
+                },
+                "request": {
+                  "description": "The request, for the answer.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tool_input": {
+                  "description": "Its input.",
+                  "x-eileen-text": "untrusted"
+                },
+                "tool_name": {
+                  "description": "The tool.",
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "description": "The vendor's id for the use.",
+                  "type": "string"
+                },
+                "urls": {
+                  "description": "Added by the runtime: one per URL in the call (`WebFetch`, shell arguments).",
+                  "items": {
+                    "$ref": "#/$defs/UrlFact"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "request",
+                "tool_name",
+                "tool_input",
+                "tool_use_id",
+                "paths",
+                "git",
+                "urls"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pre_tool_use"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The CLI asks permission; the core answers with a [`PermissionDecision`].",
+          "properties": {
+            "permission_request": {
+              "properties": {
+                "request": {
+                  "description": "The request, for the answer.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tool_input": {
+                  "description": "Its input.",
+                  "x-eileen-text": "untrusted"
+                },
+                "tool_name": {
+                  "description": "The tool.",
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "description": "The vendor's id for the use.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "request",
+                "tool_name",
+                "tool_input",
+                "tool_use_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "permission_request"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A notification from the CLI.",
+          "properties": {
+            "notification": {
+              "properties": {
+                "kind": {
+                  "description": "Its kind.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "Its message.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "notification"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The CLI denied a tool.",
+          "properties": {
+            "permission_denied": {
+              "properties": {
+                "tool_name": {
+                  "description": "The tool.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool_name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "permission_denied"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool failed.",
+          "properties": {
+            "post_tool_use_failure": {
+              "properties": {
+                "error": {
+                  "description": "The error.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "tool_name": {
+                  "description": "The tool.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool_name",
+                "error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "post_tool_use_failure"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "subagent_start",
+          "description": "A subagent started.",
+          "type": "string"
+        },
+        {
+          "const": "subagent_stop",
+          "description": "A subagent stopped.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session stopped.",
+          "properties": {
+            "stop": {
+              "properties": {
+                "last_message": {
+                  "description": "Its last message.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "stop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session failed to stop cleanly.",
+          "properties": {
+            "stop_failure": {
+              "properties": {
+                "error": {
+                  "description": "The error.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "stop_failure"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JobBinding": {
+      "description": "A started session's job: the first user turn.",
+      "properties": {
+        "facts": {
+          "description": "The facts block, at most about 400 tokens, scoped to the repository and app.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inline_skill": {
+          "description": "The skill's text, at most 4 KB, when the snapshot lacks it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        },
+        "kind": {
+          "$ref": "#/$defs/JobKind",
+          "description": "Its kind."
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A learned skill to follow."
+        },
+        "task": {
+          "description": "The task.",
+          "type": "string"
+        },
+        "trace": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Correlation."
+        }
+      },
+      "required": [
+        "job",
+        "kind",
+        "task",
+        "facts",
+        "trace"
+      ],
+      "type": "object"
+    },
+    "PermissionDecision": {
+      "description": "The answer to a permission request. `Allow` only from a `UserInput` approval.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Allowed by the user.",
+          "properties": {
+            "allow": {
+              "properties": {
+                "approval": {
+                  "$ref": "#/$defs/ApprovalId",
+                  "description": "The approval that allowed it."
+                }
+              },
+              "required": [
+                "approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "allow"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Refused.",
+          "properties": {
+            "deny": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SessionSpec": {
+      "description": "Everything a driver needs to spawn a session.",
+      "properties": {
+        "allowed_tools": {
+          "description": "The `--allowedTools` list.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "append_system_prompt": {
+          "description": "Text appended to the system prompt.",
+          "type": "string"
+        },
+        "build_slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildSlotTicket"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Held for build-heavy coding jobs; carries the memory-scaled cargo job count."
+        },
+        "builtin_tools": {
+          "description": "`--tools`: the kind's built-in tools; nothing else exists in the session.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "chrome": {
+          "description": "Whether Claude in Chrome is on for it.",
+          "type": "boolean"
+        },
+        "cwd": {
+          "description": "The working folder.",
+          "type": "string"
+        },
+        "disallowed_tools": {
+          "description": "`--disallowedTools`: the subagent tools from the harness's flag constant.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Effort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The reasoning effort, where the CLI takes one."
+        },
+        "env": {
+          "$ref": "#/$defs/EnvPolicy",
+          "description": "How its environment is built (section 2.12)."
+        },
+        "extra_mcp_servers": {
+          "description": "Approved third-party MCP servers.",
+          "items": {
+            "$ref": "#/$defs/ApprovedMcpServer"
+          },
+          "type": "array"
+        },
+        "hook_endpoint": {
+          "$ref": "#/$defs/HookEndpoint",
+          "description": "Where its hooks post."
+        },
+        "kind": {
+          "$ref": "#/$defs/JobKind",
+          "description": "The job kind it serves."
+        },
+        "memory_limit_mb": {
+          "description": "`JOB_OBJECT_LIMIT_JOB_MEMORY` when `memory.worker_job_limit_mb` is set.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The model name or full id.",
+          "type": "string"
+        },
+        "plugin_dirs": {
+          "description": "Plugin folders, the session's learned-skill snapshot first.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PoolClass"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its pool, for a warm pooled session."
+        },
+        "resume_session": {
+          "description": "A session to resume.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "$ref": "#/$defs/Route",
+          "description": "Its route."
+        },
+        "session": {
+          "$ref": "#/$defs/WorkerSessionId",
+          "description": "The session."
+        },
+        "shim": {
+          "$ref": "#/$defs/ShimEndpoint",
+          "description": "Pipe name and per-session token for the generated MCP config."
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnapshotManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Re-hashed before spawn and checked against `system/init`."
+        },
+        "snapshot_ref": {
+          "description": "A snapshot to restore before it starts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toolsets": {
+          "description": "Eileen's toolsets it gets.",
+          "items": {
+            "$ref": "#/$defs/Toolset"
+          },
+          "type": "array"
+        },
+        "trace": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Correlation."
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorktreeSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A worktree to create for it."
+        }
+      },
+      "required": [
+        "session",
+        "kind",
+        "route",
+        "model",
+        "cwd",
+        "append_system_prompt",
+        "toolsets",
+        "allowed_tools",
+        "extra_mcp_servers",
+        "builtin_tools",
+        "disallowed_tools",
+        "plugin_dirs",
+        "chrome",
+        "env",
+        "trace",
+        "hook_endpoint",
+        "shim"
+      ],
+      "type": "object"
+    },
+    "SessionToken": {
+      "description": "A per-session token. Minted by the runtime from OS randomness (the core reads none), checked\nby the dispatcher and the hook endpoint. `Debug` does not show it; recordings replace it.",
+      "type": "string"
+    },
+    "ShimEndpoint": {
+      "description": "Where a session's shim connects: the dispatcher pipe.",
+      "properties": {
+        "pipe": {
+          "description": "The pipe's name.",
+          "type": "string"
+        },
+        "token": {
+          "$ref": "#/$defs/SessionToken",
+          "description": "The session's token."
+        }
+      },
+      "required": [
+        "pipe",
+        "token"
+      ],
+      "type": "object"
+    },
+    "WorkerCmd": {
+      "description": "To a worker session.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Spawn a session, pooled or for one job.",
+          "properties": {
+            "start": {
+              "$ref": "#/$defs/SessionSpec"
+            }
+          },
+          "required": [
+            "start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Give a started session its job: the first user turn.",
+          "properties": {
+            "bind": {
+              "$ref": "#/$defs/JobBinding"
+            }
+          },
+          "required": [
+            "bind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One more user turn.",
+          "properties": {
+            "prompt": {
+              "properties": {
+                "text": {
+                  "description": "The text.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "interrupt",
+          "description": "Interrupt the turn in progress.",
+          "type": "string"
+        },
+        {
+          "const": "cancel",
+          "description": "Kill the session's Job Object.",
+          "type": "string"
+        },
+        {
+          "const": "recycle",
+          "description": "End the session and start a fresh one in its place.",
+          "type": "string"
+        },
+        {
+          "const": "remove_worktree",
+          "description": "Remove the job's worktree.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Restore the job's files to a snapshot.",
+          "properties": {
+            "restore_snapshot": {
+              "properties": {
+                "snapshot_ref": {
+                  "description": "The snapshot.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "snapshot_ref"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "restore_snapshot"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkerEvent": {
+      "description": "From a worker session.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The session started; from its `system/init` event.",
+          "properties": {
+            "init": {
+              "properties": {
+                "capabilities": {
+                  "description": "The capabilities the CLI reports.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "mcp_servers": {
+                  "description": "The MCP servers and their status.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "model": {
+                  "description": "The resolved model id.",
+                  "type": "string"
+                },
+                "pid": {
+                  "description": "The process id.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "plugins": {
+                  "description": "The plugins loaded.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "session_id": {
+                  "description": "The vendor's session id.",
+                  "type": "string"
+                },
+                "tools": {
+                  "description": "The tools the session has.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "session_id",
+                "pid",
+                "model",
+                "tools",
+                "mcp_servers",
+                "plugins",
+                "capabilities"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "init"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A narration line (text lines starting with `> `).",
+          "properties": {
+            "narration": {
+              "properties": {
+                "line": {
+                  "description": "The line.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "line"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "narration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Streamed text.",
+          "properties": {
+            "text": {
+              "properties": {
+                "delta": {
+                  "description": "The text.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "delta"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool use.",
+          "properties": {
+            "tool_use": {
+              "properties": {
+                "input": {
+                  "description": "Its input, redacted, at most 2 KB.",
+                  "x-eileen-text": "untrusted"
+                },
+                "name": {
+                  "description": "The tool's name.",
+                  "type": "string"
+                },
+                "tool_use_id": {
+                  "description": "The vendor's id for it.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool_use_id",
+                "name",
+                "input"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_use"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool result.",
+          "properties": {
+            "tool_result": {
+              "properties": {
+                "observed": {
+                  "description": "For every call section 2.12's observed-read table maps to a source (built-ins, shell\nreads, Claude in Chrome, third-party MCP tools, approved egress commands): the result\ntext, redacted, at most 16 KB, for provenance only.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-eileen-text": "untrusted"
+                },
+                "ok": {
+                  "description": "Whether it succeeded.",
+                  "type": "boolean"
+                },
+                "tool_use_id": {
+                  "description": "The vendor's id for the use.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool_use_id",
+                "ok"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `Skill` tool use.",
+          "properties": {
+            "skill_invoked": {
+              "properties": {
+                "args": {
+                  "description": "Its arguments.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                },
+                "name": {
+                  "description": "The skill's name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "args"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill_invoked"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session's Job Object hit `memory.worker_job_limit_mb`.",
+          "properties": {
+            "memory_limit": {
+              "properties": {
+                "limit_mb": {
+                  "description": "The limit, MB.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "limit_mb"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "memory_limit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A turn finished.",
+          "properties": {
+            "turn_done": {
+              "properties": {
+                "cost": {
+                  "$ref": "#/$defs/Cost",
+                  "description": "What it cost."
+                },
+                "is_error": {
+                  "description": "Whether the vendor reported an error.",
+                  "type": "boolean"
+                },
+                "summary": {
+                  "description": "The final message.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "cost",
+                "is_error",
+                "summary"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn_done"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The vendor's rate-limit event.",
+          "properties": {
+            "rate_limit": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "rate_limit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sign-in failed; parsed from the result event, not the exit code.",
+          "properties": {
+            "auth_failed": {
+              "properties": {
+                "message": {
+                  "description": "The vendor's message.",
+                  "type": "string",
+                  "x-eileen-text": "untrusted"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "auth_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A line that did not parse.",
+          "properties": {
+            "malformed": {
+              "properties": {
+                "line_len": {
+                  "description": "Its length.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "line_len"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "malformed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session's process exited.",
+          "properties": {
+            "exited": {
+              "properties": {
+                "code": {
+                  "description": "Its exit code.",
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "exited"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorktreeSpec": {
+      "description": "A git worktree for a coding job.",
+      "properties": {
+        "base": {
+          "description": "The commit or branch it starts from.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "The new branch.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The worktree's folder.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "repo": {
+          "description": "The repository.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "repo",
+        "path",
+        "branch",
+        "base"
+      ],
+      "type": "object"
+    }
+  }
+}

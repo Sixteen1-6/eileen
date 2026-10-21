@@ -1,0 +1,2256 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "DesktopClick": {
+      "description": "`desktop_click`. Tier 1, by arguments; takes the foreground.",
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/MouseButton",
+          "description": "The button."
+        },
+        "count": {
+          "description": "How many clicks.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "x": {
+          "description": "Horizontal position.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Vertical position.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "x",
+        "y",
+        "button",
+        "count"
+      ],
+      "type": "object"
+    },
+    "DesktopClickElement": {
+      "description": "`desktop_click_element`: invoke an element through UI Automation. Tier 1, or 2 for\nsend-like names.",
+      "properties": {
+        "element": {
+          "description": "The element's index from `desktop_tree`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How to find it again if the index moved."
+        }
+      },
+      "required": [
+        "hwnd",
+        "element"
+      ],
+      "type": "object"
+    },
+    "DesktopDrag": {
+      "description": "`desktop_drag`. Tier 1; takes the foreground.",
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/MouseButton",
+          "description": "The button."
+        },
+        "from": {
+          "$ref": "#/$defs/Point",
+          "description": "Where it starts."
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/$defs/Point",
+          "description": "Where it ends."
+        }
+      },
+      "required": [
+        "hwnd",
+        "from",
+        "to",
+        "button"
+      ],
+      "type": "object"
+    },
+    "DesktopInsertText": {
+      "description": "`desktop_insert_text`: the insertion ladder. Tier 1.",
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What kind of field it is."
+        },
+        "target": {
+          "$ref": "#/$defs/InsertTarget",
+          "description": "Where it goes."
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "target"
+      ],
+      "type": "object"
+    },
+    "DesktopLaunchApp": {
+      "description": "`desktop_launch_app`. Tier 1; an ambiguous name returns candidates.",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Only resolve the name.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The app, as the user said it.",
+          "type": "string"
+        },
+        "wait_main_window_ms": {
+          "description": "Wait for its main window, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "DesktopPressKeys": {
+      "description": "`desktop_press_keys`, for example `ctrl+s`. Tier 1, by arguments (Enter in mail or chat 2,\nblocked combinations 3).",
+      "properties": {
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "keys": {
+          "description": "The keys.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "keys"
+      ],
+      "type": "object"
+    },
+    "DesktopScreenshot": {
+      "description": "`desktop_screenshot`. Tier 0.",
+      "properties": {
+        "marks": {
+          "default": false,
+          "description": "Draw numbered marks on the elements.",
+          "type": "boolean"
+        },
+        "max_edge_px": {
+          "description": "The longest edge, pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/ShotTarget",
+          "description": "What to capture."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "DesktopScroll": {
+      "description": "`desktop_scroll`. Tier 1.",
+      "properties": {
+        "dx": {
+          "description": "Horizontal amount.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "dy": {
+          "description": "Vertical amount.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "x": {
+          "description": "Horizontal position.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Vertical position.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "x",
+        "y",
+        "dx",
+        "dy"
+      ],
+      "type": "object"
+    },
+    "DesktopSelection": {
+      "description": "`desktop_selection`. Tier 0.",
+      "properties": {
+        "allow_clipboard": {
+          "default": false,
+          "description": "Fall back to the clipboard.",
+          "type": "boolean"
+        },
+        "hwnd": {
+          "description": "The window; the foreground one when left out.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DesktopSetValue": {
+      "description": "`desktop_set_value`. Tier 1; refuses password fields.",
+      "properties": {
+        "element": {
+          "description": "The element's index.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "value": {
+          "description": "The value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "element",
+        "value"
+      ],
+      "type": "object"
+    },
+    "DesktopTree": {
+      "description": "`desktop_tree`: a window's UI Automation tree. Tier 0.",
+      "properties": {
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_depth": {
+          "description": "How deep, 12 by default.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_elements": {
+          "description": "How many elements, 250 by default.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Only elements matching this text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hwnd"
+      ],
+      "type": "object"
+    },
+    "DesktopTypeText": {
+      "description": "`desktop_type_text`. Tier 1 (2 in terminals and unknown targets); takes the foreground.",
+      "properties": {
+        "element": {
+          "description": "The element to focus first.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "text"
+      ],
+      "type": "object"
+    },
+    "DesktopVolume": {
+      "description": "`desktop_volume`, served through the `SystemVolume` platform trait. Tier 1 (`Get` 0); the\ninverse is journaled.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/VolumeAction",
+          "description": "What to do."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "DesktopWaitFor": {
+      "description": "`desktop_wait_for`: at most 30,000 ms. Tier 0.",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WaitCondition",
+          "description": "What to wait for."
+        },
+        "timeout_ms": {
+          "description": "How long, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "condition",
+        "timeout_ms"
+      ],
+      "type": "object"
+    },
+    "DesktopWindow": {
+      "description": "`desktop_window`. Tier 1; `Close` is tier 1 when the app reports nothing unsaved, else 2.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/WindowAction",
+          "description": "What to do."
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "action"
+      ],
+      "type": "object"
+    },
+    "DesktopWindows": {
+      "description": "`desktop_windows`. Tier 0.",
+      "properties": {
+        "include_minimized": {
+          "default": false,
+          "description": "Include minimized windows.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "InsertTarget": {
+      "description": "Where inserted text goes.",
+      "oneOf": [
+        {
+          "const": "focused",
+          "description": "The focused element.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An element of a window.",
+          "properties": {
+            "element": {
+              "properties": {
+                "element": {
+                  "description": "The element's index.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd",
+                "element"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "element"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window's focused element.",
+          "properties": {
+            "window": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MouseButton": {
+      "description": "A mouse button.",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "The left button.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "The right button.",
+          "type": "string"
+        },
+        {
+          "const": "middle",
+          "description": "The middle button.",
+          "type": "string"
+        }
+      ]
+    },
+    "ShotTarget": {
+      "description": "What a screenshot captures.",
+      "oneOf": [
+        {
+          "const": "screen",
+          "description": "Every monitor.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One monitor.",
+          "properties": {
+            "monitor": {
+              "properties": {
+                "ordinal": {
+                  "description": "Its ordinal.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ordinal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "monitor"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One window.",
+          "properties": {
+            "window": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A region.",
+          "properties": {
+            "region": {
+              "properties": {
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "The region."
+                }
+              },
+              "required": [
+                "rect"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "region"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ShowReason": {
+      "description": "Why a window is brought forward.",
+      "oneOf": [
+        {
+          "const": "approval",
+          "description": "The user must approve something in it.",
+          "type": "string"
+        },
+        {
+          "const": "result",
+          "description": "It shows a job's result.",
+          "type": "string"
+        },
+        {
+          "const": "question",
+          "description": "It asks the user something only the app can ask.",
+          "type": "string"
+        }
+      ]
+    },
+    "SnapZone": {
+      "description": "Where a window snaps.",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "The left part.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "The right part.",
+          "type": "string"
+        },
+        {
+          "const": "top",
+          "description": "The top part.",
+          "type": "string"
+        },
+        {
+          "const": "bottom",
+          "description": "The bottom part.",
+          "type": "string"
+        },
+        {
+          "const": "top_left",
+          "description": "The top-left quarter.",
+          "type": "string"
+        },
+        {
+          "const": "top_right",
+          "description": "The top-right quarter.",
+          "type": "string"
+        },
+        {
+          "const": "bottom_left",
+          "description": "The bottom-left quarter.",
+          "type": "string"
+        },
+        {
+          "const": "bottom_right",
+          "description": "The bottom-right quarter.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "Centred.",
+          "type": "string"
+        }
+      ]
+    },
+    "VolumeAction": {
+      "description": "What `desktop_volume` does.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Set the volume.",
+          "properties": {
+            "set": {
+              "properties": {
+                "pct": {
+                  "description": "Percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Change the volume.",
+          "properties": {
+            "step": {
+              "properties": {
+                "delta_pct": {
+                  "description": "Percentage points, up or down.",
+                  "format": "int8",
+                  "maximum": 127,
+                  "minimum": -128,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "delta_pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Mute or unmute.",
+          "properties": {
+            "mute": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "mute"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "get",
+          "description": "Read the volume.",
+          "type": "string"
+        }
+      ]
+    },
+    "WaitCondition": {
+      "description": "What `desktop_wait_for` waits for.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A window of this process opens.",
+          "properties": {
+            "window_open": {
+              "properties": {
+                "process": {
+                  "description": "The process name.",
+                  "type": "string"
+                },
+                "title_contains": {
+                  "description": "Text its title contains.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "process"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window_open"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window closes.",
+          "properties": {
+            "window_closed": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window_closed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An element appears.",
+          "properties": {
+            "element": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "selector": {
+                  "$ref": "#/$defs/Selector",
+                  "description": "The element."
+                }
+              },
+              "required": [
+                "hwnd",
+                "selector"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "element"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window becomes the foreground window.",
+          "properties": {
+            "foreground": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "foreground"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WindowAction": {
+      "description": "What `desktop_window` does.",
+      "oneOf": [
+        {
+          "const": "focus",
+          "description": "Bring it to the front.",
+          "type": "string"
+        },
+        {
+          "const": "minimize",
+          "description": "Minimize it.",
+          "type": "string"
+        },
+        {
+          "const": "maximize",
+          "description": "Maximize it.",
+          "type": "string"
+        },
+        {
+          "const": "restore",
+          "description": "Restore it.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move and size it.",
+          "properties": {
+            "move": {
+              "properties": {
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "Its new frame."
+                }
+              },
+              "required": [
+                "rect"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "move"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Snap it to part of a monitor.",
+          "properties": {
+            "snap": {
+              "properties": {
+                "fraction_pct": {
+                  "description": "How much of the monitor, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "monitor": {
+                  "description": "The monitor's ordinal; the window's own when left out.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "zone": {
+                  "$ref": "#/$defs/SnapZone",
+                  "description": "The zone."
+                }
+              },
+              "required": [
+                "zone"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "snap"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "close",
+          "description": "Close it (`WM_CLOSE` through `SendMessageTimeout`).",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Bring it forward because the user should look (section 2.6).",
+          "properties": {
+            "show": {
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/ShowReason",
+                  "description": "Why."
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "show"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "tool_inputs": {
+    "desktop_click": {
+      "$defs": {
+        "MouseButton": {
+          "description": "A mouse button.",
+          "oneOf": [
+            {
+              "const": "left",
+              "description": "The left button.",
+              "type": "string"
+            },
+            {
+              "const": "right",
+              "description": "The right button.",
+              "type": "string"
+            },
+            {
+              "const": "middle",
+              "description": "The middle button.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_click`. Tier 1, by arguments; takes the foreground.",
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/MouseButton",
+          "description": "The button."
+        },
+        "count": {
+          "description": "How many clicks.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "x": {
+          "description": "Horizontal position.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Vertical position.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "x",
+        "y",
+        "button",
+        "count"
+      ],
+      "title": "DesktopClick",
+      "type": "object"
+    },
+    "desktop_click_element": {
+      "$defs": {
+        "Selector": {
+          "description": "How an element is found again: by its process, window and its own identity.",
+          "properties": {
+            "ancestors": {
+              "default": [],
+              "description": "Its ancestors, nearest first.",
+              "items": {
+                "$ref": "#/$defs/SelectorStep"
+              },
+              "type": "array"
+            },
+            "automation_id": {
+              "description": "The element's automation id.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "control_type": {
+              "description": "The element's control type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "The element's name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "process": {
+              "description": "The process name.",
+              "type": "string"
+            },
+            "window_class": {
+              "description": "The window class.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "process"
+          ],
+          "type": "object"
+        },
+        "SelectorStep": {
+          "description": "One ancestor of a selected element.",
+          "properties": {
+            "automation_id": {
+              "description": "Its automation id.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "control_type": {
+              "description": "Its control type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Its name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_click_element`: invoke an element through UI Automation. Tier 1, or 2 for\nsend-like names.",
+      "properties": {
+        "element": {
+          "description": "The element's index from `desktop_tree`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How to find it again if the index moved."
+        }
+      },
+      "required": [
+        "hwnd",
+        "element"
+      ],
+      "title": "DesktopClickElement",
+      "type": "object"
+    },
+    "desktop_drag": {
+      "$defs": {
+        "MouseButton": {
+          "description": "A mouse button.",
+          "oneOf": [
+            {
+              "const": "left",
+              "description": "The left button.",
+              "type": "string"
+            },
+            {
+              "const": "right",
+              "description": "The right button.",
+              "type": "string"
+            },
+            {
+              "const": "middle",
+              "description": "The middle button.",
+              "type": "string"
+            }
+          ]
+        },
+        "Point": {
+          "description": "A point in physical virtual-screen pixels.",
+          "properties": {
+            "x": {
+              "description": "Horizontal position.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Vertical position.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_drag`. Tier 1; takes the foreground.",
+      "properties": {
+        "button": {
+          "$ref": "#/$defs/MouseButton",
+          "description": "The button."
+        },
+        "from": {
+          "$ref": "#/$defs/Point",
+          "description": "Where it starts."
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/$defs/Point",
+          "description": "Where it ends."
+        }
+      },
+      "required": [
+        "hwnd",
+        "from",
+        "to",
+        "button"
+      ],
+      "title": "DesktopDrag",
+      "type": "object"
+    },
+    "desktop_insert_text": {
+      "$defs": {
+        "FieldCategory": {
+          "description": "What kind of field text goes into, for dictation and insertion.",
+          "oneOf": [
+            {
+              "const": "plain",
+              "description": "Plain text.",
+              "type": "string"
+            },
+            {
+              "const": "email",
+              "description": "An e-mail.",
+              "type": "string"
+            },
+            {
+              "const": "chat",
+              "description": "A chat message.",
+              "type": "string"
+            },
+            {
+              "const": "document",
+              "description": "A document.",
+              "type": "string"
+            },
+            {
+              "const": "code",
+              "description": "Source code.",
+              "type": "string"
+            },
+            {
+              "const": "terminal",
+              "description": "A terminal.",
+              "type": "string"
+            },
+            {
+              "const": "search",
+              "description": "A search box.",
+              "type": "string"
+            },
+            {
+              "const": "form",
+              "description": "A form field.",
+              "type": "string"
+            }
+          ]
+        },
+        "InsertTarget": {
+          "description": "Where inserted text goes.",
+          "oneOf": [
+            {
+              "const": "focused",
+              "description": "The focused element.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "An element of a window.",
+              "properties": {
+                "element": {
+                  "properties": {
+                    "element": {
+                      "description": "The element's index.",
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd",
+                    "element"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "element"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A window's focused element.",
+              "properties": {
+                "window": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "window"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_insert_text`: the insertion ladder. Tier 1.",
+      "properties": {
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What kind of field it is."
+        },
+        "target": {
+          "$ref": "#/$defs/InsertTarget",
+          "description": "Where it goes."
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "target"
+      ],
+      "title": "DesktopInsertText",
+      "type": "object"
+    },
+    "desktop_launch_app": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_launch_app`. Tier 1; an ambiguous name returns candidates.",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Only resolve the name.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The app, as the user said it.",
+          "type": "string"
+        },
+        "wait_main_window_ms": {
+          "description": "Wait for its main window, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "DesktopLaunchApp",
+      "type": "object"
+    },
+    "desktop_press_keys": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_press_keys`, for example `ctrl+s`. Tier 1, by arguments (Enter in mail or chat 2,\nblocked combinations 3).",
+      "properties": {
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "keys": {
+          "description": "The keys.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "keys"
+      ],
+      "title": "DesktopPressKeys",
+      "type": "object"
+    },
+    "desktop_screenshot": {
+      "$defs": {
+        "Rect": {
+          "description": "A rectangle in physical virtual-screen pixels.",
+          "properties": {
+            "h": {
+              "description": "Height.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "w": {
+              "description": "Width.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "description": "Left edge.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Top edge.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "type": "object"
+        },
+        "ShotTarget": {
+          "description": "What a screenshot captures.",
+          "oneOf": [
+            {
+              "const": "screen",
+              "description": "Every monitor.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "One monitor.",
+              "properties": {
+                "monitor": {
+                  "properties": {
+                    "ordinal": {
+                      "description": "Its ordinal.",
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ordinal"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "monitor"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "One window.",
+              "properties": {
+                "window": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "window"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A region.",
+              "properties": {
+                "region": {
+                  "properties": {
+                    "rect": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "The region."
+                    }
+                  },
+                  "required": [
+                    "rect"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "region"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_screenshot`. Tier 0.",
+      "properties": {
+        "marks": {
+          "default": false,
+          "description": "Draw numbered marks on the elements.",
+          "type": "boolean"
+        },
+        "max_edge_px": {
+          "description": "The longest edge, pixels.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/ShotTarget",
+          "description": "What to capture."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "DesktopScreenshot",
+      "type": "object"
+    },
+    "desktop_scroll": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_scroll`. Tier 1.",
+      "properties": {
+        "dx": {
+          "description": "Horizontal amount.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "dy": {
+          "description": "Vertical amount.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "x": {
+          "description": "Horizontal position.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Vertical position.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "x",
+        "y",
+        "dx",
+        "dy"
+      ],
+      "title": "DesktopScroll",
+      "type": "object"
+    },
+    "desktop_selection": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_selection`. Tier 0.",
+      "properties": {
+        "allow_clipboard": {
+          "default": false,
+          "description": "Fall back to the clipboard.",
+          "type": "boolean"
+        },
+        "hwnd": {
+          "description": "The window; the foreground one when left out.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "DesktopSelection",
+      "type": "object"
+    },
+    "desktop_set_value": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_set_value`. Tier 1; refuses password fields.",
+      "properties": {
+        "element": {
+          "description": "The element's index.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "value": {
+          "description": "The value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "element",
+        "value"
+      ],
+      "title": "DesktopSetValue",
+      "type": "object"
+    },
+    "desktop_tree": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_tree`: a window's UI Automation tree. Tier 0.",
+      "properties": {
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_depth": {
+          "description": "How deep, 12 by default.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_elements": {
+          "description": "How many elements, 250 by default.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Only elements matching this text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hwnd"
+      ],
+      "title": "DesktopTree",
+      "type": "object"
+    },
+    "desktop_type_text": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_type_text`. Tier 1 (2 in terminals and unknown targets); takes the foreground.",
+      "properties": {
+        "element": {
+          "description": "The element to focus first.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "description": "The text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hwnd",
+        "text"
+      ],
+      "title": "DesktopTypeText",
+      "type": "object"
+    },
+    "desktop_volume": {
+      "$defs": {
+        "VolumeAction": {
+          "description": "What `desktop_volume` does.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Set the volume.",
+              "properties": {
+                "set": {
+                  "properties": {
+                    "pct": {
+                      "description": "Percent.",
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "pct"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "set"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Change the volume.",
+              "properties": {
+                "step": {
+                  "properties": {
+                    "delta_pct": {
+                      "description": "Percentage points, up or down.",
+                      "format": "int8",
+                      "maximum": 127,
+                      "minimum": -128,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "delta_pct"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Mute or unmute.",
+              "properties": {
+                "mute": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mute"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "get",
+              "description": "Read the volume.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_volume`, served through the `SystemVolume` platform trait. Tier 1 (`Get` 0); the\ninverse is journaled.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/VolumeAction",
+          "description": "What to do."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "DesktopVolume",
+      "type": "object"
+    },
+    "desktop_wait_for": {
+      "$defs": {
+        "Selector": {
+          "description": "How an element is found again: by its process, window and its own identity.",
+          "properties": {
+            "ancestors": {
+              "default": [],
+              "description": "Its ancestors, nearest first.",
+              "items": {
+                "$ref": "#/$defs/SelectorStep"
+              },
+              "type": "array"
+            },
+            "automation_id": {
+              "description": "The element's automation id.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "control_type": {
+              "description": "The element's control type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "The element's name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "process": {
+              "description": "The process name.",
+              "type": "string"
+            },
+            "window_class": {
+              "description": "The window class.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "process"
+          ],
+          "type": "object"
+        },
+        "SelectorStep": {
+          "description": "One ancestor of a selected element.",
+          "properties": {
+            "automation_id": {
+              "description": "Its automation id.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "control_type": {
+              "description": "Its control type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Its name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "WaitCondition": {
+          "description": "What `desktop_wait_for` waits for.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "A window of this process opens.",
+              "properties": {
+                "window_open": {
+                  "properties": {
+                    "process": {
+                      "description": "The process name.",
+                      "type": "string"
+                    },
+                    "title_contains": {
+                      "description": "Text its title contains.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "process"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "window_open"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A window closes.",
+              "properties": {
+                "window_closed": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "window_closed"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "An element appears.",
+              "properties": {
+                "element": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    },
+                    "selector": {
+                      "$ref": "#/$defs/Selector",
+                      "description": "The element."
+                    }
+                  },
+                  "required": [
+                    "hwnd",
+                    "selector"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "element"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A window becomes the foreground window.",
+              "properties": {
+                "foreground": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "foreground"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_wait_for`: at most 30,000 ms. Tier 0.",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WaitCondition",
+          "description": "What to wait for."
+        },
+        "timeout_ms": {
+          "description": "How long, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "condition",
+        "timeout_ms"
+      ],
+      "title": "DesktopWaitFor",
+      "type": "object"
+    },
+    "desktop_window": {
+      "$defs": {
+        "Rect": {
+          "description": "A rectangle in physical virtual-screen pixels.",
+          "properties": {
+            "h": {
+              "description": "Height.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "w": {
+              "description": "Width.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "description": "Left edge.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Top edge.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "type": "object"
+        },
+        "ShowReason": {
+          "description": "Why a window is brought forward.",
+          "oneOf": [
+            {
+              "const": "approval",
+              "description": "The user must approve something in it.",
+              "type": "string"
+            },
+            {
+              "const": "result",
+              "description": "It shows a job's result.",
+              "type": "string"
+            },
+            {
+              "const": "question",
+              "description": "It asks the user something only the app can ask.",
+              "type": "string"
+            }
+          ]
+        },
+        "SnapZone": {
+          "description": "Where a window snaps.",
+          "oneOf": [
+            {
+              "const": "left",
+              "description": "The left part.",
+              "type": "string"
+            },
+            {
+              "const": "right",
+              "description": "The right part.",
+              "type": "string"
+            },
+            {
+              "const": "top",
+              "description": "The top part.",
+              "type": "string"
+            },
+            {
+              "const": "bottom",
+              "description": "The bottom part.",
+              "type": "string"
+            },
+            {
+              "const": "top_left",
+              "description": "The top-left quarter.",
+              "type": "string"
+            },
+            {
+              "const": "top_right",
+              "description": "The top-right quarter.",
+              "type": "string"
+            },
+            {
+              "const": "bottom_left",
+              "description": "The bottom-left quarter.",
+              "type": "string"
+            },
+            {
+              "const": "bottom_right",
+              "description": "The bottom-right quarter.",
+              "type": "string"
+            },
+            {
+              "const": "center",
+              "description": "Centred.",
+              "type": "string"
+            }
+          ]
+        },
+        "WindowAction": {
+          "description": "What `desktop_window` does.",
+          "oneOf": [
+            {
+              "const": "focus",
+              "description": "Bring it to the front.",
+              "type": "string"
+            },
+            {
+              "const": "minimize",
+              "description": "Minimize it.",
+              "type": "string"
+            },
+            {
+              "const": "maximize",
+              "description": "Maximize it.",
+              "type": "string"
+            },
+            {
+              "const": "restore",
+              "description": "Restore it.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Move and size it.",
+              "properties": {
+                "move": {
+                  "properties": {
+                    "rect": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "Its new frame."
+                    }
+                  },
+                  "required": [
+                    "rect"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "move"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Snap it to part of a monitor.",
+              "properties": {
+                "snap": {
+                  "properties": {
+                    "fraction_pct": {
+                      "description": "How much of the monitor, percent.",
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "monitor": {
+                      "description": "The monitor's ordinal; the window's own when left out.",
+                      "format": "uint8",
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "zone": {
+                      "$ref": "#/$defs/SnapZone",
+                      "description": "The zone."
+                    }
+                  },
+                  "required": [
+                    "zone"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "snap"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "close",
+              "description": "Close it (`WM_CLOSE` through `SendMessageTimeout`).",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Bring it forward because the user should look (section 2.6).",
+              "properties": {
+                "show": {
+                  "properties": {
+                    "reason": {
+                      "$ref": "#/$defs/ShowReason",
+                      "description": "Why."
+                    }
+                  },
+                  "required": [
+                    "reason"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "show"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_window`. Tier 1; `Close` is tier 1 when the app reports nothing unsaved, else 2.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/WindowAction",
+          "description": "What to do."
+        },
+        "hwnd": {
+          "description": "The window.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hwnd",
+        "action"
+      ],
+      "title": "DesktopWindow",
+      "type": "object"
+    },
+    "desktop_windows": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_windows`. Tier 0.",
+      "properties": {
+        "include_minimized": {
+          "default": false,
+          "description": "Include minimized windows.",
+          "type": "boolean"
+        }
+      },
+      "title": "DesktopWindows",
+      "type": "object"
+    }
+  }
+}

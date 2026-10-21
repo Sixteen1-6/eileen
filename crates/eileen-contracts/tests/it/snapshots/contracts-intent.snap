@@ -1,0 +1,989 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AppRoutes": {
+      "description": "One app's routes, ranked by their declared rungs and the recorded route statistics\n(`eileen_skills::routes::rank`).",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "rungs": {
+          "description": "Its routes, best first.",
+          "items": {
+            "$ref": "#/$defs/RankedRung"
+          },
+          "type": "array"
+        },
+        "verbs": {
+          "description": "What it can do.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "app",
+        "verbs",
+        "rungs"
+      ],
+      "type": "object"
+    },
+    "Awaiting": {
+      "description": "What the core is waiting for from the user.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A yes or no to an approval question.",
+          "properties": {
+            "approval": {
+              "$ref": "#/$defs/ApprovalId"
+            }
+          },
+          "required": [
+            "approval"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An answer to a clarifying question.",
+          "properties": {
+            "answer": {
+              "properties": {
+                "id": {
+                  "description": "The question's id.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "options": {
+                  "description": "The options offered.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "options"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "first_run",
+          "description": "A first-run choice.",
+          "type": "string"
+        }
+      ]
+    },
+    "Capabilities": {
+      "description": "What Eileen can do here, as the `capabilities` tool and \"what can you do here\" report it.",
+      "properties": {
+        "apps": {
+          "description": "Each app's routes, ranked.",
+          "items": {
+            "$ref": "#/$defs/AppRoutes"
+          },
+          "type": "array"
+        },
+        "focused": {
+          "description": "The focused app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "description": "Learned skills that apply here.",
+          "items": {
+            "$ref": "#/$defs/SkillRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "apps",
+        "skills"
+      ],
+      "type": "object"
+    },
+    "CoreCommand": {
+      "description": "What a grammar entry of section 2.4 asks the core to do itself (entries that are plain tool\ncalls resolve to `Resolution::Tool` instead). One variant per entry family.",
+      "oneOf": [
+        {
+          "const": "mute",
+          "description": "Mute (safety and control, precedence 1).",
+          "type": "string"
+        },
+        {
+          "const": "unmute",
+          "description": "Unmute.",
+          "type": "string"
+        },
+        {
+          "const": "stop",
+          "description": "Stop speaking.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cancel a job, or the current one.",
+          "properties": {
+            "cancel": {
+              "properties": {
+                "job": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JobRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The job."
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "cancel"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "go_on",
+          "description": "Go on after an interruption.",
+          "type": "string"
+        },
+        {
+          "const": "that_was_for_you",
+          "description": "\"That was for you.\"",
+          "type": "string"
+        },
+        {
+          "const": "undo",
+          "description": "Undo the last action.",
+          "type": "string"
+        },
+        {
+          "const": "undo_fact",
+          "description": "Undo the last fact.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Forget something.",
+          "properties": {
+            "forget": {
+              "$ref": "#/$defs/ForgetTarget"
+            }
+          },
+          "required": [
+            "forget"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "something_went_wrong",
+          "description": "\"Something went wrong.\"",
+          "type": "string"
+        },
+        {
+          "const": "save_scenario",
+          "description": "Save that as a test.",
+          "type": "string"
+        },
+        {
+          "const": "stop_recording",
+          "description": "Stop recording.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Go off the record, or back on.",
+          "properties": {
+            "off_the_record": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "off_the_record"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "pause_agents",
+          "description": "Pause the agents.",
+          "type": "string"
+        },
+        {
+          "const": "what_time",
+          "description": "What time is it (built-in grammar, precedence 2).",
+          "type": "string"
+        },
+        {
+          "const": "hows_it_going",
+          "description": "How is it going.",
+          "type": "string"
+        },
+        {
+          "const": "what_have_you_learned",
+          "description": "What have you learned.",
+          "type": "string"
+        },
+        {
+          "const": "what_do_you_know_about_me",
+          "description": "What do you know about me.",
+          "type": "string"
+        },
+        {
+          "const": "learn_from_that_now",
+          "description": "Learn from that now.",
+          "type": "string"
+        },
+        {
+          "const": "record_session",
+          "description": "Record this session.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Use a voice.",
+          "properties": {
+            "use_voice": {
+              "properties": {
+                "engine": {
+                  "description": "The engine.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "description": "The voice.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "use_voice"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "back_to_normal",
+          "description": "Back to the normal voice.",
+          "type": "string"
+        },
+        {
+          "const": "forget_my_voice",
+          "description": "Forget my voice.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Rename the assistant.",
+          "properties": {
+            "rename": {
+              "properties": {
+                "name": {
+                  "description": "The new name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "rename"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "take_dictation",
+          "description": "Take dictation.",
+          "type": "string"
+        },
+        {
+          "const": "stop_dictating",
+          "description": "Stop dictating.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Think this hard.",
+          "properties": {
+            "depth": {
+              "$ref": "#/$defs/Depth"
+            }
+          },
+          "required": [
+            "depth"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "show_me_how",
+          "description": "Show me how.",
+          "type": "string"
+        },
+        {
+          "const": "what_can_you_do_here",
+          "description": "What can you do here.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Show a job's changes.",
+          "properties": {
+            "show_changes": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobRef",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "show_changes"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "open_recent_work",
+          "description": "Open recent work.",
+          "type": "string"
+        },
+        {
+          "const": "start_anyway",
+          "description": "Start it anyway.",
+          "type": "string"
+        },
+        {
+          "const": "fix_it",
+          "description": "Fix it.",
+          "type": "string"
+        },
+        {
+          "const": "add_that_server",
+          "description": "Add that server.",
+          "type": "string"
+        },
+        {
+          "const": "show_route_suggestions",
+          "description": "Show route suggestions.",
+          "type": "string"
+        },
+        {
+          "const": "explain_that",
+          "description": "Explain that.",
+          "type": "string"
+        },
+        {
+          "const": "about",
+          "description": "About Eileen.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A fact phrase.",
+          "properties": {
+            "fact": {
+              "$ref": "#/$defs/FactCommand"
+            }
+          },
+          "required": [
+            "fact"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FactCommand": {
+      "description": "A fact the user stated, from the deterministic fact path. A `FactCommand` of kind `Phrasing`\nis stored as a `PhrasingFact` (a `SlotAlias` target with its subject set), never as a\n`UserFact`.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FactKind",
+          "description": "The kind of fact."
+        },
+        "retire": {
+          "$ref": "#/$defs/RetireRule",
+          "description": "Which earlier facts it retires."
+        },
+        "scope": {
+          "description": "Feedback: the current answer's topic only when the statement refers to it; project: the\nrepository or app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "description": "The subject key (section 2.10 item 11): the thing, the phrase of \"X means Y\", the\nbracketed referent of \"I loved that `[place]`\", or the dimension a refinement word names;\n`None` for \"remember that\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "The user's normalised final transcript, at most 200 characters, referents in brackets.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "retire"
+      ],
+      "type": "object"
+    },
+    "FollowUp": {
+      "description": "Whether an unnamed utterance resolves against Eileen's last turn.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "It does not.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A pronoun or ellipsis the slot resolvers bound to one of the last turn's items, job,\napps, files or media.",
+          "properties": {
+            "referent": {
+              "properties": {
+                "slot": {
+                  "description": "The slot.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Its value."
+                }
+              },
+              "required": [
+                "slot",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "referent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A content word or the topic shared with the last turn.",
+          "properties": {
+            "shared": {
+              "properties": {
+                "word": {
+                  "description": "The word.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "word"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "shared"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LastTurnRefs": {
+      "description": "What Eileen's own last turn mentioned, filled by the core from that turn (never from screen\nor model text it did not speak or show): the addressee gate's follow-up feature and the fact\npath's feedback scope read it.",
+      "properties": {
+        "age_ms": {
+          "description": "How long ago it ended, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "apps": {
+          "description": "Apps it mentioned, as slot values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "content_words": {
+          "description": "Its spoken content words, normalised (stop words dropped, stems).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "files": {
+          "description": "Files it mentioned, as slot values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "items": {
+          "description": "HUD items of that turn (answer items, contact-sheet entries), in order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job it announced or named."
+        },
+        "media": {
+          "description": "Media it mentioned, as slot values.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "topic": {
+          "description": "The deep answer's topic, when it was one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "age_ms",
+        "items",
+        "apps",
+        "files",
+        "media",
+        "content_words"
+      ],
+      "type": "object"
+    },
+    "MediaRef": {
+      "description": "One item of the media history.",
+      "properties": {
+        "app": {
+          "description": "The app that played it.",
+          "type": "string"
+        },
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it last played."
+        },
+        "title": {
+          "description": "Its title.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Its URL, for web media.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "app",
+        "at"
+      ],
+      "type": "object"
+    },
+    "RankedRung": {
+      "description": "One route of an app, with its record.",
+      "properties": {
+        "failures": {
+          "description": "Failures recorded.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rung": {
+          "$ref": "#/$defs/Rung",
+          "description": "The route."
+        },
+        "successes": {
+          "description": "Successes recorded.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rung",
+        "successes",
+        "failures"
+      ],
+      "type": "object"
+    },
+    "Resolution": {
+      "description": "The resolver's answer.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "L1 safety and control, built-in commands and the fact phrases.",
+          "properties": {
+            "command": {
+              "properties": {
+                "command": {
+                  "$ref": "#/$defs/CoreCommand",
+                  "description": "The command."
+                },
+                "slots": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/SlotValue"
+                  },
+                  "description": "Its slots.",
+                  "type": "object"
+                }
+              },
+              "required": [
+                "command",
+                "slots"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A plain tool call.",
+          "properties": {
+            "tool": {
+              "properties": {
+                "args": {
+                  "description": "Its arguments."
+                },
+                "source": {
+                  "$ref": "#/$defs/ToolSource",
+                  "description": "Where the match came from."
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "tool",
+                "args",
+                "source"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An L1 template of a learned skill: level 4 replays now; level 3 goes to the brain as the\n`[match]` block; levels 1 and 2 come back as hints.",
+          "properties": {
+            "skill": {
+              "properties": {
+                "level": {
+                  "$ref": "#/$defs/Level",
+                  "description": "Its level."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                },
+                "slots": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/SlotValue"
+                  },
+                  "description": "Its slots.",
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill",
+                "slots",
+                "level"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ambiguous, including an ambiguous slot (\"15 seconds or 15 minutes?\").",
+          "properties": {
+            "ambiguous": {
+              "properties": {
+                "options": {
+                  "description": "The options.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "question": {
+                  "description": "The clarifying question.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "options"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ambiguous"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "L2: skills for the brain to consider, with their scores.",
+          "properties": {
+            "hints": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/SkillRef"
+                  },
+                  {
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "hints"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "L3, with any depth override.",
+          "properties": {
+            "brain": {
+              "properties": {
+                "addressee_unsure": {
+                  "description": "Whether the addressee gate was unsure.",
+                  "type": "boolean"
+                },
+                "depth": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Depth"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The depth the user asked for."
+                }
+              },
+              "required": [
+                "addressee_unsure"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "brain"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResolveCtx": {
+      "description": "What the resolver knows about the moment.",
+      "properties": {
+        "assistant_name": {
+          "description": "The assistant's name.",
+          "type": "string"
+        },
+        "awaiting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Awaiting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the core is waiting for from the user."
+        },
+        "dictation": {
+          "description": "Whether dictation is on.",
+          "type": "boolean"
+        },
+        "focused_app": {
+          "description": "The focused app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastTurnRefs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What Eileen's own last turn mentioned."
+        },
+        "media_active": {
+          "description": "Whether media is playing.",
+          "type": "boolean"
+        },
+        "media_history": {
+          "description": "Recent media, newest first.",
+          "items": {
+            "$ref": "#/$defs/MediaRef"
+          },
+          "type": "array"
+        },
+        "monitors": {
+          "description": "How many monitors there are.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "media_active",
+        "dictation",
+        "assistant_name",
+        "monitors",
+        "media_history"
+      ],
+      "type": "object"
+    },
+    "RetireRule": {
+      "description": "Which earlier facts a new one retires.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "None.",
+          "type": "string"
+        },
+        {
+          "const": "same_subject",
+          "description": "Active facts of this kind and subject key whose scope is this one or none (every scope\nwhen this one is `None`); for kind `Phrasing`, the alias phrasings of this slot kind and\nsubject key.",
+          "type": "string"
+        }
+      ]
+    },
+    "SlotValue": {
+      "description": "One slot's value.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One value.",
+          "properties": {
+            "resolved": true
+          },
+          "required": [
+            "resolved"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Several candidates; replay never runs on an ambiguous slot.",
+          "properties": {
+            "ambiguous": {
+              "properties": {
+                "candidates": {
+                  "description": "The candidates.",
+                  "items": true,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "candidates"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ambiguous"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ToolSource": {
+      "description": "Where a tool match came from.",
+      "oneOf": [
+        {
+          "const": "grammar",
+          "description": "A grammar entry.",
+          "type": "string"
+        },
+        {
+          "const": "confirmed_phrasing",
+          "description": "A phrasing the user confirmed.",
+          "type": "string"
+        },
+        {
+          "const": "exact_repeat",
+          "description": "An exact repeat of an earlier request (slot-free only).",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}
