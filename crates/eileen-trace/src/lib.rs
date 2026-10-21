@@ -29,7 +29,8 @@
 //!
 //! - Called by every Eileen crate; `tools/repo-tools` uses [`redact`] and [`privacy`].
 //! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
-//!   and error crates, `serde_json`, `blake3`; no async runtime, no OpenTelemetry.
+//!   and error crates, `serde_json`, `blake3` and `toml` (for [`privacy`]); no async runtime,
+//!   no OpenTelemetry.
 //! - Wire types: the JSON-lines log and ring formats, documented in [`file`](mod@file) and
 //!   [`ring`].
 //!

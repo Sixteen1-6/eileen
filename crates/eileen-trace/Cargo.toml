@@ -19,6 +19,8 @@ eileen-contracts.workspace = true
 eileen-stdx.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The scenario privacy rules parse scenario.toml into the contracts' Scenario.
+toml.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-error.workspace = true

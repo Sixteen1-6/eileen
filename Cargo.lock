@@ -333,6 +333,7 @@ dependencies = [
  "eileen-stdx",
  "serde_json",
  "thiserror",
+ "toml",
  "tracing",
  "tracing-appender",
  "tracing-error",
