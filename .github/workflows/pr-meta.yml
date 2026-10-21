@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0 # the base commit and the merge base, for the changed files
           ref: ${{ github.event.pull_request.head.sha }}
       - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install && rustup show active-toolchain
+        run: rustup toolchain install --no-self-update && rustup show active-toolchain
       - name: Check the title, description and changed files
         # Everything from the event payload reaches the script through the environment, never
         # as a template expression inside it.
