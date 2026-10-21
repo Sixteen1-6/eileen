@@ -1,0 +1,4 @@
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"                 # no extra targets: the host target is installed anyway, and Linux jobs skip the Windows std

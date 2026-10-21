@@ -1,0 +1,23 @@
+* text=auto eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ndjson text eol=lf
+*.jsonl text eol=lf
+*.trace text eol=lf
+*.setting text eol=lf
+*.snap text eol=lf
+*.lua text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.wav binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.zst binary
+*.drx binary
+*.drp binary
+*.pdb binary
