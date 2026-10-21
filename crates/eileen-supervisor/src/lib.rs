@@ -41,6 +41,7 @@
 //! # Traps
 //!
 //! - A [`Child`] kills its tree when dropped: keep it for as long as the child should live.
+//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime (tokio's process driver).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
