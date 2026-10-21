@@ -15,44 +15,9 @@ repository = "https://github.com/Sixteen1-6/eileen"
 publish = false
 
 [workspace.dependencies]
-# Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1.
-eileen-contracts = { path = "crates/eileen-contracts" }
-eileen-stdx = { path = "crates/eileen-stdx" }
-eileen-trace = { path = "crates/eileen-trace" }
-eileen-rt = { path = "crates/eileen-rt" }
-eileen-platform = { path = "crates/eileen-platform" }
-eileen-supervisor = { path = "crates/eileen-supervisor" }
-eileen-buildguard = { path = "crates/eileen-buildguard" }
-eileen-core = { path = "crates/eileen-core" }
-eileen-record = { path = "crates/eileen-record" }
-eileen-replay = { path = "crates/eileen-replay" }
-eileen-sim = { path = "crates/eileen-sim" }
-eileen-runtime = { path = "crates/eileen-runtime" }
-eileen-mcp = { path = "crates/eileen-mcp" }
-eileen-crash = { path = "crates/eileen-crash" }
-eileen-shell-win = { path = "crates/eileen-shell-win" }
-eileen-scenarios = { path = "crates/eileen-scenarios" }
-eileen-cli = { path = "crates/eileen-cli" }
-eileen-shim = { path = "crates/eileen-shim" }
-eileen-guard = { path = "crates/eileen-guard" }
-eileen-harness = { path = "crates/eileen-harness" }
-eileen-stub-harness = { path = "crates/eileen-stub-harness" }
-eileen-audio = { path = "crates/eileen-audio" }
-eileen-audio-win = { path = "crates/eileen-audio-win" }
-eileen-speech = { path = "crates/eileen-speech" }
-eileen-dictation = { path = "crates/eileen-dictation" }
-eileen-desktop = { path = "crates/eileen-desktop" }
-eileen-desktop-win = { path = "crates/eileen-desktop-win" }
-eileen-apps = { path = "crates/eileen-apps" }
-eileen-apps-win = { path = "crates/eileen-apps-win" }
-eileen-intent = { path = "crates/eileen-intent" }
-eileen-skills = { path = "crates/eileen-skills" }
-eileen-learn = { path = "crates/eileen-learn" }
-eileen-config = { path = "crates/eileen-config" }
-eileen-hud = { path = "crates/eileen-hud" }
-eileen-hud-win = { path = "crates/eileen-hud-win" }
-eileen-fleet = { path = "crates/eileen-fleet" }
-eileen-e2e = { path = "crates/eileen-e2e" }
+# Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1. Each
+# line joins in the WP0 pull request that creates its crate, as `members` does: Dependabot's
+# cargo updater fails the whole run on a workspace dependency whose path holds no Cargo.toml.
 
 # Async and plumbing
 tokio = { version = "1.54.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
@@ -64,10 +29,11 @@ serde_json = "1.0.154"
 schemars = "1.2.3"
 ulid = { version = "3.0.0", default-features = false, features = ["std", "serde"] }
 toml = "1.1.8"
-# toml 1.1.8 does not depend on toml_edit; 0.25.17 is the release cut with it on 2026-10-09 and
-# shares its toml_datetime, toml_parser, toml_writer, serde_spanned and winnow requirements, so the
-# tree holds one copy of each.
-toml_edit = "0.25.17"
+# toml 1.1.8 does not depend on toml_edit. 0.25.15 (2026-09-11) is the newest release at least
+# 14 days old on 2026-10-21, and its toml_datetime, toml_parser, toml_writer, serde_spanned and
+# winnow requirements accept the versions toml 1.1.8 locks, so the tree holds one copy of each.
+# Exact, so the first lock cannot take 0.25.16 or 0.25.17, both inside the cooling-off period.
+toml_edit = "=0.25.15"
 
 # Errors, tracing, secrets
 thiserror = "2.0.21"
@@ -148,8 +114,9 @@ arbitrary = { version = "1.5.0", features = ["derive"] }
 loom = "0.7.2"
 # shuttle and shuttle-tokio: the newest releases at least 14 days old on 2026-10-21 (shuttle 0.9.5,
 # released 2026-10-01, since 0.9.6 to 0.9.8 are inside the cooling-off period; shuttle-tokio 1.0.0,
-# released 2026-09-04); WP2 uses them behind a `shuttle` feature no shipped binary enables
-shuttle = "0.9.5"
+# released 2026-09-04); WP2 uses them behind a `shuttle` feature no shipped binary enables.
+# shuttle is exact, so the first lock cannot take 0.9.8; Dependabot still proposes exact bumps.
+shuttle = "=0.9.5"
 shuttle-tokio = "1.0.0"
 
 [workspace.lints.rust]

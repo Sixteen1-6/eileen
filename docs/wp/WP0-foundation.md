@@ -69,24 +69,50 @@ order of the switch, from BUILD.md sections 3.2 and 6.2:
      -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY
    ```
 
-5. Push the commit that deletes the Python scaffold (`src/`, `tests/*.py`, `pyproject.toml` and
-   `python-scaffold.yml`), and merge on green.
+5. Push the commit that deletes the Python scaffold (`src/`, `tests/*.py`, `pyproject.toml`,
+   `python-scaffold.yml` and the Python lines of `.gitignore`), and merge on green.
+
+## Steps for the later phase A pull requests
+
+- `wp0/contracts`, `wp0/base-crates` and `wp0/stubs` each add the `[workspace.dependencies]` line
+  of every crate they create, `name = { path = "crates/<name>" }`, beside the `members` entry.
+- After `wp0/stubs` merges, check that Dependabot's next `cargo` run finishes (the repository's
+  Insights, Dependency graph, Dependabot tab) and record it here.
+- `wp0/stubs` is the first pull request to lock `shuttle` and `shuttle-tokio`. Its description
+  lists the publish date of every package it adds to `Cargo.lock`, and any package younger than 14
+  days that no section 4.1 pin names is held back with `cargo update -p <name> --precise
+  <version>` to its newest older release, or named in the description with the reason it stays.
 
 ## Surprises
 
 - Cargo refuses a workspace member path or glob that matches nothing, so the root manifest lists
   only `xtask` for now. `crates/*` joins with the first crate (`wp0/contracts`) and
-  `tools/repo-tools` with phase B. Unused path entries in `[workspace.dependencies]` are accepted,
-  so every internal crate is declared already.
+  `tools/repo-tools` with phase B.
+- Cargo accepts `[workspace.dependencies]` path entries for crates that do not exist yet, but
+  Dependabot does not. Its cargo file fetcher (`cargo/lib/dependabot/cargo/file_fetcher.rb` in
+  dependabot-core, read on 2026-10-21) fetches `<path>/Cargo.toml` for every workspace dependency
+  and stops the whole run with "path dependencies not reachable" when one is missing. So the
+  internal lines join with their crates, as `members` does, instead of all at once.
 - nextest refuses a `package()` or `binary_id()` filter term that matches no workspace member, so
   the two overrides in `.config/nextest.toml` keep only their test-name terms until `wp0/stubs`
   creates the crates they name.
-- `toml` 1.1.8 does not depend on `toml_edit`. The pin is `toml_edit` 0.25.17, released with it and
-  sharing its `toml_datetime`, `toml_parser`, `toml_writer`, `serde_spanned` and `winnow`
-  requirements, so the tree holds one copy of each.
+- `toml` 1.1.8 does not depend on `toml_edit`, so section 4.1's rule for it (the version `toml`
+  depends on) names nothing. The pin follows the 14-day rule instead: `toml_edit` 0.25.15
+  (2026-09-11). Its requirements accept the `toml_datetime` 1.1.2, `toml_parser` 1.1.5,
+  `toml_writer` 1.1.3, `serde_spanned` 1.1.2 and `winnow` 1.0.4 that `toml` 1.1.8 locks, so the
+  tree holds one copy of each. 0.25.16 and 0.25.17 (2026-10-08 and 2026-10-09) are inside the
+  window.
 - Section 4.1 names `shuttle` 0.9.7, but crates.io dates it 2026-10-14, inside the 14-day window.
   The rule wins: `shuttle` 0.9.5 (2026-10-01), `shuttle-tokio` 1.0.0 (2026-09-04), `syn` 2.0.119
   (2026-07-15) and `rtrb` 0.4.0 (2026-08-17, the newest release; 0.3.5 is a later backport).
+- A version requirement in `Cargo.toml` is a caret range, and the first lock takes the newest
+  release in it, so a cooled-off choice holds only when it is written exact. `shuttle = "=0.9.5"`
+  and `toml_edit = "=0.25.15"` are exact (the first lock would otherwise take `shuttle` 0.9.8,
+  2026-10-20, and `toml_edit` 0.25.17); `syn` 2.0.119, `rtrb` 0.4.0 and `shuttle-tokio` 1.0.0 are
+  the newest releases in their ranges, and Dependabot proposes bumps of exact requirements too.
+  The pins hold direct requirements only: transitive packages lock at their newest compatible
+  release (this branch's lockfile has `syn` 3.0.9 of 2026-10-12, through `serde_derive`), which
+  the `wp0/stubs` step above and phase B's `deps-age` check cover.
 - `cargo deny check` passes on the current tree with one warning per allowed license the tree does
   not use yet, IJG and the `webpki-roots` exception included. Whether `ring`'s `Apache-2.0 AND
   ISC` passes is confirmed when `wp0/stubs` brings it into the tree.
