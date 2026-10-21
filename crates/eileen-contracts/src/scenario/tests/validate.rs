@@ -38,8 +38,12 @@ fn check(root: &Value, schema: &Value, value: &Value, path: &str, out: &mut Vec<
     let map = match schema {
         Value::Bool(true) => return,
         Value::Object(map) => map,
-        other => {
-            out.push(format!("{path}: the schema {other} allows nothing"));
+        Value::Null
+        | Value::Bool(false)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Array(_) => {
+            out.push(format!("{path}: the schema {schema} allows nothing"));
             return;
         }
     };
@@ -85,7 +89,9 @@ fn type_matches(rule: &Value, value: &Value) -> bool {
     };
     match rule {
         Value::Array(kinds) => kinds.iter().any(one),
-        kind => one(kind),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            one(rule)
+        }
     }
 }
 

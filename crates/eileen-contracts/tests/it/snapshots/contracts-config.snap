@@ -1985,7 +1985,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         "watermark_exports": {
           "default": false,
-          "description": "Mark saved and exported audio (`eileen voice render` files and the audio lanes of\nrecordings) with the AudioSeal watermark. Opt in: no engine watermarks by default, and\nturning this on is what makes `eileen setup` fetch the AudioSeal models.",
+          "description": "Mark saved and exported audio (`eileen voice render` files and the audio lanes of\nrecordings) with the `AudioSeal` watermark. Opt in: no engine watermarks by default, and\nturning this on is what makes `eileen setup` fetch the `AudioSeal` models.",
           "type": "boolean"
         }
       },

@@ -131,8 +131,8 @@ pub struct VoiceConfig {
     /// Speaking rate, percent.
     pub rate_pct: u16,
     /// Mark saved and exported audio (`eileen voice render` files and the audio lanes of
-    /// recordings) with the AudioSeal watermark. Opt in: no engine watermarks by default, and
-    /// turning this on is what makes `eileen setup` fetch the AudioSeal models.
+    /// recordings) with the `AudioSeal` watermark. Opt in: no engine watermarks by default, and
+    /// turning this on is what makes `eileen setup` fetch the `AudioSeal` models.
     pub watermark_exports: bool,
     /// The engine per cloned voice name.
     pub engines: BTreeMap<String, VoiceEngine>,
