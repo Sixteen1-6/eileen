@@ -1,0 +1,169 @@
+# Recorded on 2026-10-21 under WSL2 (Ubuntu 24.04.4, kernel 6.18.33.2) on an AMD Ryzen 5 5600X
+# with 16 GB and an RTX 3060, trimmed to the files the probe reads. /proc/cpuinfo keeps its
+# first processor in full and the other eleven as their `processor` lines; /proc/self/mountinfo
+# keeps the root's line. WSL lists no DRM card, power supply or display connector.
+
+proc/sys/kernel/osrelease = 6.18.33.2-microsoft-standard-WSL2
+
+<<< etc/os-release
+PRETTY_NAME="Ubuntu 24.04.4 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.4 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=noble
+LOGO=ubuntu-logo
+>>>
+
+<<< proc/meminfo
+MemTotal:       16337548 kB
+MemFree:        12773992 kB
+MemAvailable:   14372884 kB
+Buffers:           10116 kB
+Cached:          1728216 kB
+SwapCached:            0 kB
+Active:           406984 kB
+Inactive:        2615844 kB
+Active(anon):       2524 kB
+Inactive(anon):  1285024 kB
+Active(file):     404460 kB
+Inactive(file):  1330820 kB
+Unevictable:           0 kB
+Mlocked:               0 kB
+SwapTotal:       4194304 kB
+SwapFree:        4194304 kB
+Dirty:               264 kB
+Writeback:             0 kB
+AnonPages:       1284788 kB
+Mapped:           324336 kB
+Shmem:              3036 kB
+KReclaimable:     102048 kB
+Slab:             188072 kB
+SReclaimable:     102048 kB
+SUnreclaim:        86024 kB
+KernelStack:        5936 kB
+PageTables:        24412 kB
+SecPageTables:         0 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:    12363076 kB
+Committed_AS:    2322508 kB
+VmallocTotal:   34359738367 kB
+VmallocUsed:       72040 kB
+VmallocChunk:          0 kB
+Percpu:             4672 kB
+HardwareCorrupted:     0 kB
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+ShmemPmdMapped:        0 kB
+FileHugePages:     14336 kB
+FilePmdMapped:         0 kB
+Unaccepted:            0 kB
+Balloon:               0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:               0 kB
+DirectMap4k:       33792 kB
+DirectMap2M:     4120576 kB
+DirectMap1G:    22020096 kB
+>>>
+
+<<< proc/cpuinfo
+processor	: 0
+vendor_id	: AuthenticAMD
+cpu family	: 25
+model		: 33
+model name	: AMD Ryzen 5 5600X 6-Core Processor
+stepping	: 2
+microcode	: 0xffffffff
+cpu MHz		: 3700.045
+cache size	: 512 KB
+physical id	: 0
+siblings	: 12
+core id		: 0
+cpu cores	: 6
+apicid		: 0
+initial apicid	: 0
+fpu		: yes
+fpu_exception	: yes
+cpuid level	: 13
+wp		: yes
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves clzero xsaveerptr arat umip vaes vpclmulqdq rdpid fsrm
+bugs		: sysret_ss_attrs null_seg spectre_v1 spectre_v2 spec_store_bypass srso ibpb_no_ret spectre_v2_user tsa
+bogomips	: 7400.09
+TLB size	: 2560 4K pages
+clflush size	: 64
+cache_alignment	: 64
+address sizes	: 48 bits physical, 48 bits virtual
+power management:
+
+processor	: 1
+
+processor	: 2
+
+processor	: 3
+
+processor	: 4
+
+processor	: 5
+
+processor	: 6
+
+processor	: 7
+
+processor	: 8
+
+processor	: 9
+
+processor	: 10
+
+processor	: 11
+
+>>>
+
+sys/devices/system/cpu/online = 0-11
+sys/devices/system/cpu/cpu{0,1}/topology/core_cpus_list = 0-1
+sys/devices/system/cpu/cpu{2,3}/topology/core_cpus_list = 2-3
+sys/devices/system/cpu/cpu{4,5}/topology/core_cpus_list = 4-5
+sys/devices/system/cpu/cpu{6,7}/topology/core_cpus_list = 6-7
+sys/devices/system/cpu/cpu{8,9}/topology/core_cpus_list = 8-9
+sys/devices/system/cpu/cpu{10,11}/topology/core_cpus_list = 10-11
+sys/devices/system/cpu/cpu{0-11}/cpu_capacity = 1024
+
+sys/class/drm/version = drm 1.1.0 20060810
+dev/dxg =
+
+sys/block/loop{0-7}/dev = 7:$n
+sys/block/loop{0-7}/queue/rotational = 0
+sys/block/ram{0-15}/dev = 1:$n
+sys/block/ram{0-15}/queue/rotational = 0
+sys/block/sda/dev = 8:0
+sys/block/sda/queue/rotational = 1
+sys/block/sda/device/vendor = Msft
+sys/block/sda/device/model = Virtual Disk
+sys/block/sdb/dev = 8:16
+sys/block/sdb/queue/rotational = 1
+sys/block/sdb/device/vendor = Msft
+sys/block/sdb/device/model = Virtual Disk
+sys/block/sdc/dev = 8:32
+sys/block/sdc/queue/rotational = 1
+sys/block/sdc/device/vendor = Msft
+sys/block/sdc/device/model = Virtual Disk
+sys/block/sdd/dev = 8:48
+sys/block/sdd/queue/rotational = 1
+sys/block/sdd/device/vendor = Msft
+sys/block/sdd/device/model = Virtual Disk
+
+<<< proc/self/mountinfo
+82 67 8:48 / / rw,relatime - ext4 /dev/sdd rw,discard,errors=remount-ro,data=ordered
+>>>

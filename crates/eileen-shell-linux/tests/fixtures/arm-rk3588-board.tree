@@ -1,0 +1,89 @@
+# Synthetic: an RK3588 board (four Cortex-A55 cores at capacity 530, four Cortex-A76 at 1024)
+# with 16 GB under Ubuntu 24.04 for arm64. Its /proc/cpuinfo names no processor, so the name
+# comes from the device tree. The Mali GPU (panthor) and the NPU (rocket) are platform devices
+# with no PCI id; the display controller (rockchip-drm) only displays. eMMC storage, no battery.
+
+proc/sys/kernel/osrelease = 6.18.0-1004-rockchip
+
+<<< etc/os-release
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+ID=ubuntu
+ID_LIKE=debian
+>>>
+
+<<< proc/meminfo
+MemTotal:       16120408 kB
+MemFree:        13982144 kB
+MemAvailable:   14863512 kB
+SwapTotal:       8060200 kB
+SwapFree:        8060200 kB
+CommitLimit:    16120404 kB
+Committed_AS:    1937420 kB
+>>>
+
+<<< proc/cpuinfo
+processor	: 0
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x2
+CPU part	: 0xd05
+CPU revision	: 0
+
+processor	: 4
+BogoMIPS	: 48.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x4
+CPU part	: 0xd0b
+CPU revision	: 0
+>>>
+
+sys/devices/system/cpu/online = 0-7
+sys/devices/system/cpu/cpu{0-7}/topology/core_cpus_list = $n
+# core_id restarts in each cluster (the A55s, then two pairs of A76s), which is why the probe
+# counts cores from core_cpus_list.
+sys/devices/system/cpu/cpu{0-3}/topology/core_id = $n
+sys/devices/system/cpu/cpu{4,6}/topology/core_id = 0
+sys/devices/system/cpu/cpu{5,7}/topology/core_id = 1
+sys/devices/system/cpu/cpu{0-3}/cpu_capacity = 530
+sys/devices/system/cpu/cpu{4-7}/cpu_capacity = 1024
+sys/firmware/devicetree/base/compatible = radxa,rock-5b\0rockchip,rk3588\0
+
+sys/class/drm/version = drm 1.1.0 20060810
+<<< sys/class/drm/card0/device/uevent
+DRIVER=rockchip-drm
+OF_NAME=display-subsystem
+OF_FULLNAME=/display-subsystem
+OF_COMPATIBLE_0=rockchip,display-subsystem
+OF_COMPATIBLE_N=1
+>>>
+<<< sys/class/drm/card1/device/uevent
+DRIVER=panthor
+OF_NAME=gpu
+OF_FULLNAME=/gpu@fb000000
+OF_COMPATIBLE_0=rockchip,rk3588-mali
+OF_COMPATIBLE_1=arm,mali-valhall-csf
+OF_COMPATIBLE_N=2
+>>>
+sys/class/drm/card0-HDMI-A-1/status = connected
+sys/class/drm/card0-HDMI-A-1/enabled = enabled
+sys/class/drm/card0-HDMI-A-2/status = disconnected
+<<< sys/class/accel/accel0/device/uevent
+DRIVER=rocket
+OF_NAME=npu
+OF_FULLNAME=/npu@fdab0000
+OF_COMPATIBLE_0=rockchip,rk3588-rknn-core
+OF_COMPATIBLE_N=1
+>>>
+
+sys/block/mmcblk0/dev = 179:0
+sys/block/mmcblk0/queue/rotational = 0
+sys/block/mmcblk0/mmcblk0p1/dev = 179:1
+sys/block/mmcblk0/mmcblk0p2/dev = 179:2
+sys/block/mmcblk0boot0/dev = 179:8
+sys/block/mmcblk0boot0/queue/rotational = 0

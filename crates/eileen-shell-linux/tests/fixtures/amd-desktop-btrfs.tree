@@ -1,0 +1,130 @@
+# Synthetic: a Fedora 43 desktop with a Ryzen 7 7700X (Zen 4: AVX-512 with VNNI; SMT siblings
+# numbered n and n+8), 64 GB, the processor's own Radeon (a 512 MB carve-out) and an RX 7900 XTX
+# (24 GB), btrfs subvolumes on NVMe with an anonymous device number, a hard disk and zram swap,
+# a mouse's battery, and three monitors of which the user turned one off. Fedora keeps
+# os-release under /usr/lib and the PCI ID database under /usr/share/hwdata.
+
+proc/sys/kernel/osrelease = 6.17.4-300.fc43.x86_64
+
+<<< usr/lib/os-release
+NAME="Fedora Linux"
+VERSION="43 (Workstation Edition)"
+ID=fedora
+VERSION_ID=43
+PRETTY_NAME="Fedora Linux 43 (Workstation Edition)"
+VARIANT_ID=workstation
+>>>
+
+<<< proc/meminfo
+MemTotal:       63980544 kB
+MemFree:        51034112 kB
+MemAvailable:   58771456 kB
+SwapTotal:       8388604 kB
+SwapFree:        8388604 kB
+CommitLimit:    40378876 kB
+Committed_AS:    9514604 kB
+>>>
+
+<<< proc/cpuinfo
+processor	: 0
+vendor_id	: AuthenticAMD
+cpu family	: 25
+model		: 97
+model name	: AMD Ryzen 7 7700X 8-Core Processor
+siblings	: 16
+cpu cores	: 8
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm abm sse4a fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb avx512f avx512dq avx512ifma avx512cd avx512bw avx512vl sha_ni xsaveopt xsavec xgetbv1 xsaves avx512_bf16 avx512vbmi umip pku avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm
+
+processor	: 1
+processor	: 2
+processor	: 3
+processor	: 4
+processor	: 5
+processor	: 6
+processor	: 7
+processor	: 8
+processor	: 9
+processor	: 10
+processor	: 11
+processor	: 12
+processor	: 13
+processor	: 14
+processor	: 15
+>>>
+
+sys/devices/system/cpu/online = 0-15
+sys/devices/system/cpu/cpu{0,8}/topology/core_cpus_list = 0,8
+sys/devices/system/cpu/cpu{1,9}/topology/core_cpus_list = 1,9
+sys/devices/system/cpu/cpu{2,10}/topology/core_cpus_list = 2,10
+sys/devices/system/cpu/cpu{3,11}/topology/core_cpus_list = 3,11
+sys/devices/system/cpu/cpu{4,12}/topology/core_cpus_list = 4,12
+sys/devices/system/cpu/cpu{5,13}/topology/core_cpus_list = 5,13
+sys/devices/system/cpu/cpu{6,14}/topology/core_cpus_list = 6,14
+sys/devices/system/cpu/cpu{7,15}/topology/core_cpus_list = 7,15
+
+sys/class/drm/version = drm 1.1.0 20060810
+<<< sys/class/drm/card0/device/uevent
+DRIVER=amdgpu
+PCI_CLASS=30000
+PCI_ID=1002:164E
+PCI_SUBSYS_ID=1043:8877
+PCI_SLOT_NAME=0000:11:00.0
+>>>
+sys/class/drm/card0/device/mem_info_vram_total = 536870912
+sys/class/drm/card0/device/mem_info_gtt_total = 32758624256
+<<< sys/class/drm/card1/device/uevent
+DRIVER=amdgpu
+PCI_CLASS=30000
+PCI_ID=1002:744C
+PCI_SUBSYS_ID=1002:0E3B
+PCI_SLOT_NAME=0000:03:00.0
+>>>
+sys/class/drm/card1/device/mem_info_vram_total = 25753026560
+sys/class/drm/card1/device/mem_info_gtt_total = 32758624256
+sys/class/drm/card0-HDMI-A-2/status = disconnected
+sys/class/drm/card1-DP-1/status = connected
+sys/class/drm/card1-DP-1/enabled = enabled
+sys/class/drm/card1-DP-2/status = connected
+sys/class/drm/card1-DP-2/enabled = enabled
+sys/class/drm/card1-HDMI-A-1/status = connected
+sys/class/drm/card1-HDMI-A-1/enabled = disabled
+
+<<< usr/share/hwdata/pci.ids
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+	164e  Raphael
+	744c  Navi 31 [Radeon RX 7900 XT/7900 XTX/7900 GRE/7900M]
+		1002 0e3b  Radeon RX 7900 XTX
+1022  Advanced Micro Devices, Inc. [AMD]
+	14d8  Raphael/Granite Ridge Root Complex
+>>>
+
+sys/block/nvme0n1/dev = 259:0
+sys/block/nvme0n1/queue/rotational = 0
+sys/block/nvme0n1/nvme0n1p1/dev = 259:1
+sys/block/nvme0n1/nvme0n1p2/dev = 259:2
+sys/block/nvme0n1/nvme0n1p3/dev = 259:3
+sys/block/sda/dev = 8:0
+sys/block/sda/queue/rotational = 1
+sys/block/sda/device/vendor = ATA
+sys/block/sda/device/model = ST4000DM004-2U91
+sys/block/sda/sda1/dev = 8:1
+sys/block/zram0/dev = 251:0
+sys/block/zram0/queue/rotational = 0
+
+<<< proc/self/mountinfo
+22 1 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+61 1 0:35 /root / rw,relatime shared:1 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root
+88 61 0:35 /home /home rw,relatime shared:47 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/home
+95 61 259:2 / /boot rw,relatime shared:51 - ext4 /dev/nvme0n1p2 rw,seclabel
+97 61 8:1 / /srv/media rw,relatime shared:53 - ext4 /dev/sda1 rw,seclabel
+41 61 0:38 / /tmp rw,nosuid,nodev shared:17 - tmpfs tmpfs rw,seclabel,size=32768000k
+>>>
+
+sys/class/power_supply/hidpp_battery_0/type = Battery
+sys/class/power_supply/hidpp_battery_0/scope = Device
+sys/class/power_supply/hidpp_battery_0/status = Discharging
+<<< var/lib/power-profiles-daemon/state.ini
+[State]
+CpuDriver=amd_pstate
+Profile=balanced
+>>>
