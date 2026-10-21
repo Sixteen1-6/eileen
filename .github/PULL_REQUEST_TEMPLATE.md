@@ -17,11 +17,14 @@ A test path starts with the package (any workspace member, hyphens or underscore
 then gives its module path from the crate root, as in eileen-core::turn::tests::barge_in_pauses.
 An integration test gives its test target first: eileen-core::it::job_model::<fn> is a test in
 tests/it/job_model.rs. Only the tests: and scenarios: lines are read as ids, and every id listed
-must exist at the head commit.
+must exist at the head commit; a test path must name a test (#[test], #[tokio::test] and the
+like), not other code.
 
 A feature, fix or refactor lists at least one id. A fix lists the test or scenario that failed
-before the change and passes now. Docs, scenario and deps pull requests say what was checked and
-how: a command and its result, or a link. This section is never left empty or as this comment.
+before the change and passes now, and adds or changes a regression: a scenario, a file under
+tests/, or the listed test or the test module around it. Docs, scenario and deps pull requests
+say what was checked and how: a command and its result, or a link. This section is never left
+empty or as this comment.
 -->
 
 ## Type

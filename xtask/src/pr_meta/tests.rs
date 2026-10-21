@@ -1,6 +1,6 @@
 //! Fixture tests for `pr-meta`: one per rule of checks 7, 8 and 19 that BUILD.md section 6.2
-//! (WP0 acceptance 11) names, over an in-memory repository, plus two runs against scratch git
-//! repositories.
+//! (WP0 acceptance 11) names, and one per failure branch of the template and type rules, over an
+//! in-memory repository, plus runs against scratch git repositories.
 
 use super::*;
 use crate::repo::mem::{MemRepo, ScratchGit};
@@ -10,9 +10,10 @@ const GOOD_TITLE: &str = "Add the title rule";
 const PERSON: &str = "a-contributor";
 const XTASK_TEST: &str = "xtask::pr_meta::tests::title_rule_holds";
 const CORE_IT_TEST: &str = "eileen-core::it::job_model::focus_job_follows_the_last_mention";
+const TURN_TEST: &str = "eileen-core::turn::tests::barge_in_pauses";
 
-/// A workspace like this repository's: xtask with a unit test, and a core crate with an
-/// integration test target `it` holding `job_model.rs`.
+/// A workspace like this repository's: xtask with a unit test, and a core crate with an inline
+/// test module in `turn.rs` and an integration test target `it` holding `job_model.rs`.
 fn workspace() -> MemRepo {
     MemRepo::default()
         .file("Cargo.toml", "[workspace]\nmembers = [\"crates/*\", \"xtask\"]\n")
@@ -20,14 +21,33 @@ fn workspace() -> MemRepo {
         .file("xtask/src/lib.rs", "mod pr_meta;\n")
         .file("xtask/src/pr_meta.rs", XTASK_SOURCE)
         .file("crates/eileen-core/Cargo.toml", "[package]\nname = \"eileen-core\"\n")
-        .file("crates/eileen-core/src/lib.rs", "//! The core.\npub fn step() {}\n")
+        .file("crates/eileen-core/src/lib.rs", "//! The core.\npub fn step() {}\npub mod turn;\n")
+        .file("crates/eileen-core/src/turn.rs", TURN_SOURCE)
         .file("crates/eileen-core/tests/it/main.rs", "mod job_model;\n")
         .file("crates/eileen-core/tests/it/job_model.rs", JOB_MODEL_SOURCE)
+        .file("scenarios/core/hello/scenario.toml", "id = \"hello\"\n")
 }
 
-const XTASK_SOURCE: &str =
-    "#[cfg(test)]\nmod tests {\n    #[test]\n    fn title_rule_holds() {}\n}\n";
+const XTASK_SOURCE: &str = "pub(crate) fn check() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    \
+                            fn title_rule_holds() {}\n}\n";
 const JOB_MODEL_SOURCE: &str = "#[test]\nfn focus_job_follows_the_last_mention() {}\n";
+/// `turn.rs`: production code on lines 1 to 3, the test module on lines 5 to 13, its helper
+/// on line 7 and the test itself on lines 9 to 12.
+const TURN_SOURCE: &str = "\
+pub fn step(paused: bool) -> bool {
+    !paused
+}
+
+#[cfg(test)]
+mod tests {
+    fn paused() -> bool { true }
+
+    #[test]
+    fn barge_in_pauses() {
+        assert!(!super::step(paused()));
+    }
+}
+";
 
 /// The workspace with one source file changed.
 fn code_change() -> MemRepo {
@@ -64,11 +84,16 @@ fn template_with_type(kind: &str) -> String {
 }
 
 fn run(title: &str, body: &str, author: &str, repo: &MemRepo) -> Outcome {
-    check(&Input { title, body, author }, repo).expect("the in-memory repository cannot fail")
+    check(&Input { title: Some(title), body, author }, repo)
+        .expect("the in-memory repository cannot fail")
 }
 
 fn run_person(body: &str, repo: &MemRepo) -> Outcome {
     run(GOOD_TITLE, body, PERSON, repo)
+}
+
+fn run_fix(evidence: &str, repo: &MemRepo) -> Outcome {
+    run("Fix the barge-in pause", &body("fix", evidence), PERSON, repo)
 }
 
 #[track_caller]
@@ -118,6 +143,12 @@ fn feature_naming_a_missing_test_fails() {
 }
 
 #[test]
+fn feature_naming_a_function_that_is_not_a_test_fails() {
+    let outcome = run_person(&body("feature", "tests: xtask::pr_meta::check"), &code_change());
+    assert_fails_with(&outcome, Check::Description, "is not a test");
+}
+
+#[test]
 fn scenario_id_without_a_folder_fails() {
     let evidence = format!("tests: {XTASK_TEST}\nscenarios: core/missing-scenario");
     let outcome = run_person(&body("feature", &evidence), &code_change());
@@ -131,8 +162,7 @@ fn scenario_id_without_a_folder_fails() {
 #[test]
 fn fix_without_a_regression_fails() {
     let repo = workspace().changed("crates/eileen-core/src/lib.rs", "pub fn step() { fixed(); }\n");
-    let outcome =
-        run("Fix the focus job", &body("fix", &format!("tests: {CORE_IT_TEST}")), PERSON, &repo);
+    let outcome = run_fix(&format!("tests: {CORE_IT_TEST}"), &repo);
     assert_fails_with(&outcome, Check::Regression, "adds or changes no regression");
 }
 
@@ -141,9 +171,26 @@ fn fix_with_a_changed_test_passes() {
     let repo = workspace()
         .changed("crates/eileen-core/src/lib.rs", "pub fn step() { fixed(); }\n")
         .changed("crates/eileen-core/tests/it/job_model.rs", JOB_MODEL_SOURCE);
-    let outcome =
-        run("Fix the focus job", &body("fix", &format!("tests: {CORE_IT_TEST}")), PERSON, &repo);
-    assert_passes(&outcome);
+    assert_passes(&run_fix(&format!("tests: {CORE_IT_TEST}"), &repo));
+}
+
+#[test]
+fn fix_editing_only_code_beside_an_unchanged_inline_test_fails() {
+    let repo = workspace().edited("crates/eileen-core/src/turn.rs", TURN_SOURCE, &[2]);
+    let outcome = run_fix(&format!("tests: {TURN_TEST}"), &repo);
+    assert_fails_with(&outcome, Check::Regression, "adds or changes no regression");
+}
+
+#[test]
+fn fix_changing_the_listed_inline_test_passes() {
+    let repo = workspace().edited("crates/eileen-core/src/turn.rs", TURN_SOURCE, &[2, 11]);
+    assert_passes(&run_fix(&format!("tests: {TURN_TEST}"), &repo));
+}
+
+#[test]
+fn fix_changing_the_test_module_around_the_listed_test_passes() {
+    let repo = workspace().edited("crates/eileen-core/src/turn.rs", TURN_SOURCE, &[2, 7]);
+    assert_passes(&run_fix(&format!("tests: {TURN_TEST}"), &repo));
 }
 
 #[test]
@@ -152,9 +199,23 @@ fn deleting_a_test_is_not_a_regression() {
         .changed("crates/eileen-core/src/lib.rs", "pub fn step() { fixed(); }\n")
         .file("crates/eileen-core/tests/it/old.rs", "#[test]\nfn old() {}\n")
         .deleted("crates/eileen-core/tests/it/old.rs");
-    let outcome =
-        run("Fix the focus job", &body("fix", &format!("tests: {CORE_IT_TEST}")), PERSON, &repo);
+    let outcome = run_fix(&format!("tests: {CORE_IT_TEST}"), &repo);
     assert_fails_with(&outcome, Check::Regression, "adds or changes no regression");
+}
+
+#[test]
+fn scenario_folders_count_as_regressions_but_their_readme_and_schema_do_not() {
+    let repo = workspace()
+        .changed("crates/eileen-core/src/lib.rs", "pub fn step() { fixed(); }\n")
+        .changed("scenarios/README.md", "# Scenarios\n")
+        .changed("scenarios/core/README.md", "# Core scenarios\n")
+        .changed("scenarios/_schema/v1/scenario.schema.json", "{}\n");
+    let outcome = run_fix(&format!("tests: {CORE_IT_TEST}"), &repo);
+    assert_fails_with(&outcome, Check::Regression, "adds or changes no regression");
+    let scenario = workspace()
+        .changed("crates/eileen-core/src/lib.rs", "pub fn step() { fixed(); }\n")
+        .changed("scenarios/core/hello/scenario.toml", "id = \"hello\"\nsteps = 2\n");
+    assert_passes(&run_fix("scenarios: core/hello", &scenario));
 }
 
 #[test]
@@ -176,6 +237,30 @@ fn bad_title_fails() {
     assert_fails_with(&outcome, Check::Title, "period");
     assert_fails_with(&outcome, Check::Title, "capital letter");
     assert_fails_with(&outcome, Check::Title, "past tense");
+}
+
+#[test]
+fn without_a_title_the_head_commit_subject_is_checked() {
+    let described = body("feature", &format!("tests: {XTASK_TEST}"));
+    let untitled =
+        |repo: &MemRepo| check(&Input { title: None, body: &described, author: PERSON }, repo);
+    let good = untitled(&code_change().commit("Add the title rule")).expect("a commit exists");
+    assert_passes(&good);
+    assert!(
+        good.summary.contains("\"Add the title rule\" (the head commit's subject"),
+        "the summary says which title was checked: {}",
+        good.summary
+    );
+    let bad =
+        untitled(&code_change().commit("Start").commit("added the rule.")).expect("commits exist");
+    assert_fails_with(&bad, Check::Title, "past tense");
+    assert!(
+        bad.advice.iter().all(|advice| !advice.contains("added the rule.")),
+        "the subject checked as the title is not repeated as advice: {:?}",
+        bad.advice
+    );
+    let error = untitled(&code_change()).expect_err("no commit and no title leaves nothing");
+    assert!(error.0.contains("--title"), "the error says how to go on: {error}");
 }
 
 #[test]
@@ -231,6 +316,40 @@ fn dependabot_changing_more_than_pins_fails() {
     );
     let outcome = run("Bump the github-actions group", "Bumps things.", DEPENDABOT, &repo);
     assert_fails_with(&outcome, Check::Description, "may change only");
+    let binary = workspace().changed_with_lines("docs/diagram.png", &[]);
+    let outcome = run("Bump the github-actions group", "Bumps things.", DEPENDABOT, &binary);
+    assert_fails_with(&outcome, Check::Description, "docs/diagram.png");
+}
+
+#[test]
+fn deps_type_with_a_binary_change_fails() {
+    for path in ["scenarios/core/hello/clip.wav", "models/vad.onnx"] {
+        let repo = workspace().changed("Cargo.lock", "version = 4\n").changed_with_lines(path, &[]);
+        let outcome = run_person(&body("deps", "cargo deny check passes."), &repo);
+        assert_fails_with(&outcome, Check::Description, path);
+    }
+}
+
+#[test]
+fn deps_type_with_a_mode_or_blank_line_change_to_a_workflow_fails() {
+    let mode = workspace().changed_with_lines(".github/workflows/ci.yml", &[]);
+    let outcome = run_person(&body("deps", "cargo deny check passes."), &mode);
+    assert_fails_with(&outcome, Check::Description, "no text line changed");
+    let blank = workspace().changed_with_lines(
+        ".github/workflows/ci.yml",
+        &["      - uses: a/b@111 # v1", "      - uses: a/b@222 # v2", ""],
+    );
+    let outcome = run_person(&body("deps", "cargo deny check passes."), &blank);
+    assert_fails_with(&outcome, Check::Description, "lines other than `uses:`");
+}
+
+#[test]
+fn deps_type_with_a_blank_or_uses_line_in_rust_fails() {
+    for lines in [&[""][..], &["    uses: n,"][..]] {
+        let repo = workspace().changed_with_lines("xtask/src/lib.rs", lines);
+        let outcome = run_person(&body("deps", "cargo deny check passes."), &repo);
+        assert_fails_with(&outcome, Check::Description, "xtask/src/lib.rs (not a manifest");
+    }
 }
 
 #[test]
@@ -297,6 +416,49 @@ fn template_order_is_enforced() {
 }
 
 #[test]
+fn a_heading_given_twice_fails() {
+    let twice = format!("{}\n## Why\n\nAgain.\n", body("feature", &format!("tests: {XTASK_TEST}")));
+    let outcome = run_person(&twice, &code_change());
+    assert_fails_with(&outcome, Check::Description, "`## Why` appears more than once");
+}
+
+#[test]
+fn a_heading_out_of_order_fails() {
+    let good = body("feature", &format!("tests: {XTASK_TEST}"));
+    let moved = good
+        .replace("## Scenario\n\nNone.\n\n", "")
+        .replace("## Why\n", "## Scenario\n\nNone.\n\n## Why\n");
+    let outcome = run_person(&moved, &code_change());
+    assert_fails_with(&outcome, Check::Description, "`## Scenario` is out of the template's order");
+}
+
+#[test]
+fn type_not_second_fails() {
+    let good = body("feature", &format!("tests: {XTASK_TEST}"));
+    let late = good.replace(
+        "## Type\n\ntype: feature\n\n## What\n\nIt adds a rule.\n\n",
+        "## What\n\nIt adds a rule.\n\n## Type\n\ntype: feature\n\n",
+    );
+    let outcome = run_person(&late, &code_change());
+    assert_fails_with(&outcome, Check::Description, "`## Type` does not come right after");
+}
+
+#[test]
+fn a_malformed_type_section_fails_with_its_reason() {
+    let good = body("feature", &format!("tests: {XTASK_TEST}"));
+    let cases = [
+        ("", "the Type section is empty"),
+        ("type: feature\nAnd it is small.", "holds more than its one `type:` line"),
+        ("kind: feature", "is not `type: <value>`"),
+        ("type: bugfix", "`bugfix` is not a type"),
+    ];
+    for (type_section, reason) in cases {
+        let described = good.replace("type: feature", type_section);
+        assert_fails_with(&run_person(&described, &code_change()), Check::Description, reason);
+    }
+}
+
+#[test]
 fn crlf_description_from_the_browser_passes() {
     let evidence = format!("Typed in the browser.\ntests: {XTASK_TEST}");
     let crlf = body("feature", &evidence).replace('\n', "\r\n");
@@ -310,14 +472,31 @@ fn fenced_heading_and_field_are_prose() {
 }
 
 #[test]
+fn a_comment_marker_quoted_in_code_is_text() {
+    let inline = format!("The template's `<!--` comments are removed.\ntests: {XTASK_TEST}");
+    assert_passes(&run_person(&body("feature", &inline), &code_change()));
+    let fenced = format!("tests: {XTASK_TEST}\n```html\n<!-- the template's guidance\n```");
+    assert_passes(&run_person(&body("feature", &fenced), &code_change()));
+    let after_code =
+        format!("Shown as `x`. <!-- a comment\ntests: not::an::id\n-->\ntests: {XTASK_TEST}");
+    assert_passes(&run_person(&body("feature", &after_code), &code_change()));
+}
+
+#[test]
 fn evidence_fields_are_checked() {
-    let evidence = format!("tests: {XTASK_TEST}\ntests: {XTASK_TEST}\nreplay: rec_123\nnumbers:");
+    let evidence = format!(
+        "tests: {XTASK_TEST}\ntests: {XTASK_TEST}\nreplay: rec_123\nincident: inc_123\nnumbers:"
+    );
     let outcome = run_person(&body("feature", &evidence), &code_change());
     assert_fails_with(&outcome, Check::Description, "`tests:` field appears more than once");
     assert_fails_with(&outcome, Check::Description, "is not `rec_<ulid>`");
+    assert_fails_with(&outcome, Check::Description, "`incident: inc_123` is not `inc_<ulid>`");
     assert_fails_with(&outcome, Check::Description, "`numbers:` field is empty");
-    let good_replay = format!("tests: {XTASK_TEST}\nreplay: rec_01JZ8Q3V6R4N2K7T9W5X0Y1M3B");
-    assert_passes(&run_person(&body("feature", &good_replay), &code_change()));
+    let good_ids = format!(
+        "tests: {XTASK_TEST}\nreplay: rec_01JZ8Q3V6R4N2K7T9W5X0Y1M3B\n\
+         incident: inc_01JZ8Q3V6R4N2K7T9W5X0Y1M3B"
+    );
+    assert_passes(&run_person(&body("feature", &good_ids), &code_change()));
 }
 
 #[test]
@@ -353,9 +532,9 @@ fn report_names_check_place_fix_and_reproduce() {
 
 #[test]
 fn reproduce_command_quotes_the_title() {
-    let options = PrMetaOptions {
+    let mut options = PrMetaOptions {
         body_file: "pr body.md".into(),
-        title: "Fix the author's check".to_owned(),
+        title: Some("Fix the author's check".to_owned()),
         base: "origin/main".to_owned(),
         head: "HEAD".to_owned(),
         author: String::new(),
@@ -364,6 +543,12 @@ fn reproduce_command_quotes_the_title() {
         reproduce_command(&options, "abc", "def"),
         r"cargo xtask pr-meta --body-file 'pr body.md' --title 'Fix the author'\''s check' --base abc --head def",
         "single quotes survive a POSIX shell"
+    );
+    options.title = None;
+    assert_eq!(
+        reproduce_command(&options, "abc", "def"),
+        "cargo xtask pr-meta --body-file 'pr body.md' --base abc --head def",
+        "a run without a title reproduces without one"
     );
 }
 
@@ -383,7 +568,7 @@ fn git_backed_run_reads_the_branch() {
     let repo = GitRepo::open(git.path(), "main", "topic").expect("both revisions resolve");
 
     let fix = body("fix", "tests: tool::tests::rejects_empty");
-    let input = Input { title: "Fix the empty input", body: &fix, author: PERSON };
+    let input = Input { title: Some("Fix the empty input"), body: &fix, author: PERSON };
     let outcome = check(&input, &repo).expect("git answers");
     assert!(
         outcome.findings.is_empty(),
@@ -392,11 +577,41 @@ fn git_backed_run_reads_the_branch() {
     );
 
     let wrong = body("feature", "tests: tool::tests::accepts_everything");
-    let input = Input { title: "Add parsing", body: &wrong, author: PERSON };
+    let input = Input { title: Some("Add parsing"), body: &wrong, author: PERSON };
     let outcome = check(&input, &repo).expect("git answers");
     assert!(
         outcome.findings.iter().any(|f| f.problem.contains("accepts_everything")),
         "a test that is not at the head fails: {:#?}",
         outcome.findings
     );
+}
+
+#[test]
+fn git_backed_fix_must_touch_the_listed_test() {
+    let git = ScratchGit::new("pr-meta-fix");
+    let tests = "\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn rejects_empty() {}\n}\n";
+    git.write("Cargo.toml", "[workspace]\nresolver = \"3\"\nmembers = [\"tool\"]\n");
+    git.write("tool/Cargo.toml", "[package]\nname = \"tool\"\n");
+    git.write("tool/src/lib.rs", &format!("pub fn parse() {{}}\n{tests}"));
+    git.commit("Start with a test");
+    git.branch("topic");
+    git.write("tool/src/lib.rs", &format!("pub fn parse() {{ guard(); }}\n{tests}"));
+    git.commit("Fix the empty input");
+    let fix = body("fix", "tests: tool::tests::rejects_empty");
+    let input = Input { title: Some("Fix the empty input"), body: &fix, author: PERSON };
+
+    let repo = GitRepo::open(git.path(), "main", "topic").expect("both revisions resolve");
+    let outcome = check(&input, &repo).expect("git answers");
+    assert!(
+        outcome.findings.iter().any(|f| f.check == Check::Regression),
+        "only production code changed beside the old test: {:#?}",
+        outcome.findings
+    );
+
+    let changed_test = tests.replace("fn rejects_empty() {}", "fn rejects_empty() { check(); }");
+    git.write("tool/src/lib.rs", &format!("pub fn parse() {{ guard(); }}\n{changed_test}"));
+    git.commit("Show the empty input failing");
+    let repo = GitRepo::open(git.path(), "main", "topic").expect("both revisions resolve");
+    let outcome = check(&input, &repo).expect("git answers");
+    assert!(outcome.findings.is_empty(), "the test changed too: {:#?}", outcome.findings);
 }

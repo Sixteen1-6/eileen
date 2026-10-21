@@ -6,10 +6,11 @@
 //! first segment is the test target (the file stem under `tests/`, or the folder holding
 //! `main.rs`), then the module path inside it. The id resolves when `git grep` finds `fn <name>`
 //! under the package's directory in a file whose module path, plus the inline modules around the
-//! function, matches. A scenario id `<area>/<id>` resolves when
+//! function, matches, and that function is a test (an attribute whose path ends in `test`, such
+//! as `#[test]` or `#[tokio::test]`). A scenario id `<area>/<id>` resolves when
 //! `scenarios/<area>/<id>/scenario.toml` exists at the head.
 
-use crate::pr_meta::scan;
+use crate::pr_meta::scan::{self, Lines};
 use crate::repo::{Repo, RepoError};
 
 /// A workspace member: its package name and its directory from the repository root.
@@ -30,11 +31,34 @@ pub(crate) struct TestId {
 
 /// Where an id led.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Resolution {
-    /// The id exists; for a test, this is the file that defines it.
-    Found(String),
+pub(crate) enum Resolution<T> {
+    /// The id exists, and this is where.
+    Found(T),
     /// The id does not exist, and why.
     Missing(String),
+}
+
+/// Where a listed test is defined at the head commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TestSite {
+    /// The file that defines it.
+    pub(crate) file: String,
+    /// Its lines, from its first attribute to the end of its body.
+    pub(crate) lines: Lines,
+    /// The test module around it in that file, if any.
+    pub(crate) test_module: Option<Lines>,
+}
+
+impl TestSite {
+    /// Whether a change at this head line changes the test: it is inside the test or inside
+    /// the test module around it (a shared fixture, a new case beside it).
+    pub(crate) const fn is_touched_at(&self, line: usize) -> bool {
+        self.lines.contains(line)
+            || match self.test_module {
+                Some(module) => module.contains(line),
+                None => false,
+            }
+    }
 }
 
 /// Parses `<package>::<module>::...::<fn>`.
@@ -141,7 +165,7 @@ fn join(dir: &str, name: &str) -> String {
 }
 
 /// Glob match of one path segment: `*` is any run of characters, `?` is one.
-fn wildcard(pattern: &str, name: &str) -> bool {
+pub(crate) fn wildcard(pattern: &str, name: &str) -> bool {
     fn matches(pattern: &[char], name: &[char]) -> bool {
         match (pattern.split_first(), name.split_first()) {
             (None, None) => true,
@@ -197,7 +221,7 @@ pub(crate) fn resolve_test(
     repo: &dyn Repo,
     members: &[Member],
     id: &TestId,
-) -> Result<Resolution, RepoError> {
+) -> Result<Resolution<TestSite>, RepoError> {
     let normal = |name: &str| name.replace('-', "_");
     let Some(member) = members.iter().find(|member| normal(&member.name) == normal(&id.package))
     else {
@@ -209,6 +233,7 @@ pub(crate) fn resolve_test(
         )));
     };
     let mut elsewhere = Vec::new();
+    let mut not_tests = Vec::new();
     for file in repo.grep_head(&format!("fn {}", id.name), &member.dir)? {
         let relative = if member.dir.is_empty() {
             file.as_str()
@@ -223,8 +248,13 @@ pub(crate) fn resolve_test(
         };
         for site in scan::fn_sites(&source).into_iter().filter(|site| site.name == id.name) {
             let full: Vec<String> = file_path.iter().cloned().chain(site.modules).collect();
+            if full == id.path && site.is_test {
+                let found = TestSite { file, lines: site.lines, test_module: site.test_module };
+                return Ok(Resolution::Found(found));
+            }
             if full == id.path {
-                return Ok(Resolution::Found(file));
+                not_tests.push(format!("{file}:{}", site.lines.first));
+                continue;
             }
             let mut shown = vec![member.name.clone()];
             shown.extend(full);
@@ -233,15 +263,22 @@ pub(crate) fn resolve_test(
         }
     }
     let shown_dir = if member.dir.is_empty() { "the repository root" } else { member.dir.as_str() };
-    Ok(Resolution::Missing(if elsewhere.is_empty() {
+    Ok(Resolution::Missing(if !not_tests.is_empty() {
+        format!(
+            "`fn {}` exists at {} but is not a test: it has no `#[test]` (or other attribute \
+             whose path ends in `test`)",
+            id.name,
+            not_tests.join(", ")
+        )
+    } else if elsewhere.is_empty() {
         format!("there is no `fn {}` under {shown_dir} at the head commit", id.name)
     } else {
         format!("`fn {}` exists only as {}", id.name, elsewhere.join(", "))
     }))
 }
 
-/// Resolves a scenario id `<area>/<id>` against the head commit.
-pub(crate) fn resolve_scenario(repo: &dyn Repo, id: &str) -> Result<Resolution, RepoError> {
+/// Resolves a scenario id `<area>/<id>` against the head commit to its `scenario.toml`.
+pub(crate) fn resolve_scenario(repo: &dyn Repo, id: &str) -> Result<Resolution<String>, RepoError> {
     let well_formed = id.split_once('/').is_some_and(|(area, name)| {
         [area, name].iter().all(|part| {
             !part.is_empty()
@@ -284,10 +321,18 @@ mod tests {
             .file("scenarios/core/hello/scenario.toml", "id = \"hello\"\n")
     }
 
-    fn resolve(repo: &MemRepo, id: &str) -> Resolution {
+    fn resolve(repo: &MemRepo, id: &str) -> Resolution<TestSite> {
         let members = members(repo).expect("the fixture manifest parses");
         let id = parse_test_id(id).expect("the fixture id parses");
         resolve_test(repo, &members, &id).expect("the in-memory repository cannot fail")
+    }
+
+    /// The file a test id resolves to.
+    fn found_file(resolution: Resolution<TestSite>) -> Option<String> {
+        match resolution {
+            Resolution::Found(site) => Some(site.file),
+            Resolution::Missing(_) => None,
+        }
     }
 
     #[test]
@@ -301,16 +346,32 @@ mod tests {
     fn xtask_unit_test_resolves() {
         assert_eq!(
             resolve(&workspace(), "xtask::pr_meta::tests::title_passes"),
-            Resolution::Found("xtask/src/pr_meta.rs".to_owned()),
-            "W0's own tests live in xtask and resolve like any member's"
+            Resolution::Found(TestSite {
+                file: "xtask/src/pr_meta.rs".to_owned(),
+                lines: Lines { first: 4, last: 5 },
+                test_module: Some(Lines { first: 2, last: 6 }),
+            }),
+            "W0's own tests live in xtask and resolve like any member's, with their lines"
         );
+    }
+
+    #[test]
+    fn a_function_that_is_not_a_test_does_not_resolve() {
+        let Resolution::Missing(why) = resolve(&workspace(), "xtask::pr_meta::check") else {
+            panic!("production code is not a test");
+        };
+        assert!(why.contains("is not a test"), "the message says why: {why}");
+        assert!(why.contains("xtask/src/pr_meta.rs:1"), "and where the fn is: {why}");
     }
 
     #[test]
     fn integration_test_resolves_by_its_test_target() {
         assert_eq!(
-            resolve(&workspace(), "eileen-core::it::job_model::focus_job_follows_the_last_mention"),
-            Resolution::Found("crates/eileen-core/tests/it/job_model.rs".to_owned()),
+            found_file(resolve(
+                &workspace(),
+                "eileen-core::it::job_model::focus_job_follows_the_last_mention"
+            )),
+            Some("crates/eileen-core/tests/it/job_model.rs".to_owned()),
             "the first segment after the package is the test target, `it`"
         );
         assert!(

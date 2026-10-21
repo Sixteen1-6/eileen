@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{Change, ChangeKind, Repo, RepoError};
+use super::{Change, ChangeKind, FileDiff, GIT_LOCATION_ENV, Repo, RepoError};
 
-/// A repository held in memory: the head tree, the changed files and their changed lines.
+/// A repository held in memory: the head tree, the changed files and their diffs.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct MemRepo {
     files: BTreeMap<String, String>,
     changes: Vec<Change>,
-    lines: BTreeMap<String, Vec<String>>,
+    diffs: BTreeMap<String, FileDiff>,
     subjects: Vec<(String, String)>,
 }
 
@@ -24,19 +24,46 @@ impl MemRepo {
         self
     }
 
-    /// Puts a file in the head tree and marks it added or modified, with every line changed.
+    /// Puts a file in the head tree and marks it added or modified, with every line added.
     pub(crate) fn changed(mut self, path: &str, content: &str) -> Self {
         let kind =
             if self.files.contains_key(path) { ChangeKind::Modified } else { ChangeKind::Added };
+        let diff = FileDiff {
+            lines: content.lines().map(str::to_owned).collect(),
+            added_at: (1..=content.lines().count()).collect(),
+        };
         self.files.insert(path.to_owned(), content.to_owned());
-        self.lines.insert(path.to_owned(), content.lines().map(str::to_owned).collect());
+        self.diffs.insert(path.to_owned(), diff);
         self.changes.push(Change { path: path.to_owned(), kind });
         self
     }
 
-    /// Marks a file changed with exactly these added and removed lines.
+    /// Puts a file in the head tree and marks it modified, with only these head lines
+    /// (1-based) added or changed.
+    pub(crate) fn edited(mut self, path: &str, content: &str, changed: &[usize]) -> Self {
+        let lines: Vec<&str> = content.lines().collect();
+        let diff = FileDiff {
+            lines: changed
+                .iter()
+                .filter_map(|at| at.checked_sub(1).and_then(|index| lines.get(index)))
+                .map(|&line| line.to_owned())
+                .collect(),
+            added_at: changed.to_vec(),
+        };
+        self.files.insert(path.to_owned(), content.to_owned());
+        self.diffs.insert(path.to_owned(), diff);
+        self.changes.push(Change { path: path.to_owned(), kind: ChangeKind::Modified });
+        self
+    }
+
+    /// Marks a file modified with exactly these added and removed lines, at no particular
+    /// head line. No lines stands for a binary or mode-only change.
     pub(crate) fn changed_with_lines(mut self, path: &str, lines: &[&str]) -> Self {
-        self.lines.insert(path.to_owned(), lines.iter().map(|&line| line.to_owned()).collect());
+        let diff = FileDiff {
+            lines: lines.iter().map(|&line| line.to_owned()).collect(),
+            added_at: Vec::new(),
+        };
+        self.diffs.insert(path.to_owned(), diff);
         self.changes.push(Change { path: path.to_owned(), kind: ChangeKind::Modified });
         self
     }
@@ -89,8 +116,8 @@ impl Repo for MemRepo {
         Ok(self.changes.clone())
     }
 
-    fn changed_lines(&self, path: &str) -> Result<Vec<String>, RepoError> {
-        Ok(self.lines.get(path).cloned().unwrap_or_default())
+    fn file_diff(&self, path: &str) -> Result<FileDiff, RepoError> {
+        Ok(self.diffs.get(path).cloned().unwrap_or_default())
     }
 
     fn commit_subjects(&self) -> Result<Vec<(String, String)>, RepoError> {
@@ -169,18 +196,18 @@ impl ScratchGit {
     /// Runs git in the scratch repository with a fixed identity and no user configuration that
     /// could change its behaviour (hooks, signing, line ending conversion).
     fn run(&self, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(&self.dir)
             .args(["-c", "user.name=xtask test", "-c", "user.email=xtask-test@example.invalid"])
             .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
             .args(["-c", "core.hooksPath=.git/no-hooks"])
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .output()
-            .expect("git runs");
+            .args(args);
+        for name in GIT_LOCATION_ENV {
+            command.env_remove(name);
+        }
+        let output = command.output().expect("git runs");
         assert!(
             output.status.success(),
             "git {args:?} failed: {}",

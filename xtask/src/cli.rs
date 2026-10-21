@@ -12,9 +12,10 @@ commands:
   pr-meta   check a pull request's title, description and changed files (BUILD.md checks 7, 8, 19)
   help      print this text
 
-cargo xtask pr-meta --body-file <file> --title <title> [--base <rev>] [--head <rev>] [--author <login>]
+cargo xtask pr-meta --body-file <file> [--title <title>] [--base <rev>] [--head <rev>] [--author <login>]
   --body-file  the pull request description, as Markdown
-  --title      the pull request title
+  --title      the pull request title (default: the head commit's subject, which GitHub proposes
+               as the title of a one-commit pull request; the report says which title it checked)
   --base       the branch the pull request merges into (default origin/main)
   --head       the pull request's last commit (default HEAD)
   --author     the pull request author's login; dependabot[bot] gets the bot rule (default: a person)
@@ -34,8 +35,8 @@ pub(crate) enum Command {
 pub(crate) struct PrMetaOptions {
     /// The file holding the pull request description.
     pub(crate) body_file: PathBuf,
-    /// The pull request title.
-    pub(crate) title: String,
+    /// The pull request title, or `None` to check the head commit's subject.
+    pub(crate) title: Option<String>,
     /// The base revision.
     pub(crate) base: String,
     /// The head revision.
@@ -89,7 +90,7 @@ where
     }
     Ok(PrMetaOptions {
         body_file: PathBuf::from(body_file.ok_or("pr-meta needs `--body-file <file>`")?),
-        title: title.ok_or("pr-meta needs `--title <title>`")?,
+        title,
         base: base.unwrap_or_else(|| "origin/main".to_owned()),
         head: head.unwrap_or_else(|| "HEAD".to_owned()),
         author: author.unwrap_or_default(),
@@ -126,12 +127,21 @@ mod tests {
             parsed,
             Ok(Command::PrMeta(PrMetaOptions {
                 body_file: PathBuf::from("b.md"),
-                title: "Add a check".to_owned(),
+                title: Some("Add a check".to_owned()),
                 base: "origin/main".to_owned(),
                 head: "HEAD".to_owned(),
                 author: String::new(),
             })),
             "flags with a space or an equals sign, base and head defaulted"
+        );
+    }
+
+    #[test]
+    fn pr_meta_runs_as_documented_with_only_the_body_file() {
+        let parsed = parse_strs(&["pr-meta", "--body-file", "b.md"]);
+        assert!(
+            matches!(parsed, Ok(Command::PrMeta(PrMetaOptions { title: None, .. }))),
+            "BUILD.md section 4b.3's local form needs no title: {parsed:?}"
         );
     }
 

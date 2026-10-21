@@ -9,6 +9,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// The environment variables git exports to hooks that would point a git command at another
+/// repository than the one `-C` names. Every git command xtask starts removes them, so a run
+/// from a hook in a worktree reads the same repository as a run from the shell.
+pub(crate) const GIT_LOCATION_ENV: [&str; 4] =
+    ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"];
+
 /// How a changed file changed between the merge base and the head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChangeKind {
@@ -27,6 +33,16 @@ pub(crate) struct Change {
     pub(crate) path: String,
     /// How it changed.
     pub(crate) kind: ChangeKind,
+}
+
+/// What one changed file's diff says, read from `git diff -U0`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FileDiff {
+    /// The added and removed lines, without their `+` or `-` marker. Empty for a binary or
+    /// mode-only change, which has no text hunk.
+    pub(crate) lines: Vec<String>,
+    /// The head-side line numbers (1-based) of the added lines.
+    pub(crate) added_at: Vec<usize>,
 }
 
 /// A git command failed or printed something unexpected.
@@ -50,8 +66,8 @@ pub(crate) trait Repo {
     fn grep_head(&self, needle: &str, dir: &str) -> Result<Vec<String>, RepoError>;
     /// The files the pull request changes, from the merge base of base and head to the head.
     fn changed_files(&self) -> Result<Vec<Change>, RepoError>;
-    /// The added and removed lines of one changed file, without their `+` or `-` marker.
-    fn changed_lines(&self, path: &str) -> Result<Vec<String>, RepoError>;
+    /// The changed lines of one changed file, and where its added lines sit at the head.
+    fn file_diff(&self, path: &str) -> Result<FileDiff, RepoError>;
     /// `(short sha, subject)` of each commit in `base..head`, newest first.
     fn commit_subjects(&self) -> Result<Vec<(String, String)>, RepoError>;
 }
@@ -95,14 +111,23 @@ impl GitRepo {
         Ok(stdout_text(&output).trim().to_owned())
     }
 
+    /// A git command for this repository: `-C` locates it, the location variables a hook
+    /// inherits are removed, and the user settings that would change the output xtask parses
+    /// (quoted paths, colour, signatures in `git log`) are fixed.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(&self.root);
+        command.args(["-c", "core.quotePath=false", "-c", "color.ui=never"]);
+        command.args(["-c", "log.showSignature=false"]);
+        command.args(args);
+        for name in GIT_LOCATION_ENV {
+            command.env_remove(name);
+        }
+        command
+    }
+
     fn git(&self, args: &[&str]) -> Result<Output, RepoError> {
-        Command::new("git")
-            .arg("-C")
-            .arg(&self.root)
-            .args(["-c", "core.quotePath=false"])
-            .args(args)
-            .output()
-            .map_err(|error| RepoError(format!("cannot run git: {error}")))
+        self.command(args).output().map_err(|error| RepoError(format!("cannot run git: {error}")))
     }
 
     /// Runs git and fails unless it exits with one of `ok_codes`.
@@ -142,7 +167,8 @@ impl Repo for GitRepo {
             args.extend(["--", pathspec.as_str()]);
         }
         let output = self.git_ok(&args, &[0])?;
-        Ok(nul_fields(&output)
+        Ok(nul_fields(&output)?
+            .into_iter()
             .filter_map(|path| path.rsplit('/').next().map(str::to_owned))
             .collect())
     }
@@ -155,7 +181,8 @@ impl Repo for GitRepo {
         // git grep exits with 1 when nothing matches.
         let output = self.git_ok(&args, &[0, 1])?;
         let prefix = format!("{}:", self.head);
-        Ok(nul_fields(&output)
+        Ok(nul_fields(&output)?
+            .into_iter()
             .map(|line| line.strip_prefix(&prefix).unwrap_or(line).to_owned())
             .collect())
     }
@@ -163,25 +190,16 @@ impl Repo for GitRepo {
     fn changed_files(&self) -> Result<Vec<Change>, RepoError> {
         let range = self.range();
         let output = self.git_ok(&["diff", "--name-status", "--no-renames", "-z", &range], &[0])?;
-        let mut fields = nul_fields(&output);
-        let mut changes = Vec::new();
-        while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
-            let kind = match status.chars().next() {
-                Some('A') => ChangeKind::Added,
-                Some('D') => ChangeKind::Deleted,
-                Some(_) | None => ChangeKind::Modified,
-            };
-            changes.push(Change { path: path.to_owned(), kind });
-        }
-        Ok(changes)
+        name_status_changes(&nul_fields(&output)?)
     }
 
-    fn changed_lines(&self, path: &str) -> Result<Vec<String>, RepoError> {
+    fn file_diff(&self, path: &str) -> Result<FileDiff, RepoError> {
         let range = self.range();
         let args = [
             "diff",
             "--no-renames",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-color",
             "-U0",
             range.as_str(),
@@ -189,15 +207,23 @@ impl Repo for GitRepo {
             path,
         ];
         let output = self.git_ok(&args, &[0])?;
-        Ok(diff_lines(&stdout_text(&output)))
+        Ok(parse_diff(&stdout_text(&output)))
     }
 
     fn commit_subjects(&self) -> Result<Vec<(String, String)>, RepoError> {
         let range = format!("{}..{}", self.base, self.head);
         let output = self.git_ok(&["log", "-z", "--format=%h%x1f%s", &range], &[0])?;
-        Ok(nul_fields(&output)
-            .filter_map(|record| record.split_once('\u{1f}'))
-            .map(|(sha, subject)| (sha.trim().to_owned(), subject.to_owned()))
+        // Subjects are only reported, so an odd byte in one is shown, never fatal.
+        Ok(output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+            .map(String::from_utf8_lossy)
+            .filter_map(|record| {
+                record
+                    .split_once('\u{1f}')
+                    .map(|(sha, subject)| (sha.trim().to_owned(), subject.to_owned()))
+            })
             .collect())
     }
 }
@@ -206,24 +232,75 @@ fn stdout_text(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// The NUL-separated fields of a `-z` git output, without empty ones.
-fn nul_fields(output: &Output) -> impl Iterator<Item = &str> {
+/// The NUL-separated fields of a `-z` git output, without empty ones. A field that is not UTF-8
+/// is an error, never skipped, because callers pair fields by position.
+fn nul_fields(output: &Output) -> Result<Vec<&str>, RepoError> {
     output
         .stdout
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty())
-        .filter_map(|field| std::str::from_utf8(field).ok())
+        .map(|field| {
+            std::str::from_utf8(field).map_err(|_| {
+                RepoError(format!(
+                    "git reported a path that is not UTF-8: {}",
+                    String::from_utf8_lossy(field)
+                ))
+            })
+        })
+        .collect()
 }
 
-/// The added and removed lines of a one-file unified diff, without their markers. Everything
-/// before the first hunk header is the file header and is skipped.
-fn diff_lines(diff: &str) -> Vec<String> {
-    diff.lines()
-        .skip_while(|line| !line.starts_with("@@"))
-        .filter(|line| !line.starts_with("@@"))
-        .filter_map(|line| line.strip_prefix('+').or_else(|| line.strip_prefix('-')))
-        .map(|line| line.trim_end_matches('\r').to_owned())
-        .collect()
+/// The `(status, path)` pairs of `git diff --name-status --no-renames -z`, as changes.
+fn name_status_changes(fields: &[&str]) -> Result<Vec<Change>, RepoError> {
+    let (pairs, rest) = fields.as_chunks::<2>();
+    if let [status] = rest {
+        return Err(RepoError(format!("git diff --name-status printed `{status}` with no path")));
+    }
+    Ok(pairs
+        .iter()
+        .map(|[status, path]| {
+            let kind = match status.chars().next() {
+                Some('A') => ChangeKind::Added,
+                Some('D') => ChangeKind::Deleted,
+                Some(_) | None => ChangeKind::Modified,
+            };
+            Change { path: (*path).to_owned(), kind }
+        })
+        .collect())
+}
+
+/// Reads a one-file unified diff: the added and removed lines without their markers, and the
+/// head-side line number of each added line, counted from each hunk header's `+<start>`.
+/// Everything before the first hunk header is the file header and is skipped, so a binary or
+/// mode-only change, which has no hunk, gives no lines.
+fn parse_diff(diff: &str) -> FileDiff {
+    let mut parsed = FileDiff::default();
+    let mut head_line: Option<usize> = None;
+    for line in diff.lines() {
+        if let Some(header) = line.strip_prefix("@@ ") {
+            head_line = hunk_head_start(header);
+            continue;
+        }
+        let Some(at) = head_line.as_mut() else {
+            continue;
+        };
+        if let Some(added) = line.strip_prefix('+') {
+            parsed.lines.push(added.to_owned());
+            parsed.added_at.push(*at);
+            *at += 1;
+        } else if let Some(removed) = line.strip_prefix('-') {
+            parsed.lines.push(removed.to_owned());
+        } else if line.starts_with(' ') {
+            *at += 1;
+        }
+    }
+    parsed
+}
+
+/// The head-side start line in the rest of a hunk header, `-a,b +c,d @@ ...`.
+fn hunk_head_start(header: &str) -> Option<usize> {
+    let head = header.split_whitespace().find_map(|part| part.strip_prefix('+'))?;
+    head.split(',').next()?.parse().ok()
 }
 
 #[cfg(test)]
@@ -232,15 +309,64 @@ mod tests {
     use crate::repo::mem::ScratchGit;
 
     #[test]
-    fn diff_lines_skip_headers_and_context_markers() {
+    fn diff_lines_skip_headers_and_count_head_lines() {
         let diff = "diff --git a/x.yml b/x.yml\nindex 1..2 100644\n--- a/x.yml\n+++ b/x.yml\n\
                     @@ -3 +3 @@ jobs:\n-      - uses: a/b@111 # v1\n+      - uses: a/b@222 # v2\n\
-                    \\ No newline at end of file\n";
+                    \\ No newline at end of file\n@@ -9,0 +10,2 @@\n+++ two plus signs\n+b\n";
         assert_eq!(
-            diff_lines(diff),
-            vec!["      - uses: a/b@111 # v1".to_owned(), "      - uses: a/b@222 # v2".to_owned()],
-            "only the changed lines, markers removed"
+            parse_diff(diff),
+            FileDiff {
+                lines: vec![
+                    "      - uses: a/b@111 # v1".to_owned(),
+                    "      - uses: a/b@222 # v2".to_owned(),
+                    "++ two plus signs".to_owned(),
+                    "b".to_owned(),
+                ],
+                added_at: vec![3, 10, 11],
+            },
+            "only the changed lines, markers removed, added lines placed by their hunk"
         );
+        let binary = "diff --git a/a.png b/a.png\nindex 1..2 100644\n\
+                      Binary files a/a.png and b/a.png differ\n";
+        assert_eq!(parse_diff(binary), FileDiff::default(), "a binary change has no text lines");
+        let mode = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n";
+        assert_eq!(parse_diff(mode), FileDiff::default(), "a mode change has no text lines");
+    }
+
+    #[test]
+    fn a_path_that_is_not_utf8_is_an_error_not_a_shifted_pair() {
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"A\0bad-\xff.rs\0M\0crates/x/src/lib.rs\0".to_vec(),
+            stderr: Vec::new(),
+        };
+        let error = nul_fields(&output).expect_err("an invalid byte must not be dropped");
+        assert!(error.0.contains("not UTF-8"), "the message says why: {error}");
+        assert_eq!(
+            name_status_changes(&["A", "docs/a.md", "M", "crates/x/src/lib.rs"]),
+            Ok(vec![
+                Change { path: "docs/a.md".to_owned(), kind: ChangeKind::Added },
+                Change { path: "crates/x/src/lib.rs".to_owned(), kind: ChangeKind::Modified },
+            ]),
+            "fields pair up as status and path"
+        );
+        assert!(name_status_changes(&["A"]).is_err(), "a status with no path is an error");
+    }
+
+    #[test]
+    fn git_commands_ignore_the_hook_environment_and_signatures() {
+        let repo = GitRepo { root: PathBuf::from("."), base: String::new(), head: String::new() };
+        let command = repo.command(&["log"]);
+        for name in GIT_LOCATION_ENV {
+            assert!(
+                command.get_envs().any(|(key, value)| key == name && value.is_none()),
+                "{name} is removed, so `-C` decides the repository"
+            );
+        }
+        let args: Vec<String> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert!(args.iter().any(|arg| arg == "log.showSignature=false"), "{args:?}");
+        assert!(args.iter().any(|arg| arg == "color.ui=never"), "{args:?}");
     }
 
     #[test]
@@ -249,11 +375,13 @@ mod tests {
         git.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
         git.write("crates/alpha/src/lib.rs", "fn kept() {}\n");
         git.write("docs/old.md", "old\n");
+        git.write("assets/a.png", "PNG\u{0}one\n");
         git.commit("Start");
         git.branch("topic");
         git.write("crates/alpha/src/lib.rs", "fn kept() {}\n#[test]\nfn added_test() {}\n");
         git.remove("docs/old.md");
         git.write("docs/new.md", "new\n");
+        git.write("assets/a.png", "PNG\u{0}two\n");
         git.commit("Change on the branch");
         git.checkout("main");
         git.write("unrelated.txt", "main moved on\n");
@@ -266,6 +394,7 @@ mod tests {
         assert_eq!(
             changes,
             vec![
+                Change { path: "assets/a.png".to_owned(), kind: ChangeKind::Modified },
                 Change { path: "crates/alpha/src/lib.rs".to_owned(), kind: ChangeKind::Modified },
                 Change { path: "docs/new.md".to_owned(), kind: ChangeKind::Added },
                 Change { path: "docs/old.md".to_owned(), kind: ChangeKind::Deleted },
@@ -285,9 +414,17 @@ mod tests {
         );
         assert_eq!(repo.read_head("docs/old.md").expect("cat-file runs"), None, "deleted at head");
         assert_eq!(
-            repo.changed_lines("crates/alpha/src/lib.rs").expect("diff runs"),
-            vec!["#[test]".to_owned(), "fn added_test() {}".to_owned()],
-            "added lines without markers"
+            repo.file_diff("crates/alpha/src/lib.rs").expect("diff runs"),
+            FileDiff {
+                lines: vec!["#[test]".to_owned(), "fn added_test() {}".to_owned()],
+                added_at: vec![2, 3],
+            },
+            "added lines without markers, at their head line numbers"
+        );
+        assert_eq!(
+            repo.file_diff("assets/a.png").expect("diff runs"),
+            FileDiff::default(),
+            "git reports a binary change with no text lines"
         );
         let subjects = repo.commit_subjects().expect("git log runs");
         assert_eq!(subjects.len(), 1, "one commit on the branch since main: {subjects:?}");

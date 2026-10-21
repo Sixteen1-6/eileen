@@ -123,10 +123,24 @@ order of the switch, from BUILD.md sections 3.2 and 6.2:
   `rust-toolchain.toml`, before `rustup show`, so a job does not depend on whether `rustup show`
   installs a missing toolchain (that behaviour changed in rustup 1.28).
 - The `plan` job computes the path classes with `dorny/paths-filter`, and `pr-meta` computes the
-  same classes in Rust. The xtask test `ci_filters_match_the_classifier` fails when the two drift.
-- `pr-meta` treats a fix as carrying a regression when it adds or changes a file under
-  `scenarios/`, `fuzz/regressions/`, `crates/eileen-sim/regressions/` or any `tests/` folder, or
-  the file that defines a test its Evidence lists, so unit tests in `#[cfg(test)]` modules count.
+  same classes in Rust. The xtask test `ci_filters_match_the_classifier` reads the two filter
+  steps out of `ci.yml`, evaluates their globs and fails when any sample path's classes differ.
+- `pr-meta` treats a fix as carrying a regression when it adds or changes a file inside a
+  scenario folder (`scenarios/<area>/<id>/`, areas starting with `_` excluded), under
+  `fuzz/regressions/`, `crates/eileen-sim/regressions/` or any `tests/` folder, or an added or
+  changed line inside a listed test or the test module around it. The test module counts, not
+  only the test, because a new case or fixture beside the listed test is how such fixes are often
+  shown, and it is the inline counterpart of a file under `tests/`. A change elsewhere in the file
+  does not count.
+- A `tests:` id must name a test: a function with an attribute whose path ends in `test`
+  (`#[test]`, `#[tokio::test]`, `#[test]` inside `proptest!`). Other functions do not resolve.
+- `deps`, and every Dependabot pull request, may change manifests and lockfiles, and otherwise
+  only `uses:` lines of an existing workflow under `.github/workflows/` or action file
+  (`action.yml` at the root or under `.github/actions/`). A change with no text line (a binary or
+  mode-only change) fails.
+- `cargo xtask pr-meta` takes `--title` from CI. Without it, the local form section 4b.3 documents
+  checks the head commit's subject, which GitHub proposes as the title of a one-commit pull
+  request, and the report names the title it checked.
 - `pr-meta` requires `## Seen failing before the fix` to say something for a fix, and allows that
   heading to be absent or empty for other types.
 - The title check reads "imperative" as: the first word is not a gerund, a past tense or a

@@ -14,7 +14,7 @@ use crate::cli::PrMetaOptions;
 use crate::repo::{Change, ChangeKind, GitRepo, Repo, RepoError};
 use body::{Description, Evidence, PrType, Problem};
 use classes::Classes;
-use resolve::Resolution;
+use resolve::{Resolution, TestSite};
 
 /// The author Dependabot's pull requests carry in the event payload.
 const DEPENDABOT: &str = "dependabot[bot]";
@@ -103,7 +103,9 @@ impl Outcome {
 /// The pull request as the event payload gives it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Input<'a> {
-    pub(crate) title: &'a str,
+    /// The title, or `None` to check the head commit's subject, which is what GitHub proposes
+    /// as the title of a one-commit pull request.
+    pub(crate) title: Option<&'a str>,
     pub(crate) body: &'a str,
     pub(crate) author: &'a str,
 }
@@ -119,7 +121,8 @@ pub(crate) fn main(options: &PrMetaOptions, out: &mut dyn Write) -> io::Result<E
     };
     let outcome =
         GitRepo::open(&crate::repo_root(), &options.base, &options.head).and_then(|repo| {
-            let input = Input { title: &options.title, body: &body, author: &options.author };
+            let input =
+                Input { title: options.title.as_deref(), body: &body, author: &options.author };
             let outcome = check(&input, &repo)?;
             Ok((outcome, repo))
         });
@@ -152,10 +155,31 @@ pub(crate) fn check(input: &Input<'_>, repo: &dyn Repo) -> Result<Outcome, RepoE
             format!("Dependabot pull request, read as type deps; {} changed files", changes.len());
         return Ok(outcome);
     }
-    for (problem, fix) in title::subject_problems(input.title) {
+    let subjects = repo.commit_subjects()?;
+    let (title, title_note) = match (input.title, subjects.first()) {
+        (Some(title), _) => (title.to_owned(), format!("title \"{title}\"")),
+        (None, Some((sha, subject))) => (
+            subject.clone(),
+            format!("title \"{subject}\" (the head commit's subject, {sha}; --title sets one)"),
+        ),
+        (None, None) => {
+            return Err(RepoError(
+                "no --title was given and the branch has no commits since the base, so there is \
+                 no title to check; pass --title <title>"
+                    .to_owned(),
+            ));
+        }
+    };
+    for (problem, fix) in title::subject_problems(&title) {
         outcome.fail(Check::Title, Place::Title, problem, fix);
     }
-    advise_on_commits(repo, &mut outcome)?;
+    // When the title is the head commit's subject, its problems are findings already.
+    let advised = if input.title.is_some() {
+        subjects.as_slice()
+    } else {
+        subjects.get(1..).unwrap_or_default()
+    };
+    advise_on_commits(advised, &mut outcome);
 
     let description = Description::parse(input.body);
     let pr_type = description.section("Type").map(body::read_type);
@@ -166,33 +190,33 @@ pub(crate) fn check(input: &Input<'_>, repo: &dyn Repo) -> Result<Outcome, RepoE
         check_evidence_filled(&evidence, section.line, &mut outcome);
     }
     let listed = resolve_listed_ids(repo, &evidence, &mut outcome)?;
-    match pr_type {
+    let known_type = match pr_type {
         Some(Ok(pr_type)) => {
             check_type_fits(repo, pr_type, &changes, classes, &listed, &mut outcome)?;
             if pr_type == PrType::Fix {
-                check_fix(&description, &changes, &listed, &mut outcome);
+                check_fix(repo, &description, &changes, &listed, &mut outcome)?;
             }
-            outcome.summary = summary(Some(pr_type), &changes, classes, &listed);
+            Some(pr_type)
         }
         Some(Err(problem)) => {
             outcome.fail_body(problem);
-            outcome.summary = summary(None, &changes, classes, &listed);
+            None
         }
-        None => outcome.summary = summary(None, &changes, classes, &listed),
-    }
+        None => None,
+    };
+    outcome.summary = format!("{title_note}; {}", summary(known_type, &changes, classes, &listed));
     Ok(outcome)
 }
 
 /// Check 7 applies to the pull request title; each commit's subject gets the same rule as
 /// advice only, since the squash merge keeps only the title.
-fn advise_on_commits(repo: &dyn Repo, outcome: &mut Outcome) -> Result<(), RepoError> {
-    for (sha, subject) in repo.commit_subjects()? {
-        for (problem, _) in title::subject_problems(&subject) {
+fn advise_on_commits(subjects: &[(String, String)], outcome: &mut Outcome) {
+    for (sha, subject) in subjects {
+        for (problem, _) in title::subject_problems(subject) {
             let problem = problem.replacen("the title", "its subject", 1);
             outcome.advice.push(format!("commit {sha} \"{subject}\": {problem}"));
         }
     }
-    Ok(())
 }
 
 /// The template's shape: `## Evidence` first with nothing said before it, `## Type` second,
@@ -295,13 +319,13 @@ fn is_prefixed_ulid(value: &str, prefix: &str) -> bool {
     })
 }
 
-/// The ids listed on the `tests:` and `scenarios:` lines and where the found ones live.
+/// The ids listed on the `tests:` and `scenarios:` lines and where the found tests live.
 #[derive(Debug, Default)]
 struct Listed {
     tests: usize,
     scenarios: usize,
-    /// Files that define a listed test, at the head commit.
-    test_files: Vec<String>,
+    /// Where each listed test that exists is defined, at the head commit.
+    test_sites: Vec<TestSite>,
 }
 
 impl Listed {
@@ -329,7 +353,7 @@ fn resolve_listed_ids(
                 Err(why) => Resolution::Missing(why),
             };
             match resolution {
-                Resolution::Found(file) => listed.test_files.push(file),
+                Resolution::Found(site) => listed.test_sites.push(site),
                 Resolution::Missing(why) => outcome.fail(
                     Check::Description,
                     Place::Body(Some(field.line)),
@@ -405,7 +429,9 @@ fn check_type_fits(
     Ok(())
 }
 
-/// `deps` changes only dependency manifests, lockfiles and `uses:` lines.
+/// `deps` changes only dependency manifests, lockfiles and the `uses:` lines of workflow and
+/// action files. Any other file, an added or deleted workflow, a change with no text line (a
+/// binary or mode-only change) and any changed line that is not a `uses:` line fail it.
 fn check_deps_files(
     repo: &dyn Repo,
     changes: &[Change],
@@ -417,10 +443,22 @@ fn check_deps_files(
         if classes::is_dependency_manifest(&change.path) {
             continue;
         }
-        let only_pins = change.kind == ChangeKind::Modified
-            && repo.changed_lines(&change.path)?.iter().all(|line| classes::is_pin_line(line));
-        if !only_pins {
-            offenders.push(change.path.as_str());
+        let why = if !classes::may_hold_pins(&change.path) {
+            Some("not a manifest, lockfile, workflow or action file")
+        } else if change.kind != ChangeKind::Modified {
+            Some("added or deleted")
+        } else {
+            let diff = repo.file_diff(&change.path)?;
+            if diff.lines.is_empty() {
+                Some("no text line changed: a binary or mode-only change")
+            } else if diff.lines.iter().all(|line| classes::is_pin_line(line)) {
+                None
+            } else {
+                Some("changes lines other than `uses:`")
+            }
+        };
+        if let Some(why) = why {
+            offenders.push(format!("{} ({why})", change.path));
         }
     }
     if !offenders.is_empty() {
@@ -428,8 +466,8 @@ fn check_deps_files(
             Check::Description,
             Place::Files,
             format!(
-                "{what} may change only Cargo.toml and Cargo.lock files and `uses:` lines, but it \
-                 changes {}",
+                "{what} may change only Cargo.toml and Cargo.lock files and the `uses:` lines of \
+                 workflows and actions, but it changes {}",
                 offenders.join(", ")
             ),
             "split the other changes into their own pull request, or pick the type that fits",
@@ -439,26 +477,42 @@ fn check_deps_files(
 }
 
 /// A fix adds or changes a regression: a scenario, a fuzz or simulator regression, a file
-/// under a `tests/` folder, or the file that defines a test it lists. It also says how the
-/// failure was seen before the fix.
+/// under a `tests/` folder, or a test it lists, where an added or changed line inside the
+/// listed test or the test module around it counts. It also says how the failure was seen
+/// before the fix.
 fn check_fix(
+    repo: &dyn Repo,
     description: &Description,
     changes: &[Change],
     listed: &Listed,
     outcome: &mut Outcome,
-) {
-    let has_regression = changes
-        .iter()
-        .filter(|change| change.kind != ChangeKind::Deleted)
-        .any(|change| is_regression_path(&change.path) || listed.test_files.contains(&change.path));
+) -> Result<(), RepoError> {
+    let mut has_regression = false;
+    for change in changes.iter().filter(|change| change.kind != ChangeKind::Deleted) {
+        if is_regression_path(&change.path) {
+            has_regression = true;
+            break;
+        }
+        let sites: Vec<&TestSite> =
+            listed.test_sites.iter().filter(|site| site.file == change.path).collect();
+        if sites.is_empty() {
+            continue;
+        }
+        let diff = repo.file_diff(&change.path)?;
+        if diff.added_at.iter().any(|&line| sites.iter().any(|site| site.is_touched_at(line))) {
+            has_regression = true;
+            break;
+        }
+    }
     if !has_regression {
         outcome.fail(
             Check::Regression,
             Place::Files,
             "a fix that adds or changes no regression: no scenario, fuzz or simulator \
-             regression, test file, or file defining a listed test is changed",
-            "add the test or scenario that failed before the fix, and list it on `tests:` or \
-             `scenarios:`",
+             regression or file under `tests/` is changed, and no line inside a listed test or \
+             the test module around it is added or changed",
+            "add or change the test or scenario that failed before the fix, and list it on \
+             `tests:` or `scenarios:`",
         );
     }
     if let Some(section) = description.section(FIX_HEADING)
@@ -471,14 +525,20 @@ fn check_fix(
             "say under `## Seen failing before the fix` how the failure was reproduced",
         );
     }
+    Ok(())
 }
 
+/// A file whose change is a regression by its path: a file inside a scenario folder,
+/// `scenarios/<area>/<id>/...` (areas starting with `_`, such as `_schema`, hold no
+/// scenarios), a fuzz or simulator regression, or a test file.
 fn is_regression_path(path: &str) -> bool {
-    let under = |dir: &str| path.starts_with(dir);
-    under("scenarios/")
-        || under("fuzz/regressions/")
-        || under("crates/eileen-sim/regressions/")
-        || path.split('/').any(|part| part == "tests")
+    let parts: Vec<&str> = path.split('/').collect();
+    let scenario =
+        matches!(parts.as_slice(), ["scenarios", area, _, _, ..] if !area.starts_with('_'));
+    scenario
+        || path.starts_with("fuzz/regressions/")
+        || path.starts_with("crates/eileen-sim/regressions/")
+        || parts.contains(&"tests")
         || path.ends_with("/tests.rs")
 }
 
@@ -509,10 +569,11 @@ fn reproduce_command(options: &PrMetaOptions, base: &str, head: &str) -> String 
     } else {
         format!(" --author {}", shell_quote(&options.author))
     };
+    let title = options.title.as_deref().map(|title| format!(" --title {}", shell_quote(title)));
     format!(
-        "cargo xtask pr-meta --body-file {} --title {} --base {base} --head {head}{author}",
+        "cargo xtask pr-meta --body-file {}{} --base {base} --head {head}{author}",
         shell_quote(&options.body_file.display().to_string()),
-        shell_quote(&options.title),
+        title.unwrap_or_default(),
     )
 }
 

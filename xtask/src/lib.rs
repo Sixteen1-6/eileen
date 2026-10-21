@@ -45,10 +45,13 @@
 //! # Traps
 //!
 //! - Descriptions edited in the browser arrive with CRLF line endings; parsing normalises first.
-//! - A `## ` line inside a fenced code block is not a heading, and HTML comments are removed
-//!   before anything is read, so the template's guidance never counts as evidence.
+//! - A `## ` line inside a fenced code block is not a heading, and HTML comments outside code are
+//!   removed before anything is read, so the template's guidance never counts as evidence while
+//!   a `<!--` quoted in a code span or block stays text.
 //! - Changed files come from the merge base (`base...head`), not from `base` itself, so commits
 //!   that landed on `main` after the branch started are not counted as the pull request's own.
+//! - git exports `GIT_DIR` and friends to hooks, and in a worktree they beat `-C`; every git
+//!   command xtask starts removes them.
 //!
 //! # Logs and tracing
 //!
