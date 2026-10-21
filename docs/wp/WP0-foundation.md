@@ -22,7 +22,7 @@ records when they exist.
 | Order | Branch | State |
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
-| 2 | `wp0/contracts` | Committed 2026-10-21 with the review's fixes; pull request to open with its amendment `wp0/contracts-amendment` |
+| 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
 | 3 | `wp0/base-crates` | Not started |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
@@ -88,7 +88,8 @@ printed `[true,"all-green","pr-meta"]`, both with app id 15368. The full protect
 and after, differs only in those checks: `strict`, enforce admins, linear history, conversation
 resolution, no force pushes and no deletions are unchanged. The squash default command returned
 `PR_TITLE` and `PR_BODY`. Acceptance 1's last clause, the next pull request going green with no
-Python job, is checked by `wp0/contracts`.
+Python job, held on `wp0/contracts`: pull request #15's first run (run 39580553639) passed
+`all-green` and `pr-meta`, the two required checks, and ran no Python job.
 
 ## Steps for the later phase A pull requests
 
@@ -220,8 +221,8 @@ Python job, is checked by `wp0/contracts`.
   context has neither turn nor job or an id would be all zeros (the W3C rule); `BrainCmd::Promote`
   names the slot it promotes, so every brain command names a slot.
 - Contracts: every shape above that differs from BUILD.md's text, in pinned and provisional
-  modules alike, is written into BUILD.md by the one-file amendment `wp0/contracts-amendment`,
-  which merges first or together with `wp0/contracts`, so the spec of record and the pinned
+  modules alike, is written into BUILD.md by the one-file amendment `wp0/contracts-amendment`
+  (pull request #16), which merged before `wp0/contracts`, so the spec of record and the pinned
   contract agree.
 - Contracts: pinned modules hold only the vocabulary the plan states. `UserErrorKind` is
   `JobKindUnavailable` and `Unexpected` (WP1 adds the kinds with their sentences and fixes);
@@ -259,6 +260,14 @@ cache, since rust-cache saves only from `main`): `plan` 6 s, `hygiene` 15 s, `lo
 workspace. Warm times need the cache that this pull request's push to `main` saves, so the next
 pull request records them, and `wp0/stubs` records both again with the full stub workspace,
 beside its target size.
+
+The next run, pull request #15 (`wp0/contracts`) on 2026-10-21 (run 39580553639, the workspace of
+`xtask` and `eileen-contracts`): `logic-linux` and `windows-test` restored #13's `main` caches as
+partial matches (the lockfile had changed), so only the contracts' new dependencies and the crate
+itself compiled; `windows-clippy` found no cache and built cold. `plan` 4 s, `hygiene` 14 s,
+`logic-linux` 91 s, `windows-clippy` 153 s, `windows-test` 184 s, `all-green` 3 s; 195 s from the
+first job's start to `all-green`'s end, and `pr-meta` 19 s. Locally, on the owner's PC with 3.9 GB
+free and 4 jobs, the warm `cargo nextest run --workspace` ran 165 tests in 11 s.
 
 ## Outcome
 
