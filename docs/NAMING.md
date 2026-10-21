@@ -25,6 +25,7 @@ Checked against each registry's public API on 2026-10-11.
 
 ## History
 
-- Orin was the first codename. It was dropped because of NVIDIA Jetson Orin, three AI-agent companies already using it, and a four-phoneme wake word.
-- Eragon was the working name until 2026-10-11 and was never meant to ship. `eragon.ai` is a funded startup in the same category, and the word is Christopher Paolini's coinage, with rights held by Paolini International LLC and Disney.
+- The first codename was dropped because an NVIDIA hardware product line and three AI-agent companies already used it, and its wake word had only four phonemes.
+- An earlier working name was used until 2026-10-11 and was never meant to ship: a funded startup in the same category already uses it, and it belongs to a commercial book and film franchise.
 - The research brief vetted sixty candidates and ranked a shortlist with Ilmari at the top. The owner chose Eileen instead, which closes the shortlist. The vetting notes stay in [RESEARCH.md, section 8](RESEARCH.md#8-name).
+- Neither earlier name appears in the repository's current files any more (owner answer 15 of 2026-10-20 in [OWNER-DIRECTION.md](OWNER-DIRECTION.md)); the house-style check of BUILD.md section 4b.3 (check 6) keeps them out.

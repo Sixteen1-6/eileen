@@ -1,6 +1,6 @@
 # Eileen: what to build on, and what to build
 
-Research brief, 2026-09-19, written under the working name Eragon (earlier Orin). The project was named Eileen on 2026-10-11 ([DECISIONS.md, D16](DECISIONS.md#d16-the-product-is-named-eileen)). Everything here was checked against primary sources (repos, LICENSE files, vendor docs, pricing pages) on this date by five parallel research passes. Where something could not be verified it is marked as such. Sources are listed at the end.
+Research brief, 2026-09-19, written under an earlier working name. The project was named Eileen on 2026-10-11 ([DECISIONS.md, D16](DECISIONS.md#d16-the-product-is-named-eileen)). Everything here was checked against primary sources (repos, LICENSE files, vendor docs, pricing pages) on this date by five parallel research passes. Where something could not be verified it is marked as such. Sources are listed at the end.
 
 ## 1. The short version
 
@@ -154,20 +154,20 @@ Permission tiers: reversible actions (move window, open site, run tests, draft e
 
 ## 8. Name
 
-Update, 2026-10-11: the owner named the project Eileen, which was not on the shortlist below. This section stays as the record of why Eragon and Orin were dropped ([DECISIONS.md, D16](DECISIONS.md#d16-the-product-is-named-eileen)).
+Update, 2026-10-11: the owner named the project Eileen, which was not on the shortlist below. This section stays as the record of why the two earlier names were dropped ([DECISIONS.md, D16](DECISIONS.md#d16-the-product-is-named-eileen)). Update, 2026-10-21: by the owner's answer of 2026-10-20, the earlier names and the franchise one of them came from are no longer written here; their collisions are described without naming them.
 
 Sixty candidates were vetted (GitHub orgs and repos, PyPI and npm, product and company collisions, DNS and RDAP for .ai/.dev/.sh/.io/.app, wake-word phonetics against Picovoice's six-phoneme guideline). Trademark registries blocked automated lookups, so trademark status is inferred from commercial use rather than USPTO records. Raw check outputs are in the session scratchpad (`github.txt`, `pkg.txt`, `dns.txt`, `rdap2.txt`).
 
-### Eragon: keep as a working name, do not ship under it
+### The earlier working name: keep as a working name, do not ship under it
 
-- `eragon.ai` is a live, funded San Francisco startup whose tagline is "The AI Operating System built for work" (11 to 50 employees, X handle @EragonAI). An open-source "AI operating layer" called Eragon shares a name and a category with an existing company.
-- The name is Christopher Paolini's coinage ("dragon" with one letter changed), in active multi-class commercial use: 33.5 million books, the 2006 Fox film, a video game, and a Disney+ live-action series in development. Rights sit with Paolini International LLC and Disney. A voice product answering to "Hey Eragon" with a dragon-rider story is the profile that draws cease-and-desist letters and store takedowns.
-- npm `eragon` is a security holding package (previously used by a malicious package); PyPI is free; `eragon.app` is available, `.ai` is the startup, `.dev` is registered, `.com` is the franchise.
-- Wake word: three syllables and six phonemes, which is fine, but a near-homophone of "Oregon" and a rhyme with "paragon", "Aragon" and "a dragon", so accidental triggers in ordinary speech are likely.
+- A live, funded San Francisco startup with the same name markets itself as "The AI Operating System built for work" (11 to 50 employees). An open-source "AI operating layer" under that name would share a name and a category with an existing company.
+- The name is an author's coinage from a commercial book and film franchise in active multi-class commercial use (tens of millions of books, a feature film, a video game and a live-action series in development), with the rights held by the author's company and a major studio. A voice product answering to that name, with a story borrowed from the franchise, is the profile that draws cease-and-desist letters and store takedowns.
+- On npm the name is a security holding package (previously used by a malicious package); PyPI was free; the `.app` domain was available, `.ai` is the startup's, `.dev` was registered and `.com` belongs to the franchise.
+- Wake word: three syllables and six phonemes, which is fine, but a near-homophone of a US state's name and a rhyme with several common words, so accidental triggers in ordinary speech are likely.
 
-### Orin: internal codename at most
+### The first codename: internal at most
 
-NVIDIA Jetson Orin is a shipping product line in 2026, GitHub search for "orin" is dominated by Jetson repos, three AI-agent companies already use the name (useorin.com, orinlabs.ai, orinai.tech), PyPI and npm are taken, and "Hey Orin" has only four phonemes.
+An NVIDIA embedded-computing product line ships under that name in 2026, GitHub search for it is dominated by that product's repositories, three AI-agent companies already use it, PyPI and npm are taken, and its wake word has only four phonemes.
 
 ### Shortlist (ranked)
 
@@ -178,7 +178,7 @@ NVIDIA Jetson Orin is a shipping product line in 2026, GitHub search for "orin" 
 | **Domovoi** (DOM-oh-voy) | Slavic household spirit that keeps the house, does chores while the family sleeps, warns of danger: a background daemon with a soul. | 178-star AWS Lambda tool; a 1-star "local-first harness for AI coding agents" created three weeks ago | 7 phonemes, impossible to trigger by accident | C+ |
 | **Sanjaya** (san-JAY-uh) | In the Mahabharata, granted divine sight to watch the whole battlefield and narrate it live to the blind king: the original screen reader plus reporter. | Common South Asian first name; PyPI `sanjaya` is an agent framework | 7 phonemes | C+ |
 | **Enkidu** (EN-ki-doo) | The companion the gods made to match Gilgamesh; oldest epic on earth. | PyPI and npm free; `.ai` parked for sale | 6 phonemes, open vowels | B |
-| **Pendragon** (PEN-dra-gon) | Welsh "chief of warriors", Uther and Arthur's epithet; closest in sound to Eragon | PyPI and npm free; a 2026 TV series and a UK plc share the name | 9 phonemes | B- |
+| **Pendragon** (PEN-dra-gon) | Welsh "chief of warriors", Uther and Arthur's epithet; closest in sound to the earlier working name | PyPI and npm free; a 2026 TV series and a UK plc share the name | 9 phonemes | B- |
 | Kvasir | Born from the mingling of every god, "extremely wise"; fits a layer that blends many models into one voice | Kvasir Technologies (AI hedge fund, kvasir.ai), Kvasir Analytics, two 400-star repos | 6 phonemes, "kv" onset awkward | C |
 | Medha | Sanskrit for the faculty that grasps, understands and retains | PyPI, npm and `medha.app` free; tiny existing uses | 4 phonemes; "Hey Medha" is close to Meta's "Hey Meta" | B- / wake C |
 | Hermod | Odin's son who rode to Hel on a hard errand and came back with the answer | 94-star voice stack named hermod; confusable with the 247k-star Hermes Agent | fine | C- |

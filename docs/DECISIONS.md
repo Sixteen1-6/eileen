@@ -199,7 +199,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D17. Rust core with supervised sidecars
 
 - Date: 2026-10-20
-- Status: accepted; amended by D55
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D55
 - Supersedes: D9
 - Decision: The always-on core is one Rust process (`eileen.exe`) that owns the microphone, mute, the event bus, the job registry, permissions, learning and a supervisor, and links nothing that can hang. Speech models, UI Automation, app COM, the HUD and every Claude session run in child processes started in kill-on-close Job Objects, with a deadline on every call and a heartbeat on every sidecar.
 - Why: The owner asked for a fast Rust core. One UI Automation call on the owner's PC blocked for 38.7 minutes, past UIA's own 20 s timeout, and a blocked COM call cannot be cancelled in-process; only a process boundary and a kill recover. Rust's measured wins are start-up, idle footprint (the skeleton idled at 26.6 MB), hook and UIA latency and single binaries, not model latency.
@@ -212,7 +212,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D18. Subscriptions only; Claude is the v0.1 route
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted (owner answer 1 of 2026-10-20)
 - Amends: D4 (its credential rule stands; its API-key and naming consequences are replaced)
 - Decision: Models run through each vendor's own signed-in CLI on the owner's plans. Claude, through the installed `claude` CLI, is the brain and every worker in v0.1. Codex is added when the owner installs it; Grok and DeepSeek later. A DeepSeek API key is the only API key Eileen may ever store. There is no Gemini route.
 - Why: Owner direction of 2026-10-11 and 2026-10-20. Anthropic permits an end user to sign in to the unmodified binary when another product runs it, and counts that usage against the plan. Google's consumer terms exclude third-party agents, and the owner allows no Gemini key.
@@ -225,7 +225,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D19. Workers are named by route; native Claude driver; ACP as a slot
 
 - Date: 2026-10-20
-- Status: accepted; amended by D41
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D41
 - Supersedes: D3, and D4's worker-naming consequence
 - Decision: Every worker route implements one `WorkerDriver` trait. v0.1 builds the native Claude driver over `claude -p` stream-json. The Codex app-server driver and a generic ACP driver (for Grok and others) are designed slots behind the same trait, not built in v0.1. Workers are named by route only (Claude, Codex, Grok, DeepSeek) in every UI string, log line and document.
 - Why: The Claude and Codex ACP adapters are Node wrappers around the same native protocols, add about 99 MB and a second per session, and hide features Eileen needs (the permission-prompt tool, partial messages, interrupts, rate limits). Anthropic's branding rules forbid using its product name as part of another product's or feature's name.
@@ -237,7 +237,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D20. The brain is a warm Claude session with a hot spare, behind a deterministic fast path
 
 - Date: 2026-10-20
-- Status: accepted; amended by D41 and D53
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D41 and D53
 - Supersedes: D13's use of LiteLLM and the YAML policy file; ARCHITECTURE.md's 2026-09 conversational model
 - Decision: The conversational brain is a warm `claude -p` stream-json process on the owner's plan, started at boot with connectors and user MCP servers off, thinking off, a short system prompt and only Eileen's MCP tools, plus a hot spare. Common commands bypass it through the deterministic fast path of the intent resolver (D28). Depth tiers (instant, quick, considered, deep) run in two speeds: the brain answers at once and a deep worker runs in parallel.
 - Why: Cold start measured 39 to 48 s on the loaded PC; a warm turn reached first text in 1.0 to 1.5 s with connectors off and two to four times slower with them on. A per-utterance spawn would ruin the feel.
@@ -264,7 +264,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D22. Browser and media: URL launch and SMTC first
 
 - Date: 2026-10-20
-- Status: accepted; amended by D59
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D59
 - Amends: D7
 - Decision: Known videos and pages open with `ShellExecuteW` in the user's own browser, and playback is controlled through Windows' system media controls from Rust. Page content goes through screenshots and foreground input in v0.1, or through the Playwright MCP extension when the user installs it. Claude in Chrome is used only inside a Claude worker, by user opt-in. YouTube is never searched headlessly.
 - Why: Measured on the owner's PC: a `&t=930s` URL landed at 15:30 and SMTC pause and seek from Rust took effect, with no extension. YouTube's robots.txt disallows headless search, and yt-dlp took seconds idle and minutes under load.
@@ -274,7 +274,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D23. App hooks are resident Rust; Resolve through a Lua bridge
 
 - Date: 2026-10-20
-- Status: accepted; amended by D48
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D48
 - Amends: D8 (its ladder stands; its list of adapters changes)
 - Decision: One resident Rust process, `eileen-apps`, holds every app adapter: SMTC with one long-lived manager, Office and Explorer over late-bound COM on per-target STA threads, the recent-work index, and DaVinci Resolve through a small Lua bridge run by Resolve's own `fuscript.exe`, supervised and gated on Resolve running. Absolute timecodes are computed in Rust. Adobe apps get Eileen-owned UXP plugins in v0.2. On Resolve 21.1 or later, Resolve's own MCP server is offered to workers and measured against the bridge.
 - Why: Warm state beats fast calls: under load, spawns and fresh system-object requests degraded by orders of magnitude while resident handles stayed at about a microsecond. Resolve needs no Python of Eileen's own.
@@ -284,7 +284,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D24. A local voice pipeline in Rust, CPU only
 
 - Date: 2026-10-20
-- Status: accepted; amended by D42, D53 and D58
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D42, D53 and D58
 - Decision: cpal on WASAPI with sonora echo cancellation and a mute that stops capture, in the core; Silero VAD v6.2, Nemotron streaming 0.6B (int8, 560 ms), Smart Turn v3.2 fused with transcript cues and a silence cap, and Kokoro v1.0 fp32 with clause chunking and a phrase cache, in `eileen-speech` through sherpa-onnx 1.13.8 (shared) and `ort` 2.0.0-rc.13 on one shipped `onnxruntime.dll`. Barge-in ducks at the first VAD window and stops by the third. Every Eileen process opts out of EcoQoS at start.
 - Why: Measured on the owner's PC: idle listening 5.8 percent of one core, Nemotron WER 2.35 percent with the final 0.4 s after speech, barge-in about 70 to 110 ms from measured parts, and a 10-fold slowdown without the EcoQoS opt-out. The iGPU, NPU and DirectML gave no usable path for Kokoro.
 - Consequences: Static sherpa-onnx is not used (it fails to link on MSVC 14.42); the native DLLs ship beside the binaries, never from `PATH`.
@@ -302,7 +302,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D26. Dictation is built into Eileen
 
 - Date: 2026-10-20
-- Status: accepted; amended by D42
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D42
 - Decision: Dictation uses the already-loaded streaming recognizer, Rust cleanup rules (with SpeakoFlow's conformance cases), an optional Claude scribe for polish, and an insertion ladder in the desktop server (`EM_REPLACESEL`, then a port of Handy's clipboard transaction, then paced keys), behind the same input lock as computer use, with vocabulary learned from corrections.
 - Why: Owner direction for dictation better than the paid tools; Eileen already knows the focused field, its app and what is on screen, which the open-source leaders do not.
 - Consequences: Handy's and SpeakoFlow's code is ported with attribution in NOTICE; GPL and AGPL dictation projects are design references only.
@@ -311,7 +311,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D27. The learning loop
 
 - Date: 2026-10-20
-- Status: accepted; amended by D44
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D44
 - Decision: Record a redacted trajectory for every job at the dispatcher and from the worker stream; a low-priority Claude librarian distills successful jobs into native `SKILL.md` skills with optional recipes of Eileen tool calls with checks, writing only through a validating tool; workers load them with `--plugin-dir`; skills climb a promotion ladder on evidence (draft, trusted, compiled recipe with one user approval, spoken fast path) and fall on failure; replay runs through the same dispatcher and permission gate as a worker and hands off on the first failed check. Version history lives in `learn.sqlite`, not in a git repository per skill. The crate is `eileen-learn`; the matcher lives in `eileen-intent`.
 - Why: Owner direction: this is the main point of the product. The native route was verified on the owner's PC. SQLite history avoids `gix`'s compile cost on this PC and any dependency on a git CLI, and makes "forget" one transaction.
 - Consequences: A learned skill never raises a tier or skips a confirmation; screen text enters a skill only with the user's approval; auto memory and session persistence are off in every session Eileen starts.
@@ -320,7 +320,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D28. A layered intent resolver
 
 - Date: 2026-10-20
-- Status: accepted; amended by D44 and D52
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D44 and D52
 - Decision: Intent resolution is its own crate, `eileen-intent`, with four layers: a deterministic grammar plus learned templates (L1, under 1 ms), a local semantic matcher with a small on-device embedding model run in the speech process (L2, hints and confirmed paraphrases only), the brain with live context (L3), and a worker that figures out new capabilities which the learning loop turns into skills (L4). Unclear requests get one clarifying question, never an error. "What can you do here?" is answered by introspection of tools, app capabilities and skills.
 - Why: Owner direction "intent, not commands"; the measured matcher is microseconds per utterance; lexical hints alone matched the wrong verb, so nothing below L3 acts on an unconfirmed similarity.
 - Consequences: The embedding model is adopted only if it meets its latency budget on the owner's PC; otherwise L2 runs lexical only and says so.
@@ -329,7 +329,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D29. Settings by voice, in versioned TOML
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted (owner answer 1 of 2026-10-20)
 - Supersedes: D13's YAML policy file and ARCHITECTURE.md's YAML files
 - Decision: Configuration is TOML with comments in `%LOCALAPPDATA%\eileen\config`, generated from documented types. Every setting is reachable by voice and on the HUD through one flow (propose, check when a choice could misfire, confirm in one sentence, apply, version), with "undo that", profiles and hand edits picked up by a watcher. Safety bounds: tier 3 can never be relaxed; skipping a tier-2 confirmation needs an explicit, logged decision and never covers credentials, payments, messages sent as the user or deletes outside a repository.
 - Why: Owner direction "customise anything by just saying it". The Rust YAML options are deprecated or unsound; TOML parsed in 0.4 to 5.1 ms here.
@@ -339,7 +339,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D30. Claude integration only through official extension points
 
 - Date: 2026-10-20
-- Status: accepted; amended by D43
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D43
 - Decision: Workers get per-job `--settings` files whose HTTP hooks send `PreToolUse` to Eileen's tier guard (fail closed, never answering allow) and report notifications, failures and stops to the loopback bus. The owner may install one opt-in plugin named `eileen` (a handoff skill, Eileen's session tools, a display-only mod) through Claude's own plugin flow. Mods are never in Eileen's critical path. Nothing patches, wraps or replaces the Claude app or turns off its updater.
 - Why: Owner direction to use Claude's official mods, plugins, skills and hooks while keeping updates. Hooks are documented and were verified to fire and to block on the owner's PC; the mod API is early access and changes between releases.
 - Consequences: CI validates the plugin and fails if it gains a gating hook; learned skills are not loaded into the owner's own sessions in v0.1.
@@ -348,7 +348,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D31. A sans-IO core tested by deterministic simulation
 
 - Date: 2026-10-20
-- Status: accepted; amended by D45
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D45
 - Decision: `eileen-core` is a state machine with one entry point, `Core::step(now, rng, input, effects)`, over closed `Input` and `Effect` enums, with time, randomness and IDs injected and every queue bounded. `eileen-sim` drives it on one thread with simulated speech, playback, brain, workers and sidecars, injects faults at `buggify!` points, checks named invariants after every step and replays any failure from a seed or a decoded input script. Pull requests run a fixed seed set; `main` and nightly run fresh seeds. End-to-end tests inject recorded or synthesized audio at the audio boundary and use a stub harness; the owner's PC is never a self-hosted runner for this public repository.
 - Why: The best-tested systems (TigerBeetle, FoundationDB, Turso) make concurrency bugs reproducible this way; the owner asked for simulation of jobs, bus, scheduling and barge-in from a seed.
 - Consequences: Core logic never reads the clock or OS randomness (clippy bans them); the event log format is shared by the flight recorder, the simulator, the end-to-end harness and the learning record.
@@ -357,7 +357,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D32. Conventions are enforced by CI with one local command
 
 - Date: 2026-10-20
-- Status: accepted; amended by D46
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D46
 - Decision: Every way of working adopted from the exemplar repositories has an automated check in `cargo xtask lint-repo` (crate guidance, the code map matching the crates, Markdown lint, links, spelling, house style and naming, commit and pull request format, generated files current, unsafe only in `ffi` modules with safety comments, documented public items, decision record format, dependency policy, the credential boundary, the platform boundary, scenario privacy). `cargo xtask ci` runs locally exactly what the pull request lane runs. One aggregate check, `all-green`, gates merges.
 - Why: Owner direction: conventions enforced by CI, not just written down. Guidance files rot; the checks are the guardrail.
 - Consequences: The list of checks lives in BUILD.md section 4b.3, CONTRIBUTING.md and the root AGENTS.md; each check has a test that fails on a seeded violation.
@@ -366,7 +366,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D33. Guidance form: one AGENTS.md, crate docs in the code, nested files only where rules differ
 
 - Date: 2026-10-20
-- Status: accepted; amended by D46
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D46
 - Decision: The root `AGENTS.md` is the canonical guide for people and every coding tool; the root `CLAUDE.md` imports it with `@AGENTS.md` and adds a short Claude-only section. Each crate's guidance (what it owns and does not own, invariants, boundaries, how to test, traps, logs) is its crate doc at the top of `src/lib.rs` or `src/main.rs`, with required headings checked by CI. A nested `AGENTS.md` (paired with a one-line importing `CLAUDE.md`) exists only where a folder's rules genuinely differ. A short root `ARCHITECTURE.md` is the code map.
 - Why: The engineering-practice survey found that no best-run repository keeps a guidance file in every crate; per-directory files appear only where a subsystem has its own contract; Codex reads only `AGENTS.md` and has no import syntax; symlinks break on Windows checkouts. The owner asked not to assume a CLAUDE.md in every folder.
 - Consequences: The nested files at the start are listed in BUILD.md section 4b.4; adding one needs a stated reason. `docs/ARCHITECTURE.md` moves to the repository root in WP0.
@@ -375,7 +375,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D34. Observability: request IDs, a flight recorder and replay
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted (owner answer 1 of 2026-10-20)
 - Decision: Typed, prefixed ULIDs (`turn_` is the request ID) and a `TraceCtx` carried on every bus envelope, frame, tool call and worker environment; span names as constants with a checked parent table; user content only in `pii.` fields; JSON log files, an in-memory flight recorder with a replayable input lane, incidents on panics, crashes, watchdog trips and spoken reports; a guard process outside the Job Object that writes minidumps of crashed or hung processes; L1 replay of recordings in the simulator; a generated code map with an event map; a read-only `dev` toolset for Eileen's own coding workers.
 - Why: Owner direction: one request ID traced end to end, a flight recorder, session replay and a code map, so a bug goes from symptom to code quickly for people and agents.
 - Consequences: Bare `tokio::spawn` is banned in favour of a wrapper that keeps spans; the audio callback never calls `tracing`; a redaction canary test covers every sink.
@@ -384,7 +384,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D35. Real use becomes tests: the community scenario corpus and the test fleet
 
 - Date: 2026-10-20
-- Status: accepted; amended by D45 and D58
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D45 and D58
 - Decision: Scenarios are data in a versioned schema (`scenarios/<area>/<id>/scenario.toml`). "Save that as a test" turns a real request, success or failure, into a scenario from the flight recorder; sharing generalises and redacts it with a preview the contributor approves, then submits it from the contributor's own GitHub account. CI validates every scenario and replays it in simulation on every pull request. Contributors may opt in to `eileen test --fleet`, which runs real-desktop scenarios on their PCs and uploads anonymised results; failures are clustered, flakes tracked, and a readable catalogue with a coverage view is generated.
 - Why: Owner direction: the owner's friends test on their own PCs, and everything they try should feed the test suite so it grows from real use.
 - Consequences: The schema, its checks and the catalogue generator land in WP0; the replay runner in WP1; capture in WP2; sharing and the fleet in WP9. Every package ships scenarios. The owner's voice and screen never enter the public repository.
@@ -393,7 +393,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D36. The HUD is part of v0.1
 
 - Date: 2026-10-20
-- Status: accepted; amended by D47
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D47
 - Decision: A raw Win32 overlay (layered, click-through, topmost, never activated, excluded from screen capture) plus a small clickable strip, in its own process, fed with full `HudState` snapshots at most ten times a second. It shows the mic state, what is heard, what Eileen says, jobs, approvals, the input lock, the target of the next click, suggestions and indicators.
 - Why: The owner asked for mute one click away and a visual layer as part of the feel; a status surface is table stakes. The raw Win32 option adds no dependencies; the egui and WebView2 alternatives stay unmeasured in the lab.
 - Consequences: The HUD's layout is platform-neutral and snapshot-tested; only the renderer is Windows code.
@@ -402,7 +402,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D37. The PC first, then outward through connectors
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted (owner answer 1 of 2026-10-20)
 - Amends: D11 (the phone channels move from v0.1 to v0.2)
 - Decision: v0.1 connects fully to the PC. Everything outside it (the phone, Home Assistant and Matter, other devices on the user's network, earbuds as microphones) is a connector with a manifest of tools, tiers and events, sharing the permission tiers, job model and learning loop. Room-sensing connectors are opt-in per device and processed locally. Telegram and ntfy become the first outward connector in v0.2.
 - Why: Owner direction of 2026-10-20.
@@ -412,7 +412,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D38. Windows first, not Windows only; the Python scaffold is retired
 
 - Date: 2026-10-20
-- Status: accepted; amended by D55
+- Status: accepted (owner answer 1 of 2026-10-20); amended by D55
 - Supersedes: ROADMAP.md's 2026-09 non-goal "macOS and Linux", and the remaining Python consequences of D9
 - Decision: Every OS-touching piece sits behind traits in `eileen-platform` and is implemented in a per-area Windows crate (`eileen-audio-win`, `eileen-desktop-win`, `eileen-apps-win`, `eileen-shell-win`); a Linux port adds `-linux` crates. Platform-neutral crates build and pass their tests on `ubuntu-latest` in CI from the first commit. The Python scaffold under `src/eileen` is retired; nothing in the v0.1 build is Python, and any later Python adapter is a stdlib-only JSON-RPC shim.
 - Why: Owner direction of 2026-10-20. The Python MCP SDK's import alone took 35 to 42 s on the loaded PC, against 1.7 to 2.9 s for a stdlib-only shim.
@@ -560,7 +560,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D53. Model names are aliases in config; the brain and the speech stages are plug-ins
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20, "stay at the frontier" and "the brain is swappable"); amended by D62
+- Status: accepted (owner direction of 2026-10-20, "stay at the frontier" and "the brain is swappable"); amended by D62 and D74
 - Amends: D20 (model ids were full ids written into config), D24 (speech stages were wired directly)
 - Decision: Config names models through `routing.models` aliases; the harness resolves each to a full id per CLI version, passes only full ids on command lines and records the resolved id beside every timing. `routing.brain`, `routing.deep` and `routing.fallback_brain` are typed config; `BrainBackend` has `route()` and a `brain_for` factory; benchmark B10 (`eileen bench brain`) runs before a backend switch and warns when the candidate is slower or less reliable; a stalled brain falls back to the fallback slot. Voice activity, recognition and turn detection sit behind traits like the voices, each reporting its languages and cost, with the engine per stage a setting.
 - Why: The owner asked for aliases in config and for every component AI progress improves to be swappable; D20's reason (aliases drifted between CLI builds) is handled by re-resolving per CLI version and recording the resolved id.
@@ -610,7 +610,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D58. The owner's answers of 2026-10-20 applied
 
 - Date: 2026-10-20
-- Status: accepted (owner answers of 2026-10-20); amended by D60
+- Status: accepted (owner answers of 2026-10-20); amended by D60 and D74
 - Amends: D35 (fleet identity and where results go), D24 (the speech build), D39 (the watermark is built as an opt-in)
 - Decision: The fleet identifies a machine by a salted one-way hash of its Windows MachineGuid, the same in every result and scenario; results arrive as pull requests from contributors' own accounts to an orphan `devhub` branch (or relayed by the owner), where the results history and the public `RESULTS.md` table also live. The speech build contains no GPL code: sherpa-onnx is built without espeak-ng in this repository's CI and Kokoro gets an espeak-free front end. The opt-in watermark is built with AudioSeal for exported audio and recordings. The remaining answers are applied where BUILD.md section 7 lists them.
 - Why: The owner answered every question section 7 asked; these four change contracts or the build.
@@ -630,7 +630,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D60. The fleet's machine hash mixes the OS machine id with a random install id
 
 - Date: 2026-10-20
-- Status: accepted (owner answer 6 of 2026-10-20)
+- Status: accepted (owner answer 6 of 2026-10-20); amended by D74
 - Amends: D58 (its consequence that the machine hash replaces the random install id)
 - Decision: `MachineHash` is BLAKE3 over a fixed Eileen salt, the OS machine id read through a new `MachineIdentity` platform trait (Windows MachineGuid; Linux `/etc/machine-id`, then `/var/lib/dbus/machine-id`; macOS later, the platform UUID) and a random install id Eileen creates on first run; where the OS has no usable id, the salt and the install id alone.
 - Why: The owner's answer asks for exactly this, so that cloned virtual machines and disk images that share an OS id still get distinct hashes and machines without an OS id still have one; D58 read the answer as replacing the install id, which was the opposite.
@@ -766,3 +766,13 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Why: The runtime read a baseline file whose keys and reader were undefined, the paging history had no format, lock or build mark, and no test covered the fallback chain, the clamp or a test runtime writing into the PC's learned history.
 - Consequences: WP0 acceptance 4 and WP2 acceptance 12 test them.
 - Source: BUILD.md sections 2.5, 2.15, 3.1, 3.3.11 and 6.1; the fourth verification round (item a1129a-7).
+
+## D74. The owner's answers applied in full
+
+- Date: 2026-10-21
+- Status: accepted (owner answers of 2026-10-20; the owner's standing rule for the four questions it settles)
+- Amends: D60 (where the machine hash is computed and how its inputs are encoded), D58 (how fleet results reach the `devhub` branch, and the operating system named in a result), D53 (the brain and the workers report their languages too)
+- Decision: The install id is created by `eileen setup` or the first `eileen run`, and the runtime recomputes the machine hash at every start through the platform layer: the `MachineIdentity` trait (Windows MachineGuid in `eileen-shell-win`; a neutral reader of Linux's machine-id files in `eileen-platform`, tested on Linux from v0.1; macOS later) and one derivation in `eileen_platform::machine`, which normalises the OS id and length-prefixes its inputs so every OS gets the same rule. Scenario saves, voice consent records, fleet results and benchmark lines all read that one value from `fleet\machine.toml`. Fleet results reach the `devhub` branch as a pull request from the contributor's own account, as a contributor's own commit pushed there (for those with write access, validated on push), or relayed by the owner from his account, and each result names its operating system and build. The `ml_project` job kind is reserved in the contracts and refused with one plain sentence until v0.2's Colab connector exists. The brain backend and the worker driver report the languages they support, like the speech stages, from the component itself, never from a list in Eileen's code. Resolve's own MCP server is the primary Resolve route once present, and the Lua bridge stays a tested fallback through a route switch on the Resolve doctor. The owner's nightly lane is unattended from its first night. The four questions section 7 still asked (the two release assets, the memory admission defaults, `evidence` as a third required check, the listening calibration after a declined clone) are settled by the standing rule as recommended, as D54, D56, D58 and D63 already describe. The dated records no longer name the earlier working names or the franchise.
+- Why: Owner answers 6, 9, 10, 15 and 21, and the owner's entries after them. Scenario capture ships with WP2 in W1 and W2 and the consent record with WP4, so a hash that only WP9's fleet runner computed in W6 could not appear "in every result and scenario from that machine"; without normalisation, Windows' GUID form and Linux's plain form would follow two rules; a results channel that took only pull requests left out the owner's "commits" and his relays; and a job kind added in v0.2 would change a pinned contract that v0.1 can reserve now.
+- Consequences: WP0 acceptance 12, WP1 acceptance 14, WP2 acceptance 8 and 13, WP3 acceptance 6, WP6 acceptance 1 and WP9 acceptance 4 test them; `eileen-runtime` may depend on `eileen-platform`, which its memory sampler already needed.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md), "Owner answers to BUILD.md's open questions" and the entries after it; BUILD.md sections 2.5, 2.7, 2.8, 2.15, 3.3.1, 3.3.2, 3.3.8, 3.3.14, 3.3.16, 3.4, 4.2, 4.6, 4.7, 4.8 and 7.
