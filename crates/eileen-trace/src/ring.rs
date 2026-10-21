@@ -100,7 +100,7 @@ impl Ring {
 
     /// The span and event records, parsed from a redacted dump.
     #[must_use]
-    pub fn records(&self, redactor: &Redactor) -> (Vec<SpanRecord>, Vec<EventRecord>) {
+    pub fn records(&self, redactor: &Redactor) -> Parsed {
         let dump = self.dump(redactor);
         parse_lines(String::from_utf8_lossy(&dump).lines())
     }
@@ -119,14 +119,33 @@ impl Ring {
     }
 }
 
-/// Turns ring lines (or the merged `events.jsonl` of an incident) back into records.
-pub fn parse_lines<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
-) -> (Vec<SpanRecord>, Vec<EventRecord>) {
+/// What [`parse_lines`] read back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Parsed {
+    /// The spans, by start.
+    pub spans: Vec<SpanRecord>,
+    /// The events, in order.
+    pub events: Vec<EventRecord>,
+    /// Lines that were not records (not a JSON object, or no known `t`), counted so a timeline
+    /// or a schema check that lost lines says so.
+    pub skipped: usize,
+}
+
+/// Turns ring lines (or the merged `events.jsonl` of an incident) back into records. Blank
+/// lines are ignored; every other line that is not a record is counted in
+/// [`Parsed::skipped`].
+pub fn parse_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Parsed {
     let mut spans: BTreeMap<(String, u64), SpanRecord> = BTreeMap::new();
     let mut events = Vec::new();
+    let mut skipped = 0;
     for line in lines {
-        let Ok(Value::Object(o)) = serde_json::from_str::<Value>(line) else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(Value::Object(o)) = serde_json::from_str::<Value>(line) else {
+            skipped += 1;
+            continue;
+        };
         let process = o.get("process").and_then(Value::as_str).unwrap_or_default().to_owned();
         let id = o.get("id").and_then(Value::as_u64).unwrap_or(0);
         let fields = o.get("fields").and_then(Value::as_object).cloned().unwrap_or_default();
@@ -166,12 +185,12 @@ pub fn parse_lines<'a>(
                 at_us,
                 fields: sorted(&fields),
             }),
-            _ => {}
+            _ => skipped += 1,
         }
     }
     let mut spans: Vec<SpanRecord> = spans.into_values().collect();
     spans.sort_by_key(|s| (s.start_us, s.id));
-    (spans, events)
+    Parsed { spans, events, skipped }
 }
 
 /// The record id a layer gave a span, kept in the span's extensions.
@@ -276,7 +295,8 @@ mod tests {
             let _entered = turn.enter();
             tracing::info!(n = 1, "inside");
         });
-        let (spans, events) = ring.records(&Redactor::new());
+        let super::Parsed { spans, events, skipped } = ring.records(&Redactor::new());
+        assert_eq!(skipped, 0, "every line was a record");
         assert_eq!(spans.len(), 1, "one span");
         assert!(spans[0].end_us.is_some(), "closed");
         assert_eq!(events[0].span, Some(spans[0].id), "the event is inside the span");
@@ -288,5 +308,13 @@ mod tests {
         ring.request_dump();
         assert!(ring.take_dump_request(), "requested");
         assert!(!ring.take_dump_request(), "once");
+    }
+
+    #[test]
+    fn lines_that_are_not_records_are_counted() {
+        let lines = ["", "not json", r#"{"t":"event","name":"x","at_us":1}"#, r#"{"t":"?"}"#, "[1]"];
+        let parsed = super::parse_lines(lines);
+        assert_eq!(parsed.events.len(), 1, "one event");
+        assert_eq!(parsed.skipped, 3, "the blank line is not counted, the other three are");
     }
 }

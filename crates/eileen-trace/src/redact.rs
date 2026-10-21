@@ -5,7 +5,14 @@
 //! time (the session's hook token, a password field's value the desktop sidecar saw). A cheap
 //! literal prefilter keeps the cost per line low: most lines contain none of the prefixes and
 //! no long digit run, and skip the scan. A match becomes `[redacted:<kind>]`; a card number
-//! standing alone as a JSON number becomes zeros of the same length, so the line stays JSON.
+//! standing alone as a JSON number becomes `0`, so the line stays valid JSON (a run of zeros
+//! would not be: JSON forbids leading zeros).
+//!
+//! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
+//! log line or a ring record), `Debug`-escaped (a `?value` field, or the console's strings),
+//! and `Debug` then JSON-escaped, so a password holding a quote or a backslash is caught after
+//! serialization too. The file layer also redacts each field value before it serializes the
+//! line, and the line pass stays as the backstop.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -124,12 +131,19 @@ impl Redactor {
         Self::default()
     }
 
-    /// Registers a literal secret; shorter than [`MIN_LITERAL_LEN`] bytes is ignored.
+    /// Registers a literal secret with its escaped forms (see the module doc); shorter than
+    /// [`MIN_LITERAL_LEN`] bytes is ignored.
     pub fn add_literal(&self, secret: &str) {
-        if secret.len() >= MIN_LITERAL_LEN {
-            let mut literals = self.literals.write().unwrap_or_else(PoisonError::into_inner);
-            if !literals.iter().any(|l| l == secret) {
-                literals.push(secret.to_owned());
+        if secret.len() < MIN_LITERAL_LEN {
+            return;
+        }
+        let debug = format!("{secret:?}");
+        let debug = unquote(&debug);
+        let forms = [secret.to_owned(), json_escaped(secret), debug.to_owned(), json_escaped(debug)];
+        let mut literals = self.literals.write().unwrap_or_else(PoisonError::into_inner);
+        for form in forms {
+            if !literals.contains(&form) {
+                literals.push(form);
             }
         }
     }
@@ -212,7 +226,7 @@ impl Redactor {
         for f in &found {
             out.push_str(text.get(at..f.range.start).unwrap_or_default());
             if f.kind == SecretKind::CardNumber && bare_json_number(bytes, &f.range) {
-                out.extend(std::iter::repeat_n('0', f.range.len()));
+                out.push('0');
             } else {
                 out.push_str("[redacted:");
                 out.push_str(f.kind.as_str());
@@ -223,6 +237,17 @@ impl Redactor {
         out.push_str(text.get(at..).unwrap_or_default());
         Cow::Owned(out)
     }
+}
+
+/// `text` without the double quotes around it, as `Debug` and JSON write a string.
+fn unquote(text: &str) -> &str {
+    text.strip_prefix('"').and_then(|t| t.strip_suffix('"')).unwrap_or(text)
+}
+
+/// `text` as it stands inside a JSON string.
+fn json_escaped(text: &str) -> String {
+    let quoted = serde_json::Value::from(text).to_string();
+    unquote(&quoted).to_owned()
 }
 
 /// A run of at least 15 digits, allowing single spaces or hyphens between them.
@@ -404,14 +429,24 @@ mod tests {
         r.add_literal("short");
         let line = r#"{"pin":4111111111111111,"pw":"hunter2-password","short":"short"}"#;
         let out = r.redact(line);
-        assert_eq!(
-            out, r#"{"pin":0000000000000000,"pw":"[redacted:secret]","short":"short"}"#,
-            "redacted"
-        );
+        assert_eq!(out, r#"{"pin":0,"pw":"[redacted:secret]","short":"short"}"#, "redacted");
+        assert!(serde_json::from_str::<serde_json::Value>(&out).is_ok(), "still JSON: {out}");
         assert_eq!(r.redactions(), 2, "counted");
         assert!(
             matches!(r.redact("nothing here"), std::borrow::Cow::Borrowed(_)),
             "borrowed when clean"
         );
+    }
+
+    #[test]
+    fn a_literal_with_quotes_and_backslashes_is_found_escaped() {
+        let r = Redactor::new();
+        let secret = "pa\"ss\\word\tcanary";
+        r.add_literal(secret);
+        let json = serde_json::json!({ "pw": secret, "dbg": format!("{secret:?}") }).to_string();
+        for text in [secret.to_owned(), json, format!("pw={secret:?}")] {
+            let out = r.redact(&text);
+            assert!(!out.contains("canary"), "{text} came out as {out}");
+        }
     }
 }

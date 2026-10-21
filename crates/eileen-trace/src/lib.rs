@@ -20,8 +20,9 @@
 //!
 //! - Every span and event name is a constant in [`names`] with a row in [`names::ALL`]
 //!   (test `names::tests::every_named_parent_is_a_declared_span`; check 21 scans the code).
-//! - No secret reaches a file or a ring dump raw (test
-//!   `it::canary::fake_secrets_never_reach_disk_or_a_dump`).
+//! - No secret reaches a file, a ring dump or the console, raw or escaped, and every file and
+//!   dump line stays valid JSON (tests `it::canary::fake_secrets_never_reach_disk_or_a_dump`
+//!   and `it::canary::fake_secrets_never_reach_the_console`).
 //! - `pii.` fields reach the files only as length and keyed hash unless the user opted in.
 //!
 //! # Boundaries
@@ -45,6 +46,8 @@
 //! - [`init()`] can run once per process; tests use [`init::build`] with `with_default`.
 //! - Span ids are reused after a span closes; records carry their own ids for that reason.
 //! - User content goes in `pii.` fields only, never in a span name or a message.
+//! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
+//!   without it writes `pii.` fields as their length alone.
 //!
 //! # Logs and tracing
 //!
@@ -53,8 +56,9 @@
 //!
 //! # Do not change without a decision record
 //!
-//! - The line formats, the `pii.` prefix and the reduced form `{len, h}`, the replacement
-//!   text `[redacted:<kind>]`, and the span-parent rules of a span another package owns.
+//! - The line formats, the `pii.` prefix and the reduced form `{len, h}` (`{len}` when the
+//!   process has no per-install key), the replacement text `[redacted:<kind>]`, and the
+//!   span-parent rules of a span another package owns.
 
 #![forbid(unsafe_code)]
 

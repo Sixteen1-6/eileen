@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 use tracing::field::{Field, Visit};
 
 use crate::names::REMOTE_PARENT_FIELD;
+use crate::redact::Redactor;
 use crate::traceparent;
 
 /// One span, from its open to its close.
@@ -91,6 +92,27 @@ pub(crate) fn remote_parent(fields: &Map<String, Value>) -> Option<u64> {
         .and_then(Value::as_str)
         .and_then(traceparent::parse)
         .map(|tp| tp.parent_id)
+}
+
+/// Runs every string value of `fields` (nested ones included) through `redactor`, before the
+/// map is serialized, so a literal secret is matched raw rather than JSON-escaped.
+pub(crate) fn redact_values(fields: &mut Map<String, Value>, redactor: &Redactor) {
+    for value in fields.values_mut() {
+        redact_value(value, redactor);
+    }
+}
+
+fn redact_value(value: &mut Value, redactor: &Redactor) {
+    match value {
+        Value::String(text) => {
+            if let std::borrow::Cow::Owned(clean) = redactor.redact(text) {
+                *text = clean;
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| redact_value(item, redactor)),
+        Value::Object(map) => redact_values(map, redactor),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// Sorted copy of a field map.

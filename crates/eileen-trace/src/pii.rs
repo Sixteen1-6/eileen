@@ -5,7 +5,11 @@
 //! |---|---|
 //! | Flight recorder (memory) | kept; secrets scanned at dump time |
 //! | JSON log files | length and keyed hash, unless `logging.include_personal` |
-//! | Console | kept (a terminal the owner is watching) |
+//! | Console | kept (a terminal the owner is watching); secrets redacted |
+//!
+//! The hash's key is per install: the runtime derives it at setup and passes it to every
+//! process it starts. With no key the files keep the length alone, so a process started
+//! without one never hashes user text under a key anyone could know.
 
 use serde_json::{Map, Value, json};
 
@@ -24,20 +28,27 @@ pub enum Policy {
     /// Keep the value.
     Keep,
     /// Replace the value with `{"len": <chars>, "h": "<8 hex>"}`, a keyed hash, so two lines
-    /// about the same window title can be matched without the title.
+    /// about the same window title can be matched without the title; with no key, with
+    /// `{"len": <chars>}` alone.
     Reduce {
-        /// The key (per install, from the runtime).
-        key: [u8; 32],
+        /// The key (per install, from the runtime); `None` keeps the length alone.
+        key: Option<[u8; 32]>,
     },
 }
 
-/// The reduced form of one value.
+/// The reduced form of one value: its length, and its keyed hash when there is a key.
 #[must_use]
-pub fn reduce(value: &Value, key: &[u8; 32]) -> Value {
+pub fn reduce(value: &Value, key: Option<&[u8; 32]>) -> Value {
     let text = if let Value::String(s) = value { s.clone() } else { value.to_string() };
-    let hash = blake3::keyed_hash(key, text.as_bytes());
-    let [a, b, c, d, ..] = *hash.as_bytes();
-    json!({ "len": text.chars().count(), "h": format!("{a:02x}{b:02x}{c:02x}{d:02x}") })
+    let len = text.chars().count();
+    match key {
+        Some(key) => {
+            let hash = blake3::keyed_hash(key, text.as_bytes());
+            let [a, b, c, d, ..] = *hash.as_bytes();
+            json!({ "len": len, "h": format!("{a:02x}{b:02x}{c:02x}{d:02x}") })
+        }
+        None => json!({ "len": len }),
+    }
 }
 
 /// Applies `policy` to every `pii.` field of `fields`, in place.
@@ -47,7 +58,7 @@ pub fn apply(fields: &mut Map<String, Value>, policy: Policy) {
     };
     for (name, value) in fields.iter_mut() {
         if is_pii(name) {
-            *value = reduce(value, &key);
+            *value = reduce(value, key.as_ref());
         }
     }
 }
@@ -61,11 +72,16 @@ mod tests {
     #[test]
     fn reduce_keeps_the_length_and_a_keyed_hash() {
         let key = [7; 32];
-        let reduced = reduce(&json!("Quarterly report.docx"), &key);
+        let reduced = reduce(&json!("Quarterly report.docx"), Some(&key));
         assert_eq!(reduced["len"], 21, "length in characters");
         assert_eq!(reduced["h"].as_str().map(str::len), Some(8), "8 hex digits");
-        assert_eq!(reduce(&json!("Quarterly report.docx"), &key), reduced, "stable");
-        assert_ne!(reduce(&json!("Quarterly report.docx"), &[8; 32]), reduced, "keyed");
+        assert_eq!(reduce(&json!("Quarterly report.docx"), Some(&key)), reduced, "stable");
+        assert_ne!(reduce(&json!("Quarterly report.docx"), Some(&[8; 32])), reduced, "keyed");
+    }
+
+    #[test]
+    fn without_a_key_only_the_length_is_kept() {
+        assert_eq!(reduce(&json!("My diary"), None), json!({ "len": 8 }), "no hash");
     }
 
     #[test]
@@ -73,7 +89,7 @@ mod tests {
         let mut fields: Map<String, Value> = Map::new();
         fields.insert("pii.title".to_owned(), json!("My diary"));
         fields.insert("tool".to_owned(), json!("desktop_tree"));
-        apply(&mut fields, Policy::Reduce { key: [0; 32] });
+        apply(&mut fields, Policy::Reduce { key: Some([3; 32]) });
         assert!(fields["pii.title"].get("h").is_some(), "reduced");
         assert_eq!(fields["tool"], "desktop_tree", "left alone");
         assert!(is_pii("pii.transcript") && !is_pii("piixel"), "prefix");

@@ -13,14 +13,16 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use eileen_stdx::soft_assert::{self, Failure, Mode};
-use tracing::Level;
+use tracing::{Level, Subscriber};
 use tracing_appender::non_blocking::{ErrorCounter, NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Layered, SubscriberExt as _};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
-use crate::file::FileLayer;
+use crate::file::{FileLayer, RedactingMakeWriter};
 use crate::names;
 use crate::pii::Policy;
 use crate::redact::Redactor;
@@ -110,8 +112,10 @@ pub struct TraceConfig {
     pub ring_window: Duration,
     /// Keep `pii.` fields in the files (`logging.include_personal`).
     pub include_personal: bool,
-    /// The key for the files' keyed hash of `pii.` fields, per install (from the runtime).
-    pub pii_key: [u8; 32],
+    /// The per-install key for the files' keyed hash of `pii.` fields, which the runtime
+    /// derives at setup and passes to every process it starts. `None`, the default, reduces
+    /// them to their length alone: never a constant key.
+    pub pii_key: Option<[u8; 32]>,
     /// Slow-span thresholds by span name, milliseconds.
     pub slow_span_ms: BTreeMap<String, u64>,
     /// Daily files kept per process.
@@ -131,7 +135,7 @@ impl TraceConfig {
             ring_bytes: None,
             ring_window: Duration::from_mins(10),
             include_personal: false,
-            pii_key: [0; 32],
+            pii_key: None,
             slow_span_ms: SlowLayer::default_thresholds(),
             max_log_files: 14,
         }
@@ -223,6 +227,23 @@ fn parse_filter(which: &'static str, filter: &str) -> Result<EnvFilter, TraceErr
     EnvFilter::try_new(filter).map_err(|e| TraceError::Filter { which, detail: e.to_string() })
 }
 
+/// The console layer: `fmt`'s format on `writer` under `filter`, every write through
+/// `redactor`. `pii.` fields stay (a terminal the owner is watching, as the [`crate::pii`]
+/// table says); secrets do not. [`build`] gives it stderr.
+pub fn console_layer<S, W>(
+    writer: W,
+    redactor: Arc<Redactor>,
+    filter: &str,
+) -> Result<impl Layer<S> + Send + Sync + 'static, TraceError>
+where
+    S: Subscriber + for<'a> LookupSpan<'a> + 'static,
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    Ok(tracing_subscriber::fmt::layer()
+        .with_writer(RedactingMakeWriter::new(writer, redactor))
+        .with_filter(parse_filter("console", filter)?))
+}
+
 /// Builds the stack for `kind` without installing it (tests use it with `with_default`).
 pub fn build(
     kind: ProcessKind,
@@ -285,10 +306,12 @@ pub fn build(
     };
     if console {
         layers.push(
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stderr)
-                .with_filter(parse_filter("console", &config.console_filter)?)
-                .boxed(),
+            console_layer::<Registry, _>(
+                std::io::stderr,
+                Arc::clone(&redactor),
+                &config.console_filter,
+            )?
+            .boxed(),
         );
     }
     let subscriber = tracing_subscriber::registry().with(layers);

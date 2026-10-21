@@ -1,6 +1,7 @@
 //! The JSON-lines file sink: one line per event at INFO, with the event's span and the span
-//! list, `pii.` fields reduced to length and keyed hash unless `logging.include_personal`,
-//! and every line through the Redactor before it is written.
+//! list, `pii.` fields reduced to length and keyed hash unless `logging.include_personal`.
+//! Every field value goes through the Redactor before the line is serialized, and the whole
+//! line again before it is written, as a backstop.
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::pii::{self, Policy};
-use crate::record::JsonVisitor;
+use crate::record::{JsonVisitor, redact_values};
 use crate::redact::Redactor;
 
 /// A span's fields as the file layer saw them, raw (the policy applies at write time).
@@ -75,6 +76,7 @@ where
         let Some(span) = ctx.span(id) else { return };
         let mut visitor = JsonVisitor::default();
         attrs.record(&mut visitor);
+        redact_values(&mut visitor.0, &self.redactor);
         span.extensions_mut().insert(FileFields(visitor.0));
     }
 
@@ -82,6 +84,7 @@ where
         let Some(span) = ctx.span(id) else { return };
         let mut visitor = JsonVisitor::default();
         values.record(&mut visitor);
+        redact_values(&mut visitor.0, &self.redactor);
         if let Some(fields) = span.extensions_mut().get_mut::<FileFields>() {
             fields.0.extend(visitor.0);
         }
@@ -91,6 +94,7 @@ where
         let mut visitor = JsonVisitor::default();
         event.record(&mut visitor);
         let mut fields = visitor.0;
+        redact_values(&mut fields, &self.redactor);
         pii::apply(&mut fields, self.policy);
         let mut spans = Vec::new();
         if let Some(scope) = ctx.event_scope(event) {
@@ -123,8 +127,9 @@ where
     }
 }
 
-/// A `MakeWriter` that runs every write through the Redactor, for the `fmt` layers of sinks
-/// that must not hold secrets.
+/// A `MakeWriter` that runs every write through the Redactor: the console layer writes
+/// through it ([`crate::init::console_layer`]). `fmt` writes each event in one call, so a
+/// secret is never split across two writes.
 #[derive(Debug, Clone)]
 pub struct RedactingMakeWriter<M> {
     inner: M,

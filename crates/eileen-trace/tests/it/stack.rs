@@ -101,6 +101,7 @@ fn init_installs_once_and_soft_assertions_report() {
     let failed = eileen_stdx::never!(true, "a canary soft assertion");
     assert!(failed, "the condition comes back");
     assert!(guard.ring().take_dump_request(), "a dump was requested");
-    let (_, events) = guard.ring().records(guard.redactor());
-    assert!(events.iter().any(|e| e.name == names::SOFT_ASSERT_FAILED), "logged");
+    let parsed = guard.ring().records(guard.redactor());
+    assert_eq!(parsed.skipped, 0, "every ring line read back as a record");
+    assert!(parsed.events.iter().any(|e| e.name == names::SOFT_ASSERT_FAILED), "logged");
 }
