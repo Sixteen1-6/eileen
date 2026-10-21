@@ -58,6 +58,10 @@
 //! - A probe of a slot lock ([`slots::is_slot_held`], [`samples::Store::slot_held`]) holds it
 //!   for an instant, so a take that meets a probe refuses for that tick and decides again on
 //!   the next.
+//! - Unlock a lock before its handle closes: Windows releases a lock left on a closed handle
+//!   only when the system gets to it, so a probe or a finished build could hold a slot longer
+//!   than it ran (test
+//!   `slots::tests::a_slot_is_free_to_take_straight_after_a_release_and_a_probe`).
 //!
 //! # Logs and tracing
 //!

@@ -88,8 +88,8 @@ impl Holder {
 pub struct Held {
     holder_path: PathBuf,
     holder: Holder,
-    // Dropped last, after the record is gone.
-    _file: File,
+    // Unlocked and closed last, after the record is gone.
+    file: File,
 }
 
 impl Held {
@@ -104,6 +104,9 @@ impl Drop for Held {
     fn drop(&mut self) {
         // A missing record is fine: `kill_stale` may have run while the holder was wedged.
         let _ignored: io::Result<()> = fs::remove_file(&self.holder_path);
+        // Unlocked here, not left to the handle's close: Windows releases a lock left on a
+        // closed handle only when the system gets to it, and the next build waits until then.
+        let _unlocked: io::Result<()> = self.file.unlock();
     }
 }
 
@@ -130,7 +133,7 @@ pub fn try_take(root: &Path, name: &str, holder: &Holder) -> io::Result<Option<H
     let temp = root.join(format!("{name}.holder.tmp"));
     fs::write(&temp, holder.to_text())?;
     fs::rename(&temp, &holder_path)?;
-    Ok(Some(Held { holder_path, holder: holder.clone(), _file: file }))
+    Ok(Some(Held { holder_path, holder: holder.clone(), file }))
 }
 
 /// Takes a build slot if it is free.
@@ -138,7 +141,7 @@ pub fn try_take_slot(root: &Path, slot: Slot, holder: &Holder) -> io::Result<Opt
     try_take(root, slot.name(), holder)
 }
 
-/// Whether the lock `name` is held by anyone now (a brief probe of the lock).
+/// Whether the lock `name` is held by anyone now (a brief probe of the lock, let go at once).
 pub fn is_held(root: &Path, name: &str) -> io::Result<bool> {
     let (lock_path, _) = paths(root, name);
     let file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
@@ -147,7 +150,12 @@ pub fn is_held(root: &Path, name: &str) -> io::Result<bool> {
         Err(e) => return Err(e),
     };
     match file.try_lock() {
-        Ok(()) => Ok(false),
+        Ok(()) => {
+            // Unlocked before the handle closes, so the probe holds the slot for no longer
+            // than this call (see `Held`'s drop).
+            file.unlock()?;
+            Ok(false)
+        }
         Err(TryLockError::WouldBlock) => Ok(true),
         Err(TryLockError::Error(e)) => Err(e),
     }
@@ -238,7 +246,7 @@ pub fn kill_stale(root: &Path) -> io::Result<Vec<Freed>> {
                 Err(e) => return Err(e),
             }
         }
-        drop(lock);
+        lock.unlock()?;
     }
     Ok(freed)
 }
@@ -280,6 +288,20 @@ mod tests {
         drop(held);
         assert!(!is_held(&dir, "build-slot-0").unwrap(), "released");
         assert_eq!(holder(&dir, "build-slot-0"), None, "record removed");
+        let _ignored = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_slot_is_free_to_take_straight_after_a_release_and_a_probe() {
+        // A released hold and a probe both let go of the lock before their handles close, so
+        // the next command never meets a lock left behind by either.
+        let dir = root("probe");
+        for _ in 0..50 {
+            drop(try_take_slot(&dir, Slot::Zero, &me()).unwrap().unwrap());
+            assert!(!is_held(&dir, "build-slot-0").unwrap(), "free after the release");
+            let again = try_take_slot(&dir, Slot::Zero, &me()).unwrap();
+            assert!(again.is_some(), "taken straight after the probe");
+        }
         let _ignored = std::fs::remove_dir_all(&dir);
     }
 

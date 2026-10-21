@@ -341,8 +341,11 @@ impl Store {
             }
         }
         let result = f();
-        drop(lock);
-        result
+        // Unlocked before the handle closes, which Windows may finish late.
+        let unlocked = lock.unlock();
+        let value = result?;
+        unlocked?;
+        Ok(value)
     }
 
     /// Appends one sample, trimming the file first when it has passed 5 MB.
