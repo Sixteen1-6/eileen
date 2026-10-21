@@ -129,6 +129,14 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
   21. **Spoken conversation in other languages comes in a later version, and it is capability-driven, not hard-coded:** Eileen speaks and understands whatever languages the chosen speech models and the routed model or harness support, discovers that from the components rather than a fixed list, and falls back gracefully (another model that supports the language, or typed input) when a request's language is not supported.
   22. Windows App Actions as a route rung and Windows location services: v0.2; v0.1 uses a location the user states.
   23. If benchmark B4 shows "that variable" cannot be resolved reliably from VS Code's title and caret crop, the small VS Code extension moves into v0.1.
+- **ML projects end to end, with the owner's Google Colab (v0.2 connector; owner ask 2026-10-20).** The owner regularly trains models on Google Colab. Eileen should make that easier: the user says what they want ("a model that finds a person's clothing colour"), where and how to get data and sources, and Eileen runs the project:
+  1. parallel research on what already exists (models, datasets and their licences, papers, repositories, realistic accuracy), including whether no training is needed at all;
+  2. an evidence-first go or no-go ("an existing model already does this at X percent, here is a demo on your data" versus "nothing fits, training is worth it, here is the plan");
+  3. data collection from the sources the user names, licence checks, cleaning, AI-assisted labelling with user spot checks, and the notebook written;
+  4. training on the user's own Colab account (the user signs in to Google themselves; Eileen never handles Google credentials), progress narrated and steerable ("epoch 12, accuracy 91 percent"), with interrupt, adjust and rerun;
+  5. honest evaluation (held-out results, failure examples, comparison with the no-training option);
+  6. export to a format Eileen can run locally (ONNX through the existing runtime) so the new model becomes one of Eileen's own skills.
+  The Colab route must be one Google permits and that is stable (candidates: Google's official Colab extension for VS Code, the user's logged-in browser tab, notebooks in the user's Google Drive), respecting Colab's usage terms and tier limits. v0.1 keeps it possible (job kinds and connectors are plug-ins); the connector itself is v0.2, right after the main product.
 
 ## Proposed 2026-10-20 (by the assistant, not yet confirmed by the owner)
 
