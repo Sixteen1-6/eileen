@@ -64,7 +64,10 @@ fn assert_clean_json_lines(what: &str, text: &str) {
     }
     assert!(!text.contains(&CARD_NUMBER.to_string()), "the bare card reached {what}:\n{text}");
     for line in text.lines() {
-        assert!(serde_json::from_str::<Value>(line).is_ok(), "{what} holds a line that is not JSON: {line}");
+        assert!(
+            serde_json::from_str::<Value>(line).is_ok(),
+            "{what} holds a line that is not JSON: {line}"
+        );
     }
 }
 

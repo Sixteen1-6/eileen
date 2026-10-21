@@ -217,9 +217,8 @@ impl MemorySource for SystemMemory {
         let pages = majfaults.saturating_sub(self.majfaults);
         self.majfaults = majfaults;
         // Each major fault reads at least one 4 KB page.
-        let paging_kb_s =
-            u32::try_from(pages.saturating_mul(4).saturating_mul(1000) / interval_ms)
-                .unwrap_or(u32::MAX);
+        let paging_kb_s = u32::try_from(pages.saturating_mul(4).saturating_mul(1000) / interval_ms)
+            .unwrap_or(u32::MAX);
         Ok(MemorySample {
             avail_mb: u32::try_from(avail_kb / 1024).unwrap_or(u32::MAX),
             headroom_mb: u32::try_from(headroom_kb / 1024).unwrap_or(u32::MAX),

@@ -1,6 +1,6 @@
-//! The supervisor's only unsafe code: the Win32 calls for quality of service and process liveness. Every
-//! function here is safe to call; each unsafe block holds one operation and says why its
-//! preconditions hold.
+//! The supervisor's only unsafe code: the Win32 calls for quality of service and, for the
+//! tests, process liveness. Every function here is safe to call; each unsafe block holds one
+//! operation and says why its preconditions hold.
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::{
@@ -82,7 +82,8 @@ pub(crate) mod process {
     pub(crate) fn wait_exit(process: &OwnedHandle, timeout: Duration) -> bool {
         let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
         // SAFETY: the handle is open with synchronize access for as long as `process` lives.
-        unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), ms) } == WAIT_OBJECT_0
+        let event = unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), ms) };
+        event == WAIT_OBJECT_0
     }
 
     /// Opens a process with `rights`, owning the handle.

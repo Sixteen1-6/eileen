@@ -211,7 +211,10 @@ impl Child {
         Some(eileen_rt::task::spawn("supervisor.stderr", async move {
             let mut reader = BufReader::new(stderr);
             let mut line = Vec::with_capacity(256);
-            while let Ok(true) = read_line_capped(&mut reader, &mut line, MAX_STDERR_LINE).await {
+            while matches!(
+                read_line_capped(&mut reader, &mut line, MAX_STDERR_LINE).await,
+                Ok(true)
+            ) {
                 let text = decode_line(&line);
                 tracing::info!(name: names::CHILD_STDERR, child, line = %text);
             }

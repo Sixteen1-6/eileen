@@ -169,7 +169,11 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
     let long: Vec<&String> = lines.iter().filter(|l| l.starts_with("xxx")).collect();
     assert_eq!(long.len(), 1, "one long line");
     assert_eq!(long[0].len(), MAX_STDERR_LINE, "cut to the limit");
-    assert!(lines.iter().any(|l| l == "after the long line"), "forwarding went on: {:?}", lines.last());
+    assert!(
+        lines.iter().any(|l| l == "after the long line"),
+        "forwarding went on: {:?}",
+        lines.last()
+    );
 }
 
 #[cfg(windows)]

@@ -547,8 +547,8 @@ pub fn auto_paging_limit(windows: &[PagingWindow], baseline: Option<&Baseline>) 
 #[cfg(test)]
 mod tests {
     use super::{
-        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit,
-        p75_plus_25, percentile, plus_25,
+        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit, p75_plus_25,
+        percentile, plus_25,
     };
     use crate::slots::{Holder, Slot, try_take_slot};
 

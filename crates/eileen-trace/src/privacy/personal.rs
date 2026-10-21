@@ -51,7 +51,10 @@ fn child(pointer: &str, key: &str) -> String {
 }
 
 /// The definition a `$ref` names.
-fn resolve<'a>(definitions: &'a BTreeMap<String, Value>, schema: &Map<String, Value>) -> Option<&'a Value> {
+fn resolve<'a>(
+    definitions: &'a BTreeMap<String, Value>,
+    schema: &Map<String, Value>,
+) -> Option<&'a Value> {
     let reference = schema.get("$ref")?.as_str()?;
     definitions.get(reference.strip_prefix("#/$defs/")?)
 }
@@ -109,7 +112,8 @@ impl Walk<'_> {
     }
 
     fn items(&mut self, items: &[Value], schema: &Map<String, Value>, pointer: &str, depth: usize) {
-        let prefix = schema.get("prefixItems").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+        let prefix =
+            schema.get("prefixItems").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
         let rest = schema.get("items").filter(|i| i.is_object());
         for (index, item) in items.iter().enumerate() {
             let at = child(pointer, &index.to_string());
@@ -152,7 +156,12 @@ fn alternatives<'a>(schema: &'a Map<String, Value>, key: &str) -> &'a [Value] {
 /// Whether `value` could be an instance of `schema`, judged by the keywords that tell serde's
 /// enum variants and options apart: `type`, `const`, `enum`, `required`, the constant of a
 /// tag property, and `additionalProperties: false`.
-fn could_match(definitions: &BTreeMap<String, Value>, value: &Value, schema: &Value, depth: usize) -> bool {
+fn could_match(
+    definitions: &BTreeMap<String, Value>,
+    value: &Value,
+    schema: &Value,
+    depth: usize,
+) -> bool {
     let schema = match schema {
         Value::Bool(accepts) => return *accepts,
         Value::Object(schema) => schema,
@@ -167,7 +176,8 @@ fn could_match(definitions: &BTreeMap<String, Value>, value: &Value, schema: &Va
     if schema.get("const").is_some_and(|c| c != value) {
         return false;
     }
-    if schema.get("enum").and_then(Value::as_array).is_some_and(|options| !options.contains(value)) {
+    if schema.get("enum").and_then(Value::as_array).is_some_and(|options| !options.contains(value))
+    {
         return false;
     }
     if !type_matches(schema.get("type"), value) {
@@ -184,7 +194,9 @@ fn could_match(definitions: &BTreeMap<String, Value>, value: &Value, schema: &Va
     };
     any("oneOf")
         && any("anyOf")
-        && alternatives(schema, "allOf").iter().all(|o| could_match(definitions, value, o, depth + 1))
+        && alternatives(schema, "allOf")
+            .iter()
+            .all(|o| could_match(definitions, value, o, depth + 1))
 }
 
 /// The object checks of [`could_match`]: required keys present, tag constants equal, and no
@@ -220,7 +232,7 @@ fn fields_match(
 /// Whether `value` has one of the JSON types `kind` names (a name or a list); no `type`
 /// accepts anything.
 fn type_matches(kind: Option<&Value>, value: &Value) -> bool {
-    let named = |name: &str| match name {
+    let is_type = |name: &str| match name {
         "null" => value.is_null(),
         "boolean" => value.is_boolean(),
         "object" => value.is_object(),
@@ -232,8 +244,8 @@ fn type_matches(kind: Option<&Value>, value: &Value) -> bool {
     };
     match kind {
         None => true,
-        Some(Value::String(name)) => named(name),
-        Some(Value::Array(names)) => names.iter().filter_map(Value::as_str).any(named),
+        Some(Value::String(name)) => is_type(name),
+        Some(Value::Array(types)) => types.iter().filter_map(Value::as_str).any(is_type),
         Some(_) => false,
     }
 }

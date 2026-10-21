@@ -139,7 +139,8 @@ impl Redactor {
         }
         let debug = format!("{secret:?}");
         let debug = unquote(&debug);
-        let forms = [secret.to_owned(), json_escaped(secret), debug.to_owned(), json_escaped(debug)];
+        let forms =
+            [secret.to_owned(), json_escaped(secret), debug.to_owned(), json_escaped(debug)];
         let mut literals = self.literals.write().unwrap_or_else(PoisonError::into_inner);
         for form in forms {
             if !literals.contains(&form) {

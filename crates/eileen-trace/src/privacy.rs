@@ -152,7 +152,11 @@ impl fmt::Display for Problem {
                 write!(f, "{path}:{line}: {kind:?}; use a placeholder")
             }
             Self::NotPlaceholder { path, line, pointer } => {
-                write!(f, "{}: {pointer} is a personal field; write only placeholders there", at(path, *line))
+                write!(
+                    f,
+                    "{}: {pointer} is a personal field; write only placeholders there",
+                    at(path, *line)
+                )
             }
             Self::Unreadable { path, line } => {
                 write!(f, "{}: does not parse, so its privacy cannot be checked", at(path, *line))
@@ -379,8 +383,9 @@ fn consented_audio(scenario: Option<&Scenario>, files: &[ScenarioFile<'_>]) -> O
     let scenario = scenario?;
     let audio = scenario.intent.audio.as_ref()?;
     let consent = normalised(&audio.consent);
-    let has_record =
-        files.iter().any(|f| normalised(f.path) == consent && !f.bytes.is_empty() && !is_audio(f.path));
+    let has_record = files
+        .iter()
+        .any(|f| normalised(f.path) == consent && !f.bytes.is_empty() && !is_audio(f.path));
     (scenario.origin == ScenarioOrigin::ContributedConsentedAudio && has_record)
         .then(|| normalised(&audio.file))
 }
@@ -398,13 +403,18 @@ fn check_replay_line(path: &str, line_no: usize, line: &str, problems: &mut Vec<
         return;
     }
     let value = serde_json::from_str::<serde_json::Value>(line).ok();
-    let typed = value.as_ref().is_some_and(|v| serde_json::from_value::<RecordLine>(v.clone()).is_ok());
+    let typed =
+        value.as_ref().is_some_and(|v| serde_json::from_value::<RecordLine>(v.clone()).is_ok());
     let Some(value) = value.filter(|_| typed) else {
         problems.push(Problem::Unreadable { path: path.to_owned(), line: Some(line_no) });
         return;
     };
     for pointer in personal::offending(&value, "RecordLine") {
-        problems.push(Problem::NotPlaceholder { path: path.to_owned(), line: Some(line_no), pointer });
+        problems.push(Problem::NotPlaceholder {
+            path: path.to_owned(),
+            line: Some(line_no),
+            pointer,
+        });
     }
 }
 
@@ -568,7 +578,8 @@ mod tests {
             "{problems:?}"
         );
         assert!(
-            problems.contains(&Problem::Unreadable { path: "scenario.toml".to_owned(), line: None }),
+            problems
+                .contains(&Problem::Unreadable { path: "scenario.toml".to_owned(), line: None }),
             "not a scenario: {problems:?}"
         );
         let clean = scenario("synthetic", "");
@@ -634,8 +645,15 @@ mod tests {
 
     #[test]
     fn personal_fields_hold_only_placeholders() {
-        let toml = scenario("synthetic-from-user", "\n[sim]\ninputs = \"replay/inputs.jsonl\"\nexpected = \"replay/expected.trace\"\n");
-        let inputs = format!("{}\n{}\n", typed_line("{HOME}\\{DOCS}\\{TITLE}"), typed_line("open my tax return"));
+        let toml = scenario(
+            "synthetic-from-user",
+            "\n[sim]\ninputs = \"replay/inputs.jsonl\"\nexpected = \"replay/expected.trace\"\n",
+        );
+        let inputs = format!(
+            "{}\n{}\n",
+            typed_line("{HOME}\\{DOCS}\\{TITLE}"),
+            typed_line("open my tax return")
+        );
         let problems = check(&[
             ("scenario.toml", toml.as_bytes()),
             ("replay/inputs.jsonl", inputs.as_bytes()),
@@ -650,7 +668,10 @@ mod tests {
             }],
             "the second line's typed text is real text"
         );
-        let broken = check(&[("scenario.toml", toml.as_bytes()), ("replay/inputs.jsonl", b"{\"input\": 3}\n")]);
+        let broken = check(&[
+            ("scenario.toml", toml.as_bytes()),
+            ("replay/inputs.jsonl", b"{\"input\": 3}\n"),
+        ]);
         assert_eq!(
             broken,
             [Problem::Unreadable { path: "replay/inputs.jsonl".to_owned(), line: Some(1) }],
@@ -662,7 +683,9 @@ mod tests {
     fn a_hud_setting_value_in_a_step_is_a_personal_field() {
         // `HudInput::SetSetting`'s value is `Personal`: a step that types a real value fails.
         let step = |value: &str| {
-            format!("\n[[steps]]\nhud = {{ input = {{ set_setting = {{ key = \"voice.name\", value = \"{value}\" }} }} }}\n")
+            format!(
+                "\n[[steps]]\nhud = {{ input = {{ set_setting = {{ key = \"voice.name\", value = \"{value}\" }} }} }}\n"
+            )
         };
         let real = scenario("synthetic-from-user", &step("Samantha"));
         let problems = check(&[("scenario.toml", real.as_bytes())]);

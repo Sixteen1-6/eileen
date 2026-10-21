@@ -312,7 +312,8 @@ mod tests {
 
     #[test]
     fn lines_that_are_not_records_are_counted() {
-        let lines = ["", "not json", r#"{"t":"event","name":"x","at_us":1}"#, r#"{"t":"?"}"#, "[1]"];
+        let lines =
+            ["", "not json", r#"{"t":"event","name":"x","at_us":1}"#, r#"{"t":"?"}"#, "[1]"];
         let parsed = super::parse_lines(lines);
         assert_eq!(parsed.events.len(), 1, "one event");
         assert_eq!(parsed.skipped, 3, "the blank line is not counted, the other three are");
