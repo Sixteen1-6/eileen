@@ -168,16 +168,16 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
   - Sandbox by default, secrets never enter model-visible text, encrypt at rest.
 - Source: [section 4](RESEARCH.md#4-voice), [section 6](RESEARCH.md#6-orchestration-and-routing)
 
-## D15. "Eragon" is a working name
+## D15. An earlier working name
 
 - Date: 2026-09-19
-- Status: superseded by D16
-- Decision: "Eragon" is the working name; the shipping name is picked later from the shortlist in [NAMING.md](NAMING.md).
-- Why: eragon.ai is a live, funded startup in the same category. The name is Paolini's coinage in active multi-class commercial use, with rights held by Paolini International LLC and Disney. "Hey Eragon" is a near-homophone of "Oregon". GitHub renames repositories with redirects, so the choice does not block work.
+- Status: superseded by D16 (scrubbed of the earlier name by owner answer 15 of 2026-10-20)
+- Decision: The product used an earlier working name; the shipping name was to be picked later from the shortlist in [NAMING.md](NAMING.md).
+- Why: The earlier name collided with a live, funded startup in the same category, belonged to a commercial book and film franchise, and sounded like a place name when spoken after "hey". GitHub renames repositories with redirects, so the choice did not block work.
 - Consequences:
-  - Use "Eragon" everywhere in code and docs; the README points newcomers to NAMING.md.
-  - Expect an org handle like `<name>-ai`, since every candidate handle is already taken.
-  - Friends weigh in through a GitHub discussion or the naming issue.
+  - The working name was used in code and docs until D16; the README pointed newcomers to NAMING.md.
+  - An organisation handle with a suffix was expected, since every candidate handle was already taken.
+  - Friends were to weigh in through a GitHub discussion or the naming issue.
 - Source: [section 8](RESEARCH.md#8-name)
 
 ## D16. The product is named Eileen
@@ -186,20 +186,20 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Status: accepted
 - Supersedes: D15
 - Decision: The product is named Eileen. The owner chose the name on 2026-10-11, and the choice is final.
-- Why: D15 kept "Eragon" as a working name only, because eragon.ai is a funded startup in the same category and the word belongs to the Paolini and Disney franchise. The owner has now picked the shipping name. Renaming before the first commit and before the repo goes public costs nothing.
+- Why: D15 kept an earlier working name only as a placeholder, because it collided with a funded startup in the same category and belongs to a commercial franchise. The owner has now picked the shipping name. Renaming before the first commit and before the repo goes public costs nothing.
 - Consequences:
   - The Python package, the console script and the `python -m` entry point are all `eileen`.
   - Environment variables use the `EILEEN_` prefix, and the data directory is `%LOCALAPPDATA%\eileen`.
   - MCP server names and notification namespaces use `eileen`, for example `eileen-desktop` and `notifications/eileen/desktop_event`.
   - The repository is `github.com/Sixteen1-6/eileen`.
-  - Earlier entries in this log now say Eileen where they named the product. D15 keeps its wording because the old name is its subject.
-  - The shortlist in RESEARCH.md section 8 is closed; Eileen was not on it. That section stays as the record of why Eragon was dropped.
-- Source: owner decision, 2026-10-11; [section 8](RESEARCH.md#8-name) for the Eragon collisions.
+  - Earlier entries in this log now say Eileen where they named the product. D15 was later scrubbed of the earlier name as well (owner answer 15 of 2026-10-20).
+  - The shortlist in RESEARCH.md section 8 is closed; Eileen was not on it. That section stays as the record of why the earlier name was dropped, without naming it.
+- Source: owner decision, 2026-10-11; [section 8](RESEARCH.md#8-name) for the collisions of the earlier name.
 
 ## D17. Rust core with supervised sidecars
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted; amended by D55
 - Supersedes: D9
 - Decision: The always-on core is one Rust process (`eileen.exe`) that owns the microphone, mute, the event bus, the job registry, permissions, learning and a supervisor, and links nothing that can hang. Speech models, UI Automation, app COM, the HUD and every Claude session run in child processes started in kill-on-close Job Objects, with a deadline on every call and a heartbeat on every sidecar.
 - Why: The owner asked for a fast Rust core. One UI Automation call on the owner's PC blocked for 38.7 minutes, past UIA's own 20 s timeout, and a blocked COM call cannot be cancelled in-process; only a process boundary and a kill recover. Rust's measured wins are start-up, idle footprint (the skeleton idled at 26.6 MB), hook and UIA latency and single binaries, not model latency.
@@ -237,7 +237,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D20. The brain is a warm Claude session with a hot spare, behind a deterministic fast path
 
 - Date: 2026-10-20
-- Status: accepted; amended by D41
+- Status: accepted; amended by D41 and D53
 - Supersedes: D13's use of LiteLLM and the YAML policy file; ARCHITECTURE.md's 2026-09 conversational model
 - Decision: The conversational brain is a warm `claude -p` stream-json process on the owner's plan, started at boot with connectors and user MCP servers off, thinking off, a short system prompt and only Eileen's MCP tools, plus a hot spare. Common commands bypass it through the deterministic fast path of the intent resolver (D28). Depth tiers (instant, quick, considered, deep) run in two speeds: the brain answers at once and a deep worker runs in parallel.
 - Why: Cold start measured 39 to 48 s on the loaded PC; a warm turn reached first text in 1.0 to 1.5 s with connectors off and two to four times slower with them on. A per-utterance spawn would ruin the feel.
@@ -250,7 +250,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D21. Eileen's own Rust desktop server is the Windows action layer
 
 - Date: 2026-10-20
-- Status: accepted (the owner may overturn it on review)
+- Status: accepted (owner answer of 2026-10-20); amended by D59
 - Supersedes: D5
 - Amends: D6 (DesktopState lives in this server; tool names are snake_case)
 - Decision: The Windows action layer is Eileen's own Rust MCP server (`eileen-desktop`, rmcp plus the `windows` crate), ported from the research proof. Cua Driver stays an MIT reference for MSAA fallback, PostMessage delivery and Electron drags, not a dependency.
@@ -264,7 +264,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D22. Browser and media: URL launch and SMTC first
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted; amended by D59
 - Amends: D7
 - Decision: Known videos and pages open with `ShellExecuteW` in the user's own browser, and playback is controlled through Windows' system media controls from Rust. Page content goes through screenshots and foreground input in v0.1, or through the Playwright MCP extension when the user installs it. Claude in Chrome is used only inside a Claude worker, by user opt-in. YouTube is never searched headlessly.
 - Why: Measured on the owner's PC: a `&t=930s` URL landed at 15:30 and SMTC pause and seek from Rust took effect, with no extension. YouTube's robots.txt disallows headless search, and yt-dlp took seconds idle and minutes under load.
@@ -284,7 +284,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D24. A local voice pipeline in Rust, CPU only
 
 - Date: 2026-10-20
-- Status: accepted; amended by D42
+- Status: accepted; amended by D42, D53 and D58
 - Decision: cpal on WASAPI with sonora echo cancellation and a mute that stops capture, in the core; Silero VAD v6.2, Nemotron streaming 0.6B (int8, 560 ms), Smart Turn v3.2 fused with transcript cues and a silence cap, and Kokoro v1.0 fp32 with clause chunking and a phrase cache, in `eileen-speech` through sherpa-onnx 1.13.8 (shared) and `ort` 2.0.0-rc.13 on one shipped `onnxruntime.dll`. Barge-in ducks at the first VAD window and stops by the third. Every Eileen process opts out of EcoQoS at start.
 - Why: Measured on the owner's PC: idle listening 5.8 percent of one core, Nemotron WER 2.35 percent with the final 0.4 s after speech, barge-in about 70 to 110 ms from measured parts, and a 10-fold slowdown without the EcoQoS opt-out. The iGPU, NPU and DirectML gave no usable path for Kokoro.
 - Consequences: Static sherpa-onnx is not used (it fails to link on MSVC 14.42); the native DLLs ship beside the binaries, never from `PATH`.
@@ -320,7 +320,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D28. A layered intent resolver
 
 - Date: 2026-10-20
-- Status: accepted; amended by D44
+- Status: accepted; amended by D44 and D52
 - Decision: Intent resolution is its own crate, `eileen-intent`, with four layers: a deterministic grammar plus learned templates (L1, under 1 ms), a local semantic matcher with a small on-device embedding model run in the speech process (L2, hints and confirmed paraphrases only), the brain with live context (L3), and a worker that figures out new capabilities which the learning loop turns into skills (L4). Unclear requests get one clarifying question, never an error. "What can you do here?" is answered by introspection of tools, app capabilities and skills.
 - Why: Owner direction "intent, not commands"; the measured matcher is microseconds per utterance; lexical hints alone matched the wrong verb, so nothing below L3 acts on an unconfirmed similarity.
 - Consequences: The embedding model is adopted only if it meets its latency budget on the owner's PC; otherwise L2 runs lexical only and says so.
@@ -384,7 +384,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D35. Real use becomes tests: the community scenario corpus and the test fleet
 
 - Date: 2026-10-20
-- Status: accepted; amended by D45
+- Status: accepted; amended by D45 and D58
 - Decision: Scenarios are data in a versioned schema (`scenarios/<area>/<id>/scenario.toml`). "Save that as a test" turns a real request, success or failure, into a scenario from the flight recorder; sharing generalises and redacts it with a preview the contributor approves, then submits it from the contributor's own GitHub account. CI validates every scenario and replays it in simulation on every pull request. Contributors may opt in to `eileen test --fleet`, which runs real-desktop scenarios on their PCs and uploads anonymised results; failures are clustered, flakes tracked, and a readable catalogue with a coverage view is generated.
 - Why: Owner direction: the owner's friends test on their own PCs, and everything they try should feed the test suite so it grows from real use.
 - Consequences: The schema, its checks and the catalogue generator land in WP0; the replay runner in WP1; capture in WP2; sharing and the fleet in WP9. Every package ships scenarios. The owner's voice and screen never enter the public repository.
@@ -412,7 +412,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D38. Windows first, not Windows only; the Python scaffold is retired
 
 - Date: 2026-10-20
-- Status: accepted
+- Status: accepted; amended by D55
 - Supersedes: ROADMAP.md's 2026-09 non-goal "macOS and Linux", and the remaining Python consequences of D9
 - Decision: Every OS-touching piece sits behind traits in `eileen-platform` and is implemented in a per-area Windows crate (`eileen-audio-win`, `eileen-desktop-win`, `eileen-apps-win`, `eileen-shell-win`); a Linux port adds `-linux` crates. Platform-neutral crates build and pass their tests on `ubuntu-latest` in CI from the first commit. The Python scaffold under `src/eileen` is retired; nothing in the v0.1 build is Python, and any later Python adapter is a stdlib-only JSON-RPC shim.
 - Why: Owner direction of 2026-10-20. The Python MCP SDK's import alone took 35 to 42 s on the loaded PC, against 1.7 to 2.9 s for a stdlib-only shim.
@@ -422,7 +422,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D39. Voices: the engine is chosen per voice, and Chatterbox is in v0.1
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20)
+- Status: accepted (owner direction of 2026-10-20); amended by D58
 - Amends: D25 (its consequence that Chatterbox waits for v0.2)
 - Decision: Kokoro stays the default voice and Kyutai Pocket TTS the default cloner. Chatterbox (Turbo from Resemble's official ONNX graphs, Nano from a community ONNX export once its license checks out) sits behind the same `Synth` trait in v0.1, run through `ort` with no PyTorch and no Python. Each voice profile stores its engine. A head-to-head on the owner's PC (Pocket TTS against Chatterbox-Nano and Chatterbox-Turbo, cloning his own voice: time to first audio, real-time factor, memory, a listening test) is part of WP4's acceptance. An engine speaks live when its measured real-time factor allows it; otherwise it keeps announcements, summaries and read-alouds, rendering a whole line before playing it when it is slower than real time. No watermark by default on any engine; Perth stays off.
 - Why: The owner's entry of 2026-10-20 makes Chatterbox selectable per voice and live when fast enough, and asks for the head-to-head; D25 was written from the earlier entry.
@@ -432,7 +432,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D40. What contains a worker in v0.1, and what waits for v0.2
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the safety review; the owner confirms or overturns)
+- Status: accepted (owner answer of 2026-10-20); amended by D62
 - Amends: D14 (its "sandbox by default" and "encrypt at rest" consequences)
 - Decision: In v0.1 a Claude worker is contained by: its own repository or worktree; a path guard that tiers every read and write by canonicalised path (Eileen's data folder, credential stores and browser profiles are tier 3; anything outside the job's folder and toolchains is tier 2); a shell policy that parses commands and allows only a list of build, test and local git commands without asking; per-job taint that makes network egress tier 2 once a job has both seen untrusted content and read private data; the `PreToolUse` guard failing closed; per-app consent for desktop input; and its Job Object. The CLI's own `--restricted` mode (on 2.1.304 it drops code-running tools and WebFetch unless named, confines file tools to the working folders and ignores user and project settings) becomes a second fence for every session if WP3's test shows workers still work under it; other sandbox and Windows container options are measured in WP3 and recorded. A real sandbox and encryption at rest (a DPAPI-wrapped key with an AEAD cipher) are v0.2; v0.1 gives the learning folder a user-only ACL and keeps it out of Windows Search.
 - Why: The safety review showed a worker with web tools and file reads could exfiltrate private data with nothing in the way. Encryption at rest adds a crypto dependency and key handling for little gain over the profile's own permissions on a single-user PC.
@@ -442,7 +442,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D41. The brain may act through deterministic tools; workers bind to warm sessions
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the feasibility and owner-asks reviews)
+- Status: accepted (owner answer of 2026-10-20); amended by D52 and D54
 - Amends: D19 (the driver starts sessions, and jobs are bound to them) and D20 (the brain is no longer limited to answering and dispatching)
 - Decision: The brain gets an `act` toolset of tier-0 and tier-1 tools that never move the mouse or type (launch an app, move or snap a window, volume, open a URL, URI or file, media control, recent work, Resolve navigation), only in turns that began with the user's own addressed input. Clicks, typing, drags and every edit stay with workers. A worker driver starts a session first and binds a job to it later; one computer-use session and one deep session are kept warm when memory allows, and a memory admission rule in the core decides what may start. Personality travels in each turn, so renames and style changes need no restart, and the brain is recycled only on context size, a skill change or a crash.
 - Why: Anything outside the exact grammar otherwise waited for a cold worker (34.5 s to a usable session measured under load, 39 to 48 s for a cold brain), which broke "intent, not commands".
@@ -452,7 +452,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D42. Hearing: the system mix as the echo reference, a conversation window, Raw Input
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the owner-asks and safety reviews)
+- Status: accepted (owner answer of 2026-10-20); amended by D51
 - Amends: D24 (the echo reference and the barge-in rule) and D26 (how the dictation key is read)
 - Decision: Echo cancellation uses the WASAPI loopback capture of the default render endpoint as its far-end reference, so video and music the PC plays are cancelled as well as Eileen's own voice; it is bypassed when nothing plays. The addressee gate adds a conversation window that stays open while the user is engaged and is suspended while other audio plays or another app uses the microphone, plus a local score for unnamed requests about the screen when the user is alone, with the brain able to answer that an utterance was not for it. Barge-in pauses first and resumes after a backchannel. The dictation key and physical input are read through Raw Input, never a low-level keyboard hook in the core.
 - Why: Without a system reference, a video playing beside Eileen triggered barge-in, opened the follow-up window and could even approve; without a conversation window, "no wake word" still needed the name in almost every sentence; a slow low-level hook is silently removed by Windows and makes every keystroke wait on Eileen.
@@ -462,7 +462,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D43. Approvals come only from the user, and the worker route is proven against the real CLI
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the safety review)
+- Status: accepted (owner answer of 2026-10-20); amended by D51
 - Amends: D14 (approval sources) and D30 (how a worker's tier-2 call reaches the user)
 - Decision: An approval is built only from the user's own input: a physical click on the HUD (synthetic input is ignored), the tray, the approval hotkey, or speech inside the voice window. For tier 2 by voice the user says the action word ("yes, push") or the assistant's name; voice approval is off while other audio plays, while another app uses the microphone, and during fleet and nightly runs. Other media pause while the question is open. An unanswered request waits on the HUD until the job's deadline. Grants cover the exact call that was shown, and an approval is bound to its target. The summary is built by Eileen's code, never by a worker. How a worker's tier-2 call reaches Eileen (the `PermissionRequest` hook held open, `--permission-prompt-tool`, or deny then steer) is decided by WP3's contract test against the real CLI before the harness merges, and re-checked by the weekly and nightly contract tests.
 - Why: The `ask` path through the permission-prompt tool was never tested and the flag no longer appears in `claude --help` on 2.1.304; the earlier rule let any "yes" the microphone heard approve, including a video Eileen had opened itself.
@@ -472,7 +472,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D44. The learning loop, revised
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the learning-loop review)
+- Status: accepted (owner answer of 2026-10-20); amended by D52
 - Amends: D27 and D28
 - Decision: The loop's decisions (the ladder, the linter, computed provenance, shadow agreement, the replay state machine) live in a pure crate, `eileen-skills`, that the core calls through a `SkillEngine` port, so learning runs in the simulator; the IO lives in `eileen-learn`. Each worker session gets its own learned-skill snapshot written from `learn.sqlite` with a manifest, and every use of a skill is attributed. Recipes may refer to earlier steps' outputs, have call, delegate and confirm steps, check only read-only ops, and retry only idempotent ones. The ladder is risk-weighted (light skills reach model-free replay after three clean replays, standard ones after ten), and success needs an objective check or praise. Provenance is computed, never taken from the librarian; tainted steps and steps that needed approval never become recipe steps. The librarian is capped by share of the plan, sees only jobs that already ran on Claude, and can be run on demand. Confirmed phrasings run directly only when their target has no slots.
 - Why: The review found that the recipe format could not express the worked examples, skill use was never attributed, the ladder's numbers contradicted the demos, and the safety rules had no mechanism that could be computed.
@@ -482,7 +482,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D45. Replay and scenarios: two modes, formats as contracts, shipped crates
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the engineering review)
+- Status: accepted (owner answer of 2026-10-20); amended by D57
 - Amends: D31 and D35
 - Decision: The recording, checkpoint, stub-script, regression, expected-trace and fleet formats are contracts. Strict replay (for incidents) compares every event on the commit that recorded it; scenario replay (for the community corpus) starts a fresh core and serves model and tool responses reactively, remapping IDs, so shared scenarios survive code changes. Replay, scenario capture and sharing, and the fleet runner are shipped crates (`eileen-replay`, `eileen-scenarios`, `eileen-fleet`); the simulator stays development-only. Sharing ships with the first slice. The scenario catalogue and its results are rendered to GitHub Pages and never committed, so pull request checks stay hermetic.
 - Why: Open-loop replay broke on any change that minted one more ID, friends' pull requests could not regenerate a committed catalogue, and shipped commands lived in development-only crates.
@@ -492,7 +492,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D46. The build guard and the gates, revised
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the feasibility and engineering reviews)
+- Status: accepted (owner answer of 2026-10-20); amended by D54, D55 and D57
 - Amends: D32 and D33
 - Decision: `cargo xtask` admits a build slot by measured free memory per compile job, samples before admitting a second, runs cargo in a kill-on-close Job Object at below-normal priority, and records its holder; agents cannot run cargo directly. Native libraries appear only under Windows target tables, so neutral crates build and test on Linux. Pull requests lead with an Evidence section whose tests must exist, and fix pull requests are checked failing before and passing after where Linux can show it. The house-style denylist is stored as hashes so the names never enter the repository. Each crate's guidance stays its crate doc, with an added heading for what needs a decision record, and is also generated into path-scoped Claude rules. A check registry generates the documented list; each check is marked as a repository check or delegated to a tool.
 - Why: The first guard admitted builds on a single 2 GB reading on a PC whose free memory sits near 1 to 2 GB; the native dependencies would have broken the Linux lane, Windows test binaries and cargo-deny; the owner's evidence-first rule had no check.
@@ -502,7 +502,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D47. The HUD draws with DirectWrite and counts only physical clicks
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the feasibility and safety reviews)
+- Status: accepted (owner answer of 2026-10-20); amended by D51
 - Amends: D36
 - Decision: The HUD draws text with DirectWrite into Direct2D on a DirectComposition surface (GDI text in a per-pixel-alpha layered window is invisible), with a colour-keyed GDI fallback if WP8's first measurement prefers it, and probes capture exclusion on exactly that window type. Its strip accepts a click on Allow, Deny, the mic or a first-run choice only when Raw Input shows it came from a device. It adds a live DWM thumbnail of the window a job works in, a confirm panel for crops, a contact sheet, a settings panel and a drop target for voice clips. The tray and hotkeys move into the core's shell crate, built in WP2, so the first slice has a mute key.
 - Why: A worker could otherwise click Eileen's own Allow button; the owner asked for the mini-view, the crop confirmation and settings reachable on the HUD.
@@ -512,7 +512,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D48. Resolve edits: Fusion first, versions as undo
 
 - Date: 2026-10-20
-- Status: proposed (architect, after the owner-asks review)
+- Status: accepted (owner answer of 2026-10-20); amended by D59
 - Amends: D23
 - Decision: The benchmark's edit tries, in order, a generated Fusion composition imported on the clip (an ellipse mask keyed from face boxes Eileen tracks itself, feeding a sharpen node), a generated DRX with a window if the format allows placing one, and computer use on the Color page last. Before any edit Eileen adds a color version, so undo loads the previous one, and shows the face crop for confirmation. The bridge also loads projects and timelines, polls readiness after a launch, opens the Edit page before moving the playhead, and reports render progress, which the core tracks as an app task. WP6 runs the spike that picks the route in W1, before anything depends on it.
 - Why: The DRX route was unknown and replaced the clip's grade with no undo, computer use on the Color page could never become a model-free recipe, and nothing loaded a project after launch.
@@ -522,7 +522,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 ## D49. The first run has a surprise path
 
 - Date: 2026-10-20
-- Status: accepted (owner direction of 2026-10-20)
+- Status: accepted (owner direction of 2026-10-20); amended by D56
 - Decision: The first run offers a tour, a skip, and "Show me something cool". With a truthful consent tick for the user's own voice, the surprise path asks for half a minute of free speech, uses it for setup and as a clone reference, runs a short live demo in the user's cloned voice, reveals it, and deletes everything at once if the user does not keep it. If the PC cannot clone fast enough, it runs the demo in the default voice or the tour, and offers the surprise later.
 - Why: Owner direction: the moment that makes people understand what Eileen is.
 - Consequences: A state machine in the core, the choices and checkbox on the HUD strip, the clone and its timing check in the speech process, and a scenario that asserts no file is left after a decline.
@@ -536,3 +536,143 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Why: Owner direction: other projects using this style of development should be able to adopt the discoveries.
 - Consequences: Check 29 enforces citations and links; check 30 makes a change to this decision log update the playbook in the same pull request. WP0 writes the first version; later changes arrive through amendment pull requests, and WP9 adds the measured results.
 - Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md section 4b.6.
+
+## D51. Approvals and the conversation window, revised
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D62
+- Amends: D42 (who passes inside the conversation window, and what is never suspended), D43 (the forms of a tier-2 voice approval and its order), D47 (the tray is not an approval source)
+- Decision: A tier-2 approval by voice needs the action word, and also a speaker match once the speaker check is adopted and the user enrolled; a bare "yes" or "Eileen, yes" answers only clarifying questions, confirm steps and tier-1 asks. The approve, deny and unmute hotkeys count only when Raw Input saw the chord come from a keyboard, and the desktop server refuses to press any of Eileen's hotkeys. The tray offers no approval. When an approval is asked, the core pauses media first, waits for the pause to be confirmed, then decides the voice mode and speaks; the voice window opens after the question has drained plus an echo tail. Inside the conversation window only commands and replies pass without the local addressee score; media-control and stop words are never suspended while other audio plays. Every resolution records its `ApprovalSource`.
+- Why: `RegisterHotKey` fires on injected keystrokes, so a worker could press "approve"; "Eileen, yes" from any voice was weaker than the action word the other documents promised; a question could be heard as its own answer; the window answered side talk such as "want coffee?"; and the suspension blocked "pause" while a video played.
+- Consequences: Simulator invariant 7 covers the order and the sources; WP1 acceptance 5 tests each case; ROADMAP and ARCHITECTURE no longer say "only the user's own voice" unless the speaker check is enrolled.
+- Source: BUILD.md sections 2.5, 2.8 and 2.9; the first verification round (items ab65bc-3 and aedf46-2).
+
+## D52. The learning loop, second revision
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D61
+- Amends: D44 (recipes, attribution, provenance, facts), D41 (how brain actions become phrasings), D28 (L2 always has an on-device model)
+- Decision: Every op a recipe may use declares an output schema, and recipes point into outputs with typed operands; branching is one fallback construct with an `ask` step for questions; eligibility allows only vocabulary literals in non-read steps; a replay may call only the act, desktop and apps toolsets and `jobs_dispatch`; a level-3 match reaches the brain as a `[match]` block. Slot values of every skill use have a defined source order. Snapshots are verified and recycled when their skills change; the claim is detection, not prevention. Provenance defines "literal", traces to untainted worker steps too, and one set of observed sources drives both taint and recipe compilation; drafts from jobs that read free text from outside are held whole for review. Facts have a deterministic path from the user's own words, `FactDelta`, and `facts_used` on skills. Fast-path commands and brain act turns are `Act` jobs, and a phrasing serves exact repeats at once and paraphrases after confirmation. L2 uses a transformer model if it meets its budget and a static-embedding model otherwise.
+- Why: The verification round found that pointers had nothing to point into, the worked recipes broke their own eligibility rule and needed branching the contract lacked, worker skill uses had no slot values, observed text was never captured for the main injection path, facts had only a name for their path, and the first-run repeat could not be served by the fast path.
+- Consequences: BUILD.md section 2.10's three worked recipes lint clean; WP1 acceptance 12 and 13 and WP7 acceptance 5 to 10 test the rules.
+- Source: BUILD.md sections 2.3, 2.10, 3.3.10 and 3.3.13; the first verification round (items a6a62e-1, -2, -3, -5, -6, -8 and aedf46-1).
+
+## D53. Model names are aliases in config; the brain and the speech stages are plug-ins
+
+- Date: 2026-10-20
+- Status: accepted (owner direction of 2026-10-20, "stay at the frontier" and "the brain is swappable"); amended by D62
+- Amends: D20 (model ids were full ids written into config), D24 (speech stages were wired directly)
+- Decision: Config names models through `routing.models` aliases; the harness resolves each to a full id per CLI version, passes only full ids on command lines and records the resolved id beside every timing. `routing.brain`, `routing.deep` and `routing.fallback_brain` are typed config; `BrainBackend` has `route()` and a `brain_for` factory; benchmark B10 (`eileen bench brain`) runs before a backend switch and warns when the candidate is slower or less reliable; a stalled brain falls back to the fallback slot. Voice activity, recognition and turn detection sit behind traits like the voices, each reporting its languages and cost, with the engine per stage a setting.
+- Why: The owner asked for aliases in config and for every component AI progress improves to be swappable; D20's reason (aliases drifted between CLI builds) is handled by re-resolving per CLI version and recording the resolved id.
+- Consequences: Simulator invariant 15; WP3 acceptance 6; the later language support discovers languages from the components.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md sections 2.3, 2.8 and 3.3.8.
+
+## D54. Memory admission and the build guard read available memory, commit headroom and paging
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D64
+- Amends: D41 (admission and the warm pool), D46 (the build guard's numbers)
+- Decision: Admission reads available memory (free plus standby), commit headroom and the paging rate. A job starts if commit headroom stays above 1 GB and either available memory stays above the reserve (10 percent of RAM, 768 MB to 2 GB), or paging has been low for 30 s, or the user says "start it anyway"; a queued job names the biggest process and asks again after ten minutes. The warm pool starts only by the reserve rule. A per-job memory limit is a Job Object limit that fails the job by name. The build guard admits its first slot by headroom and paging with two compile jobs under 2 GB available, its second only with real room, and waits then exits with code 75 when refused. Eileen's own coding workers run no language server in v0.1.
+- Why: With 1 to 2 GB usually available on the owner's PC, the old rules would have admitted no worker and no build at all, contradicting the M6 demo and the owner's answer that one build slot runs on normal days.
+- Consequences: WP9 records which rule admitted each M6 job and retunes the defaults by amendment; the documents say plainly that the warm pool and the hot spare are usually absent on this PC.
+- Source: BUILD.md sections 2.5, 4.4 and 6.1; owner answer 8 of 2026-10-20.
+
+## D55. The crate graph and the lint bans agree; secrets, volume and app hooks are platform traits
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies)
+- Amends: D17 (only the supervisor spawns processes), D38 (what sits behind platform traits)
+- Decision: Named threads and sleep live in `eileen-stdx`, so every crate, the `-win` crates included, obeys the thread and sleep bans; the `-win` crates may use `eileen-trace`; `eileen-runtime` may use `eileen-replay`; `tools/repo-tools` may use `eileen-trace`'s privacy module. Three listed exemptions may spawn processes: the build guard's cargo spawn, the guard's restart of a hung core, and the development tools, each with one `#[expect]` or its own `clippy.toml`, enforced by check 14. Credentials (`SecretStore`), system volume (`SystemVolume`) and app hooks (`AppHost`) are platform traits with Windows implementations in the `-win` crates.
+- Why: The crates that need threads, sleeps, spans and spawns could not reach the wrappers the lints point to, and the owner's "Windows first, not Windows only" entry lists app hooks and credential storage among the things behind traits.
+- Consequences: BUILD.md section 3.1's table and section 4b.2's exception list change together; ARCHITECTURE.md's code map follows.
+- Source: BUILD.md sections 3.1, 3.4 and 4b.2; [OWNER-DIRECTION.md](OWNER-DIRECTION.md).
+
+## D56. The first run, revised
+
+- Date: 2026-10-20
+- Status: accepted (owner direction of 2026-10-20); amended by D61
+- Amends: D49 (the fallback and what the recording does)
+- Decision: When cloning is too slow, the first run gives the normal tour and offers the surprise later, as the owner wrote; an unticked box runs the demo in the default voice and records nothing. The prompt asks the user to start with "Hi Eileen", which teaches the name without spoiling the surprise; echo cancellation is calibrated from Eileen's own prompt; the clip sets the mic level, measures the recognizer's confidence and, if adopted, enrols the speaker check; no model is adapted. The choices and consent work by voice. A declined clone deletes the clip and the clone; the listening calibration, which holds no audio, is kept, said aloud, and removed by "forget my voice". The "faster the second time" moment uses the exact-repeat rule of D52.
+- Why: The earlier text promised name, accent and echo calibration from a clip that could not provide them, and its fallback did not match the owner's.
+- Consequences: WP4 acceptance 12 and WP8 acceptance 5 test the calibration, the voice path and the decline.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md section 2.8 and E18.
+
+## D57. The thin slice is gated on named pull requests; evidence checks from the first pull request
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the first verification round; the owner's standing rule applies); amended by D63 and D64
+- Amends: D45 (scenario replay rules), D46 (when the evidence checks start)
+- Decision: WP2 starts as soon as WP1's minimal core merges, and slice S1 waits only for four named pull requests (`wp2/s1-live`, `wp3/worker-brain`, `wp4/s1-audio`, `wp4/s1-speech`). WP0 pins only the contracts on the S1 path; the others stay provisional until their owner's first pull request. `pr-meta` runs `cargo xtask pr-meta` from WP0's CI bootstrap with the title, template, filled-evidence, test-existence and fix-regression rules, and the before-and-after evidence job follows in phase B with defined mechanics. Scenario replay feeds every input family by one of three rules (scheduled, reactive, synthesized); `bless` belongs to WP2 and `stale` expires.
+- Why: The owner's evidence rule applies during the build too, and the first live loop should not wait for the whole of WP3 and WP4 or for every contract to freeze.
+- Consequences: BUILD.md section 0's waves, sections 6.1 and 6.2 and checks 8 and 19 change together.
+- Source: BUILD.md sections 0, 3.3, 3.3.16, 4b.3 and 6; [OWNER-DIRECTION.md](OWNER-DIRECTION.md) ("Evidence first, then the change").
+
+## D58. The owner's answers of 2026-10-20 applied
+
+- Date: 2026-10-20
+- Status: accepted (owner answers of 2026-10-20); amended by D60
+- Amends: D35 (fleet identity and where results go), D24 (the speech build), D39 (the watermark is built as an opt-in)
+- Decision: The fleet identifies a machine by a salted one-way hash of its Windows MachineGuid, the same in every result and scenario; results arrive as pull requests from contributors' own accounts to an orphan `devhub` branch (or relayed by the owner), where the results history and the public `RESULTS.md` table also live. The speech build contains no GPL code: sherpa-onnx is built without espeak-ng in this repository's CI and Kokoro gets an espeak-free front end. The opt-in watermark is built with AudioSeal for exported audio and recordings. The remaining answers are applied where BUILD.md section 7 lists them.
+- Why: The owner answered every question section 7 asked; these four change contracts or the build.
+- Consequences: `MachineHash` replaces the random install id; `native.yml` and `devhub.yml` join the workflows.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md), "Owner answers to BUILD.md's open questions".
+
+## D59. App routes: discovery by Eileen's own tool, remembered per app, and shown without hijacking
+
+- Date: 2026-10-20
+- Status: accepted (owner direction of 2026-10-20, "the app's own AI route first"); amended by D62
+- Amends: D21 (the page-structure rung and showing), D22 (route discovery), D48 (undo per Resolve route and ResolveMCP first)
+- Decision: Route discovery is Eileen's own `routes_lookup`, which queries the official MCP registry from the apps sidecar, so no worker needs web tools for it; proposals are stored, shown on the HUD and accepted only as a tier-2 Safety setting. A `route_stats` table remembers which route worked per app and task and feeds workers and introspection, and a vision or UI Automation step is never compiled for an app with a higher declared route. The page-structure rung is on-demand UI Automation of a browser window's web content. The screen lease is always announced and handed back, and a window comes forward only when the user should look. Resolve undo follows the route (Eileen's composition deleted and the previous one loaded, or the previous color version), and Resolve's own MCP server serves each op it covers once the owner is on 21.1 or later.
+- Why: Discovery was assigned to workers that had no web tools, "remembers the best route" had no store or reader, page structure depended on an optional extension, and color versions do not remove a Fusion composition.
+- Consequences: WP5, WP6, WP7 and WP8 each own a part, with tests listed in BUILD.md section 6.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md); BUILD.md sections 2.5, 2.6 and 2.7.
+
+## D60. The fleet's machine hash mixes the OS machine id with a random install id
+
+- Date: 2026-10-20
+- Status: accepted (owner answer 6 of 2026-10-20)
+- Amends: D58 (its consequence that the machine hash replaces the random install id)
+- Decision: `MachineHash` is BLAKE3 over a fixed Eileen salt, the OS machine id read through a new `MachineIdentity` platform trait (Windows MachineGuid; Linux `/etc/machine-id`, then `/var/lib/dbus/machine-id`; macOS later, the platform UUID) and a random install id Eileen creates on first run; where the OS has no usable id, the salt and the install id alone.
+- Why: The owner's answer asks for exactly this, so that cloned virtual machines and disk images that share an OS id still get distinct hashes and machines without an OS id still have one; D58 read the answer as replacing the install id, which was the opposite.
+- Consequences: `fleet\machine.toml` keeps the install id; WP2 implements the trait in `eileen-shell-win`; WP9 tests two installs on one fake OS id and the install-id-only case.
+- Source: [OWNER-DIRECTION.md](OWNER-DIRECTION.md), owner answer 6; BUILD.md sections 3.3.1, 3.4 and 4.8.
+
+## D61. The learning loop, third revision
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Amends: D52 (recipe typing, facts, distillation events, provenance precedence), D56 (the first run's gates and its phrasing)
+- Decision: Recipes type every operand, with `$len` for array lengths; a fallback step may point to earlier steps of its own fallback; `call` and `delegate` steps need postconditions while `ask` and `confirm` steps have implicit ones; an `ask` fills a declared, asked slot (kind `Pick` when its options come from an earlier step); a delegate's own check is the worker's report and the objective check is the next `call`; `apps_open_url` can reuse a session already playing the video. The fact patterns match only single declarative statements with a known subject, are said back with "Noted" and are undoable; `CoreCommand` and `FactCommand` are contracts; a correction retires facts by subject key; only `Corrected` and `Forgotten` retirements queue repairs. Which sources gave accepted answers is a statistics table fed by the user's own signals, not a fact kind. Phrasings record their source turn and job, forget plans include them, and first-run phrasings are ephemeral; no-learn never suppresses a phrasing. "Learn from that now" closes the regret window, and every distillation ends in one drafted (with its hold), rejected or skipped event. Provenance and the deny-scan follow one table by literal class. The first run checks setup's clone timing before recording and deletes the clip if rendering misses its limit afterwards.
+- Why: The second verification round found the worked recipes broke the linter's own rules, ordinary requests would have been stored as facts, phrasings survived "forget that", `--wait` could time out on a held draft, the deny-scan contradicted provenance, and the first run's clip could outlive a fallback to the tour.
+- Consequences: WP1 acceptance 12, WP7 acceptance 3, 5, 6, 8, 9 and 11, WP4 acceptance 12 and WP8 acceptance 5 test the rules.
+- Source: BUILD.md sections 2.4, 2.8, 2.10, 3.3.10 and 3.3.13; the second verification round (items a6a62e-1, -3, -5, -6, -8, aedf46-1, aedf46-5, L1 and L8).
+
+## D62. Containment, calls and the brain's slots, revised
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the second verification round; owner answer 19 for calls)
+- Amends: D40 (git internals, path class order, egress after taint), D51 (the follow-up feature and calls), D53 (how the fallback brain is addressed), D59 (route proposals and installs)
+- Decision: Writes to a repository's git directory and git configuration are tier 2 and HUD only, workers run with `core.fsmonitor` off, and hook-running git commands become tier 2 after taint in a repository with hooks. Path classes match most specific first, so a job's own folders and snapshot inside Eileen's data folder are not tier 3 for that job. Apps Eileen opens for the user are started by the shell, outside every Eileen job. One table decides which reads are observed and of which kind, covering the browser and mail trees, Claude in Chrome, third-party MCP servers, egress commands and `routes_lookup`. After taint and a private read, queries to vouched hosts, browser input and files a browser opens are tier 2, and hosts in a brain-dispatched task must pass the brain's URL rule. A route proposal must match a registry entry and is shown and spoken only from registry fields; an approved server is installed once at its exact version. During a call only name-led utterances are addressed and Eileen stays silent. A conversation-window follow-up counts only when it resolves against Eileen's last turn. Brain commands name their slot and brain events carry their process instance, so a stalled brain's late answer is dropped.
+- Why: Each closes a gap the second verification round found: git hooks bypassed the taint rule, the data folder contradicted job folders inside it, launched apps inherited a kill-on-close job, poisoned pages read through UI Automation escaped the whole-draft hold, the brain could hand an attacker's URL to a worker, a worker could propose any server in Eileen's voice, calls contradicted owner answer 19, and the core could not tell two answers to one turn apart.
+- Consequences: WP0 phase B builds `user_launch`; WP1 acceptance 6 and 12, WP2 acceptance 10, WP5 acceptance 11 and 12, WP6 acceptance 8, WP7 acceptance 9 and WP8 acceptance 7 test them; section 7 names the git hook limit.
+- Source: BUILD.md sections 2.1, 2.3, 2.5, 2.8, 2.9, 2.12, 3.3.3 and 3.3.9; the second verification round (items ab65bc-1, -2, -5, -11, aedf46-2, aedf46-7, L3, L4 and L8).
+
+## D63. Evidence has a grammar and its own required check; Dependabot updates cargo; scenario keys are stable
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Amends: D57 (the evidence job's home and the bot rule; scenario replay keys and expiry)
+- Decision: The Evidence section has field lines (`tests:`, `scenarios:`, `numbers:`, `replay:`, `incident:`, `owner-run:`, `override:`) and only `tests:` and `scenarios:` are read as ids; tests resolve in any workspace member, `xtask` and `repo-tools` included; `type:` sits under its own heading. The evidence job moves to `evidence.yml`, re-runs on description and label edits, and becomes a required check from phase B; cases Linux cannot show fail until the owner labels them reviewed. Dependabot opens the cargo and action update pull requests with a 14-day cooldown, and no workflow creates pull requests. Scenario replay keys reactive families without digesting composed prompts, feeds the brain's and workers' tool calls inside their turn's sequence, schedules environment events, and one shared function applies the stale and quarantine expiry in both checks.
+- Why: Ids could not be parsed from prose, W0's own tests could not be named, an edited description kept a stale evidence result, a pull request opened with the workflow token never runs the required checks, and prompt rewording would have made every brain scenario stale.
+- Consequences: WP0 acceptance 8 and 11, WP1 acceptance 13 and WP2 acceptance 11 test them; the pull request template follows the grammar.
+- Source: BUILD.md sections 3.3.14, 3.3.16, 4.6 and 4b.3; the second verification round (items a184cd-2, a184cd-4, L6 and L8).
+
+## D64. The slice in W1, and memory thresholds from this PC's own measurements
+
+- Date: 2026-10-20
+- Status: accepted (architect, after the second verification round; the owner's standing rule applies)
+- Amends: D54 (the thresholds and the pool), D57 (when WP4's slice pull requests run)
+- Decision: WP4's two slice pull requests run in W1, sharing the desktop lock with WP6's spike, so S1 can pass while WP1 deepens the simulator. The build guard's thresholds come from a baseline day measured on the owner's PC in W0, its job count never falls as memory rises, and guard processes share their samples. Memory admission's paging limit defaults to `auto`, learned from the PC's own week of paging, and WP3's W1 record must show a cold worker admitted on a typical day. The deep pool session is kept first and may start on a quiet minute; deep answers that start cold are a named v0.1 limit with B6 targets. Benchmarks are stratified by how their jobs were admitted instead of excluded below a fixed free-memory figure, and the M6 demo must start its three agents without "start it anyway".
+- Why: A live read with several agent sessions showed about 19,400 KB/s of paging and 275 MB available, under which the fixed defaults would refuse every build and admission, and the old exclusions would have discarded most benchmark runs on this PC.
+- Consequences: WP0 acceptance 4, WP3 acceptance 3 and WP9 acceptance 2 and 6 carry the checks; section 7 lists the remaining risks.
+- Source: BUILD.md sections 0, 2.5, 4.3, 4.6, 4.7 and 6.1; the second verification round (items aedf46-10, a1129a-1, a1129a-5 and a1129a-7).

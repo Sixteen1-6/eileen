@@ -27,7 +27,7 @@ The halves of Eileen exist and we say so. The ChatGPT desktop app lets voice dir
 2. **Conversation never blocks on work.** The core owns the microphone and treats every Claude session as an async job.
 3. **Subscriptions, not API keys.** Models run through each vendor's own signed-in CLI on your plan. You sign in yourself; Eileen never runs a login and never reads credential files. Claude is the route in v0.1; Codex, Grok and DeepSeek follow. Workers are named by route.
 4. **Deterministic first, vision last.** App scripting and UI Automation before screenshots and the mouse.
-5. **Reversible things happen, consequential things ask.** Sending, deleting, pushing and spending confirm first; credentials and payments are never Eileen's.
+5. **Reversible things happen, consequential things ask.** Sending, deleting, pushing and spending confirm first, and only your own click, key or spoken action word can say yes; credentials and payments are never Eileen's.
 6. **It learns, locally.** Every request can teach it; you can ask what it learned and make it forget. A learned skill never skips a confirmation.
 7. **Engineered to be trusted.** Rust core, every risky part in a process that can be killed, a deterministic simulator for the core, and every convention checked by CI.
 
@@ -67,7 +67,7 @@ Each box below the core is a separate process the core supervises and can restar
 | Item | State |
 |---|---|
 | Research | Done, October 2026 ([docs/research/](docs/research/)) |
-| v0.1 specification | [docs/BUILD.md](docs/BUILD.md), ten work packages, revised after five reviews on 2026-10-20 |
+| v0.1 specification | [docs/BUILD.md](docs/BUILD.md), ten work packages, revised on 2026-10-20 after five reviews, a verification round and the owner's answers to its open questions |
 | Rust workspace | Being built (the old Python scaffold is retired) |
 
 Milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).

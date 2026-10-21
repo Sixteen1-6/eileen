@@ -1,8 +1,8 @@
 # Architecture
 
-This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-20, after the reviews of the v0.1 specification.
+This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-20, after the reviews of the v0.1 specification, its first verification round and the owner's answers.
 
-WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D50 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
+WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D59 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
 
 ## Bird's eye view
 
@@ -39,10 +39,10 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | Crate | Kind | Platform | One line |
 |---|---|---|---|
 | `eileen-contracts` | lib | neutral | Every type that crosses a process, pipe, file or socket, the ports, and the recording, scenario and fleet formats |
-| `eileen-stdx` | lib | neutral | Clock and ID ports, the seeded RNG, assertions, fault points, checked casts |
-| `eileen-trace` | lib | neutral | Tracing setup, span names and their parent table, redaction, the flight recorder ring |
-| `eileen-rt` | lib | neutral | The named task and thread wrappers, bounded channels |
-| `eileen-platform` | lib | neutral | The traits each operating system implements |
+| `eileen-stdx` | lib | neutral | Clock and ID ports, named threads and sleep, the seeded RNG, assertions, fault points, checked casts |
+| `eileen-trace` | lib | neutral | Tracing setup, span names and their parent table, redaction and the scenario privacy rules, the flight recorder ring |
+| `eileen-rt` | lib | neutral | The named task wrappers, bounded channels |
+| `eileen-platform` | lib | neutral | The traits each operating system implements, including app hooks, secrets and system volume |
 | `eileen-supervisor` | lib | neutral, Windows module | Spawning children in kill-on-close Job Objects; process QoS |
 | `eileen-buildguard` | lib | neutral, Windows module | Build slots admitted by free memory, shared by `cargo xtask` and build-heavy coding jobs |
 | `eileen-core` | lib | neutral | The sans-IO state machine that makes every decision |
@@ -52,25 +52,25 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-runtime` | lib | neutral | Drivers that carry out the core's effects: store, bus, loopback endpoint, dispatcher, sidecars, incidents |
 | `eileen-mcp` | lib | neutral | rmcp glue, the shim protocol, the core-side tool handlers |
 | `eileen-crash` | lib | neutral, Windows module | Panic hook and crash handler client |
-| `eileen-shell-win` | lib | Windows | Tray, global hotkeys, Raw Input, toasts, the Start menu and sign-in entries |
+| `eileen-shell-win` | lib | Windows | Tray, global hotkeys with the physical-key check, Raw Input, toasts, the Start menu and sign-in entries, the credential store |
 | `eileen-scenarios` | lib | neutral | Saving, sharing and submitting scenarios; the real-desktop runner |
 | `eileen-cli` | bin | neutral | The `eileen` binary and composition root |
 | `eileen-shim` | bin | neutral | Per-session stdio MCP server forwarding to the dispatcher |
 | `eileen-guard` | bin | neutral, Windows module | Minidump server and core watchdog |
-| `eileen-harness` | lib | neutral | Claude stream-json driver, sessions and the warm pool, the brain backend, worktrees; slots for Codex and ACP |
+| `eileen-harness` | lib | neutral | Claude stream-json driver, sessions and the warm pool, the brain backends and their benchmark, model aliases, worktrees; slots for Codex, DeepSeek, ACP and a local model |
 | `eileen-stub-harness` | bin, dev | neutral | A fake `claude -p` that plays recorded scripts with faults |
 | `eileen-audio` | lib | neutral logic, Windows devices | Capture, playback, loopback, echo cancellation, mute, barge-in accounting, WAV sources and sinks |
-| `eileen-audio-win` | lib | Windows | Audio endpoints, loopback, volume and MMCSS |
-| `eileen-speech` | lib and bin | neutral logic, Windows models | The speech sidecar |
+| `eileen-audio-win` | lib | Windows | Audio endpoints, loopback and MMCSS |
+| `eileen-speech` | lib and bin | neutral logic, Windows models | The speech sidecar; every stage (voice activity, recognition, turn detection, voices) behind a plug-in trait |
 | `eileen-dictation` | lib | neutral | Dictation cleanup rules |
 | `eileen-desktop` | lib and bin | neutral logic | The desktop sidecar's tools and safety rules |
-| `eileen-desktop-win` | lib | Windows | UI Automation, capture, input, app index, text insertion on Windows |
+| `eileen-desktop-win` | lib | Windows | UI Automation, capture, input, app index, text insertion and system volume on Windows |
 | `eileen-apps` | lib and bin | neutral logic | The apps sidecar's tools |
-| `eileen-apps-win` | lib | Windows | SMTC, COM targets, recent-work sources, the Resolve process gate |
+| `eileen-apps-win` | lib | Windows | SMTC, the app hooks (COM targets, the Resolve process gate), recent-work sources |
 | `eileen-intent` | lib | neutral | The layered intent resolver, the grammar, the skill matcher, introspection |
 | `eileen-skills` | lib | neutral | The learning loop's decisions: template grammar, linter, provenance, ladder, shadow agreement, replay state machine |
-| `eileen-learn` | lib | neutral | The learning loop's IO: trajectories, the skill store and snapshots, the librarian, the user model, the ledger, forget |
-| `eileen-config` | lib | neutral | TOML configuration, the settings model, versions, profiles, secrets |
+| `eileen-learn` | lib | neutral | The learning loop's IO: trajectories, the skill store and verified snapshots, the librarian, the user model and phrasings, route statistics and proposals, the ledger, forget |
+| `eileen-config` | lib | neutral | TOML configuration, the settings model, versions, profiles, secrets through the platform trait |
 | `eileen-hud` | lib and bin | neutral layout | The HUD sidecar |
 | `eileen-hud-win` | lib | Windows | The HUD renderer: DirectWrite, the overlay, the strip, the thumbnail |
 | `eileen-fleet` | lib | neutral | The opt-in test fleet runner and result upload |
@@ -90,19 +90,19 @@ Every serialized type: IDs, `TraceCtx` and `Envelope`, `Input`, `Effect`, `BusEv
 `Core::step(now, rng, input, effects)`: turns, the addressee gate, intent dispatch, the brain turn and its authority, jobs and sessions, memory admission, routing, the permission gate, taint and approvals, announcements, barge-in and what the user heard, the input lock and leases, the journal, the settings flow, the first run, plan-usage policy, supervisor policy, and the learning loop's decisions through the `SkillEngine` port.
 **Architecture invariant:** sans-IO. No clock, no OS randomness, no IO, no threads; every queue bounded; ordered maps wherever order can reach an effect.
 **Architecture invariant:** depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`. The resolver, dictation cleaner, settings validator and skill engine arrive through ports.
-**Architecture invariant:** an action above tier 1 needs an approval built from the user's own input (a physical click, a hotkey, or speech in the approval window with the action word for tier 2). That type cannot be made from screen text, model output, tool results, a command line or a learned skill.
+**Architecture invariant:** an action above tier 1 needs an approval built from the user's own input: a physical click, an approval hotkey pressed on a real keyboard, or speech in the approval window that contains the action word (and matches the enrolled voice once the speaker check exists). That type cannot be made from screen text, model output, tool results, a command line or a learned skill.
 
 ### `eileen-runtime`, `eileen-mcp`, `eileen-cli`, `eileen-shell-win`
 
 The drivers that carry out effects and turn the world into inputs, and the binary that composes them. They hold no decisions.
-**Architecture invariant:** only `eileen-mcp` knows rmcp. Every child process starts through `eileen-supervisor`; every task through `eileen-rt`.
-**Architecture invariant:** a token alone proves nothing. The dispatcher and the loopback endpoint check the calling process and its Job Object.
+**Architecture invariant:** only `eileen-mcp` knows rmcp. Every child process starts through `eileen-supervisor` (the build guard, the guard's restart of the core and the development tools are the listed exceptions); every task through `eileen-rt`, every thread through `eileen-stdx`.
+**Architecture invariant:** a token alone proves nothing. The dispatcher and the loopback endpoint check the calling process and its Job Object; the owner's own Claude sessions connect only from outside every Eileen job, with their own token and only the session tools.
 **API boundary:** the loopback endpoint (hooks, state, control) and the shim protocol. The bus token reaches status and control only; nothing reachable with it can approve.
 
 ### `eileen-harness`
 
 **Architecture invariant:** the only crate that knows vendor CLI flags and protocols. It never reads vendor credential files and never runs a login; the brain gets a constructed allowlist environment, workers the user's environment minus a denylist, and every session per-session flags only.
-**API boundary:** `WorkerDriver` (start a session, bind a job) and `BrainBackend`. Claude is built; Codex app-server and ACP are slots behind the same traits.
+**API boundary:** `WorkerDriver` (start a session, bind a job) and `BrainBackend` (built through `brain_for`). Claude is built; Codex app-server, DeepSeek, ACP and a local model are slots behind the same traits. Config names models by alias; command lines carry the full ids resolved per CLI version.
 
 ### Sidecars: `eileen-speech`, `eileen-desktop`, `eileen-apps`, `eileen-hud`
 
@@ -114,7 +114,7 @@ The drivers that carry out effects and turn the world into inputs, and the binar
 ### `eileen-intent`, `eileen-skills`, `eileen-learn`, `eileen-config`
 
 **Architecture invariant:** learned skills and settings can never raise a permission tier or skip a confirmation. A skill replays through the same dispatcher and gate as a worker.
-**Architecture invariant:** provenance is computed, never taken from a model; text seen on screen or a page enters a skill only after the user approves it.
+**Architecture invariant:** provenance is computed, never taken from a model; text seen on screen or a page enters a skill only after the user approves it, and a draft from a job that read free text from outside is reviewed whole.
 **Architecture invariant:** learned data stays on the PC; "forget" removes the skill, its versions and its evidence from every store.
 
 ### `eileen-replay`, `eileen-scenarios`, `eileen-fleet`
@@ -127,17 +127,17 @@ Development only. The simulator owns the invariants; `eileen-e2e` owns benchmark
 
 ## Cross-cutting concerns
 
-**Process isolation and supervision.** Every child runs in a kill-on-close Job Object, so killing the core kills its children. Every cross-process call has a deadline and every sidecar a heartbeat; a hung UI Automation thread is abandoned and replaced first, and only a repeatedly hung sidecar is hang-dumped, killed and restarted; the caller gets a typed error. Sidecars and Claude sessions are long-lived; nothing is spawned per request.
+**Process isolation and supervision.** Every child runs in a kill-on-close Job Object, so killing the core kills its children. Apps Eileen opens for the user are not its children: the shell starts them (AUMID activation or the shell's own `ShellExecute`), so they live outside every Eileen job, carry none of Eileen's environment and survive a restart; a worker's job never allows breakaway. Every cross-process call has a deadline and every sidecar a heartbeat; a hung UI Automation thread is abandoned and replaced first, and only a repeatedly hung sidecar is hang-dumped, killed and restarted; the caller gets a typed error. Sidecars and Claude sessions are long-lived; nothing is spawned per request.
 
-**Memory.** The core samples free memory and admits jobs only above a reserve, dropping the warm pool and the brain's spare first; build-heavy coding jobs share the build slots with `cargo xtask`. A low-memory profile picks smaller models.
+**Memory.** The core samples available memory, commit headroom and paging, and admits a job when commit headroom stays safe and either memory stays above a reserve, paging has been low for a while, or the user says "start it anyway"; it drops the warm pool and the brain's spare first, keeping the deep-answer session longest. The paging limit is learned from the PC's own week of paging, so a machine that always pages a little still admits work on an ordinary minute. Build-heavy coding jobs share the build slots with `cargo xtask`. A low-memory profile picks smaller models, and on a PC with little free memory the warm pool and the hot spare are usually absent, which Eileen says.
 
 **Events, request IDs and the event log.** A `turn_` ID is minted when a request begins and travels on every bus event, frame, tool call, span and record. Across MCP it is `_meta.traceparent`; into Claude sessions it is `TRACEPARENT` and `EILEEN_SESSION_ID`. One newline-delimited event format serves the flight recorder, the simulator, the end-to-end harness and the learning record.
 
 **Time, randomness and determinism.** The core gets `MonoTime` and a seeded RNG as arguments. IDs come from a port. A recording of port values with its checkpoints replays the core exactly on the commit that made it; scenario replay checks a scenario's expectations on any later commit.
 
-**Hearing and turn-taking.** The echo reference is the system's own output, so video and music are cancelled too. The addressee gate uses the name, a conversation window that stays open while the user is engaged, the command grammar and, when the user is alone, a local score with the brain as tie-breaker. Barge-in ducks at the first 32 ms window and pauses by the third; a backchannel resumes; otherwise synthesis is cancelled and the samples actually played map back to the text the user heard.
+**Hearing and turn-taking.** The echo reference is the system's own output, so video and music are cancelled too. The addressee gate uses the name, a conversation window that stays open while the user is engaged (inside it, commands and replies pass and other speech needs the local score), the command grammar and, when the user is alone, a local score with the brain as tie-breaker. Media-control and stop words work without the name while other audio plays. During a call Eileen answers only to its name and stays silent, showing its replies on the HUD. Barge-in ducks at the first 32 ms window and pauses by the third; a backchannel resumes; otherwise synthesis is cancelled and the samples actually played map back to the text the user heard.
 
-**Permissions and untrusted input.** Tiers 0 to 3 (observe, reversible, consequential, blocked). Every tool declares its tier per op; undeclared means tier 2. Workers are contained by their folder, a path guard, a shell policy and per-job taint. Screen text, page text, transcripts of other voices, tool results and model output are data and can never approve, raise a tier, start a job from an ambient turn or become a skill without the user. Credentials, payments and security settings are never Eileen's to touch.
+**Permissions and untrusted input.** Tiers 0 to 3 (observe, reversible, consequential, blocked). Every tool declares its tier per op; undeclared means tier 2. Workers are contained by their folder, a path guard, a shell policy and per-job taint. Screen text, page text, tool results and model output are data and can never approve, raise a tier, start a job from an ambient turn or become a skill without the user. Another person's voice can say the action word too, so once the speaker check is enrolled a voice approval must also match the user's voice; until then the HUD and the hotkey are the approvals only the user can give. Credentials, payments and security settings are never Eileen's to touch.
 
 **Error handling and assertions.** Operating errors are values. Programmer errors are `never!` and `always!` in the core (log, count, dump the flight recorder, keep listening) and plain assertions in sidecars, tests and the simulator. Builders that can fail per item return partial results with diagnostics, so one unreadable window never loses the whole DesktopState.
 
@@ -157,7 +157,7 @@ Development only. The simulator owns the invariants; `eileen-e2e` owns benchmark
 
 **Connectors.** The PC is the first connector (`pc.desktop`, `pc.apps`). The phone, the home hub and other devices are new connectors with the same manifests, tiers, job model and learning loop. Room-sensing connectors are opt-in per device and local only.
 
-**Learning.** Every tool call is recorded at the dispatcher; successful jobs become native skills each Claude session gets in its own snapshot; proven skills replay with a check after every step and hand off to a worker on the first failed check; the user can ask what was learned, correct it and make Eileen forget it.
+**Learning.** Every tool call is recorded at the dispatcher, fast-path and brain actions included; successful jobs become native skills each Claude session gets in its own verified snapshot; proven skills replay with a check after every step and hand off to a worker on the first failed check; phrasings the user kept run from the fast path; the user's own corrections become facts with no model; the user can ask what was learned, correct it and make Eileen forget it.
 
 ## Glossary
 
