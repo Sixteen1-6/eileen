@@ -3,6 +3,7 @@
 //! of 2.4 s), and audio threads register with MMCSS.
 
 use std::fmt;
+use std::marker::PhantomData;
 
 /// A quality-of-service call failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -15,6 +16,14 @@ pub struct QosError {
 }
 
 /// Opts this process out of `EcoQoS` execution-speed throttling. Off Windows it does nothing.
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::missing_const_for_fn,
+        clippy::unnecessary_wraps,
+        reason = "the signature is the Windows one; off Windows there is nothing to opt out of"
+    )
+)]
 pub fn opt_out_of_ecoqos() -> Result<(), QosError> {
     #[cfg(windows)]
     {
@@ -27,10 +36,15 @@ pub fn opt_out_of_ecoqos() -> Result<(), QosError> {
 }
 
 /// The calling thread's MMCSS registration; dropping it reverts the thread.
+///
+/// Not `Send` on any OS: MMCSS must be reverted on the thread that joined it, and the marker
+/// keeps Linux to the Windows rule, so code that moves a boost to another thread fails on the
+/// Linux lane as it would on Windows.
 pub struct AudioBoost {
     #[cfg(windows)]
     _handle: crate::ffi::MmcssHandle,
     task: &'static str,
+    _thread_bound: PhantomData<*const ()>,
 }
 
 impl fmt::Debug for AudioBoost {
@@ -49,15 +63,27 @@ impl AudioBoost {
 
 /// Registers the calling thread with MMCSS as `Pro Audio`. Off Windows it returns a boost
 /// that does nothing.
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::missing_const_for_fn,
+        clippy::unnecessary_wraps,
+        reason = "the signature is the Windows one; off Windows the boost does nothing"
+    )
+)]
 pub fn boost_audio_thread() -> Result<AudioBoost, QosError> {
     const TASK: &str = "Pro Audio";
     #[cfg(windows)]
     {
-        Ok(AudioBoost { _handle: crate::ffi::MmcssHandle::join(TASK)?, task: TASK })
+        Ok(AudioBoost {
+            _handle: crate::ffi::MmcssHandle::join(TASK)?,
+            task: TASK,
+            _thread_bound: PhantomData,
+        })
     }
     #[cfg(not(windows))]
     {
-        Ok(AudioBoost { task: TASK })
+        Ok(AudioBoost { task: TASK, _thread_bound: PhantomData })
     }
 }
 
