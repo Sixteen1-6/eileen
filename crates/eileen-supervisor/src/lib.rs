@@ -12,7 +12,8 @@
 //! # Does not own
 //!
 //! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`),
-//!   cargo under the build guard (`eileen-buildguard::spawn_cargo`), worker flags (`eileen-harness`).
+//!   cargo under the build guard (`eileen-buildguard::spawn_cargo`), worker flags
+//!   (`eileen-harness`).
 //!
 //! # Invariants
 //!

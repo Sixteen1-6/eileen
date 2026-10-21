@@ -1,7 +1,7 @@
 //! The span-parent check: every span is declared in [`crate::names`] and sits under a parent
-//! its row allows (observability report section 2.5, after the `trace_schema.py` of `LiveKit` Agents). It
-//! runs on in-memory spans in tests (`test_support::Captured::assert_schema_ok`), in every
-//! simulation run, and on the records of an incident.
+//! its row allows (observability report section 2.5, after the `trace_schema.py` of `LiveKit`
+//! Agents). It runs on in-memory spans in tests (`test_support::Captured::assert_schema_ok`),
+//! in every simulation run, and on the records of an incident.
 
 use std::collections::BTreeMap;
 use std::fmt;

@@ -162,7 +162,8 @@ names! {
     /// A task started through `eileen_rt::task` panicked.
     TASK_PANICKED = "task.panicked", Event, "all", parents: [Any], outlives: false, fields: ["task", "message"];
     /// A bounded channel was full and a send was refused or had to wait.
-    CHANNEL_FULL = "channel.full", Event, "all", parents: [Any], outlives: false, fields: ["channel", "capacity"];
+    CHANNEL_FULL = "channel.full", Event, "all", parents: [Any], outlives: false,
+        fields: ["channel", "capacity", "times"];
     /// The supervisor started a child.
     CHILD_SPAWNED = "child.spawned", Event, "all", parents: [Any], outlives: false, fields: ["child", "pid", "class"];
     /// A line a child wrote to stderr.
