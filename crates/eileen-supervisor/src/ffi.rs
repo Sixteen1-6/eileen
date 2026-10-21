@@ -55,21 +55,35 @@ impl MmcssHandle {
 impl Drop for MmcssHandle {
     fn drop(&mut self) {
         // SAFETY: the handle came from AvSetMmThreadCharacteristicsW on this thread (the boost
-        // is not Send) and is reverted exactly once, here.
+        // that owns it is not Send, on any OS) and is reverted exactly once, here.
         let _reverted = unsafe { AvRevertMmThreadCharacteristics(self.0) };
     }
 }
 
-/// Process liveness and termination, for the tests that check what a Job Object kills.
+/// Process liveness, termination and waiting, for the tests that check what a Job Object
+/// kills.
 #[cfg(test)]
 pub(crate) mod process {
     use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+    use std::time::Duration;
 
-    use windows::Win32::Foundation::{HANDLE, STILL_ACTIVE};
+    use windows::Win32::Foundation::{HANDLE, STILL_ACTIVE, WAIT_OBJECT_0};
     use windows::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROCESS_TERMINATE, TerminateProcess,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
     };
+
+    /// Opens `pid` so its end can be waited on; `None` when no such process runs.
+    pub(crate) fn open_for_wait(pid: u32) -> Option<OwnedHandle> {
+        open(pid, PROCESS_SYNCHRONIZE)
+    }
+
+    /// Waits up to `timeout` for the process behind `process` to end; true once it has.
+    pub(crate) fn wait_exit(process: &OwnedHandle, timeout: Duration) -> bool {
+        let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+        // SAFETY: the handle is open with synchronize access for as long as `process` lives.
+        unsafe { WaitForSingleObject(HANDLE(process.as_raw_handle()), ms) } == WAIT_OBJECT_0
+    }
 
     /// Opens a process with `rights`, owning the handle.
     fn open(pid: u32, rights: PROCESS_ACCESS_RIGHTS) -> Option<OwnedHandle> {

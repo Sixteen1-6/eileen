@@ -14,7 +14,7 @@ use std::process::{ExitStatus, Stdio};
 
 use eileen_trace::names;
 use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
-use tokio::io::{AsyncBufReadExt as _, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 use tokio::task::JoinHandle;
 
@@ -199,20 +199,21 @@ impl Child {
     }
 
     /// Forwards stderr into tracing, one `child.stderr` event per line, until it closes.
+    ///
+    /// Lines are read as bytes and decoded lossily, so a tool writing in the ANSI code page
+    /// does not stop the forwarding (which would leave the child writing into a closed pipe);
+    /// at most [`MAX_STDERR_LINE`] bytes of a line are kept, so a child that writes megabytes
+    /// without a newline costs no more memory than one line. Only the end of the stream or a
+    /// read error ends it.
     pub fn forward_stderr(&mut self) -> Option<JoinHandle<()>> {
         let stderr = self.take_stderr()?;
         let child = self.name;
         Some(eileen_rt::task::spawn("supervisor.stderr", async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(mut line)) = lines.next_line().await {
-                if line.len() > MAX_STDERR_LINE {
-                    let cut = (0..=MAX_STDERR_LINE)
-                        .rev()
-                        .find(|&i| line.is_char_boundary(i))
-                        .unwrap_or(0);
-                    line.truncate(cut);
-                }
-                tracing::info!(name: names::CHILD_STDERR, child, line = %line);
+            let mut reader = BufReader::new(stderr);
+            let mut line = Vec::with_capacity(256);
+            while let Ok(true) = read_line_capped(&mut reader, &mut line, MAX_STDERR_LINE).await {
+                let text = decode_line(&line);
+                tracing::info!(name: names::CHILD_STDERR, child, line = %text);
             }
         }))
     }
@@ -234,4 +235,46 @@ impl Child {
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.inner.try_wait()
     }
+}
+
+/// Reads one line into `line` (cleared first), keeping at most `cap` bytes of it and
+/// discarding the rest up to the newline. False at the end of the stream with nothing read.
+async fn read_line_capped<R>(reader: &mut R, line: &mut Vec<u8>, cap: usize) -> io::Result<bool>
+where
+    R: AsyncBufRead + Unpin,
+{
+    line.clear();
+    let mut read_any = false;
+    loop {
+        let buffer = match reader.fill_buf().await {
+            Ok(buffer) => buffer,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if buffer.is_empty() {
+            return Ok(read_any);
+        }
+        read_any = true;
+        let (chunk, used, ended) = match buffer.iter().position(|b| *b == b'\n') {
+            Some(at) => (buffer.get(..at).unwrap_or_default(), at + 1, true),
+            None => (buffer, buffer.len(), false),
+        };
+        let room = cap.saturating_sub(line.len());
+        line.extend_from_slice(chunk.get(..room.min(chunk.len())).unwrap_or_default());
+        reader.consume(used);
+        if ended {
+            return Ok(true);
+        }
+    }
+}
+
+/// A forwarded line as text: invalid UTF-8 replaced, a trailing `\r` dropped, and cut to
+/// [`MAX_STDERR_LINE`] bytes at a character boundary.
+fn decode_line(bytes: &[u8]) -> String {
+    let mut text = String::from_utf8_lossy(bytes.strip_suffix(b"\r").unwrap_or(bytes)).into_owned();
+    if text.len() > MAX_STDERR_LINE {
+        let cut = (0..=MAX_STDERR_LINE).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+        text.truncate(cut);
+    }
+    text
 }

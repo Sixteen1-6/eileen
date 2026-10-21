@@ -18,6 +18,9 @@
 //!
 //! - Killing a child's Job Object kills its grandchildren (Windows test
 //!   `tests::killing_the_job_kills_the_grandchild`).
+//! - Stderr forwarding survives bytes that are not UTF-8 and keeps at most
+//!   [`MAX_STDERR_LINE`] bytes of a line in memory
+//!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
 //! - The detached spawn outlives its parent (Windows test
 //!   `tests::the_guard_spawn_outlives_its_parent`).
 //! - A failing child restarts at most `max_restarts` times per window
@@ -45,6 +48,7 @@
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
+//! - [`qos::AudioBoost`] is not `Send` on any OS: MMCSS is reverted on the thread that joined.
 //!
 //! # Logs and tracing
 //!
