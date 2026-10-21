@@ -136,7 +136,7 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
   4. training on the user's own Colab account (the user signs in to Google themselves; Eileen never handles Google credentials), progress narrated and steerable ("epoch 12, accuracy 91 percent"), with interrupt, adjust and rerun;
   5. honest evaluation (held-out results, failure examples, comparison with the no-training option);
   6. export to a format Eileen can run locally (ONNX through the existing runtime) so the new model becomes one of Eileen's own skills.
-  The Colab route must be one Google permits and that is stable (candidates: Google's official Colab extension for VS Code, the user's logged-in browser tab, notebooks in the user's Google Drive), respecting Colab's usage terms and tier limits. v0.1 keeps it possible (job kinds and connectors are plug-ins); the connector itself is v0.2, right after the main product.
+  The Colab route is Google's official Colab extension for VS Code (owner decision, 2026-10-20): Eileen's workers write and run notebooks in VS Code connected to the user's Colab runtime, and the user signs in to Google through the extension themselves. The logged-in browser tab and notebooks in Google Drive are fallbacks only, and every route respects Colab's usage terms and tier limits. v0.1 keeps it possible (job kinds and connectors are plug-ins); the connector itself is v0.2, right after the main product.
 
 ## Proposed 2026-10-20 (by the assistant, not yet confirmed by the owner)
 
