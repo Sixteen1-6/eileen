@@ -462,8 +462,8 @@ pub enum HudInput {
     SetSetting {
         /// The key.
         key: String,
-        /// The value.
-        value: Value,
+        /// The value the user chose or typed, which may name a person or a path.
+        value: Personal<Value>,
     },
     /// A first-run choice.
     FirstRun {

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core_io::Rung;
-use crate::ids::{ApprovalId, Personal, ToolName, WallTime};
+use crate::ids::{ApprovalId, Personal, ToolName, Untrusted, WallTime};
 use crate::jobs::Depth;
 use crate::learn::{FactKind, ForgetTarget, Level, SkillRef};
 use crate::schema::Registry;
@@ -174,16 +174,17 @@ pub enum ToolSource {
     ExactRepeat,
 }
 
-/// One slot's value.
+/// One slot's value. Untrusted: it comes from the user's words through a resolver or from a
+/// model's dispatch, and a recipe uses it as data, never as an instruction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SlotValue {
     /// One value.
-    Resolved(Value),
+    Resolved(Untrusted<Value>),
     /// Several candidates; replay never runs on an ambiguous slot.
     Ambiguous {
         /// The candidates.
-        candidates: Vec<Value>,
+        candidates: Vec<Untrusted<Value>>,
     },
 }
 

@@ -2,7 +2,8 @@
 # check 26), each with the reason it is not Untrusted or Personal text. The test
 # `it::text::free_text_is_wrapped_or_allowlisted` fails on a free-text string missing here and on
 # an entry that no longer matches. Paths: the definition, then property names (an enum variant
-# appears as its tag), `[]` for array items, `[n]` for tuple members and `{}` for map values.
+# appears as its tag), `[]` for array items, `[n]` for tuple members, `{}` for map values and
+# `{key}` for map keys. A `serde_json::Value` counts as free text, since it can hold any.
 #
 # Kept short on purpose: a string from a page, a file, a tool or a model is wrapped, not listed.
 
@@ -32,6 +33,7 @@
 "UrlFact.arg" = "the name of the argument the URL came from"
 "UrlFact.host" = "the host the runtime parsed from the wrapped URL, compared by the URL rule"
 "ToolCallRequest.traceparent" = "a W3C traceparent value, parsed and checked before use"
+"JobSpec.slots{key}" = "slot names, validated against the skill's SlotSpecs by the dispatcher"
 
 # Tool results: media types, encodings and Eileen's own verification kinds.
 "Content.image.mime" = "an image media type, set by Eileen's own capture code"
@@ -46,6 +48,8 @@
 "ToolSpec.description" = "a tool description written in Eileen's code for the model"
 "ToolSpec.selector" = "the argument field that names the op, enum-like"
 "ToolSpec.schema_hash" = "a BLAKE3 hex digest"
+"ToolSpec.input_schema" = "a JSON Schema schemars generated from an argument struct in Eileen's code"
+"OpSpec.output_schema" = "a JSON Schema schemars generated from a result struct in Eileen's code"
 "OpSpec.op" = "an op tag, enum-like"
 "OpSpec.inverse" = "how the journal reverses the op, written in Eileen's code"
 "ConnectorEvent.app.app" = "a key of Eileen's app index"
@@ -89,6 +93,7 @@
 "HudInput.set_setting.key" = "a setting key, validated by the settings flow"
 "CheckResult.detail" = "the sentence Eileen's own check wrote"
 "SpeechCheck.unavailable.reason" = "the sentence Eileen's speech process wrote"
+"VoiceEvent.health.rtf_by_engine{key}" = "speech engine names, keys of Eileen's own models.toml"
 
 # The learning store (WP7 decides any wrapping when it pins the learn module): text the
 # librarian proposed is linted and its provenance computed by eileen-skills before it is stored
@@ -101,24 +106,33 @@
 "SkillMeta.apps[][1]" = "a version range the recipe was proven on"
 "SkillMeta.tool_hashes[][1]" = "a BLAKE3 hex digest"
 "SlotSpec.name" = "a slot name, linted"
+"SlotSpec.default" = "a slot's default, a recipe literal the linter traced to its source"
+"SlotSpec.seen_values[]" = "values of successful uses, from the user's own confirmed turns, typed by the slot kind"
 "SlotKind.choice.options[]" = "choice options, literals the linter traced to their source"
 "RecipeStep.id" = "a recipe step id, linted"
 "StepKind.call.op" = "an op tag, enum-like"
+"StepKind.call.args" = "recipe arguments: operands and literals the linter typed and traced (section 2.10 item 9)"
+"StepKind.delegate.inputs" = "a delegate step's bound inputs: operands and literals the linter typed and traced"
 "StepKind.ask.question" = "a recipe literal the linter traced to its source (section 2.10 item 9)"
 "StepKind.ask.slot" = "a slot name, linted"
 "StepKind.confirm.question" = "a recipe literal the linter traced to its source (section 2.10 item 9)"
 "StepKind.delegate.goal" = "a recipe literal the linter traced to its source (section 2.10 item 9)"
 "Check.op" = "an op tag, enum-like"
+"Check.args" = "check arguments: operands and literals the linter typed and traced (section 2.10 item 9)"
 "Check.path" = "a JSON pointer, typed by the linter against the op's output schema"
 "Operand.$slot" = "a slot name"
 "Operand.$step" = "a recipe step id"
 "Operand.ptr" = "a JSON pointer, typed by the linter"
+"Operand" = "a recipe literal the linter typed and traced to its source (section 2.10 item 9)"
+"Operand.$lit" = "an escaped recipe literal, traced like any other"
 "LintError.rule" = "a lint rule id"
 "LintError.step" = "a recipe step id"
 "LintError.message" = "the sentence Eileen's linter wrote"
 "PhrasingFact.id" = "a phrasing id"
 "PhrasingFact.subject" = "a subject key from the user's own words"
 "PhrasingTarget.grammar_entry.id" = "a grammar entry id"
+"PhrasingTarget.slot_alias.value" = "the slot value an alias stands for, from the user's own confirmed answer"
+"PhrasingTarget.slot_free_call.args" = "a confirmed slot-free call's arguments, checked against the tool's input schema"
 "UserFact.id" = "the learning store's id for the fact"
 "UserFact.subject" = "a subject key from the user's own words"
 "UserFact.scope" = "a topic, repository or app key"

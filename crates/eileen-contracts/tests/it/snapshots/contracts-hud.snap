@@ -387,7 +387,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
                   "type": "string"
                 },
                 "value": {
-                  "description": "The value."
+                  "description": "The value the user chose or typed, which may name a person or a path.",
+                  "x-eileen-text": "personal"
                 }
               },
               "required": [

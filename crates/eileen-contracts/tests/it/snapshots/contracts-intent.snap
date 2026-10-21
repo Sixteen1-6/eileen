@@ -927,13 +927,15 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ]
     },
     "SlotValue": {
-      "description": "One slot's value.",
+      "description": "One slot's value. Untrusted: it comes from the user's words through a resolver or from a\nmodel's dispatch, and a recipe uses it as data, never as an instruction.",
       "oneOf": [
         {
           "additionalProperties": false,
           "description": "One value.",
           "properties": {
-            "resolved": true
+            "resolved": {
+              "x-eileen-text": "untrusted"
+            }
           },
           "required": [
             "resolved"
@@ -948,7 +950,9 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "properties": {
                 "candidates": {
                   "description": "The candidates.",
-                  "items": true,
+                  "items": {
+                    "x-eileen-text": "untrusted"
+                  },
                   "type": "array"
                 }
               },

@@ -1,7 +1,9 @@
 //! The text rule (BUILD.md section 3.3.1, check 26): every free-text string reachable from
 //! `Input`, `ToolResult` and `DesktopState` is `Untrusted` or `Personal` (their schemas carry
 //! `x-eileen-text`), or is listed in `text-allowlist.toml` with a reason. A string with an
-//! `enum`, `const`, `pattern` or `format` is not free text.
+//! `enum`, `const`, `pattern` or `format` is not free text. A schema that accepts any value
+//! (`true`, or one with no `type`, `$ref`, `const`, `enum` or combinator, as schemars writes a
+//! `serde_json::Value`) can hold free text, and so can the keys of a map.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,15 +24,37 @@ fn allowlist() -> BTreeMap<String, String> {
     toml::from_str::<Allowlist>(text).unwrap().allow
 }
 
-/// True for a schema that accepts a free-text string.
+/// True for a schema that accepts a free-text string: a string with no `enum`, `const`,
+/// `pattern` or `format`, or a schema that accepts any value.
 fn is_free_text(schema: &Map<String, Value>) -> bool {
     let accepts_string = match schema.get("type") {
         Some(Value::String(kind)) => kind == "string",
         Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
-        _ => false,
+        Some(_) => false,
+        None => return accepts_any_value(schema),
     };
     accepts_string
         && ["enum", "const", "pattern", "format"].iter().all(|k| !schema.contains_key(*k))
+}
+
+/// True for an object schema that constrains nothing: no type, reference, constant, enum or
+/// combinator.
+fn accepts_any_value(schema: &Map<String, Value>) -> bool {
+    ["type", "$ref", "const", "enum", "oneOf", "anyOf", "allOf", "not"]
+        .iter()
+        .all(|k| !schema.contains_key(*k))
+}
+
+/// True for an object schema whose keys are free text: a map (`additionalProperties` that
+/// allows something) with no `propertyNames` rule.
+fn has_free_keys(schema: &Map<String, Value>) -> bool {
+    let open =
+        schema.get("additionalProperties").is_some_and(|values| values != &Value::Bool(false));
+    let named = schema
+        .get("propertyNames")
+        .and_then(Value::as_object)
+        .is_some_and(|names| ["pattern", "enum", "const"].iter().any(|k| names.contains_key(*k)));
+    open && !named
 }
 
 /// The definition a `$ref` names.
@@ -40,7 +64,20 @@ fn ref_name(reference: &str) -> Option<&str> {
 
 /// Collects the free-text paths under `schema` and the definitions it refers to.
 fn walk(schema: &Value, path: &str, found: &mut BTreeSet<String>, refs: &mut Vec<String>) {
-    let Value::Object(map) = schema else { return };
+    let map = match schema {
+        Value::Bool(true) => {
+            found.insert(path.to_owned());
+            return;
+        }
+        Value::Object(map) => map,
+        Value::Null
+        | Value::Bool(false)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Array(_) => {
+            return;
+        }
+    };
     if map.contains_key("x-eileen-text") {
         return;
     }
@@ -50,6 +87,9 @@ fn walk(schema: &Value, path: &str, found: &mut BTreeSet<String>, refs: &mut Vec
     }
     if is_free_text(map) {
         found.insert(path.to_owned());
+    }
+    if has_free_keys(map) {
+        found.insert(format!("{path}{{key}}"));
     }
     if let Some(Value::Object(properties)) = map.get("properties") {
         for (name, property) in properties {
@@ -134,13 +174,23 @@ fn the_walk_sees_a_plain_string_and_skips_a_wrapped_one() {
             "kind": { "type": "string", "enum": ["a", "b"] },
             "list": { "type": "array", "items": { "type": "string" } },
             "pair": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "integer" }] },
-            "other": { "$ref": "#/$defs/Other" }
+            "other": { "$ref": "#/$defs/Other" },
+            "any": true,
+            "any2": { "description": "x" },
+            "any_wrapped": { "description": "x", "x-eileen-text": "personal" },
+            "count": { "type": "integer" },
+            "choice": { "oneOf": [{ "const": "a" }, { "type": "integer" }] },
+            "names": { "type": "object", "additionalProperties": { "type": "integer" } },
+            "closed": { "type": "object", "additionalProperties": false }
         }
     });
     let (mut found, mut refs) = (BTreeSet::new(), Vec::new());
     walk(&schema, "T", &mut found, &mut refs);
     let expected: BTreeSet<String> =
-        ["T.plain", "T.maybe", "T.list[]", "T.pair[0]"].into_iter().map(str::to_owned).collect();
+        ["T.plain", "T.maybe", "T.list[]", "T.pair[0]", "T.any", "T.any2", "T.names{key}"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     assert_eq!(found, expected, "free text");
     assert_eq!(refs, ["Other"], "references followed");
 }
