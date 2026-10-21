@@ -21,7 +21,7 @@ records when they exist.
 
 | Order | Branch | State |
 |---|---|---|
-| 1 | `wp0/ci-bootstrap` | Built and checked locally on 2026-10-21; waiting for its first CI run |
+| 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Not started |
 | 3 | `wp0/base-crates` | Not started |
 | 4 | `wp0/stubs` | Not started |
@@ -32,7 +32,7 @@ records when they exist.
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
 `all-green`), the first cut of `cargo xtask` with `pr-meta` and its fixture tests, `pr-meta.yml`,
 the pull request template, Dependabot and `CODEOWNERS`. The tag `python-scaffold-final` marks
-`main`'s last commit with the Python scaffold, `7694c44`.
+`main`'s last commit with the Python scaffold, `7694c44`, and is on GitHub.
 
 ## Switching main's required checks
 
@@ -71,6 +71,14 @@ order of the switch, from BUILD.md sections 3.2 and 6.2:
 
 5. Push the commit that deletes the Python scaffold (`src/`, `tests/*.py`, `pyproject.toml`,
    `python-scaffold.yml` and the Python lines of `.gitignore`), and merge on green.
+
+Done on 2026-10-21 in that order. On pull request #13's first run (`all-green` and `pr-meta`
+green, `test (3.12)` and `test (3.13)` green beside them) the PATCH above ran and the read-back
+printed `[true,"all-green","pr-meta"]`, both with app id 15368. The full protection, read before
+and after, differs only in those checks: `strict`, enforce admins, linear history, conversation
+resolution, no force pushes and no deletions are unchanged. The squash default command returned
+`PR_TITLE` and `PR_BODY`. Acceptance 1's last clause, the next pull request going green with no
+Python job, is checked by `wp0/contracts`.
 
 ## Steps for the later phase A pull requests
 
@@ -151,6 +159,14 @@ order of the switch, from BUILD.md sections 3.2 and 6.2:
 To record from the first CI runs and the owner's PC (acceptance 4 and 10): the Windows job times
 cold and warm, the per-worktree target size of the stub workspace, the sccache hit rate after a
 second worktree's build, and the build guard's baseline.
+
+The first CI run, pull request #13 on 2026-10-21 (run 39562667916, workspace of `xtask` only, no
+cache, since rust-cache saves only from `main`): `plan` 6 s, `hygiene` 15 s, `logic-linux` 28 s,
+`windows-clippy` 51 s, `windows-test` 54 s, `all-green` 2 s; 70 s from the first job's start to
+`all-green`'s end. `pr-meta` took 14 s in its own workflow. These are cold times for a one-crate
+workspace. Warm times need the cache that this pull request's push to `main` saves, so the next
+pull request records them, and `wp0/stubs` records both again with the full stub workspace,
+beside its target size.
 
 ## Outcome
 
