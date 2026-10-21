@@ -6,13 +6,14 @@ An open-source, voice-first AI layer for Windows 11. You talk to your PC while y
 
 You leave it running and talk to it. There is no wake word: it listens whenever the microphone is not muted, works out when you are talking to it, and mute is one key or one click away. It knows which monitor you are looking at, which window has focus and what you have selected. Simple things happen at once with no model call. Bigger things become jobs that run while the conversation continues, and a small on-screen layer shows what it hears, what it is doing and what it is waiting for. Things you can say:
 
-- "Open Resolve, go to 15:30 and make the face of the girl on the right less blurry."
+- "Open the video editor, go to 15:30 and make the face of the girl on the right less blurry."
 - "Launch three agents to fix the flaky login tests, and tell me when one passes."
 - "Play the timelapse on YouTube and go to 3:20."
 - "What am I looking at?"
 - "Stop." (mid-sentence; it stops at once and remembers what you actually heard)
 - "What have you learned?" and "forget that".
 - "I want to call you Nova now."
+- "Learn a new voice." (with the voice owner's own spoken consent)
 
 Hold a key in any app to dictate: clean, punctuated text lands where your cursor is, locally and free.
 
@@ -53,7 +54,7 @@ Each box below the core is a separate process the core supervises and can restar
 
 | Layer | Project | License |
 |---|---|---|
-| Speech | sherpa-onnx with Silero VAD, Nemotron streaming ASR, Smart Turn, Kokoro; Kyutai Pocket TTS for cloned voices | Apache-2.0, MIT, BSD-2, NVIDIA Open Model License, CC-BY-4.0 |
+| Speech | sherpa-onnx with Silero VAD, Nemotron streaming ASR, Smart Turn, Kokoro; Kyutai Pocket TTS and Chatterbox (through ONNX Runtime) for cloned voices | Apache-2.0, MIT, BSD-2, NVIDIA Open Model License, CC-BY-4.0 |
 | Audio | cpal, sonora (WebRTC AEC3 in Rust) | Apache-2.0, BSD-3 |
 | MCP | rmcp, the official Rust SDK | Apache-2.0 |
 | Windows | the `windows` crate, UI Automation, DWM, SMTC, COM | MIT or Apache-2.0 |
@@ -66,7 +67,7 @@ Each box below the core is a separate process the core supervises and can restar
 | Item | State |
 |---|---|
 | Research | Done, October 2026 ([docs/research/](docs/research/)) |
-| v0.1 specification | [docs/BUILD.md](docs/BUILD.md), ten work packages |
+| v0.1 specification | [docs/BUILD.md](docs/BUILD.md), ten work packages, revised after five reviews on 2026-10-20 |
 | Rust workspace | Being built (the old Python scaffold is retired) |
 
 Milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -75,7 +76,7 @@ Milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 The repository is public. Two ways to help:
 
-- **Test it on your PC.** Install it, use it for real, and when something works or breaks, say "save that as a test". You see exactly what would leave your PC before anything is shared, and you share it from your own GitHub account. Every shared scenario becomes a permanent regression test. The testers' guide is `TESTING.md` (it lands with the first build).
+- **Test it on your PC.** Install it, use it for real, and when something works or breaks, say "save that as a test". You see exactly what would leave your PC before anything is shared, and you share it from your own GitHub account. Every shared scenario becomes a permanent regression test. The testers' guide is `TESTING.md` (it lands with the first live slice, so you can share scenarios from the first build you can run).
 - **Build it.** Read [CONTRIBUTING.md](CONTRIBUTING.md), the work packages in [docs/BUILD.md](docs/BUILD.md), and [docs/DEV-SETUP.md](docs/DEV-SETUP.md). Coding agents read `AGENTS.md`.
 
 Maintainer: Shubhanshu Pokharel ([Sixteen1-6](https://github.com/Sixteen1-6)).
