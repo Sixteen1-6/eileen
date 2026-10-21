@@ -2,339 +2,165 @@
 
 Eileen ships in small, demonstrable steps. Each v0.1 milestone on this page is also a GitHub issue with the same title, so the tracker and this page never disagree on scope.
 
-Every claim here about a third-party project, license or vendor policy comes from [RESEARCH.md](RESEARCH.md). This page summarizes and links. It does not restate.
+The milestones are the spine. The October 2026 direction ([OWNER-DIRECTION.md](OWNER-DIRECTION.md)) changed what is inside them: the core is Rust, Claude on the owner's plan is the only v0.1 route, Eileen drives the PC through its own desktop server, and the learning loop, the HUD, dictation, voices (including Chatterbox per voice), the first-run surprise path and settings by voice are part of v0.1. The full specification, contracts and the ten work packages that build these milestones are in [BUILD.md](BUILD.md); the demo scripts referenced below are in its section 1. Research and measurements are in [docs/research/](research/) and [RESEARCH.md](RESEARCH.md).
 
-The order follows [RESEARCH.md section 9](RESEARCH.md#9-build-order-for-v01) and three rules:
+Numbers in acceptance criteria are targets we set for our own code, to be measured on the owner's PC (Windows 11 Home, Core Ultra 7 155H, 16 GB, no NVIDIA GPU, one 1920x1200 monitor) and then tightened or loosened with evidence.
 
-1. Grounding before action. You cannot move a window you cannot name.
-2. Action before voice. A voice loop with nothing to do is a demo, not a tool.
-3. Voice before delegation. Conversation must never block on work, so the loop that owns the microphone exists before the first job runs inside it.
+## v0.1: the whole PC, by voice, learning as it goes
 
-Numbers in acceptance criteria (latency, sizes, counts) are targets we set for our own code. They are not vendor claims. Measure on the owner's machine first, then tighten or loosen with evidence.
+One sentence: talk to it with no wake word, it knows what is on the Windows desktop, it opens and drives any app including Resolve, it starts Claude jobs that run in parallel while you keep talking, it shows what it is doing on the HUD, and the second time you ask for something hard it is faster.
 
-## v0.1: the nucleus
+| Milestone | Area | Work packages (BUILD.md section 6) | Depends on | Status |
+|---|---|---|---|---|
+| M0: Foundation | workspace, contracts, gates | WP0 | nothing | not started |
+| M1: Desktop grounding | desktop | WP5 (DesktopState, windows, app index) | M0, slice S1 | not started |
+| M2: Action layer and app hooks | actions, apps | WP5 (tools), WP6 (Resolve, media, Office, Explorer, recent work) | M1 | not started |
+| M3: Voice loop and the HUD | voice, HUD | WP1 (turn-taking), WP2 (runtime, mute key and tray, slice S1), WP4 (speech, dictation, voices), WP8 (HUD, first run) | M0 | not started |
+| M4: Claude workers, jobs, routing, tiers, learning, settings | harness, core, learning | WP1, WP3 (Claude driver, brain, the approval contract test), WP7 (intent, settings, learning), WP8 (Claude plugin) | M3 (slice S1) | not started |
+| M5: Phone channels | channels | moved to v0.2 as the first outward connector | | deferred |
+| M6: Integration demo and the test fleet | integration | WP9 (fleet, benchmarks, demo); scenario sharing already ships with slice S1 (WP2) | M1 to M4 | not started |
 
-One sentence: talk to it, it knows what is on the Windows desktop, it moves and arranges windows and apps, it hands a coding task to one or more harnesses, and you can interrupt or reroute while those jobs run.
+The build order is not the milestone order. The thin slice comes first and is live: as soon as its four named pull requests (the runtime's live wiring, the Claude brain and worker, and the audio and speech slice) have merged, which the plan schedules inside the first feature wave, with the real microphone and speakers, a mute key and a console view, one fast-path command, one interruption, one brain answer and one Claude job. No desktop or app work starts until it passes on the owner's PC. BUILD.md section 6.1 has the waves and the rules that keep parallel builds from overloading the owner's PC.
 
-| Milestone | Area | Depends on | Status |
+### What changed in October, and why
+
+| Item | Was | Now | Why |
 |---|---|---|---|
-| [M1: DesktopState grounding service](#m1-desktopstate-grounding-service) | desktop | nothing | not started |
-| [M2: Action layer](#m2-action-layer) | actions | M1 | not started |
-| [M3: Voice loop](#m3-voice-loop) | voice | M1 (M2 for the demo) | not started |
-| [M4: Harness adapters, job registry, event bus, overrides, permission tiers](#m4-harness-adapters-job-registry-event-bus-spoken-overrides-and-permission-tiers) | harness | M3 | not started |
-| [M5: Phone channels and presence routing](#m5-phone-channels-and-presence-aware-announcement-routing) | channels | M4 | not started |
-| [M6: Integration demo](#m6-integration-demo) | integration | M1 to M5 | not started |
+| Core language | Python | Rust | Owner direction; start-up, idle footprint, hook and UIA latency, single binaries (decision D17) |
+| Conversational model | Haiku through LiteLLM with an API key | A warm `claude -p` session on the owner's plan with a hot spare, plus a deterministic fast path; it may run deterministic actions itself | Subscriptions, not API keys; DeepSeek is the only key ever allowed (D18, D20, D41) |
+| Workers | ACP adapters for Claude and Codex | Native Claude driver with a small warm pool; Codex, Grok and DeepSeek as slots behind the same trait | Claude is the only v0.1 route; Codex is not installed (D19, D41) |
+| Action layer | Cua Driver | Eileen's own Rust desktop server, which stops the moment the user's own hands move | Measured faster grounding, smaller tool list, safety rules in the server (D21) |
+| Approvals | any "yes" | Only the user's own input: a physical click, the approval hotkey on a real keyboard, or the action word in the voice window (also matched to the user's voice once the speaker check is enrolled); the route for Claude workers proven against the real CLI | Safety review and its verification round (D43, D51) |
+| HUD with mute | v0.2 | v0.1: the mute key and tray with slice S1, the overlay in M3 | Mute one click away and a visual layer are part of the feel |
+| Resolve hook | v0.2 | v0.1, M2, with a Fusion-first edit, undo that follows the edit route, and Resolve's own MCP server first once the owner is on 21.1 | The owner's first benchmark is a Resolve request (D48, D59) |
+| Learning loop | not planned | v0.1, M4 | The owner's main point (D27, D44) |
+| Dictation, voices with consent, settings by voice | not planned | v0.1 | Owner direction 2026-10-20 |
+| Chatterbox | v0.2 | v0.1, selectable per voice, live when fast enough, after a head-to-head with Pocket TTS on the owner's PC | Owner direction 2026-10-20 (D39) |
+| First-run surprise path | not planned | v0.1, M3 and M6 | Owner direction 2026-10-20 (D49) |
+| Community scenario corpus and test fleet | v0.3 evaluation loop | v0.1: sharing with slice S1, the fleet in M6 | Friends test on their own PCs now (D35, D45) |
+| Phone channels | v0.1 M5 | v0.2 | The whole PC first, then outward through connectors |
+| Gemini | v0.2 | removed | No permitted subscription route; no Gemini key |
+| Linux | non-goal | v0.2 target | "Windows first, not Windows only"; neutral crates are tested on Linux from day one |
 
-M2 and M3 can run in parallel once M1 exposes `desktop.state`. Everything else is sequential.
+### M0: Foundation
 
-### M1: DesktopState grounding service
+**Goal.** The workspace, the contracts and every quality gate exist before any feature, so every later package inherits them.
 
-**Goal.** A Windows-native sidecar that answers "what is the user looking at" as one state object over MCP, with a live event stream.
+**Scope.** WP0 in BUILD.md section 6.2. Phase A: the Cargo workspace with pinned dependencies and the native libraries declared under Windows target tables, the contracts crate, tracing, the task wrapper, platform traits, the supervisor, the memory-admitting build guard, the simulator skeleton, the basic CI lanes on Windows and Linux with `all-green` replacing the Python checks, the guidance files, and every crate as a documented stub. Phase B, alongside the first features: all 30 repository checks, the generated code map and references, the scenario checks, the nightly, weekly, long-run and release workflows, and `docs/PLAYBOOK.md` with `templates/`, the project-agnostic, fully cited record of how this repository is built, for any other project to adopt.
 
-**Scope.**
+**Acceptance.** `cargo xtask ci` is green on the owner's PC and `all-green` on GitHub; `main` requires `all-green` and `pr-meta`; every repository check has a test proving it fails on a seeded violation; contract snapshots pin every wire shape.
 
-- Monitor model: `EnumDisplayMonitors` joined with `QueryDisplayConfig`, our own left-to-right ordinals, EDID names, work areas, per-monitor DPI. Settings' "Identify" numbers are not exposed by any public API, so we assign our own and keep them stable.
-- Window model: `EnumWindows` filtered by DWM cloaked state, DWM extended frame bounds, `MonitorFromWindow`, z-order, process name and PID.
-- Foreground and focus history: a `SetWinEventHook` thread for foreground, focus, move, name and cloak events. A UI Automation focus-changed handler on an MTA thread.
-- Focused element: control type, name, rect, supported patterns.
-- Selection: `TextPattern.GetSelection` with a clipboard-sequence-number fallback. `null` when unknown, never a stale value.
-- Caret rect when the element exposes one.
-- MCP tools: `desktop.state`, `window.move`, `window.snap`, `window.focus`, `window.minimize`, `window.maximize`, plus an event stream for focus and foreground changes.
-- Per-monitor-V2 DPI awareness on the grounding thread. Every rect is physical pixels.
-- A timeout around every UIA call.
-- Two output modes: a compact summary for prompts and a full dump for tools.
-- Language: Rust (uiautomation-rs plus the windows crate) or C# (FlaUI.UIA3). The first implementer decides. The Rust toolchain is not installed on the owner's machine today, so C# has a shorter path to a first run there.
-- Python client in `src/eileen/desktop/` that speaks MCP to the sidecar and exposes a pydantic `DesktopState` model.
+### M1: Desktop grounding
 
-**Acceptance criteria.**
+**Goal.** One cheap state object answers "what is the user looking at".
 
-- `desktop.state` returns in under 100 ms at p95 over 100 calls on a desktop with 30 open windows and three monitors.
-- Monitor ordinals match the physical left-to-right arrangement and survive a reboot and a monitor hot-plug without renumbering.
-- On a mixed-DPI setup (100 percent and 150 percent), returned rects agree with a screenshot's pixel coordinates within 2 px.
-- Cloaked UWP windows and tool windows are absent from the visible list. Test: open Settings, close it, confirm the list is back to baseline.
-- A foreground-change event arrives within 50 ms at p95 of an Alt+Tab.
-- Selecting text in Notepad, Word, the Chrome address bar and VS Code returns the selected string or `null`. A test copies "A", selects "B" elsewhere, and asserts the result is never "A".
-- `window.move` to a monitor ordinal places the window inside that monitor's work area (taskbar excluded) and leaves the foreground window unchanged.
-- A hung UIA provider (test with a deliberately suspended process) produces a timeout error within 2 s instead of hanging the service.
-- The compact summary of a typical desktop is under 4 KB of JSON.
-- The service starts in under 2 s, runs as a normal user (no admin), and logs to a file.
+**Scope.** DesktopState in `eileen-desktop` (BUILD.md section 2.6): monitors with stable ordinals, windows with DWM frame rects and executable versions, foreground and focus, the focused element, the selection, presentation state and whether another app uses the microphone, served from an event-fed cache.
 
-**Demo script.** M1 has no voice yet. The demo is typed; the spoken equivalents arrive in M3.
+**Acceptance.** `desktop_state` p95 under 100 ms on the owner's desktop; ordinals stable across a reboot; rects agree with a screenshot within 2 px; a hung UIA provider produces a typed error within its deadline, its thread is replaced, and window moves and app launches keep working meanwhile. Demo E4 ("what am I looking at") answers from DesktopState with no screenshot.
 
-| You type | Expected behavior |
+### M2: Action layer and app hooks
+
+**Goal.** Deterministic control of windows, apps and media, background first, vision last, and real hooks for the owner's apps.
+
+**Scope.** The 18 desktop tools with safety rules in the server, the input lock, leases that are announced, stop on physical input and hand the screen back, and visible intent; app launch by AUMID with a margin rule; text insertion; volume and window close; SMTC and the media history; YouTube by URL; the Resolve Lua bridge with project and timeline loading, timecode math, stills, face finding, tracking and sharpness, undo that follows the edit route, the Fusion-first edit and render progress, and Resolve's own MCP server as the primary route once the owner is on 21.1 or later; route discovery through the MCP registry and per-app route statistics; Word, Excel and Explorer over COM; the recent-work index; Photoshop designed and tested against a fake.
+
+**Acceptance.** Background UIA actions verified on owned fixtures with the user's cursor and foreground unchanged; password fields and blocked combos refused, including for coordinate clicks; "go to 15:30" lands on the computed timecode for four frame rates; an edit is undone on its own route (Eileen's composition deleted and the previous one loaded, or the previous color version); a YouTube URL plays at the requested second and a seek through SMTC is confirmed. Demos E2, E3 and the deterministic steps of E7.
+
+### M3: Voice loop and the HUD
+
+**Goal.** An always-on local voice loop that hears you, knows when you are talking to it, answers fast, stops the moment you interrupt, and shows what it is doing.
+
+**Scope.** WASAPI audio with sonora echo cancellation against the system's own output and a mute that stops capture; Silero VAD, Nemotron streaming ASR, Smart Turn fused with transcript cues, Kokoro TTS with clause chunking and a phrase cache; barge-in that pauses, resumes after a backchannel and records what was heard; the local addressee gate with a conversation window, a follow-up rule that needs a real reference to Eileen's last turn and a speech-level check against the first run's calibration, and silence during calls, when only the name is heard and replies go to the HUD; the mute key, tray and console view (slice S1); dictation with the insertion ladder and cleanup; voice cloning with consent enrollment and an engine per voice (Pocket TTS, Chatterbox); the HUD overlay and strip with the live thumbnail, confirm panels and settings; the first-run surprise path.
+
+**Acceptance.** Slice S1 passes live on the owner's PC; barge-in at most 150 ms at p95 with speakers; zero self-transcription over 20 announcements and zero leaked words from a video playing beside Eileen; room talk ignored in at least 9 of 10 scripted trials and unnamed requests in a conversation acted on in at least 8 of 10; idle listening a few percent of one core; mute stops capture within one buffer; the HUD never takes focus, never appears in Eileen's screenshots, and ignores synthetic clicks; the Chatterbox and Pocket TTS head-to-head recorded. Demos E1, E12, E13, E16, E17 and E18.
+
+### M4: Claude workers, jobs, routing, tiers, learning and settings
+
+**Goal.** Hand work to Claude as async jobs, keep talking while they run, steer them by voice, and learn from every request.
+
+**Scope.** The warm brain with a hot spare, connectors off and its deterministic `act` tools; the Claude worker driver with sessions, a warm pool, per-session hooks and the tier guard, the path guard, the shell policy and taint; jobs, announcements, narration, approvals, reroute, steer and cancel; fan-out with git worktrees and memory admission; plan-limit awareness; the layered intent resolver; settings by voice with checks, versions, undo and profiles; the learning loop (capture, the librarian, per-session skill snapshots, recipes, the promotion ladder, replay with step checks and handoff, correct and forget); the opt-in `eileen` Claude plugin.
+
+**Acceptance.** The approval route for Claude workers proven against the real CLI; three parallel workers in worktrees with the HUD showing each; an approval only from the user's own input (a physical click, the hotkey from a real keyboard, or the action word in the voice window, with a speaker match once enrolled); the learning loop's CI acceptance tests; "call you Nova" checked, applied on the next turn and undone; the second run of a learned request uses fewer model turns, measured as an A/B. Demos E5, E6, E9, E10, E11 and E14.
+
+### M6: Integration demo and the test fleet
+
+**Goal.** One continuous session exercises M1 to M4 end to end, the owner's benchmarks are timed scenarios, and friends' PCs are a test fleet.
+
+**Scope.** The opt-in fleet runner (recorded mode with no model by default, live mode on the contributor's own plan), anonymised results, ingest and failure clustering, benchmarks B1 to B10 (B10 is the brain benchmark) and the learning curve with A/B timing, soak tests, `docs/FLEET.md`; the real-desktop runner and scenario sharing already exist from slice S1.
+
+**Acceptance.**
+
+- A friend installs Eileen on their own Windows 11 PC from TESTING.md without asking the author anything, says "save that as a test", previews what will be shared, and submits it; CI validates and replays it on every pull request from then on.
+- B1 runs for real: "Open the video editor, go to 15:30 and make the face of the girl on the right less blurry", with the sharpness gain measured and the owner's confirmation.
+- The demo below runs on the owner's single monitor with no restart and no typed command after `eileen run`, with peak memory and the memory admission record kept. It starts from a data directory in which the user once answered "Resolve" to "which video editor?" (so the phrasing exists) and once played the timelapse (so the media history knows it), and nothing else is learned. It asserts the first row of BUILD.md section 2.10's run-by-run table: "learn from that now" closes the Resolve job's regret window at once, and a drafted skill for that job arrives (committed, or held for review because the job read a screenshot or a web page) before "what have you learned today?" is asked (the script waits up to ten minutes for it; a skipped, deferred or rejected outcome fails the demo with its stated reason), and the answer names it. Each of the three agents starts beside Resolve by the normal memory admission rules within ten minutes, with no "start it anyway". Lines spoken while the video plays carry the name, because Eileen needs it while other audio plays (except for words such as "stop" and "pause").
+
+**Demo script** (about five minutes):
+
+| You say | Expected behaviour |
 |---|---|
-| `eileen desktop state` | Prints monitors with ordinals and names, visible windows with monitor and rect, the foreground window and process, the focused element, and the current selection or `null`. |
-| `eileen desktop watch` then press Alt+Tab twice | Two foreground events print within 50 ms each, with the new window title and process. |
-| Select a sentence in Word, then `eileen desktop state --field selection` | Prints exactly the selected sentence. |
-| `eileen window move --to 2` | The foreground window lands inside monitor 2's work area. Focus does not change. |
-| Unplug a monitor, then `eileen desktop state` | The monitor list shrinks, ordinals of the remaining monitors are unchanged, no restart needed. |
-
-Spoken equivalents from M3 onward: "What am I looking at?", "Move this to screen two."
-
-**Builds on.** Win32 (`EnumWindows`, `SetWindowPos`, `SetWinEventHook`, `EnumDisplayMonitors`, `QueryDisplayConfig`), DWM window attributes, UI Automation. Reference code: terminator, Windows-MCP, mcp-windows, Microsoft UFO, FlaUI-MCP (all MIT). Libraries: uiautomation-rs and the windows crate, or FlaUI.UIA3. Details in [RESEARCH.md section 2.2](RESEARCH.md#22-windows-action-and-grounding-components).
-
-**Suggested owner skills.** Win32 and COM threading (MTA versus STA), UI Automation, DPI handling, Rust or C#, MCP server basics, a little Python for the client.
-
-### M2: Action layer
-
-**Goal.** Deterministic control of windows, apps, the browser and media, with vision as the last resort and never the default.
-
-**Scope.**
-
-- Cua Driver installed as the host daemon. Its MCP tools exposed through Eileen's tool registry: window state with indexed UIA elements, background element actions, coordinate fallback, explicit foreground escalation.
-- Playwright MCP with the Playwright browser extension for real logged-in Chrome and Edge tabs. Chrome DevTools MCP as the Chrome-only alternative.
-- COM adapters in `src/eileen/apps/`: Word, Excel, PowerPoint and Outlook through `GetActiveObject` (Selection, ActiveCell, ActiveExplorer). Explorer through `Shell.Application` (selected files per window).
-- SMTC adapter through `Windows.Media.Control`: now playing, position, play, pause, next, seek. No vendor credentials.
-- The tool ladder, enforced in code: App Actions when an app publishes them, then COM and app scripting, then UI Automation, then browser DOM, then vision. Every action records which rung ran.
-- Vision fallback wired to Anthropic's computer toolset behind a config flag, off by default. Cua Driver provides the screenshot-and-input executor.
-- Every action returns a structured result: `rung`, `duration_ms`, `reversible`.
-- `src/eileen/browser/` for Playwright MCP, `src/eileen/desktop/` for the Cua adapter.
-
-**Acceptance criteria.**
-
-- A `move_window(target_monitor=2)` call moves the foreground window into monitor 2's work area within 300 ms and does not steal focus from the user.
-- Snap left, right and quarter positions respect the work area and per-monitor DPI on both a 100 percent and a 150 percent monitor.
-- A Cua Driver background click on a button in a non-foreground Win32 app succeeds while the user's real cursor stays where it was.
-- For a Chromium or Electron target, the result reports that foreground delivery was used, and the foreground is restored afterwards.
-- Playwright MCP attaches to an existing logged-in tab through the extension, returns an accessibility snapshot with refs, clicks a ref, and never launches a second browser profile.
-- Office: the selected text in a running Word document and the active cell address in a running Excel workbook are read without opening a new instance.
-- Explorer: selected files in the frontmost Explorer window come back as absolute paths.
-- SMTC: pause Spotify, then read title, artist and position, with no Spotify account linked.
-- With a UIA path available, no screenshot is taken. A test asserts zero calls to the vision tool across the whole action suite.
-- Enabling vision requires both a config flag and an API key. Without either, the vision rung reports "disabled" and the ladder stops there.
-- The Windows Terminal adapter only opens new tabs or panes. It never sends text into an existing pane (rejected upstream on security grounds).
-
-**Demo script.** Typed until M3; the spoken lines are listed so the voice milestone has a fixed target.
-
-| You type now, say from M3 | Expected behavior |
-|---|---|
-| `eileen act snap --side left` ("Put this on the left") | Foreground window fills the left half of its monitor's work area. |
-| `eileen act arrange chrome:left word:right` ("Chrome on the left, Word on the right") | Both windows snap on the current monitor. Result shows `rung: uia`. |
-| `eileen browser tabs` ("What tabs do I have open?") | Lists the titles and URLs of the real, logged-in browser's tabs via the extension. |
-| `eileen apps word selection` ("What did I just highlight in Word?") | Prints the selected text. Result shows `rung: com`. |
-| `eileen apps explorer selected` ("Which files are selected?") | Prints absolute paths. |
-| `eileen media pause` ("Pause the music") | Playback pauses. Result shows `rung: smtc`. |
-| `eileen act click --vision "the blue OK button"` with vision disabled | Refuses with "vision is disabled; enable it in config". |
-
-**Builds on.** Cua Driver (MIT), Playwright MCP with the Playwright browser extension (Apache-2.0), Chrome DevTools MCP (Apache-2.0), Office COM, `Shell.Application`, Windows SMTC, Anthropic's computer toolset for the vision rung, M1 DesktopState. Details in [RESEARCH.md sections 2.2 to 2.5](RESEARCH.md#22-windows-action-and-grounding-components).
-
-**Suggested owner skills.** Python, COM interop (pywin32 or comtypes), Windows Runtime access for SMTC, Playwright, MCP client plumbing.
-
-### M3: Voice loop
-
-**Goal.** An always-on local voice loop that hears you, answers fast, knows the desktop, and never blocks while work runs elsewhere.
-
-**Scope.**
-
-- A two-day spike first: does Pipecat run natively on Windows? If yes, build on it. If not, a custom asyncio loop on RealtimeSTT and RealtimeTTS, which are Windows-proven.
-- One audio process owns capture and playback. pywebrtc-audio AEC3 uses the played PCM as the far-end reference.
-- Silero VAD for speech detection. Smart Turn v3 for semantic end-of-turn.
-- STT: sherpa-onnx running Nemotron streaming 0.6B INT8 for live partials and Parakeet TDT 0.6B v3 for finals. Moonshine v2 Medium as the pure-MIT CPU option.
-- TTS: Kokoro-82M through RealtimeTTS or kokoro-onnx.
-- Conversational model: Claude Haiku 4.5 through LiteLLM to start. A local 4B to 8B instruct model as the free option. Swappable by config only.
-- Context blocks: a DesktopState summary from M1 and a jobs block (recency-ordered, generated names, kind, one-line status, focus job). The jobs block stays empty until M4, but the slot and the prompt exist now.
-- Barge-in: playback stops in 50 to 150 ms, only the spoken prefix is committed to context, and the announcement is marked partially delivered.
-- Announcement policy as a small state machine: interrupt (approval or blocked), wait for idle (completed), silent (progress).
-- No wake word. A "was that for me?" check on the fast model decides whether to respond.
-- Tool calls from the conversational model go to M2 actions as async calls. Listening never pauses.
-- `src/eileen/voice/`.
-
-**Acceptance criteria.**
-
-- Voice-to-voice p50 under 1.2 s with the local model and under 2.5 s with Haiku 4.5, measured with a scripted 50-utterance run on the owner's machine.
-- Barge-in stops TTS within 150 ms at p95, and the transcript shows only the prefix that was actually spoken.
-- With speakers instead of a headset, 20 announcements produce zero self-transcriptions.
-- "Move this window to ... the left monitor" with a 700 ms mid-sentence pause is handled as one turn.
-- "What am I looking at?" answers with the foreground app, window title and any selection, from the DesktopState block, with no screenshot.
-- "Move this to screen two" triggers the M2 action, the window moves within 300 ms, and the mic stays open during the call.
-- A simulated 10 s tool call does not stop the mic. A second utterance during it is transcribed and answered.
-- A simulated ApprovalRequested event interrupts with a chime and one sentence. A simulated Completed event waits for end of turn plus one second of silence.
-- Switching between Haiku 4.5 and a local model is a config change with no code change.
-- The loop runs with no cloud key at all (local STT, local model, local TTS), with degraded latency and a warning in the log.
-- Background speech from a TV or a second person that is not addressed to Eileen gets no spoken reply in at least 9 of 10 scripted trials.
-
-**Demo script.**
-
-| You say | Expected behavior |
-|---|---|
-| "What's on my screen right now?" | Names the foreground app, window title, monitor and any selected text. Under 2 s. No screenshot. |
-| "Move this to screen two." | The foreground window moves to monitor 2's work area. A confirmation of five words or fewer. |
-| "Put Chrome on the left and Word on the right." | Both windows snap to halves of the current monitor. |
-| (while it is still talking) "Stop." | Playback stops within 150 ms. Nothing after "Stop" is answered. |
-| "Pause the music." | SMTC pause. |
-| "Never mind, play it again." | SMTC play. |
-| (a friend in the room) "Do you want coffee?" | No reply from Eileen. |
-
-**Builds on.** Pipecat (BSD-2) or RealtimeSTT and RealtimeTTS (MIT), Silero VAD (MIT), Smart Turn v3 (BSD-2), sherpa-onnx (Apache-2.0) with Nemotron streaming and Parakeet, Moonshine v2, Kokoro-82M (Apache-2.0), pywebrtc-audio, LiteLLM (MIT), Claude Haiku 4.5, M1 and M2. Details in [RESEARCH.md section 4](RESEARCH.md#4-voice).
-
-**Suggested owner skills.** Python asyncio, audio (device handling, sample rates, echo cancellation), ONNX Runtime, prompt design for small models, LiteLLM.
-
-### M4: Harness adapters, job registry, event bus, spoken overrides and permission tiers
-
-**Goal.** Hand a coding task to Claude Agent or Codex as an async job, keep talking while it runs, and override the routing by voice.
-
-**Scope.**
-
-- An Agent Client Protocol client in `src/eileen/harness/` with adapters for claude-agent-acp and codex-acp. The adapter interface leaves room for Gemini CLI and OpenCode later.
-- Vendor binaries spawned unmodified in the user's own environment. No OAuth flows. No reading `~/.claude` or `~/.codex/auth.json`. No token proxying. Users run `claude auth login` and `codex login` themselves.
-- API keys as first-class config: Anthropic, OpenAI, Bedrock, Vertex, Foundry, `CODEX_API_KEY`. A `subscription_workers: false` flag refuses dispatch to subscription-backed harnesses.
-- Workers are named "Claude Agent" and "Codex" in every UI string and log line.
-- Job registry in SQLite: id, generated name, kind, status, origin, last progress, salience, transcript path.
-- Event bus with TaskStarted, Progressed, Blocked, ApprovalRequested and Completed. The voice loop subscribes now; the phone bridge subscribes in M5.
-- Router in `src/eileen/core/`: a YAML policy from task kind to harness and model, and LiteLLM for direct model calls with per-request override.
-- Spoken overrides parsed by the conversational model into a one-off override that beats policy: "send this straight to Claude", "keep this local", "have all three debate it". In M4, "all three" fans out in parallel; the judged debate arrives in v0.3.
-- Permission tiers: reversible executes immediately, consequential confirms first. Agent-side approval requests surface as ApprovalRequested events.
-- Sandbox by default: one workspace per job, and secrets never appear in model-visible text.
-- Pronoun resolution for "how's that simulation doing?": match by kind word, then recency; ask when two jobs match.
-
-**Acceptance criteria.**
-
-- "Have Claude Agent fix the failing test" starts a claude-agent-acp session in under 3 s, a job row appears with a generated name, and an unrelated spoken question gets answered while it runs.
-- The same holds for Codex through codex-acp.
-- Progressed events update the job row silently. "How's it going?" reads the last progress line aloud.
-- A Completed event during the user's turn is announced only after end of turn plus one second of silence.
-- An ApprovalRequested event interrupts with a chime and one sentence. "Yes" resumes the agent; "no" cancels that step and the job reports Blocked.
-- "No, send this to Codex instead" during dispatch cancels the pending Claude Agent job and starts Codex. The registry records `origin: override:voice`.
-- "Keep this local" routes the direct model call to the local model. A network mock asserts nothing left the machine.
-- With one simulation job and one refactor job running, "how's that simulation doing?" resolves to the simulation. With two simulations, Eileen asks which one.
-- Send, delete and spend verbs never execute without an explicit spoken or typed yes. One test per verb.
-- A repository grep finds no "Claude Code" in user-facing strings, and no code path reads `~/.claude` or `~/.codex/auth.json`.
-- Killing a harness process mid-job marks the job failed with a reason, announces per policy, and Eileen stays up.
-- With `subscription_workers: false`, dispatch to a subscription-backed harness is refused with a one-line explanation, and API-key workers still run.
-- Two jobs run in parallel with separate workspaces and cannot see each other's files.
-
-**Demo script.**
-
-| You say | Expected behavior |
-|---|---|
-| "Have Claude Agent add a JSON flag to the desktop state command and run the tests." | "Starting Claude Agent on json-flag." A job row appears. |
-| "And have Codex write the changelog entry." | "Starting Codex on changelog." Second job row. |
-| "What's on my second monitor?" | Answers from DesktopState while both jobs run. |
-| "How's the JSON flag going?" | Reads the last progress line. |
-| (chime) "Claude Agent wants to run the test suite with network access. Allow?" then you say "Yes." | The agent resumes. |
-| "Actually, send the changelog to Claude instead." | The Codex job is cancelled. A new Claude Agent job starts with `origin: override:voice`. |
-| (you stop talking, one second passes) "The JSON flag job finished. Tests pass." | Announcement waited for idle. |
-| "Keep the next one local. Summarize the diff." | The summary comes from the local model. No network call. |
-
-**Builds on.** Agent Client Protocol, claude-agent-acp (built on the Claude Agent SDK), codex-acp (`codex app-server`), LiteLLM (MIT), SQLite. Patterns copied: OpenAI Symphony's per-item app-server in isolated workspaces, OpenClaw's background-task ledger, Claude Code's `agent_needs_input` and `agent_completed` hooks. The credential rules are in [RESEARCH.md section 3](RESEARCH.md#3-licensing-and-subscriptions-settled); the orchestration design is in [section 6](RESEARCH.md#6-orchestration-and-routing).
-
-**Suggested owner skills.** Python asyncio, JSON-RPC and ACP, subprocess management on Windows, SQLite, intent parsing prompts, a careful attitude toward secrets.
-
-### M5: Phone channels and presence-aware announcement routing
-
-**Goal.** Reach you on your phone when you are away from the PC, and take redirection from there with the same authority as your voice.
-
-**Scope.**
-
-- Telegram bot in `src/eileen/channels/` using long polling (no public webhook): text both ways, voice notes both ways (transcribed by M3 STT, answered with M3 TTS), inline buttons for approvals.
-- ntfy push with action buttons for approvals and completions. Works with ntfy.sh or a self-hosted instance.
-- Presence: a presence file plus "no voice activity for N minutes", N configurable. Away routes announcements to the phone. Present routes them to voice.
-- The same event bus subscribers, the same permission tiers. An approval from the phone equals a spoken one.
-- Tailscale documented as the private network path for anything beyond Telegram and ntfy. No port forwarding.
-- Bot token and ntfy topic stored in the encrypted config store. Never in logs or model context.
-- Discord live voice is deferred to v0.2.
-
-**Acceptance criteria.**
-
-- With presence `away`, a Completed event reaches Telegram within 5 s and is not spoken.
-- With presence `present`, the same event is spoken and not pushed, unless the config says both.
-- ApprovalRequested while away produces a Telegram message with Allow and Deny buttons plus an ntfy push. Tapping Allow resumes the agent within 5 s.
-- A Telegram voice note "how's the simulation going?" is transcribed, resolved to the right job, and answered with text and a voice note.
-- "Send this to Codex instead" typed in Telegram performs the same override as the spoken version and records `origin: override:telegram`.
-- Presence flips back to `present` on the next voice activity, and the events that went to the phone are summarized once by voice.
-- A test with the bot token in config confirms it never appears in any log line or any prompt sent to a model.
-- Everything works behind home NAT with zero inbound ports.
-- A message from any Telegram user other than the configured owner is ignored and logged.
-
-**Demo script.**
-
-| Where | You | Expected behavior |
-|---|---|---|
-| At the PC | "Start the load test with Codex. I'm heading out." | "Starting Codex on load-test." Presence flips to away after N minutes of silence. |
-| Phone | (nothing, you are walking) | Telegram: "Codex finished load-test. p95 latency dropped. Report attached." |
-| Phone | Voice note: "Have Claude write that up as a PR description." | Reply and voice note: "Starting Claude Agent on load-test-pr." |
-| Phone | (nothing) | Telegram: "Claude Agent wants to push the branch." with Allow and Deny buttons. |
-| Phone | Tap Allow. | The agent pushes. Telegram: "Pushed." |
-| Back at the PC | "I'm back." | "While you were away: load test done, PR description pushed." |
-
-**Builds on.** Telegram Bot API, ntfy (Apache-2.0), Tailscale, M3 STT and TTS, M4 event bus and job registry. Details in [RESEARCH.md section 5](RESEARCH.md#5-phone-and-off-pc-execution).
-
-**Suggested owner skills.** Python asyncio, Telegram Bot API, networking behind NAT, secret storage on Windows (DPAPI or an equivalent).
-
-### M6: Integration demo
-
-**Goal.** One continuous recorded session that exercises M1 to M5 end to end on a Windows 11 machine that is not the author's.
-
-**Scope.**
-
-- Install path: a Python package install plus one `eileen setup` command that installs Cua Driver and the DesktopState sidecar, sets up Playwright MCP, prompts for the browser extension, and checks for `claude` and `codex` on PATH.
-- A seed Windows task suite of 10 to 20 scripted tasks, since Windows Agent Arena is unmaintained. This becomes the basis of the v0.3 evaluation loop.
-- CI runs unit tests on every pull request. The Windows integration suite runs on a self-hosted runner or by hand before each release.
-- Release notes, a recorded demo, and the `v0.1.0` tag.
-
-**Acceptance criteria.**
-
-- A friend installs Eileen on a clean Windows 11 machine from the README in under 30 minutes without asking the author anything. Every stumble becomes an issue.
-- The demo script below runs end to end with no restart and no typed command after `eileen start`.
-- A file-access audit during the demo shows zero reads of `~/.claude` and `~/.codex`.
-- All six milestone issues are closed, and the README, this roadmap and the tracker agree.
-- The seed task suite passes at 100 percent on the owner's machine and is checked in under `tests/`.
-- The demo video is linked from the release notes.
-
-**Demo script.** The full session, about four minutes.
-
-| You say | Expected behavior |
-|---|---|
-| "Morning. What's open?" | Lists the foreground app and the windows per monitor. |
-| "Put the editor on screen one and the browser on screen two." | Both windows move. Focus stays where it was. |
-| "Have Claude Agent add retries to the Telegram client and run the tests. Have Codex review the diff when it's done." | Two jobs, the second waiting on the first. |
-| "Pause the music." | SMTC pause. |
-| "What did I highlight in Word?" | Reads the selection via COM. |
-| "How's the retries job?" | Last progress line. |
-| (chime) "Claude Agent wants to run the tests with network access. Allow?" then "Yes." | Resumes. |
-| "Actually, keep the review local." | The review runs on the local model instead of Codex. `origin: override:voice`. |
-| (you leave the room; N minutes pass) | Telegram: "Retries job finished. Tests pass. Local review found two nits." |
-| (Telegram voice note) "Have Claude fix the nits." | "Starting Claude Agent on nits." |
-| (back at the PC) "I'm back." | "While you were away: retries done, review done, nits fixed and tests pass." |
-
-**Builds on.** Everything in M1 to M5.
-
-**Suggested owner skills.** Packaging on Windows, CI, technical writing, patience while watching someone else follow your instructions.
+| "Morning. What's open?" | The foreground app and the open windows, from DesktopState |
+| "Open the video editor and snap it to the left half." | Resolve (the stored phrasing) starts; once its main window exists, the HUD outlines the left half and the window snaps |
+| "Go to 15:30 and make the face of the girl on the right less blurry." | The Resolve sequence of demo E7, narrated briefly, with the crop shown and "This face, on the right?" before the edit |
+| "Yes." (then, once it is done) "Learn from that now." | The edit is applied and checked; the librarian starts on the Resolve job (HUD only) while the demo goes on |
+| "Meanwhile, launch three agents to fix the flaky login tests in the demo repo." | Three Claude workers in worktrees of the `flaky-login` fixture; three HUD rows; if memory is tight, the third says why it waits and starts when admission allows, and the record notes which rule admitted each |
+| "Play the timelapse on YouTube at 3:20." | Plays from 3:20 (from the media history, no model) |
+| (Eileen is talking) "Stop." | Silence within 150 ms |
+| "Eileen, how are the agents doing?" | "Two of three pass; agent three is still running." |
+| (chime, the video pauses) "Claude wants to push the login branch. Allow?" "No." | Denied; the job reports blocked; the video resumes |
+| "Eileen, what have you learned today?" | The Resolve sharpen skill drafted from this session, one sentence, with the full list on the HUD |
+| "Eileen, save that as a test." | A scenario saved locally, previewed on the HUD |
 
 ## v0.2
 
-Only after v0.1 is tagged. Each item becomes its own issue when it starts.
-
-| Item | What it adds | Builds on |
-|---|---|---|
-| Cloud sessions for off-PC jobs | Jobs that survive the PC being off, using what the subscriptions already include: Claude Code cloud sessions (`claude --cloud`, `--teleport` to pull one back) and Codex cloud tasks. No self-hosted infrastructure yet. | [RESEARCH.md section 5](RESEARCH.md#5-phone-and-off-pc-execution) |
-| OpenClaw Gateway as an optional channel layer | Eileen registers as a node. The gateway brings 20+ chat channels, cron and mobile apps. Optional, off by default, and never a fork. Its security history is the reason to keep it optional. | [RESEARCH.md section 2.1](RESEARCH.md#21-closest-projects) |
-| Gemini CLI and OpenCode adapters | Two more ACP adapters behind the M4 interface. Gemini is API key only. | [RESEARCH.md section 3](RESEARCH.md#3-licensing-and-subscriptions-settled) |
-| VEGAS Pro 23 extension | A small in-process .NET Application Extension DLL that opens a named pipe, exposing cursor position and split-at-cursor. There is no out-of-process API. | [RESEARCH.md section 2.4](RESEARCH.md#24-app-hooks-that-beat-clicking) |
-| DaVinci Resolve 21 extension | Python API through fusionscript (Studio) or an in-app bridge (Free): playhead read and write, markers, render. Split at playhead is `SetCurrentTimecode` then Ctrl+B. Start from davinci-resolve-mcp (MIT). | [RESEARCH.md section 2.4](RESEARCH.md#24-app-hooks-that-beat-clicking) |
-| Windows On-Device Registry registration | Register Eileen's control layer as an ODR MCP connector (preview, build 26220.7262 or later). Prefer App Actions whenever an app publishes them. | [RESEARCH.md section 2.4](RESEARCH.md#24-app-hooks-that-beat-clicking) |
-| HUD overlay | A small always-on-top strip: listening state, active jobs, last announcement, a mute button. A status strip, not the GUI listed under non-goals. | M3, M4 |
-| Discord live voice | Two-way live voice from the phone through a Discord bot, so redirection while away is spoken rather than typed. | [RESEARCH.md section 5](RESEARCH.md#5-phone-and-off-pc-execution) |
+| Item | What it adds |
+|---|---|
+| Codex, Grok and DeepSeek routes | The designed driver slots: Codex app-server, ACP for Grok, the Claude driver on DeepSeek's endpoint with the one permitted key |
+| Phone connector | Telegram and ntfy with presence-aware announcements and approvals with a nonce, then voice from anywhere |
+| Home connector | Home Assistant over its local WebSocket API, Matter through it; room-sensing devices opt-in per device, local only |
+| Containment and storage | A real sandbox for workers and encryption at rest with a DPAPI-wrapped key (D40) |
+| ML projects on the user's Colab | A connector that runs a model project end to end on the user's own Google Colab account (owner direction of 2026-10-20): parallel research on what already exists, an evidence-first go or no-go, data collection with licence checks and AI-assisted labelling, training with narrated, steerable progress, honest evaluation, and export to ONNX so the result becomes one of Eileen's own skills. The user signs in to Google; the route (Google's Colab CLI or its Colab MCP server) is chosen at v0.2 design time with a live test. v0.1 keeps it possible: job kinds and connectors are plug-ins |
+| Adobe | Premiere and Photoshop UXP plugins connecting out to a loopback WebSocket; the Photoshop benchmark run for real |
+| VS Code extension | Editor state (active file, selection) over a named pipe, unless benchmark B4 pulls it into v0.1 |
+| Windows App Actions and location | App Actions as a route rung; Windows' location service as an opt-in source |
+| Show me first | A whole-plan preview before anything runs |
+| Undo inside pro apps | App-level undo inside other pro apps, beyond what Eileen journals itself |
+| HUD accessibility | The HUD exposed to screen readers |
+| Page-content recall | "What was that page about GPU pricing?" answered from page content, not only titles |
+| A richer tour | A longer guided first-run tour with per-app suggestions |
+| Releases | Signed automatic updates with one-step rollback, on the nightly, beta and stable channels v0.1 already publishes (needs the signing certificate) |
+| Teach by showing | "Eileen, watch me do this", recorded through Eileen's own hooks |
+| Routines | Scheduled jobs on the same workers, skills and tiers |
+| Languages | Spoken conversation in other languages, capability-driven: Eileen discovers which languages the chosen speech models and routed model support (every speech stage reports its languages from v0.1) and falls back to another model or to typing when one is not supported (owner answer 21) |
+| Linux | `-linux` platform crates: AT-SPI, PipeWire, Wayland or X11, MPRIS, Secret Service |
+| One-step install | winget and a signed MSI |
+| Observability extras | OpenTelemetry export to a local viewer, ETW, tokio-console builds |
+| Claude app extras | An Eileen pane in the Claude app, handing a spoken request into an open Claude session, a desktop extension for the chat tab |
 
 ## v0.3
 
 | Item | What it adds |
 |---|---|
-| Evaluation loop | Build, test, measure, compare, keep or revert. The M6 seed suite grows into a real Windows task suite. A nightly run reports pass rates, latency and regressions to the phone. A change that regresses the suite is reverted and reported. |
-| Multi-model debate mode | "Have all three debate it" becomes a real mode: fan out to N harnesses or models, a judge model summarizes where they disagree, and you pick by voice. Results land in the job registry like any other job. |
-| Local-only mode | One switch: no network egress. Local STT, local TTS, local conversational model, and a local grounder for the vision rung if it is enabled (UI-Venus-2-9B or Holo2-8B, Apache-2.0). Every cloud tool refuses cleanly and says why. |
+| Shared skills, opt-in | Signed skill packs, verified across the test fleet, untrusted until checked locally |
+| Multi-model debate | Fan a question out to several routes; a judge summarises where they disagree |
+| Local-only mode | One switch for no network egress, with a local brain |
+| Published evaluation | The scenario corpus's pass rates and latencies per machine class, published per release |
+
+## After v0.1 ships: staying at the frontier
+
+The owner's direction of 2026-10-20 makes keeping Eileen current a built-in loop, after the main product ships: a weekly scout of new models, CLIs, speech and voice models, MCP servers and research, with a digest and an issue per worthwhile upgrade; bold ideas tried as small measured experiments; every candidate adopted only if it wins the same benchmarks; failing scenarios triaged and drafted into fix pull requests that the owner approves. v0.1 keeps this possible with what it needs anyway: plug-in interfaces for the brain, workers, every speech stage, voices, the intent matcher and the app routes; model names as aliases in config; the benchmark suite, including the brain benchmark, with its public results table (`RESULTS.md` on the repository's `devhub` branch) and results page; and nightly runs against the latest Claude CLI, both the credential-free flag check and the owner's behavioural contract test.
 
 ## Non-goals for now
 
 | Not doing | Why |
 |---|---|
-| A polished GUI | The interface is voice, the phone, and a status strip. A settings window can wait until the core is stable. |
-| macOS and Linux | The grounding service and action layer are Win32, DWM, UIA and COM. Porting is a rewrite of that layer, not a flag. |
-| A mobile app of our own | Telegram, ntfy and later Discord cover the phone. OpenClaw's apps are the optional upgrade path. |
-| Training models | We compose models; we do not train them. Wake-word models with non-commercial licenses are avoided rather than replaced with our own. |
+| macOS in v0.1 or v0.2 | Windows first, Linux next; the platform traits keep macOS a new set of crates later |
+| A polished settings GUI | Settings are spoken, shown and clickable on the HUD, and written to commented TOML |
+| A mobile app of our own | The phone connector covers it in v0.2 |
+| Training Eileen's own models | Eileen composes models and adapts no weights of its own; running the user's own training projects on the user's Colab account is a v0.2 connector (above), which is the user's work, not Eileen training itself |
+| API keys other than DeepSeek's | Subscriptions through each vendor's own signed-in tool; Gemini stays out until a permitted route exists |
 
-Also not happening, as the design principles already say: forking OpenClaw or Hermes, handling vendor credentials, or bundling GPL or source-available code into the binary.
+Also not happening: forking OpenClaw or Hermes, handling vendor credentials or running login flows, patching or replacing the Claude app, or bundling GPL or source-available code into Eileen's own binaries.
 
 ## Picking up a milestone
 
-Comment on the milestone issue with what you plan to take. Split it into task issues that link back. Every acceptance criterion above should map to at least one test. A milestone closes when its criteria pass on the owner's machine and on one other Windows 11 machine.
+Comment on the milestone issue with what you plan to take, and work from the matching work package in BUILD.md. Every acceptance criterion maps to at least one test or scenario, and every pull request leads with its evidence. A milestone closes when its criteria pass on the owner's PC and on one other Windows 11 machine from the test fleet.

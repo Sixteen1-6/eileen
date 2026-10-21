@@ -1,0 +1,4000 @@
+# Eileen v0.1 build specification
+
+Written 2026-10-20 by the architect pass of the design workflow, revised the same day after five reviews (feasibility on the owner's PC, the owner's asks and the feel, safety and best-in-class, engineering quality, and the learning loop), revised again after the first verification round and the owner's answers to section 7, after the second, third and fourth verification rounds, and on 2026-10-21 to apply the owner's answers in full. This is the document parallel engineer agents build v0.1 from. It turns [OWNER-DIRECTION.md](OWNER-DIRECTION.md) (binding) and the twelve October research reports into one design, one Cargo workspace, one set of contracts and ten work packages. Section 8 lists what each round changed and which suggestions were declined, with reasons.
+
+How to use it:
+
+- Engineers: read section 0, then the work package you were given in section 6, then every section that package names. The contracts in section 3 are the only interface between packages. If a contract here is wrong, say so in your pull request and propose the fix as a separate small amendment pull request (section 6.1); do not quietly diverge.
+- Reviewers: section 4b lists every check CI runs, and section 7 lists the owner's answers and where each is applied. No question is left open for the owner: the last four were settled by his standing rule, and the few that only code or a measurement can settle are carried into their packages.
+- Numbers come from the research reports, which say how and under what load each was measured. Almost every measurement on the owner's PC was taken under heavy contention, so read them as pessimistic, and read section 4.3's "typical load" column as what the owner will actually see while he works.
+
+Reports this spec is built on (all present on 2026-10-20, in `docs/research/`): prior-art, subscription-harnesses, app-hooks, brain-latency, voice-stack, computer-use, rust-architecture, learning-loop, dictation-and-voices, claude-mods, engineering-practice, observability. The thirteenth, colab-ml-projects, informs only the v0.2 Colab connector scheduled in section 1.
+
+Documents no package owns: this file, `docs/DECISIONS.md` and `docs/OWNER-DIRECTION.md`. A package that needs to change them, or a file another package owns that has already merged, opens a separate pull request labelled `amendment` that touches only that file, and the owner reviews it.
+
+## 0. Summary
+
+v0.1 is one always-on Rust program for Windows 11 that listens whenever the microphone is not muted, understands what the user means, and either acts at once on the PC or starts Claude jobs that run in parallel while the conversation continues. Everything it does is recorded locally so the next request of the same kind is faster, and everything the user and the owner's friends try can be saved as an automated test.
+
+The shape, in one paragraph. A core process (`eileen.exe`) owns the microphone, mute, the tray and hotkeys, the event bus, the job registry, permissions, the learning loop's decisions and a supervisor. Everything that can hang or crash runs in a supervised child process the core can kill: speech models (`eileen-speech.exe`), UI Automation and input (`eileen-desktop.exe`), app scripting such as the Resolve bridge (`eileen-apps.exe`), the on-screen layer (`eileen-hud.exe`) and every Claude session. The brain is a warm `claude -p` session on the owner's plan with a hot spare; it answers, dispatches jobs and may run a small set of deterministic actions (open an app, move a window, play or seek media, jump in Resolve), but it never moves the mouse or types. Common commands skip it entirely through a deterministic fast path. Long or hands-on work goes to Claude worker sessions, taken from a small warm pool where memory allows, that drive the PC through Eileen's own MCP tools under a permission gate, a path guard and an input lock. Claude is the only route in v0.1; Codex, Grok and DeepSeek are designed slots behind the same trait. Every OS-touching piece sits behind a platform trait, and the neutral crates build and test on Linux from the first commit.
+
+Build order, thin slice first:
+
+| Wave | Packages (the build guard lets at most two compile at once) | What exists at the end |
+|---|---|---|
+| W0 | WP0 phase A | Workspace with every pin and native dependency declared, the contracts (pinned on the S1 path, provisional elsewhere), the build guard, basic gates and the evidence check green on Windows and Linux, the required check switched to `all-green`, every crate as a documented stub |
+| W1 | WP1 core and simulation, WP3 Claude harness, WP4's two slice pull requests (`wp4/s1-audio` and `wp4/s1-speech`), and WP2 runtime from the moment WP1's minimal core merges; WP0 phase B (the remaining repository checks and the nightly, weekly, long and release workflows) and WP6's Resolve correction spike (no compiling) alongside | The core decides everything in simulation, starting from a minimal core in the first pull request; Claude brain and workers run from Rust; the runtime wires the minimal core; the audio and speech path for the slice exists; the tier-2 approval path is proven against the real CLI; the Resolve edit route is chosen. **Slice S1, live**, as soon as WP2's `wp2/s1-live`, WP3's `wp3/worker-brain` and WP4's `wp4/s1-audio` and `wp4/s1-speech` have merged, whether or not the rest of W1 is done: the real microphone and speakers, mute key and tray, a console view, one fast-path command, one barge-in, one brain answer and one Claude job, latencies recorded. No W3 package starts until it passes on the owner's PC |
+| W2 | WP4's remaining pull requests, from the merge of its two slice pull requests; the rest of WP1, WP2 and WP3 continue | WP4's other pull requests (cloning, the Chatterbox head-to-head, dictation, Parakeet, the embedding model) |
+| W3 | WP7 phase A (intent, settings, capture and the first rungs of learning) once S1 passes; WP5 desktop control once WP4's last pull request has merged (two desktop packages never overlap) | Open any app, move windows, computer-use jobs; settings by voice; skills drafted and loaded by workers |
+| W4 | WP6 app adapters, WP7 phase B (recipes, replay, the full ladder) | Resolve, YouTube and media, Office, Explorer, recent files; model-free replay with step checks |
+| W5 | WP8 HUD and Claude integrations | The visual layer, the first-run surprise path, the opt-in `eileen` Claude plugin |
+| W6 | WP9 benchmarks and the test fleet | The owner's benchmarks as timed scenarios; friends' PCs as a test fleet; the M6 demo |
+
+## 1. The target experience
+
+Each demo below is a script a tester can follow. "Under the hood" names the mechanism and the section that specifies it. Every demo (E1 to E18) becomes at least one scenario in `scenarios/` (section 4.8), so these scripts are also the first tests. The owner's PC has one 1920x1200 monitor, so every demo works on one screen; steps that need two monitors are marked and run on fleet PCs that have them.
+
+Timing words: "at once" means under about 0.6 s from the end of speech to the first sound, which only the fast path and cached phrases reach. "Quickly" means a brain turn: the target is 1.5 s to the first spoken word at p50 on a quiet PC, and the honest typical-load number is 2 to 4 s (section 4.3). Whenever a turn goes to the brain or a job, a short earcon plays within 150 ms so the user knows Eileen heard. "Actions" through the brain (a paraphrase of a known command) take about 3 s to the first effect. Worker jobs start in about 1 to 2 s from the warm pool, or 30 to 111 s on a cold start under load, and Eileen says which; on the owner's PC under typical load the pool usually does not fit in memory (section 4.4), so a worker there usually starts cold. Deep answers take tens of seconds when the deep session is pooled (the pool keeps it first) and about one to two minutes when it starts cold, which is the owner's usual case under load; either way they arrive while the user keeps talking.
+
+### E1. Always listening, mute one key away
+
+| You do or say | What happens | Under the hood |
+|---|---|---|
+| Sign in to Windows | Eileen starts from the sign-in entry. The HUD strip shows "loading speech" for 10 to 20 s while the speech models load, then the mic as listening, and "brain warming up" until the Claude session is ready (cold start measured 39 to 48 s on a loaded PC). Fast-path commands work as soon as the speech models are loaded | 2.1, 2.3 |
+| "Eileen, what time is it?" | Spoken answer at once, no model | fast path, 2.4 |
+| (to a friend, even right after talking to Eileen) "Want coffee?" | Nothing spoken. The HUD shows the words greyed as heard but not for Eileen, for a few seconds; they are never written to disk. Inside the conversation window only commands, replies and utterances that pass the local addressee score go to Eileen; a follow-up scores only when it refers to something Eileen just said, and this one refers to nothing she said, so it does not pass and never reaches the brain | addressee gate, 2.8; privacy, 2.12 |
+| "That was for you" (or tap the greyed line) | The last greyed utterance runs as if it had been addressed | 2.8 |
+| Press the mute key (default Ctrl+Alt+M), click the mic on the HUD or the tray | The capture stream itself stops; the Windows mic indicator goes off; the HUD mic turns red | 2.8, 2.9 |
+| "Eileen, are you there?" while muted | Nothing. Muted means nothing is captured | invariant 9 in 4.7 |
+| Press the mute key again | Listening resumes; a short earcon | |
+
+### E2. Open any app
+
+| You say | What happens | Under the hood |
+|---|---|---|
+| "Open Premiere" | Premiere launches; "Opening Premiere Pro." from the phrase cache (launch phrases are rendered in the background after the app index is built) | fast path, app index, `desktop_launch_app` (2.6) |
+| "Get Premiere up for me" | A paraphrase the grammar does not know: the brain calls the same `desktop_launch_app` tool directly, so the app starts about 3 s after speech with no worker. The pairing becomes a phrasing: an exact repeat runs from the fast path at once, and once the regret window closes clean it is kept (2.10) | brain `act` toolset, 2.3; phrasings, 2.10 |
+| "Open the video editor" | "DaVinci Resolve or Premiere Pro?" Both are video editors, so it asks once | one clarifying question, 2.2 |
+| "Resolve" | Resolve launches; "the video editor" is stored as a phrasing fact, so next time it opens Resolve directly | user model, 2.10 |
+| "Snap it to the left half" | Once Resolve's main window exists (not the splash), it snaps to the left half of the work area. With two monitors, "put it on the left screen" moves it there (`requires = ["monitors>=2"]`) | `desktop_window` snap, fast path |
+| "Close Notepad" | Closes it if Notepad reports nothing unsaved; otherwise asks first | `WindowAction::Close`, tier rule in 2.12 |
+| "Turn it down a bit" | System volume down one step, journaled so "undo that" restores it | `desktop_volume` |
+
+### E3. A specific video, at a time
+
+| You say | What happens | Under the hood |
+|---|---|---|
+| "Play the Mount Rainier timelapse on YouTube" | If the video is known (played before, mentioned in the conversation, or in the recent-work index), the built-in grammar resolves it and its watch URL opens in the default browser at once, no model. If not, a Claude worker opens the YouTube results page in the user's own browser, reads the results from a screenshot, and opens the matching video; the worker comes from the warm pool when memory allows, and otherwise starts cold, which on the owner's PC under typical load takes about a minute (Eileen says so). Narration: "Found it, playing." The URL and title go into the media history | `apps_recent` (media), `apps_open_url`, worker computer use, 2.7 |
+| "Go to 3:20" | Playback jumps to 3:20 through the system media controls, no keystrokes. Media-control words need no name while the video plays (2.8) | `apps_media` seek over SMTC, 2.7 |
+| "Pause" / "Play" | Instant, through SMTC | fast path |
+| Another day: "play that timelapse at 1:10" | The built-in grammar matches "play <known media> at <time>" and resolves "that timelapse" through the media history; the URL opens at `&t=70s` with no model call. This needs no learning; the learning loop covers request kinds the grammar does not know (E11) | 2.4 |
+| A different video nobody has played | A worker again, because finding a new video needs judgment on a results page; the skill drafted from the first search makes later searches shorter, but the pick is a screenshot judgment, so it never becomes a model-free recipe (2.10) | 2.10 |
+
+A preroll or mid-roll ad can follow a load or a seek; Eileen waits for the SMTC session to come back with the expected title before saying it worked (app-hooks report section 5).
+
+### E4. "What am I looking at?"
+
+| You say | What happens | Under the hood |
+|---|---|---|
+| "What am I looking at?" | "Resolve, the Color page of 'Beach Edit', on your left half. Nothing is selected." Answered from DesktopState in the brain's context block, with no screenshot | DesktopState, 2.6; context blocks, 2.3 |
+| "What's in this picture?" (a photo is open) | The brain calls `desktop_look`, gets one downscaled screenshot, and describes it | 2.3 |
+| "Copy the second paragraph into my email" | A worker job reads the page and the email field through the desktop tools and inserts the text. Typing into a mail app is allowed; pressing Send is a separate tier-2 step | 2.6, 2.12 |
+| (while a job works in a window behind others) | The HUD shows a small live thumbnail of the window the job is working in, without moving it | `HudState.watch`, 2.9 |
+
+### E5. "Launch three agents to ..."
+
+| You say | What happens | Under the hood |
+|---|---|---|
+| "Launch three agents to fix the flaky login tests in the demo repo" | "Starting three Claude workers on flaky login tests." Three git worktrees and branches are created, three jobs start, and the HUD shows rows "agent one" to "agent three". If memory admission cannot start the third yet, it waits with one reason ("Memory is tight; Chrome is using 3 GB. Close something, or say start it anyway.") and starts when the paging rule or the user allows it (2.5). If the plan's five-hour window is above 80 percent, Eileen asks first | fan-out and admission, 2.5; plan-limit awareness, 2.3 |
+| (keep working; say nothing) | Short narration only for the focus job, at most one line every 20 s, attributed: "Claude: agent two found the race in the session cache." | narration, 2.5 |
+| "How are they doing?" | "Two of three pass the tests; agent three is still running them." | jobs block, 2.3 |
+| "Show me agent two's changes" | The HUD shows the diffstat and test results; "open it" opens the diff in the editor | 2.5 |
+| "Keep agent two's fix" | Agent two's branch is merged into the user's branch (local, reversible); the other worktrees are removed after a one-sentence confirmation because they hold unmerged work. In compete mode Eileen first says how the three results differ in one sentence | tiers, 2.12 |
+
+The demo repo is a fixture the scenario creates (`scenarios/bench/_fixtures/flaky-login/`, a small Python project whose flaky tests run in seconds), so the demo never needs three cold Rust builds at once.
+
+### E6. Coding by voice
+
+| You say | What happens | Under the hood |
+|---|---|---|
+| "In the eileen repo, add a json flag to the status command and run the tests" | One Claude worker job edits the user's checkout in place, after recording a snapshot ref so "undo that" can restore it; a worktree is used only when the user's uncommitted files overlap or several agents run. The worker runs the tests with the user's own toolchain. Approvals for anything beyond the repository come back by voice | worker layer, 2.5; environment, 2.12 |
+| Hold the dictation key in VS Code and say "if result is none return early" | The text lands at the caret in code style (no capital, no period), local only | dictation, 2.8 |
+| "Eileen, rename that variable to session id" | "That" is resolved from VS Code's window title (file and workspace) and a small crop around the caret; if unsure, Eileen asks which one. A worker job edits the file; the change is in git and can be undone | 2.5, 2.6 |
+
+### E7. The Resolve benchmark, done for real
+
+"Open the video editor, go to 15:30 and make the face of the girl on the right less blurry." (The owner's own words; B1 uses them literally.)
+
+| Step | How | Rung |
+|---|---|---|
+| Which editor | The first time, one question ("DaVinci Resolve or Premiere Pro?"); the answer becomes a phrasing fact | 2.2, 2.10 |
+| Resolve open and scriptable | If `Resolve.exe` is not running, launch it (tier 1) and poll the bridge's `hello` until it answers, saying "Resolve is starting" if that takes more than 3 s. If External scripting is not set to Local, Eileen says exactly which preference to change | apps, 2.7 |
+| The right project and timeline | If Resolve shows the Project Manager, Eileen asks which project, offering the recent ones ("Beach Edit or Wedding?"), and loads it; if the project has several timelines and none is current, it asks once | scripting |
+| Go to 15:30 | Open the Edit page (the playhead cannot move on the Media or Fusion pages); the bridge reads the timeline's start timecode and frame rate; Rust computes the absolute timecode (01:15:30:00 for a 01:00:00:00 start, drop-frame aware) and calls `SetCurrentTimecode`; the playhead is read back | scripting |
+| The girl on the right | Export the current frame as a still; the local YuNet detector finds faces; take the right-most and measure its sharpness as the baseline. The HUD shows the crop and Eileen asks "This face, on the right?" before any edit | scripting plus local vision; confirmation, 2.7 |
+| Keep it undoable | Before changing anything, Eileen journals the inverse for the route in use: for a Fusion composition, the clip's composition list and its current composition (undo deletes Eileen's composition `eileen-<job>` and loads the previous one); for a DRX grade, a new color version (undo loads the previous version) | scripting |
+| Less blurry | The route WP6's spike picks (section 2.7), in this order of preference: a Fusion composition on the clip with an ellipse mask keyed from per-frame face boxes (Eileen tracks the face itself by running YuNet on stills that one `export_stills` call writes every few frames across the clip) feeding a sharpen node, imported from a generated file; a generated DRX grade with a window, if the format allows placing it; and only as a last resort a Claude worker on the Color page with screenshots and the input lock. Narration: "Adding a sharpen mask on her face." | scripting first, computer use last |
+| Check | Export the frame again; sharpness inside the face box (variance of the Laplacian) must rise by at least 15 percent over the baseline; otherwise try once more, then report honestly and offer to undo | local vision |
+| Learn | The trajectory becomes a draft skill `resolve-sharpen-face` with slots for the time and which face (2.10) | |
+
+Measured as benchmark B1 (section 4.7) on the owner's PC. B1 passes only when the sharpness gain is at least 15 percent and the owner confirms the result. The second run must use fewer model turns and less time than the first.
+
+### E8. The Photoshop equivalent (designed; Photoshop is not installed on the owner's PC)
+
+"Open Photoshop, open the image where I was editing the girl at the beach, and make her face less blurry." The design is in section 2.7: candidates from Photoshop's recent files over COM plus the recent-work index and the ledger's record of which documents the user actually spent time in, ranked by name, recency and editing time. If two stay close, or the file is named like `IMG_4412.psd`, the HUD shows a contact sheet of up to nine thumbnails and Eileen asks in one sentence. Open over COM; duplicate the layer (keeps it reversible); detect the face locally and show the crop for confirmation; feathered elliptical selection; Smart Sharpen on the duplicate. Neural Filters and Generative Fill spend Adobe credits and are tier 2. The code is written and unit-tested against a fake COM target; the real-app scenario is marked `requires = ["photoshop"]` and is skipped until someone with Photoshop runs it on the test fleet.
+
+### E9. Many jobs, one conversation
+
+| You say | What happens |
+|---|---|
+| "How's the render?" while a coding job and a Resolve render run | "The render is at 60 percent; the test agent found two failures." The render is an app task the core tracks through the Resolve bridge with no Claude session; pronouns resolve against the jobs block (2.5) |
+| (Eileen is mid-sentence) "Stop." | Playback ducks within one 32 ms window and stops by the third; the transcript records only what was actually played; nothing after "Stop" is answered. Any job acting on the desktop pauses too |
+| (Eileen is mid-sentence) "Mm-hm." | Eileen pauses for a moment, hears that it was only a backchannel, and carries on from where she paused |
+| "Go on" | After a real interruption, plays the part the user did not hear |
+| "Actually, tell the test agent to only look at the parser" | The instruction is steered into that job's session (interrupt, then a new user turn) |
+| "Cancel the render" | Cancelled; the job ends in exactly one terminal state |
+| (chime; any video playing is paused) "Claude wants to run git push on the login branch. Allow?" "Yes, push." | A tier-2 approval by voice needs the action word (and, once the speaker check is enrolled, the user's own voice), or a physical click on the HUD's Allow, or the approve hotkey pressed on the keyboard. The voice window opens only after the question has finished playing. The worker resumes. "No" denies. If nobody answers within 20 s the voice window closes but the request stays on the HUD (and a toast) until the job's approval deadline, 30 minutes by default; then it is declined |
+| "Send this one to a stronger model instead" | Reroute: the job is cancelled and restarted on the deep model with the old transcript as context |
+
+### E10. Thinking together, and the best answer at conversational speed
+
+| You say | What happens |
+|---|---|
+| "What's the best place to eat near me?" | The brain answers quickly with something useful that does not pretend to know current facts ("You liked the ramen place on 5th; I'm checking what's open now."), and in the same turn starts one deep worker (strongest model, thinking on) that runs several web searches in parallel in one turn. It lands in tens of seconds when the deep session is pooled, and in about one to two minutes when it has to start cold, which is common on the owner's PC under load; the HUD shows which. When it lands, two sentences are spoken ("Better answer: ...") and the full list with links, hours, distance and reasons appears on the HUD. If the user is talking, it goes to the HUD only |
+| "Closer." / "I loved that place." | Built-in phrases with no model: "closer" refines the last answer from its cached results (a brain turn with the refinement) and is kept as a preference for this kind of question; "I loved that place" is kept against the place the HUD showed. Both become user-model facts at once through the deterministic fact path (2.10), each confirmed with "Noted" and undoable, so the next answer of this kind uses them. The hosts behind an answer the user accepted (a link opened, praise, a follow-up) are counted for this kind of question, and the next deep worker checks them first (source statistics, 2.10) |
+| "I'm trying to decide between SQLite and a flat-file store for skills; think it through with me" | Quick take spoken, a considered worker explores both (reads the code, writes a small benchmark in a scratch worktree, compares), and Eileen talks through the trade-offs while it works. "Quick answer" or "think hard about this" overrides the depth |
+
+### E11. It learns
+
+| You say | What happens |
+|---|---|
+| (E7 again, a day later: "go to 42:10 and sharpen the guy on the left") | The worker's session has the learned skill and is told to follow it, so there is no exploration: fewer turns, no dead ends. Section 2.10 has the table of what each run of each benchmark should look like; B8 measures it |
+| "Learn from that now" | The librarian distils the last job that ran on Claude at once instead of waiting for idle time |
+| "What have you learned?" | The newest two or three items, one sentence each; the HUD shows the full list with level, success rate and time saved |
+| "What do you know about me?" | The user-model facts, grouped; each can be corrected or forgotten |
+| "Show me how you do that" | The HUD shows the skill's steps and checks, each line coloured by where it came from |
+| "No, my timelines start at zero" | A built-in correction phrase: the old fact is retired and the user's words become the new fact with provenance `user`, no model involved; every skill whose `facts_used` lists the old fact is queued for repair and drops one level |
+| "Forget that" | "Forget the Resolve sharpen skill and its four recordings?" "Yes." The skill, its versions, its evidence and every copy in incidents, recordings and the event log are deleted, and a tombstone stops the librarian relearning it |
+| "Forget that I like ramen" | The matching facts are listed in one sentence and removed after a yes |
+
+### E12. Dictation better than the paid tools
+
+Hold Right Ctrl (configurable) in any app and speak; words appear in the HUD while speaking; on release, clean punctuated text lands at the caret: fillers, stutters and "scratch that" removed, "at 3, no, 4 pm" becomes "at 4 pm", code fields get literal text, chat drops the final period. The user's own clipboard is preserved. "Undo that" removes the last insertion. Corrections the user makes afterwards teach the vocabulary. An optional Claude "scribe" polishes tone when the user turns it on (section 2.8). The key is read through Raw Input, so Eileen never sits in the keyboard path.
+
+### E13. Any voice, including a friend's
+
+| You say | What happens |
+|---|---|
+| "Eileen, learn a new voice" | "Whose voice? They need to be here, or you can drop in a clip." "Sam's." Sam reads a short consent sentence and a passage (about 30 s). A same-speaker check compares the two; the model's terms are shown once; the profile "Sam" is saved on the PC only. A dropped clip is accepted only with Sam's own recorded consent sentence |
+| "Use Sam's voice for announcements" | Announcements use Sam's cloned voice. The engine is chosen per voice: Pocket TTS by default, Chatterbox if the user picks it and it measured fast enough on this PC. An engine slower than real time renders a whole line before playing it ("rendering in Sam's voice" on the HUD) instead of stuttering; conversation stays on the fast default voice and Eileen says so once |
+| "Use Chatterbox for Sam's voice" | The engine is a setting per voice (`voice.engines.sam`). Eileen first times one clause in Chatterbox on this PC (and offers the download, with its size, if Chatterbox is not installed): "Chatterbox is fast enough to talk live" or "Chatterbox is too slow to talk live here, so Sam's voice will read announcements only. Switch?" Then one sentence of confirmation, and "undo that" goes back. Also `eileen voice use sam --engine chatterbox-turbo` and the HUD's settings panel (the settings flow of 2.11; voices, 2.8) |
+| "Back to normal" | Default voice |
+| "Delete Sam's voice" | Reference clip, consent clip, caches and profile removed |
+
+No watermark is applied by default on any engine; watermarking saved or exported audio (`eileen voice render` files and the audio lanes of recordings) is an opt-in setting (owner decision of 2026-10-20).
+
+### E14. Customise anything by saying it
+
+| You say | What happens |
+|---|---|
+| "Eileen, I want to call you Nova now" | Eileen checks the name first: not a common word, not a household name it knows, and its own speech recognizer hears "Nova" correctly in three synthesized sentences. Then: "Okay, I'm Nova now. Say undo that to go back." The answer-to name, the addressee cue, the recognition hint and how it refers to itself all change on the next turn, with no restart |
+| "Talk less" / "be funnier" / "always answer in one sentence" | Personality and verbosity change on the next turn; confirmed in one sentence |
+| "Stop announcing progress on renders" | That announcement row changes |
+| "Put the HUD bottom left and make it smaller" | HUD moves and scales |
+| "Change the mute key to F8" | Eileen tests that F8 can be registered (another app may own it) before applying |
+| "Always let Claude move windows without asking" | Window moves are already reversible and silent; Eileen says so instead of adding a rule |
+| "Undo that" | Reverts the last settings change; settings are versioned locally |
+| "Save this as editing mode" / "switch to work mode" | Profiles |
+| (on the HUD) the settings panel | The common settings as clickable controls; every change goes through the same flow and can be undone |
+
+Nothing a setting does can let Eileen enter credentials, make payments, or skip a confirmation for a consequential action without an explicit, logged decision (section 2.11). Safety-relevant settings change only on the user's own voice or click, never because a model proposed it.
+
+### E15. Something went wrong, save that as a test
+
+| You say | What happens |
+|---|---|
+| "Eileen, that went wrong" or press Ctrl+Alt+Shift+B | The last ten minutes are frozen into a local incident: event log, spans, inputs (replayable), process table, last DesktopState |
+| "Save that as a test" | The last request becomes a scenario file: what was said (as text), the starting state, every step Eileen took, and checkable expectations inferred from what changed. If it failed, Eileen asks once "what should have happened?" and stores the answer |
+| `eileen scenario share last` | A preview shows exactly what would leave the PC after redaction; Eileen replays the redacted copy locally to make sure it still tests the same thing; on approval, `eileen scenario submit` opens a pull request from the user's own GitHub account. CI replays it in simulation on every pull request from then on |
+
+### E16. The feel
+
+| The owner asked for | Mechanism | Proven by |
+|---|---|---|
+| Understands half-finished speech and context ("make that bigger", "no, the other one", "go back to what we tried an hour ago") | Turn end needs Smart Turn plus transcript continuation cues plus a silence cap that stretches when the sentence is unfinished; the brain gets the focus history, the last referenced element and the episodic ledger; "no, the other one" right after a cancelled action goes to the job that was acting | sim invariants; scenarios `feel/*` |
+| Knows when it is addressed and when a thought is finished | Local addressee gate: the name, a conversation window that stays open while the user is engaged (inside it, commands and replies pass, and anything else must pass the local score), the command grammar, and a local score for unnamed requests about the screen when the user is alone, with the brain able to answer "not for me", and a voice much quieter than the user's calibrated level is not taken as addressed. Other audio (a video) suspends the window, except for media-control and stop words; during a call only utterances that begin with the name count, those words included, and Eileen stays silent | room-talk scenario: at least 9 of 10 ignored; conversation scenario: at least 8 of 10 unnamed requests acted on, at most 1 of 10 false actions |
+| Stops at once when interrupted, resumes from what you heard | Duck at the first VAD window, stop by the third (measured parts give 70 to 110 ms); a backchannel resumes; played samples mapped to text; the brain is told exactly what was heard | sim invariants 2 and 3; B5 |
+| Talks while it works, briefly | Workers mark narration lines; at most one spoken line every 20 s for the focus job, attributed to the route; never filler | narration tests |
+| Several things at once, keeps you oriented | Job registry, jobs block, announcement policy, app tasks with progress | E9 scenarios |
+| Thinks with you | Depth tiers, a deep worker in parallel, the HUD for detail | E10 |
+| A visual layer | HUD overlay and strip; visible intent before clicks; live thumbnail of background work | E17 below |
+
+### E17. The visual layer
+
+The HUD shows, in a corner the user chooses: the mic state and level; the words being heard, greyed when not addressed to Eileen; whether the conversation window is open; what Eileen is saying; each job with route, name and progress; pending approvals with Allow and Deny; what Eileen is watching (the app in focus, a live thumbnail of a background window a job works in); a countdown before and while a job holds the screen (Eileen also says so in one line, and hands the screen back with one line afterwards), and "you took over, I stopped" when the user touches the mouse or keyboard during it; learning, recording and off-the-record indicators; plan usage when it is high. Before Eileen clicks or types on the user's screen, the HUD outlines the target for 400 ms and names it, so "no, the other one" works mid-action. Before a hard-to-undo edit it shows the frame or crop and asks. A small settings panel and the first-run choices are clickable. The HUD excludes itself from screen captures and ignores synthetic clicks on its own buttons.
+
+### E18. First run, with a surprise path
+
+| You do | What happens | Under the hood |
+|---|---|---|
+| Finish `eileen setup` and start Eileen | Eileen says the three choices aloud and the HUD strip shows them: "Take the tour", "Skip", and "Show me something cool". Under the third is an unticked box: "Let Eileen use my voice to personalise how she sounds and listens. You can delete it any time." Eileen reads the box's sentence too, so the choice can be made by voice | first-run state machine, 2.8 |
+| Pick "Show me something cool" with the box ticked (or say "Show me something cool, and yes, use my voice") | "Say anything you like for about half a minute. Start with 'Hi Eileen', then tell me about your day." Nothing hints at what comes next. While Eileen speaks that prompt, its own voice calibrates echo cancellation; the recording sets the mic level, learns how the user says "Eileen" from the greeting, measures how confidently the recognizer hears this voice and, if adopted, enrols the speaker check | 2.8 |
+| (a short "getting ready" bar while the scripted lines render) | Eileen, speaking in the user's own cloned voice: what is on screen; opens an app and plays a bundled clip; answers a question; starts two small helpers in parallel; repeats a request to show it is faster the second time (the first through the brain, the exact repeat from the fast path) | 2.8, E1 to E5 |
+| (the reveal) | "That was your voice, by the way. Keep it, pick another voice, or go back to the default?" "Pick another" lists the stock voices with a one-line sample each. If the clone is not kept, the clip, the clone and every cache made from them are deleted at once; Eileen says it kept only the listening calibration (no audio), which "forget my voice" removes | 2.8 |
+| The box not ticked | The same demo in the default voice; nothing is recorded | 2.8 |
+| The PC too slow to clone in time | The normal tour in the default voice, and "Show me something cool" stays in the tray menu for later. When setup's timing already says so, nothing is recorded; when the lines miss the 40 s render limit after the recording, the clip and the clone are deleted at once. The tray choice later records afresh | 2.8 |
+
+### Roadmap spine: what moves
+
+ROADMAP.md keeps its milestones M1 to M6 as the spine, adding an M0 for the foundation WP0 builds. The October direction changes their content and pulls some later items into v0.1:
+
+| Item | Was | Now | Why |
+|---|---|---|---|
+| HUD with mute | v0.2 | v0.1: mute key and tray in M3 with slice S1 (WP2), the overlay in M3 (WP8) | The owner asked for mute one click away and a visual layer as part of the feel; the prior-art report lists a status surface as table stakes |
+| Resolve hook | v0.2 | v0.1, in M2 | The owner's first benchmark is a Resolve request; the Lua bridge already runs under a Rust supervisor on the owner's PC |
+| Learning loop | not planned | v0.1, in M4 | The owner's main point (2026-10-20) |
+| Dictation | not planned | v0.1, in M3 | Owner direction 2026-10-20 |
+| Voice cloning with consent, engine per voice (Pocket TTS, Chatterbox) | not planned | v0.1, in M3 | Owner direction 2026-10-20, including the Chatterbox head-to-head |
+| First-run surprise path | not planned | v0.1, in M3 and M6 | Owner direction 2026-10-20 |
+| Settings by voice, rename | not planned | v0.1, in M4 | Owner direction 2026-10-20 |
+| Community scenario corpus and test fleet | v0.3 evaluation loop | v0.1: capture and sharing with slice S1, the fleet in M6 | The owner's friends test on their own PCs now |
+| Claude plugin (handoff, display mod) | not planned | v0.1, opt-in, in M4 | Owner direction on Claude's extension points |
+| Phone channels (Telegram, ntfy) | v0.1 M5 | v0.2, as the first outward connector | The owner wants the whole PC first, then reach outward through connectors |
+| ML projects on the user's Colab | not planned | v0.2 connector, right after the main product; v0.1 reserves its job kind, `ml_project`, in the contracts (refused with one sentence until the connector exists, section 2.5) and keeps connectors pluggable | Owner direction 2026-10-20 ("ML projects end to end"); the route (Colab CLI or Colab MCP server) is chosen at v0.2 design time with a live test, per the Colab research report |
+| Codex, Grok, DeepSeek routes | v0.1 M4 (Codex) | slots in v0.1, built in v0.2 | Claude is the only v0.1 route; Codex is not installed |
+| Gemini | v0.2 | removed | No Gemini key; no permitted subscription route |
+| Linux | non-goal | v0.2 target; neutral crates tested on Linux from day one | Owner direction "Windows first, not Windows only" |
+
+### Proposed ideas: adopted now, scheduled later
+
+From the "Proposed 2026-10-20" section of OWNER-DIRECTION.md:
+
+| Idea | v0.1 | Later |
+|---|---|---|
+| Undo for everything | Adopted for what Eileen fully controls: window moves, volume, dictation insertions, settings, skills (rollback), job worktrees and in-place edits (snapshot refs), Resolve edits (Eileen's composition deleted and the previous one loaded, or the previous color version). Each action is journaled with its inverse; "undo that" reverses the last one or says honestly that it cannot | App-level undo inside other pro apps (v0.2) |
+| Visible intent | Adopted: HUD outline and label 400 ms before any click or keystroke on the user's screen; frame or crop confirmation before hard-to-undo edits | "Show me first" whole-plan preview (v0.2) |
+| Teach by showing | Scheduled | v0.2: "watch me do this" through Eileen's own hooks, same consent rules |
+| Discoverability | Adopted: "what can you do here?" by live introspection; two or three HUD suggestions from the same data; the first-run tour and surprise path | Richer tour (v0.2) |
+| Focus awareness | Adopted: quiet during calls, presentations, full-screen apps and screen recording (a running app from the recorder category of the app table, such as OBS, ShareX or Loom; Windows exposes no general "capture in progress" signal, so the list is honest about what it catches), announcements held and summarised afterwards; other media paused during approval questions | |
+| Plan-limit awareness | Adopted: rate-limit events drive a HUD chip, warnings before fan-out, routing small things to the fast model, and caps on the librarian by share of the plan | |
+| Accessibility | Adopted as a design rule with a test: every task works with no mouse (a test in `eileen-hud` fails if any clickable `HudInput` lacks a grammar entry or a hotkey, the first-run choices and consent included); speech rate and HUD scale are settings; everything on the HUD is also available by voice and from `eileen status` | Screen-reader exposure of the HUD (v0.2) |
+| Memory you can ask about | Adopted minimally: the episodic ledger records app, window title, document identity and focus time for 14 days, locally, searchable by the brain; an off-the-record mode records nothing | Page-content recall (v0.2) |
+| Routines | Scheduled | v0.2 |
+| Shared skills, opt-in | Scheduled; v0.1 lays the ground by turning trusted skills into local regression scenarios and offering to share those as tests | v0.3: signed packs, untrusted until verified locally |
+| Languages | Partly: multilingual dictation (Parakeet v3, on demand); typed requests in any language go to the brain; every speech stage, the brain backend and the worker driver report the languages they support as a `LanguageSupport` taken from the component itself (sections 2.8 and 3.3.8), so the later version discovers languages from the components instead of a fixed list (owner answer 21) | Spoken conversation in other languages, capability-driven with graceful fallback (owner answer 21) |
+| One-step install | Partly: `eileen setup` downloads and verifies models, checks the Claude CLI sign-in without touching credentials, creates the Start menu and sign-in entries and says hello; a nightly prebuilt zip (owner answer 5) | winget and a signed MSI (v0.2, needs a signing certificate) |
+
+## 2. The architecture as it will be built now
+
+### 2.1 Processes
+
+```
+ mic, speakers, system loopback      hotkeys, tray, Raw Input             HUD (eileen-hud.exe)
+      |                                  |                                      ^  JSON lines (stdio)
+      v                                  v                                      |
++--------------------------------------------------------------------------------------------------+
+| eileen.exe (core, always on; links nothing that can hang)                                         |
+|  audio thread: WASAPI capture, render and loopback, AEC (sonora), ring buffer, mute, ducking      |
+|  shell thread: tray, global hotkeys, Raw Input (dictation key, physical activity), toasts         |
+|  Core::step (sans-IO): turns, addressee, intent resolver, jobs, router, permission gate,          |
+|    approvals, announcements, barge-in, journal, admission, skill engine (ladder, replay)           |
+|  drivers (tokio): store (SQLite), bus, loopback HTTP (hooks, state, control), dispatcher,         |
+|    supervisor, learning store and librarian scheduler, settings, flight recorder                  |
++--------------------------------------------------------------------------------------------------+
+   | named pipe (frames)    | MCP stdio          | MCP stdio          | stream-json stdio      ^ named pipe
+   v                        v                    v                    v                        | (per-session token,
+ eileen-speech.exe     eileen-desktop.exe    eileen-apps.exe     claude -p (brain, spare,   eileen-shim.exe   checked PID)
+ VAD, ASR, end of      UIA, capture, input,  SMTC, Office COM,   pooled and job workers,    (one per Claude
+ turn, TTS, voices,    app index, windows,   Explorer, recents,  librarian, scribe)         session; serves the
+ speaker check,        DesktopState,         Resolve Lua bridge  |                          `eileen` MCP tools)
+ text embedding        text insertion        (fuscript.exe child) +-- HTTP hooks to the loopback endpoint
+ eileen-guard.exe (outside the Job Object): minidumps of crashed or hung processes, restarts a hung core
+```
+
+| Process | Contains | What a failure costs | Transport to the core |
+|---|---|---|---|
+| `eileen.exe` | Everything that decides, plus audio I/O, the ring buffer, the tray, hotkeys and Raw Input | Everything, so it links no UIA, no app COM, no ONNX Runtime and no web view; `panic = "unwind"` so a panicking task fails one job, not the process | n/a |
+| `eileen-speech.exe` | sherpa-onnx and ort sessions: Silero VAD, Nemotron streaming ASR, Smart Turn, Kokoro, Pocket TTS, Chatterbox when selected, speaker embedding, the intent embedding model if adopted | Recognition pauses; the core keeps capturing into its ring buffer and replays it after the restart; the HUD says "speech restarting" | Binary frames over a named pipe (section 3.3.7) |
+| `eileen-desktop.exe` | UI Automation on its own MTA thread with deadlines, window management and app launch on a separate thread, capture, input, the app index, DesktopState, text insertion | Grounding pauses; computer-use calls fail with a typed error and the job falls back or waits | MCP over stdio |
+| `eileen-apps.exe` | One STA thread per COM target, the SMTC manager, the recent-work index, the Resolve bridge as its child, YuNet and the sharpness metric | App hooks pause; desktop tools still work | MCP over stdio |
+| `eileen-hud.exe` | The overlay, the clickable strip, the live thumbnail | The overlay disappears and restarts; listening and work continue | JSON lines over stdio |
+| `claude -p` sessions | Brain (warm), hot spare, pooled worker sessions, one per bound job, the librarian, the optional dictation scribe | One job or one brain turn; the brain spare takes over | stream-json over stdio, plus HTTP hooks |
+| `eileen-shim.exe` | A small rmcp stdio server that each Claude session spawns from its generated MCP config; it forwards every tool call to the core's dispatcher over a named pipe | One session's tools | Named pipe with a per-session token; the dispatcher checks the caller's process |
+| `eileen-guard.exe` | Embark `minidumper` server, core heartbeat watchdog | Crash dumps are not written | Local socket |
+
+Rules (from the rust-architecture and observability reports, with the reviews' corrections):
+
+1. Every child starts through `eileen_supervisor` (process-wrap 10.0.1 with a kill-on-close Job Object, `CREATE_NO_WINDOW` and kill-on-drop). Clippy bans `Command::new` everywhere else, with three listed exemptions (section 4b.2): the build guard's cargo spawn, the guard's restart of a hung core, and the development tools `xtask` and `repo-tools`. The guard is the one child started outside the Job Object: it is spawned with `CREATE_BREAKAWAY_FROM_JOB` (falling back to a plain spawn when breakaway is refused, which matters only when Eileen itself runs inside someone else's job) and with its own null standard handles, so it survives the core. **Apps Eileen opens for the user are not its children.** `desktop_launch_app`, `apps_open_url`, `apps_open_uri` and `apps_open_path` start the app through `eileen_supervisor::user_launch`, which has the shell start it: packaged apps by AUMID through `IApplicationActivationManager` (the system starts them), everything else through `IShellDispatch2::ShellExecute` on the desktop's shell view, so Explorer is the parent. The app gets the user's normal environment (none of Eileen's variables), sits in no Eileen Job Object and survives a restart of the sidecar or of Eileen. Only when the shell route is unavailable (Explorer not running) does the sidecar fall back to `CREATE_BREAKAWAY_FROM_JOB`, which only the desktop and apps sidecars' Job Objects allow (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`); a worker's Job Object never allows breakaway, so nothing a worker starts itself can leave its job. This is what lets a Claude app that Eileen opened start the plugin's session shim outside every Eileen job (section 2.12), and lets `eileen say` run from a terminal Eileen opened.
+2. Every call to another process has a deadline, and every sidecar has a heartbeat. A UIA call that passes its deadline (default 5 s) first gets its thread abandoned: the desktop server starts a fresh MTA thread with a fresh `IUIAutomation` instance and answers the caller with a typed error. Only after three abandoned threads in ten minutes, or a missed heartbeat, is the sidecar hang-dumped by the guard, killed and restarted. One UIA call on this PC blocked for 38.7 minutes, far past UIA's own 20 s timeout, which is why this rule exists; a kill and restart costs 6 to 8 s plus the app index, which is why the thread is abandoned first.
+3. Sidecars and Claude sessions are long-lived. Spawning per request costs seconds on this PC (bare Python 4.5 to 6.9 s, claude cold start 11 to 111 s under load), which is why workers come from a warm pool where memory allows (section 2.5).
+4. Stdout carries the protocol; stderr carries logs, which the supervisor forwards into the core's tracing.
+5. Separate binaries, so an agent working on UIA never links the speech stack and a HUD change relinks only `eileen-hud`.
+6. At startup each process opts out of EcoQoS execution-speed throttling (`SetProcessInformation` with `ProcessPowerThrottling`), and audio threads register with MMCSS. Without the opt-out one Kokoro run took 27.8 s instead of 2.4 s.
+7. Claude sessions run in Job Objects at `BELOW_NORMAL_PRIORITY_CLASS`, so a worker's build never starves the voice loop, and are started only through memory admission (section 2.5).
+8. "Start at sign-in" is an `HKCU\...\Run` entry that `eileen setup` creates on request, never a Task Scheduler task (a task's default 72-hour execution limit would stop an always-on process).
+
+### 2.2 One request, end to end
+
+1. **Audio.** The core's audio thread captures 48 kHz from WASAPI in 10 ms buffers, resamples to 16 kHz mono, and runs sonora's AEC3 with the system loopback capture of the default render endpoint as the far-end reference: that is the mix the speakers actually play, including Eileen's own voice and any video or music, so a YouTube clip playing beside Eileen is cancelled too. Eileen's own PCM stays as the fallback reference when loopback is unavailable. When the loopback signal has been silent for 500 ms, AEC3 is bypassed (noise suppression and the high-pass filter keep running), which keeps idle cost low. The audio thread also derives "other audio is playing" from loopback energy that Eileen's own stream does not explain. Frames of 32 ms (512 samples) go to the ring buffer and the speech pipe. Muted means the capture stream is stopped, not that samples are discarded.
+2. **Speech.** `eileen-speech` runs Silero VAD on every frame (one thread, 300 ms pre-roll). While VAD reports speech it feeds Nemotron and streams partials. On 200 ms of silence it runs Smart Turn on the last 8 s and fuses the result with transcript continuation cues and a silence cap (1.2 s, stretched to 2.5 s when the partial ends on a continuation word) into an end-of-turn event carrying the final transcript and the recognizer's confidence. The speech process mints the `turn_` ID at the first speech onset after the previous end of turn.
+3. **Addressee gate** (core, local, no model), section 2.8: the assistant's name; an open question or approval; the conversation window (8 s after Eileen speaks, 45 s while the user is engaged), inside which commands and replies pass and every other unnamed utterance needs the local addressee score, suspended while other audio plays (media-control and stop words excepted) and while another app uses the mic, when only the name counts and Eileen stays silent; a full match in the command grammar; and, when the user is alone, a local score for unnamed requests about the screen, with the brain allowed to answer "not for me". Anything else is shown greyed on the HUD for a few seconds, never stored, and "that was for you" runs it.
+4. **Intent resolver** (`eileen-intent`, section 3.3.10), layered so it stays instant where it can:
+
+| Layer | What it does | Latency budget | When it answers |
+|---|---|---|---|
+| L1 grammar and learned templates | Deterministic grammar for Eileen's own verbs (safety and control phrases first, then the built-in grammar, then learned skill templates) with typed slots | under 1 ms (measured matcher: 4 to 6 us median, under 1 ms p99 at 5,000 skills) | A full match in which every content word is accounted for and every slot resolves unambiguously |
+| L2 local semantic matcher | BM25 over skill names, descriptions, triggers and stored phrasings, plus cosine similarity from a small local embedding model run in the speech process: a MiniLM-class transformer if it meets its budget, otherwise a static-embedding model that always does (section 3.3.10) | under 25 ms including the embedding round trip | Hints into the brain's context; a confirmed phrasing runs directly only when its target has no slots |
+| L3 brain | The warm Claude session with live context (focused app, its tree summary, selection, jobs, user facts, L2 hints) and the `act` tools | first text 1.0 to 1.5 s quiet, 2.2 to 4.2 s busy | Everything else |
+| L4 worker | When no capability exists yet, the brain dispatches a worker that figures it out; the learning loop turns the result into a skill that feeds L1 and L2 | seconds to minutes | New capabilities |
+
+   Unclear requests get one short clarifying question, never an error: the resolver returns `Ambiguous` with the options, the core asks, and the answer resolves through the open question. "What can you do here?" is answered by introspection (section 3.3.10), not from a static list.
+5. **Fast path** (L1 hit): the core emits the action as a tool call through the same dispatcher and permission gate a worker uses, and replies from the phrase cache.
+6. **Brain** (L3): an earcon within 150 ms; the core sends one stream-json user message with the context blocks; text streams back, is cut at clause boundaries and spoken; tool calls run deterministic actions (`act`) or start workers (`jobs_dispatch`).
+7. **Workers** run in parallel as jobs, bound to a pooled session when one is free. Their narration, approvals and completions come back as events; the announcement policy decides when anything is spoken.
+8. **Learning**: every tool call from every origin is recorded at the dispatcher; fast-path commands and brain turns that ran `act` tools are wrapped in lightweight jobs of kind `Act`, so every action has a job; when a job ends, a 120 s regret window listens for "no", "undo that", "that's wrong", a retry or praise, attributed only when it is clear which job the words are about (section 2.10).
+
+### 2.3 The brain
+
+A warm `claude -p` process on the owner's plan, started when Eileen starts, with a hot spare started once the first is ready (`brain.hot_spare = true`; dropped automatically under memory pressure, section 2.5). Flags, from the subscription-harnesses, brain-latency, claude-mods and learning-loop reports and the reviews:
+
+```
+claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages
+  --model <full id resolved from routing.brain's model alias> --effort low
+  --system-prompt <brain prompt, under 1,500 tokens>
+  --tools "" --allowedTools "mcp__eileen__*"
+  --strict-mcp-config --mcp-config <run\brain\mcp.json>       (only the eileen shim, toolsets brain and act)
+  --setting-sources "" --settings <run\brain\claude-settings.json>
+  --no-session-persistence --no-chrome [--restricted]         (--restricted if WP3's test passes; the brain has no built-in tools anyway)
+environment: constructed allowlist (section 2.12); ENABLE_CLAUDEAI_MCP_SERVERS=false; CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+settings file: {"alwaysThinkingEnabled": false, "disableSkillShellExecution": true}
+```
+
+Never `--bare` (it drops subscription sign-in) and never `--safe-mode` (it suppressed `--mcp-config` servers in tests). `--no-chrome` keeps the account-level Claude in Chrome connection away from Eileen's sessions unless the user opts a worker in. Connectors are off: with claude.ai connectors and user MCP servers loading, warm turns were two to four times slower. **Model names are aliases in config, never in code** (owner direction; decision D53 amends D20): `routing.models` maps Eileen's own names to a vendor alias or a full id (`fast = "haiku"`, `mid = "sonnet"`, `strong = "opus"` by default), and every other key names a model through those names. Because vendor aliases drifted between CLI builds, the harness resolves each alias to a full id at start and whenever the installed CLI version changes (a one-turn probe session per alias, read from `system/init`, cached per CLI version in `run\models.json`), passes only full ids on command lines, and records the resolved id beside every timing, so a drift shows up as a changed id in the benchmark results instead of a silent change. A better model is a config line; a better backend is a plug-in behind `BrainBackend` or `WorkerDriver` plus a config line. Every flag Eileen passes is listed in one constant in `eileen-harness`, which the nightly CLI drift job checks against `claude --help` of the pinned and the latest CLI (section 4.6).
+
+**Thinking off, measured.** Thinking must be off for the brain. WP3 tries, in order, `alwaysThinkingEnabled: false` in the settings file, `MAX_THINKING_TOKENS=0` in the environment, and `--effort low` alone, records time to first text for each with the resolved model id beside every number, and keeps the first that works. The brain-latency report measured the `haiku` alias (which resolves to Haiku 5.5 on 2.1.304) at 1.0 to 1.5 s to first text on a quiet run, so the earlier worry of about 10 s of thinking before the first word stands only if WP3 reproduces it. Decision rule: if no Claude model reaches first text in about 2 s on a quiet PC, `eileen doctor` says so and the brain stays on the fastest one measured; Haiku 4.5 is a stopgap only, since it is deprecated.
+
+**Turn input.** One user message per turn, built by the core, with blocks appended after the cached prefix so prompt caching keeps working:
+
+```
+[assistant] name Nova; personality "dry, brief"; verbosity one_sentence; humor 2 of 5      (settings, so changes apply next turn)
+[heard]     what the user said (final transcript); after a barge-in, [interrupted] and the exact prefix they heard;
+            [addressee: unsure] when the local gate passed it on a score
+[desktop]   monitor 1 (1920x1200, 144 dpi): DaVinci Resolve "Beach Edit - Color" (foreground)        <- untrusted text is fenced
+            focused: none; selection: none; recent: window Resolve, job beach-face
+[jobs]      * beach-face  computer use  Claude  running 2m  "adding a sharpen mask"   (focus)
+              login-tests coding        Claude  done 1m ago "3 of 3 pass"
+[match]     resolve-sharpen-face v3, level 3 recipe; slots t=930 which=right amount=default
+            (to run it: jobs_dispatch kind replay, skill resolve-sharpen-face, these slots)
+[hints]     known skills that may apply: resolve-sharpen-face (trusted, 4 uses)
+[facts]     "the video editor" means DaVinci Resolve; Resolve timelines start at 01:00:00:00, 24 fps
+[context]   2026-10-21 14:02, Tuesday; location: Austin (set by the user); depth: auto; plan: 41 percent of 5 h window
+```
+
+Caps: windows 12, selection 300 characters, jobs 8, match 1, hints 3, facts 8, ledger lines 6; the whole block stays under about 1,200 tokens (600 for desktop and jobs, 600 for learning). Window titles, selected text and anything else read from the screen or a page sit inside a fenced, labelled data block the prompt tells the brain never to follow as instructions. The `[match]` block appears only when L1 matched a level-3 template (section 2.10): it carries the skill, its version and the slots the Rust slot resolvers extracted, and the dispatcher accepts a `Replay` dispatch only with exactly that skill and those slots.
+
+**Turn authority.** A turn that began with addressed user input (the microphone after the addressee gate, typing in Eileen's own UI, the HUD), or one of the first-run demo's fixed requests in Eileen's own code, gets the brain's full toolset. A turn that began from a job event, an announcement, the `eileen say` command line or a Claude session gets read-only tools only (`jobs_status`, `desktop_state`, `hud_show`, `learned_query`); the dispatcher refuses the rest with a message the brain can relay. So text that reaches the brain through a job result or a window title can never start a job, change a setting or act.
+
+**Turn output.** The brain prompt asks for spoken style: at most two sentences (or what `assistant.verbosity` says), then optionally a line `---hud---` followed by Markdown for the screen. The streamer speaks everything before the marker clause by clause and sends the rest to the HUD. If the brain decides the utterance was not meant for Eileen (it was passed on with `[addressee: unsure]`), it answers only `---ignore---`, nothing is spoken and the HUD greys the line. Actions are tool calls on the `eileen` MCP server, toolsets `brain` and `act` (section 3.3.9).
+
+**The brain can act, but never with the mouse.** The `act` toolset holds the deterministic tools that never move the mouse or type: `desktop_launch_app`, `desktop_window`, `desktop_volume`, `apps_open_url`, `apps_open_uri`, `apps_open_path`, `apps_media`, `apps_recent`, and the navigation and render ops of `apps_resolve` (hello, timeline information, projects and timelines, go to, open a page, markers, render start and status). They go through the same dispatcher, permission gate and recorder as everything else, so their per-call tiers apply (a render that would overwrite a file, or opening a script, still asks). This is how "get Premiere up for me" or the first steps of the Resolve benchmark run in about 3 s instead of waiting for a worker. Each brain turn that runs `act` tools is wrapped in a job of kind `Act` (no session, silent, ending with the turn), so it gets a trajectory, the regret window and undo, and the phrasing loop of section 2.10 learns from it. Clicks, typing, drags, key presses and every edit are worker jobs.
+
+**Depth tiers.** Instant (L1 or cache, no model), quick (the brain alone), considered (a worker on the mid model with light thinking), deep (a worker on the strongest model with thinking and web research). The brain picks by calling `jobs_dispatch` with `kind = "deep_answer"` and a depth; "quick answer" and "think hard about this" are L1 overrides that set the depth before the brain sees the turn.
+
+**Two speeds.** For considered and deep questions the brain answers at once with what it knows and dispatches the deep job in the same turn. The brain prompt forbids stating current facts (opening hours, prices, news) without a source: the fast answer says what it is checking instead. When the deep answer lands: if the user is not speaking and has not moved to an unrelated topic (no new turn for 20 s, or the new turns are about the same job), two sentences are spoken ("Better answer: ...") and the full answer goes to the HUD; otherwise only the HUD changes and a short line waits for a pause. The user never hears both answers in full (simulation invariant 11). By default one deep worker runs several web searches and fetches in parallel within one turn; splitting into several research sessions plus a combiner happens only when memory admission allows it and the brain passes sub-questions.
+
+**Context makes it right.** Location is opt-in and local (`privacy.location`, set by voice: "I'm in Austin"; reading Windows' location service is v0.2). Time comes from the PC; preferences and past choices come from the user model, and which sources gave accepted answers for each kind of question from the source statistics (section 2.10 item 11); what the user is doing comes from DesktopState. Slow-changing results (opening hours, a restaurant list) are cached with an expiry in `learn.sqlite`, keyed by the deep answer's `topic`, and reused for follow-ups ("closer"). **Anticipation** (looking things up before the user asks) is `anticipation.enabled`, off by default because it spends plan limits. When the user turns it on and the five-hour plan window is under 50 percent, the brain may dispatch, after a deep answer lands, at most one more `deep_answer` job marked `anticipated` for the follow-up it expects; its result goes only into the answers cache and a one-line "also looked up" on the HUD, and is spoken only when the user asks. The core enforces the cap (one per deep answer, none above the plan threshold); WP1 builds the policy and WP3 the prompt line.
+
+**Lifecycle.** The session serves many turns. The core recycles it when the context reported in the `result` usage passes a threshold (default 60,000 tokens), after a forget whose skill, fact or job appeared in the session's turns (so forgotten text leaves its context), or after a crash; never on idle time, and never for a new phrasing, a phrasing confirmation, a new fact or a new skill version, because those live in the resolver and reach the brain through the next turn's `[match]`, `[hints]` and `[facts]` blocks. In the low-memory profile, with no hot spare, a recycle is a cold start of 39 to 48 s, which is why it is kept this rare. The spare takes over with a summary of at most 300 tokens of the conversation, and a fresh spare starts. A crash, or a turn with no stream event for 30 s, swaps to the spare at once; the 30 s stall timer is paused while one of the brain's own tool calls is in flight at the dispatcher, because time spent in Eileen's tools is not a stalled model. Act tools carry their own deadlines so a turn cannot hang on them: `desktop_launch_app` from the brain waits at most 10 s for the main window and otherwise returns `{ started: true, main_window: false }`, after which the core holds any follow-up window action on that app until its main window appears (from `DesktopDelta`) and says "Resolve is ready" when it does; `apps_resolve` ops wait for the bridge's `hello` up to 60 s, with "Resolve is starting" spoken by the core after 3 s. If the user speaks again while a turn is running, the core sends a `control_request` interrupt and a new turn holding both utterances. Speculative turns on the spare from a stable partial are an opt-in experiment WP3 measures (`brain.speculative = false` by default), because they spend plan and occupy the spare that guards against a crash.
+
+**The brain is swappable; Claude is only the default** (owner direction 2026-10-20). Everything above talks to the `BrainBackend` trait (section 3.3.8), built through `brain_for(route, cfg)`, which returns `RouteUnavailable` for every route v0.1 does not build. The conversational brain and the deep workers are configured separately: `routing.brain` and `routing.deep` each name a backend route and a model name, and `routing.fallback_brain` names the backend a stalled turn falls back to (Claude by default); all three change by voice ("use DeepSeek for conversation") or in the file, through the settings flow with "undo that", and all three are Safety keys because a different backend sends the conversation to a different vendor. In v0.1 only Claude is built; Codex, DeepSeek, Grok and a local model are slots. Before a switch is applied, the settings flow runs the brain benchmark (`CheckKind::BrainBenchmark`, the same runner as `eileen bench brain` and benchmark B10 in section 4.7: time to first spoken word over 20 turns, the right action on the brain cases of the resolver golden file, and interruption handling) for the candidate and the current backend, and warns in one sentence when the candidate is more than 25 percent slower to the first word or more than 5 points worse on the right action. If the chosen brain stalls on a turn (the rule that swaps to the spare), the core interrupts the primary (`BrainCmd::Interrupt { slot: Primary }`) and re-sends the same turn to the `Fallback` slot when `routing.fallback_brain` differs from the primary (starting it with `Start { slot: Fallback }` if it is not running), otherwise to the `Spare`, followed by `Promote`; the reply comes from there. Every `BrainEvent` carries the instance of the process that produced it, and the core accepts a turn's text only from the instance it last sent that turn to, so a late `TextDelta` from the stalled primary is dropped and counted, never spoken (invariant 15). A simulator scenario with a stalling fake backend that wakes up and sends its answer after the fallback has started proves it.
+
+**Plan usage.** The harness parses the stream's rate-limit events into `PlanUsage` bus events. Above 80 percent of the five-hour window the HUD shows a chip, fan-out above two workers asks first, and considered questions drop to quick unless the user asked for depth. Eileen never silently burns the allowance: the librarian has caps by share of the plan (section 2.10), and the nightly lanes have their own turn budget.
+
+### 2.4 The deterministic fast path
+
+L1 of the resolver. The grammar lives in `eileen-intent` as data: a table of patterns with typed slots, each producing a tool call or a core command. Utterances are normalised (lower case, fillers dropped, spoken numbers and times parsed by the slot resolvers `Offset`, `Count`, `Text`, `App`, `File`, `Url`, `Media`, `Position`, `Choice`, `Monitor`, `Voice`, `Name`, `Depth`). A slot resolver returns `Ambiguous` instead of guessing: a bare "go to 15" with no unit is "15 seconds, 15 minutes or 15:00?", never silently 15:00.
+
+Precedence, first match wins:
+
+1. **Safety and control**, which nothing learned can shadow: mute, unmute, stop, cancel (a job by name, ordinal or "that"), "go on" and "continue", "that was for you", "undo that", "that wasn't a fact" (undoes only the fact or alias the fact path stored last, within 120 s, and says so when there is none), "forget that", "something went wrong", "save that as a test", "stop recording", "off the record", "pause the agents".
+2. **Built-in grammar**: pause, play, next, seek ("go to 3:20" when media or Resolve has focus), "play <known media> [on YouTube] [at <time>]" (resolved through the media history and the recent-work index), open app, close app (tier 2 when unsaved state is unknown), move or snap a window to a side or a monitor, volume ("turn it up", "turn it down a bit"), "open the file I was working on" (a core command: `apps_recent` for documents, then `apps_open_path` on a confident match, or a contact sheet when two stay close), "what time is it", "how's it going" (reads the jobs block), "what have you learned", "what do you know about me", "learn from that now", "record this session", "use <voice>", "use <engine> for <voice>", "back to normal", "forget my voice", "call you <name>", "take dictation", "stop dictating", "quick answer", "think hard about this", "show me how you do that", "what can you do here", "show me agent <n>'s changes", "start it anyway" (admits a job queued for memory, section 2.5), "fix it" (runs the fix an error offered, section 2.13), "add that server" and "show me route suggestions" (section 2.5), "explain that" (section 2.13), and "about you" or "what are you built on?" (the about panel, section 2.9). The fact phrases of section 2.10, each turned into a fact with no model, said back with "Noted" and undoable, and matched only as a single declarative statement with a known subject (the bounds of section 2.10 item 11, so "my tests are failing, fix them" goes to the brain): "remember that <text>", "no, <phrase> means <thing>", "my <thing> <is | are | starts at> <value>", "I like | I prefer | I don't like <thing>", "I loved that [place]", a refinement word alone right after an answer ("closer", "cheaper", "quieter", "bigger", each entry naming its dimension and holding the word's opposite too), and "forget that I <text>".
+3. **Learned templates** (section 2.10): a level-4 match replays at once; a level-3 match goes to the brain with a `[match]` block, and the brain confirms intent by dispatching a `Replay` job with that skill and those slots; level-1 and level-2 matches become hints. **Phrasings** (section 2.10) run here too: an exact repeat of a phrasing candidate, confirmed or not, runs its slot-free call at once, a confirmed phrasing runs its slot-free call, and a slot alias resolves; paraphrases of a phrasing are L2's, and only once it has `learning.phrasing_paraphrase_uses` clean uses.
+
+A full match must account for every content word: each non-filler token is a literal, a slot, or a known descriptor that maps to a slot. "Go to 15:30 and make the face of the girl on the right less blurry" is therefore not a fast-path command (it goes to the brain, which can act on the first half and dispatch the rest), and an unknown descriptor ("the girl", "red shirt") turns a learned-template hit into a hint. Replies come from the phrase cache: stock phrases synthesized once per voice into PCM, plus templates whose variable part is one short clause ("Opening <app>."), with the launch phrase of every indexed app rendered in the background after indexing.
+
+### 2.5 Workers, routing and jobs
+
+**The driver trait.** Every worker route implements `WorkerDriver` (section 3.3.8). v0.1 implements the Claude driver only. The Codex app-server driver and the generic ACP driver (for Grok's `grok agent stdio` and others) are designed slots: the trait, the mapping table and the configuration keys exist, and constructing them returns `RouteUnavailable` until v0.2. DeepSeek is designed as the Claude driver pointed at DeepSeek's Anthropic-compatible endpoint with its own `CLAUDE_CONFIG_DIR` and the one permitted API key from the system keyring, text only unless the user allows images; it is off in v0.1. Gemini is not a route.
+
+**Sessions and jobs.** A driver starts a *session* (`SessionSpec`: model, toolsets, plugin snapshot, working folder for non-coding kinds) and later *binds* a job to it (`JobBinding`: the task, the matched skill, the facts). Hooks and the shim identify the session by a `ws_` ID and a token minted at spawn, and the core maps session to job when it binds, so a pre-started session can take a job. Coding jobs start their own session in their own repository; everything else can come from the warm pool.
+
+**The warm pool.** One `computer_use` session (default model, desktop and apps toolsets) and one `deep` session (strongest model, web tools, used for deep answers and research), started after the brain and its spare, re-armed after use, recycled after a learned skill changes, and dropped under memory pressure. Binding a pooled session costs one user turn instead of a cold start (11 to 111 s measured under load). Pool sizes are settings (`memory.pool_computer_use = 1`, `memory.pool_deep = 1`), and `memory.pool_order` (default: deep, then computer use) says which one is kept when only one fits, because a deep answer is the request the owner asked to arrive in tens of seconds and the user is waiting in conversation for it. The computer-use pool session is started only by admission rule 2 below; the deep pool session may also start by rule 3 (paging low for 30 s) when no job is queued, and it is the last pooled session dropped. Even so, on the owner's PC under typical load the pool often does not exist and workers start cold; the HUD shows "pool: none (memory)" and the narration says "starting a worker, this takes about a minute" instead of pretending to be warm, and a deep answer then takes about one to two minutes (section 4.3), which section 7 lists as a v0.1 limit. WP3 and WP9 record, on the owner's PC with his usual apps open, whether each pool session fit and by which rule.
+
+**Memory admission** (decision D54). The runtime samples memory every 5 s into `Input::Memory` (`MemoryPressure`, section 3.3.2): available physical memory (`GlobalMemoryStatusEx` `ullAvailPhys`, which counts the standby list as available), commit headroom (commit limit minus commit charge), the hard-fault paging rate over the last 30 s (`\Memory\Pages Input/sec` through PDH, in KB/s) and the largest non-Eileen process. The core holds a cost estimate per job kind, measured rather than guessed: a Claude session starts at 400 MB and then uses the median peak private working set of the last ten sessions of that kind; a build-heavy coding job adds its build slot, which the build guard admits on its own. A job is admitted by the first rule that holds:
+
+1. Never when commit headroom after the estimate would fall under 1 GB (an out-of-commit failure would crash processes, Eileen's included).
+2. At once when available memory after the estimate stays at or above `memory.reserve_mb` (default `auto`: 10 percent of physical memory, at least 768 MB and at most 2 GB, so 1.6 GB on the owner's 16 GB PC).
+3. When the paging rate has stayed under `memory.max_paging_kb_s` for 30 s: Windows can then trim idle working sets (a background browser tab, an idle editor) without thrashing. After a start by this rule the core admits nothing else for 30 s and re-reads the paging rate. The default is `auto`: the runtime keeps 30 s paging averages for 7 days in a machine-wide file, `%LOCALAPPDATA%\eileen\machine\paging-30s.jsonl` (like the build slots, it ignores `EILEEN_DATA_DIR`, so a fresh data directory for a test, a benchmark or the M6 demo still uses what this PC has learned), and once an hour uses the 75th percentile plus 25 percent of the windows no build slot held, clamped to 2,000 to 40,000 KB/s; until such windows cover a day it uses the build guard's baseline slot-0 limit from `buildguard.toml` (the same formula over the W0 baseline day, under the same clamp), and 5,000 KB/s only when neither exists. The file's line format, the rule that keeps two runtimes from writing one window twice, the `buildguard.toml` keys and the computation itself are all in `eileen_buildguard::samples` (section 6.1), and only a runtime reading real memory writes the file. By construction about three typical 30 s windows in four pass (more with the 25 percent margin) and a thrashing one does not; on the owner's PC, whose one live read averaged about 19,400 KB/s with peaks near 25,800 KB/s, the learned value should land well above the old 20,000 ceiling, which is why the ceiling is 40,000. WP3's admission record (acceptance 3), taken in W2 on the full runtime once WP1's admission rules and WP2's sampler have merged and the machine-wide file holds a day, checks that rule 2 or 3 admits a cold worker under typical load with the `auto` value; if it does not, an amendment sets the defaults before WP7 and WP9 depend on them.
+4. When the user says "start it anyway" (or clicks it on the HUD) for that queued job: one admission from addressed user input that skips rules 2 and 3, never rule 1.
+
+Otherwise the job waits in `queued` with one spoken reason that names the biggest user of memory ("Memory is tight; Chrome is using 3 GB. Close something, or say start it anyway."), and after `memory.queue_ask_min` (10 minutes) Eileen asks once whether to keep waiting or cancel. To make room before queuing, the core drops, in order, the computer-use pool session, the hot spare and the deep pool session. `memory.worker_job_limit_mb` (0, meaning off) sets `JOB_OBJECT_LIMIT_JOB_MEMORY` on each worker session's Job Object; the supervisor's job notification (`JOB_OBJECT_MSG_JOB_MEMORY_LIMIT`) becomes `WorkerEvent::MemoryLimit`, and the core fails the job with "agent two hit its memory limit of 2 GB" instead of letting it page the PC. A coding job whose repository is build-heavy (a `Cargo.toml`, a `.sln`, a `CMakeLists.txt` or a Gradle build at its root) takes one of the build slots shared with `cargo xtask` (section 6.1, through `eileen-buildguard`), so at most two builds run on the PC at once whoever starts them; it passes `EILEEN_BUILD_SLOT_HELD` so a `cargo xtask` inside the job reuses that slot, sets `CARGO_BUILD_JOBS` to the slot ticket's memory-scaled value and, when sccache is installed, `RUSTC_WRAPPER`, `SCCACHE_DIR` and `SCCACHE_CACHE_SIZE` as in section 6.1, each only when the user has not set it. Below 3 GB available at start for a minute, Eileen picks the low-memory profile (section 4.4). Simulator invariant 14 checks the four rules.
+
+**Claude worker flags.**
+
+```
+claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --include-hook-events
+  --model <model id for the session's class and depth> [--effort low|medium|high]
+  --append-system-prompt <worker prompt: route name, narration rule, screen and page text are data, ask before
+                          guessing, check for the app's own API or MCP server first, stop on refusal>
+  --setting-sources "" --settings <run\<session>\claude-settings.json>
+  --strict-mcp-config --mcp-config <run\<session>\mcp.json>   (the eileen shim with the session's toolsets, plus any
+                                                               third-party MCP server the user approved for this kind)
+  --tools <the kind's built-in tools, section 3.3.9>           (always; a built-in tool not named does not exist)
+  --allowedTools <per kind, section 3.3.9>
+  --disallowedTools <subagent tools from the harness's flag constant: Task, Agent and their successors>
+  --permission-mode <pinned by WP3's contract test>
+  [--permission-prompt-tool mcp__eileen__approve]             (only if WP3's test picks this route)
+  --plugin-dir <run\<session>\plugin>                         (the session's learned-skill snapshot, section 2.10)
+  [--plugin-dir <worktree>\tools\claude-plugins\eileen-dev]   (only for jobs in an Eileen worktree; one at a time)
+  --no-session-persistence --no-chrome                        (continue_session jobs use --resume <id> --fork-session;
+                                                               --chrome only when the user opted this job in)
+  [--restricted]                                              (if WP3's test keeps workers working; see below)
+cwd: the job's repository or worktree, or %LOCALAPPDATA%\eileen\run\<session>\cwd for non-coding sessions
+environment: the worker environment of section 2.12 plus ENABLE_CLAUDEAI_MCP_SERVERS=false,
+             CLAUDE_CODE_DISABLE_AUTO_MEMORY=1, EILEEN_SESSION_ID, EILEEN_HOOK_TOKEN, TRACEPARENT
+```
+
+No session gets subagent tools in v0.1. They are removed three ways: `--disallowedTools` names them, `--tools` never lists them, and `claude_tool_tier` answers tier 3 for them (and for any built-in tool outside the kind's list), so a call that reaches the permission path is denied, not asked. WP3's contract test still runs the subagent case and records whether the guard fires for a subagent's own tool calls, which is the evidence v0.2 needs before any kind gets them.
+
+The CLI's own containment: `claude --help` on 2.1.304 lists `--restricted`, which removes the code-running tools (Bash, PowerShell and others) and `WebFetch` unless `--tools` names them, ignores user, project and local settings files (`--settings` still applies), confines the file tools to the working folders (`--add-dir` included), refuses `bypassPermissions`, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. WP3 tests it for every session kind (with `--tools` naming exactly the kind's built-in tools, and `--add-dir` for toolchain folders coding jobs read); if it keeps workers working, it becomes the default for every session Eileen starts, as a second fence behind Eileen's own path guard. `--permission-prompt-tool` is no longer listed as a flag on 2.1.304, though `--permission-prompts host` still names it; `--session-id` lets Eileen choose the Claude session id at spawn, which WP3 uses to tie the CLI's own session to the `ws_` id.
+
+The per-session settings file holds `disableSkillShellExecution: true` and the HTTP hooks of the claude-mods report: `PreToolUse` to the tier guard with `onFailure: "block"` and a 10 s timeout, `PermissionRequest` to the approval endpoint (section "Approvals" below), plus `PermissionDenied`, `PostToolUseFailure`, `Notification`, `SubagentStart`, `SubagentStop`, `Stop` and `StopFailure` to the loopback bus, each with an explicit timeout (the HTTP default is 600 s). The bearer token and session ID travel in the worker's environment (`EILEEN_HOOK_TOKEN`, `EILEEN_SESSION_ID`) and are interpolated through `allowedEnvVars`, so they never sit in the file. The guard answers no decision for tiers 0 and 1, `ask` for tier 2 and `deny` for tier 3; it never answers `allow`, and with `onFailure: "block"` a dead Eileen stops risky work instead of waving it through.
+
+**Narration.** The worker prompt asks for one line starting with `> ` before each significant step. The harness turns those lines into `JobNarration` events; the core speaks at most one line every 20 s, only for the focus job, only when the user is not speaking and not in a call, only lines of 12 words or fewer, and always attributed ("Claude: ..."). Lines that ask for an approval or a credential are dropped and logged. Everything else goes to the HUD.
+
+**Routing.** Policy is TOML (section 2.11): each job kind maps to a route, a model id and a depth. v0.1 defaults: every kind goes to Claude; quick uses the fast model, considered the mid model, deep the strongest. Spoken overrides beat policy at once ("use the strongest model for this", "send this to a stronger model", later "send this to Codex") and are recorded on the job with the words that caused them. "Why did you do that?" is answered from the recorded `router.decide` reason.
+
+**Fan-out.** `jobs_dispatch` takes `fanout` (1 to 8) and `mode` (`compete`: every worker gets the whole task; `split`: the brain supplies one sub-task per worker). Children get ordinals in accept order, so "agent two" resolves. For coding jobs each child gets its own git worktree under `%LOCALAPPDATA%\eileen\worktrees\<repo-hash>\<job-slug>` on a branch `eileen/<job-slug>` created from the user's current branch. The repo comes from the utterance, the focused editor's folder, or a `project` fact; if none fits, Eileen asks once and remembers. "Show me agent two's changes" puts the diffstat and test results on the HUD; a compete run ends with one spoken sentence on how the results differ. Optionally a Windows Terminal pane per worker runs `eileen jobs tail <id>` (tier 1). Merging a worker branch into the user's branch is local and tier 1; removing a worktree that holds unmerged commits, and any push, are tier 2.
+
+**One coding job edits in place.** A single coding job works in the user's checkout, after recording a snapshot (`git stash create` plus the current HEAD, kept as a ref under `refs/eileen/`) so "undo that" restores exactly what was there. It uses a worktree instead when the user's uncommitted files overlap the files the task names, or when several agents run.
+
+**Jobs.** The registry is SQLite (`eileen.db`, section 2.15). States: `queued`, `running`, `blocked`, `awaiting_approval`, `completed`, `failed`, `cancelled`, `interrupted` (after a core restart). Every job ends in exactly one terminal state. Names are two to four words generated at accept time and never regenerated after the user has heard them; slugs are collision-checked against seven days of jobs. Pronoun resolution, first match wins: an explicit name, slug or ordinal; a kind word ("the render"); a route word; the focus job; the most recent; two remaining candidates mean one question; "it" right after an announcement means the announced job.
+
+**App tasks.** `JobKind::AppTask` is a job the core runs with no Claude session. Two things create one. A render started through Eileen: "render it with the YouTube preset" goes to the brain, which calls `apps_resolve` `render_start` from its `act` tools (a worker may call it too); when the call returns `{ render_job: <Resolve's render job id> }`, the core opens an AppTask job named "the render" that tracks it. A render the user started in Resolve: while the bridge is up, the apps sidecar polls `is_rendering` every 5 s (and at once when a turn mentions a render), and when it turns true with no AppTask tracking it, it emits `AppEvent::RenderStarted` and the core opens the job. While a render runs, the sidecar polls `render_status` every 2 s and emits `RenderProgress` and finally `RenderDone`; the core stays sans-IO and only reacts. Progress becomes `JobProgressed` with a percent, so "how's the render?" and "the render is at 60 percent" work, and "stop announcing progress on renders" has a row to change.
+
+**General jobs.** `JobKind::General` is for tasks that mix files and apps (download, unzip, rename, then attach): a computer-use session that also gets `Bash`, `PowerShell`, `Read`, `Edit` and `Write` under the path guard and the shell policy of section 2.12. The brain picks it when a task needs both.
+
+**Reserved: ML projects.** `JobKind::MlProject` (`ml_project`) is reserved in the contracts for the v0.2 Colab connector (owner direction "ML projects end to end"), so adding the connector later changes no pinned wire shape. In v0.1, `JobKind::built_in_v0_1` is false for it and the dispatcher refuses a `jobs_dispatch` of that kind before routing or admission, with a `UserError` of kind `JobKindUnavailable` returned to the brain as the call's error result: its sentence says ML projects on the user's Colab come in the next version and offers a research job on what already exists (models, datasets and their licences), which is the first step of the owner's flow and runs today as a `research` job. No session, built-in tool list or pool class exists for the kind in v0.1. The v0.2 design picks the Colab route (Google's Colab CLI or its Colab MCP server) with a live test on the owner's PC, as the Colab research report recommends, and puts the report's question about Anthropic's consumer terms for model-training work to the owner then.
+
+**Announcements.**
+
+| Event | At the PC | In a call, presentation or full-screen app |
+|---|---|---|
+| `ApprovalRequested` | Interrupt: chime, other media paused, one sentence, interruptible | HUD only, no chime; waits |
+| `JobBlocked`, `JobFailed` | Interrupt | HUD; summarised afterwards |
+| `JobCompleted` | When idle: end of the user's turn plus 1 s of silence | Held, summarised afterwards |
+| `JobNarration` | The narration rule above | HUD only |
+| `JobProgressed`, `JobStarted` | Silent unless the user asked about that job in the last two minutes | Silent |
+| `JobCancelled` | When idle, unless the user cancelled it | Held |
+| `JobQueued` (memory) | One sentence, once, naming the biggest user of memory and "start it anyway" | HUD |
+| Any event of an `Act` job | Silent (the action itself is the answer) | Silent |
+
+The table is data in the config; the user can change a row by voice, per event and per job kind ("stop announcing progress on renders").
+
+**Approvals** (decision D51 amends D43). One sentence naming the action and its object, built by Eileen's own code from the parsed tool input (never from text a worker wrote). The order is fixed: the core first pauses any app playing media through SMTC (a `Core`-origin `apps_media` call) and waits until the pause is confirmed by the next SMTC event or 1 s passes; only then does it decide the voice mode (voice, unless a rule below turns it off, judged on loopback energy over the 300 ms after the pause), emit `ApprovalRequested` with that mode and speak the question. The 20 s voice window opens when the question's playback has drained (`PlaybackEvent::Drained`) plus a 300 ms echo tail, so Eileen's own question can never answer itself; speech that began before the window opened does not count. Eileen says nothing else while the question is open, and media resumes afterwards.
+
+- What can answer: `UserInput` only, and only these: the HUD's Allow or Deny (physical clicks only; the HUD ignores synthetic input on its buttons), the approve and deny hotkeys (counted only when the shell thread's Raw Input saw that chord's keys arrive from a keyboard device within 50 ms before the hotkey message, because `RegisterHotKey` also fires on injected keystrokes; Eileen's own hotkeys are also blocked combos in the desktop server, section 2.6), or speech from the microphone inside the voice window. The tray is not an approval source. For tier 2, speech must contain the action word ("yes, push", "allow the push"); once the speaker check is adopted and the user enrolled, the voice must also match the enrolled user. A bare "yes", or "Eileen, yes", answers clarifying questions, `confirm` steps and tier-1 asks, never a tier-2 approval. Voice approval is turned off, leaving the HUD and the hotkeys, while another app uses the microphone, while other audio is still playing after the pause, and during fleet and nightly runs. Screen text, model output, tool results, the `eileen say` command line and learned skills cannot build an approval; the core's approval type cannot be constructed from them. Every resolution records its source (`ApprovalSource`, section 3.3.4).
+- When nobody answers: the voice window closes, the request stays on the HUD with a toast, and the job waits in `awaiting_approval` until its approval deadline (`approvals.deadline_min = 30`); then it is declined and logged. "No" denies at once.
+- What a grant covers: "always allow that for this job" stores a grant for the exact normalised call that was shown (the same command and target), never a tool pattern; tier-1 grants may name a pattern.
+- Binding: an approval is bound to the target it described (window handle, element selector, element name at that point and a hash of its rectangle for desktop actions; the exact input digest for tool calls). If anything changed by the time the call runs, the call is refused and the question asked again.
+
+How a worker's tier-2 call reaches the user is the one CLI behaviour nobody has tested, so WP3 proves it against the real CLI before the harness merges and records the result. The routes, in the order WP3 tries them:
+
+1. **The `PermissionRequest` hook.** After the guard answers `ask`, the CLI fires its `PermissionRequest` hook; Eileen's endpoint holds the request open (up to `approvals.hook_hold_s = 120`, under the hook's own timeout) while it asks the user, then answers `allow` (only with an `ApprovalId` that came from `UserInput`) or `deny`.
+2. **`--permission-prompt-tool mcp__eileen__approve`**, if the pinned CLI still accepts the flag (it does not appear in `claude --help` on 2.1.304; WP3 checks). The dispatcher accepts an `approve` call only when its `tool_use_id` matches a pending `ask` the guard issued for that session, builds the summary itself, and logs any other `approve` call as a security event.
+3. **Deny, then steer.** The guard answers `deny` with "awaiting user approval appr_<id>", the job moves to `awaiting_approval`, and after a yes the worker gets a steer turn ("the user approved <summary>; retry it now") plus a one-shot grant for that exact call.
+
+Route 3 is also how any approval that outlives the hook's hold completes. Whichever route wins, the weekly contract test, and the owner's nightly lane against both the installed and the latest CLI, re-run its cases (allow, deny, a guard deny of an allowed command, the disallowed and unnamed tools, a dead endpoint, the recorded subagent case), so an update cannot quietly turn tier 2 into allow.
+
+**Interrupt, steer, reroute, cancel, pause.** Interrupt sends the stream-json `control_request` interrupt (Windows has no clean SIGINT for a child). Steer is an interrupt followed by a new user turn with the instruction. Reroute cancels and starts a new job with the same prompt, the same working directory and the old transcript attached. Cancel kills the session's Job Object; a killed worker leaves no descendants. "Stop", the mute key or the hands-off hotkey within 5 s of any desktop action pauses every job that acts on the desktop: each gets an interrupt and the input lock is refused until the user says "continue"; the HUD shows them as paused.
+
+**Route discovery and third-party MCP servers.** Before driving an app it does not know, a worker calls `routes_lookup { app }` (worker toolset, tier 0). Eileen's own code answers it, not the worker's web tools: the apps sidecar queries the official MCP registry (`registry.modelcontextprotocol.io`, the one host it may call, through `curl.exe` started by `eileen_supervisor`, 10 s deadline, reply capped at 256 KB and parsed by a fuzzed parser) and returns matching servers as `Untrusted` data, each with a registry id, cached for a day. Reading the reply counts as reading web content (`Web` taint, section 2.12), because anyone can publish a registry description.
+
+- **A proposal must match the registry.** If a server fits, the worker calls `routes_propose { app, kind, registry_id, why }`. For kind `AppMcp`, the dispatcher accepts it only when `registry_id` names an entry of a `routes_lookup` reply for that same app cached for this job, and `app` names an app in Eileen's app index; it then builds the `RouteProposal` from the registry entry alone (name, the publisher namespace, source link, package type, identifier and exact version), never from the worker's words, and the worker's `why` is kept only as fenced `Untrusted` text shown on the HUD as "Claude's note", never spoken. A proposal that matches no cached entry, or whose entry's registry status is not active, is refused and logged.
+- **Who published it, and whether it is the app's maker.** The registry has no endorsement flag: the `io.modelcontextprotocol.registry/official` block in an entry's `_meta` is the registry's own bookkeeping (status, publication dates, whether it is the latest version) and appears on every entry it serves, so Eileen never reads it as a vouch. What the registry does verify is the namespace of the server's name, the part before the `/`: `io.github.<user>` through that GitHub account, and a reverse-DNS namespace such as `com.blackmagicdesign` through DNS or HTTP proof for that domain. So `publisher` is that verified namespace, shown and spoken as "GitHub user <user>" or as the domain ("blackmagicdesign.com"); and a proposal is `from_app_vendor` only when the namespace is a domain namespace listed for that app in `app-vendors.toml` (data in `eileen-apps`, maintained by WP6: each app-index key with the reverse-DNS namespaces of its maker and the maker's name, such as Resolve with `com.blackmagicdesign` and Blackmagic Design). The spoken line is built by Eileen's code from those fields only: "Resolve has an MCP server published by blackmagicdesign.com, the app's maker. Say add that server to use it." or "Resolve has an MCP server in the registry, published by GitHub user someone, not by Blackmagic Design. Say add that server to use it anyway." The word "official" is never spoken or shown, so a squatter's `io.github.someone/resolve-mcp` can never sound like the vendor's.
+- **The other kinds are hints, not installs.** A `DeepLink` proposal carries only a URI scheme; accepting it adds the scheme to `permissions.uri_schemes` (a tier-2 Safety change that names the scheme and the app that registered it in Windows). An `AppApi` proposal carries a link (`RoutesPropose.link`, stored as the proposal's `source_url`) and a note; accepting it stores a `reference` fact for that app with provenance `approved` (the link and the user's acceptance, so workers' facts lines mention it) and installs nothing, because v0.1 has no generic API connector. Both are shown as "unverified: suggested by Claude", since no registry vouches for them.
+- **Accepting an MCP server.** "Add that server", Accept on the HUD or `eileen apps add-mcp <app> <registry-id>` turns the proposal into a tier-2 settings change (`mcp.servers.<app>`, a Safety key) that shows the package and exact version and needs the user's own approval; "show me route suggestions" lists open proposals; any account sign-in is the user's. After the approval, the apps sidecar installs the exact registry version once, through the supervisor, into `%LOCALAPPDATA%\eileen\mcp\<app>\`: an npm package with `npm install --ignore-scripts --prefix <folder> <package>@<version>`, a PyPI package with `uv pip install --target <folder> <package>==<version>`, or, for a server that ships with the app (ResolveMCP), the executable at the path the app's adapter found and the user confirmed; a package whose install needs its own scripts, an OCI image or a remote-only endpoint is refused in v0.1 with a sentence saying so. The setting records the command, the arguments, the installed version and the lockfile or file digest; sessions launch it from that folder, never with `npx` or `uvx` at session start, so it never updates itself; a version change is a new proposal. The setting also records the server's `observes` class (default `Web`, section 2.12). Worker sessions launch the server themselves, so the list of its tool names comes from the install instead: right after installing it, the apps sidecar starts the installed server once through the supervisor (stdio, `initialize`, then `tools/list`, then stops it) and writes the names it lists to `cache\mcp-tools.json`, keyed by app and installed version. The sidecar is that file's only writer, and because the version is pinned and a new version is a new proposal and a new install, that list holds for every session that launches the install. The learning linter treats those names as tool names with provenance `Tool` (section 2.10 item 9); a tool the server adds later is not in the list, so a skill naming it is rejected, and its calls are tier 2 until the user relaxes it, like every third-party tool.
+
+Approved servers are merged into the generated MCP config of the job kinds the user chose; their calls pass the same `PreToolUse` guard (unknown third-party tools are tier 2 until the user relaxes one), and the harness tags each call with the server's rung from its config entry (`app_mcp` by default, `dom` for a page-structure server such as Playwright MCP).
+
+**The best route per app, remembered.** Each recorded step names the rung it used (app API, app MCP server, deep link, UI Automation, page structure, vision). `eileen-learn` keeps a `route_stats` table (app, app major version, task key: the skill id or the tool and op, rung, successes, failures, median duration), updated when each job's verdict is final, and sent to the core as `LearnEvent::RouteStats` (WP7). Two things read it: the worker's facts block gets one line per app the job will touch ("Resolve: scripting worked 14 of 14 times for navigation; screenshots 2 of 5"), which the core puts into each `JobBinding` from `SkillEngine::route_line` (built on `eileen_skills::routes::facts_line`, WP7; the binding, WP1), and `introspect`, whose contract takes the route statistics and ranks each app's routes with `eileen_skills::routes::rank` (WP7). The dispatcher (WP1) marks a job `rung_skipped` when a worker drove an app through UI Automation or vision while that app's `AppCapability` declares an API, MCP or deep-link rung; the statistics count it, the next worker's facts line says "use apps_resolve before the screen", and the linter (WP7) refuses to compile a vision or UI Automation step into a recipe for an app with a higher declared rung. WP1 acceptance 12 and WP7 acceptance 11 test the whole path. Windows App Actions are a v0.2 rung (owner answer 22).
+
+### 2.6 Computer use: Eileen's own desktop server
+
+Decision D21 replaces Cua Driver with Eileen's own Rust server, ported from the proof in the computer-use report (1,720 lines of library code plus a 389-line server, faster than Cua 0.37.0 at grounding, with safety refusals Cua lacks). Workers reach it through the `eileen` shim and the core's dispatcher, so the input lock, the permission gate and the learning recorder sit in one place.
+
+**Tools** (snake_case, valid under Anthropic's tool-name rules; exposed to Claude as `mcp__eileen__<name>`; schemas in section 3.3.9): `desktop_state`, `desktop_windows`, `desktop_tree`, `desktop_screenshot`, `desktop_look` (the brain's one-image variant), `desktop_click_element`, `desktop_set_value`, `desktop_type_text`, `desktop_press_keys`, `desktop_click`, `desktop_scroll`, `desktop_drag`, `desktop_window`, `desktop_launch_app`, `desktop_wait_for`, `desktop_selection`, `desktop_insert_text`, `desktop_volume`. The worker-visible list stays under about 15 KB.
+
+**Action order** for one action: a UIA pattern on an indexed element (Invoke, Toggle, SelectionItem, ExpandCollapse, Value, RangeValue, Scroll), in the background; for text, `ValuePattern.SetValue` when replacing the whole value is right, else the clipboard transaction plus Ctrl+V, else Unicode `SendInput` paced at 30 ms per character, always with a read-back (unpaced synthetic typing into Windows 11 Notepad arrived garbled); coordinates, key combos, drags and the wheel through `SendInput`, which needs the foreground; vision last (a screenshot with set-of-mark indices, the model picks, then a coordinate action with a post-condition). Every action returns a verification hint (value read back, title change, new focused element), which the learning loop uses as the step check. UIA Invoke on a classic Win32 button can activate its window (seen in the proof), so the server checks the foreground before and after every Invoke; if it moved while the user was active, it restores it at once and treats the call as a foreground action from then on.
+
+**The user's hands always win.** `GetLastInputInfo` also counts synthetic input, so after Eileen's first `SendInput` it measures Eileen, not the user. The desktop server therefore tracks the last *physical* input itself through Raw Input on a message-only window (`RIDEV_INPUTSINK`; injected input arrives with no device handle), timestamps only, and `Input::user_idle_ms` reports physical idle time. Foreground work runs under a lease:
+
+1. A job asks for the screen once per phase, with an estimated duration ("May Claude use the screen for about a minute to fix the face?"). If the user has been physically idle for `desktop.lease_idle_s` (default 5 s), Eileen does not ask but always says so: one short spoken line ("Claude is using the screen for about a minute; move the mouse to stop", HUD only during a call) and a 3 s countdown on the HUD before the first synthetic event; otherwise Eileen asks by voice and on the HUD.
+2. While the lease runs the HUD shows a countdown. Before every synthetic event the server re-checks the foreground and stops at once if focus moved.
+3. Any physical input during the lease aborts the remaining events within one event, releases the lock and shows "you took over, I stopped". The cursor is restored only if the user did not move it. The job's desktop actions pause until the user has been idle for 5 s and says "continue" (or clicks it on the HUD).
+4. When the lease ends, or when Windows refuses the foreground (Eileen says so and stops; it never loops on workarounds), the server restores the previous foreground window and Eileen hands the screen back with one short line ("Your screen's back"), or an earcon when the user is talking.
+
+**Showing the user something.** A window comes forward only when the user should look at it: `desktop_window` `Show { reason }` (tier 1, journaled with the previous foreground as its inverse) is granted only when the user has been physically idle for 2 s and no call or presentation is active; Eileen says a line built by its own code from the reason kind and the app name ("Here's the render in Resolve"), never from model text, and "back", the HUD's Back button or the hands-off hotkey restores the previous foreground. Otherwise the result stays on the HUD with the live thumbnail.
+
+One input lock across all workers, held in the core's dispatcher; background UIA actions on different windows run in parallel. The HUD shows who holds the lock. A signed UIAccess helper is a later decision (it needs a code-signing certificate and a Program Files install).
+
+**Visible intent.** Before any `SendInput` or Invoke on a window the user can see, the desktop server emits a `DesktopIntent` event (target rect and label) and waits `desktop.visible_intent_ms` (default 400, settable to 0). Addressed speech or a stop word ("no", "wait", "stop", "the other one") during the wait cancels the action and releases the lock; room talk does not. For a few seconds after such a cancel, the next utterance goes to the job that was acting as a steer, with the cancelled target and the next candidates from the tree, which is what makes "no, the other one" work.
+
+**DPI and coordinates.** Per-monitor-v2 awareness is the first call in `main` (DPI-unaware code sees 1280x800 on the owner's 1920x1200 display). One coordinate system everywhere: physical pixels in virtual-screen coordinates, negatives allowed. Window rects are DWM extended frame bounds. Every screenshot reply states its mapping (`image 1280x800 covers screen rect x=0 y=0 w=1920 h=1200; screen = origin + image_px * 1.5`). Screenshot replies carry text and image content only, never `structuredContent`, because the claude CLI dropped images when both were present. Multi-monitor and mixed DPI are untested on the owner's PC; the test fleet covers them.
+
+**Browsers and Electron.** Chromium and Electron expose only browser chrome over UIA until a UIA client asks for more, and refuse background input. Eileen never installs a global UIA focus handler that would switch every Chromium and Electron app (Chrome, VS Code, the Claude app) into accessibility mode on this memory-tight PC; for those windows it uses `SetWinEventHook` events and UIA on demand. Before a worker types into a Chromium window, the server asks UIA for the element at the target point once, which tells it whether the target is a password field; WP5 measures what that costs Chrome (private bytes, CPU) and how long web content takes to appear. **The page-structure rung by default** is that same on-demand UIA request: when a worker needs page content, the server asks UIA for the web content of that one window (Chromium then exposes the page's accessibility tree, which is the page structure), serves it through `desktop_tree` and acts on its elements, and records the rung as `Dom`. Screenshots and coordinate input are used only for what that tree does not expose. If WP5's probe shows the cost on this PC is too high, the probe's numbers decide a per-browser switch (`desktop.web_tree`, on by default) and the fallback to screenshots is recorded. The Playwright MCP extension, when the user installs it, is a richer `Dom` rung (section 2.7). `Chrome_WidgetWin_1` also covers the Claude desktop app and VS Code, so Eileen's and Claude's own windows are excluded by process, never by title. Every cross-process window call is bounded (`ShowWindowAsync`, `SendMessageTimeout`): `ShowWindow` on a paged-out Edge blocked for over 60 s.
+
+**Safety rules in the server**, so they apply to every worker, every learned skill and every future connector:
+
+- Never read or write a password field (`IsPassword`) and never type while one has focus. For every coordinate action the server resolves the element at the point (`ElementFromPoint`) and applies the same rules to it. Where the element is unknown (custom-drawn apps, page content UIA does not expose), typing is tier 2 unless the user has allowed desktop input in that app.
+- Refuse a coordinate action that lands on another process's window than the target, or on any Eileen or Claude window (`WindowFromPoint`), so a worker can never click Eileen's own Allow button.
+- Refuse blocked combos (`Win+L`, `Win+R`, `Win+X`, `Ctrl+Shift+Esc`, `Win+Ctrl+Shift+B`, Ctrl+Alt+Del variants, `Alt+F4` on a window the job did not open, and every hotkey Eileen itself has registered: mute, report, approve, deny, hands-off and the dictation key, pushed to the server from the current settings). `Shift+Delete` is tier 2.
+- Tier by target: any input to a terminal window class, the Run dialog, the registry editor, Task Manager or the security pages of Settings is tier 2 (or, for a terminal, the typed command is tiered like a shell command, section 2.12). Enter, Ctrl+Enter or a send-like click in a mail, chat or social app is tier 2. The category comes from `app-categories.toml` in `eileen-desktop` (data, maintained by WP5): process names and AUMIDs for installed apps (Outlook, Thunderbird, Slack, Teams, Discord, WhatsApp, Telegram, Signal and others), and for browser windows the page's host, read from the address bar over UIA (browser chrome is exposed without accessibility mode; the same read fills `WindowInfo.url_host` and the URL in a focus change, which the URL rule of section 2.12 and the ledger use), or failing that the window title's site suffix, matched against a host list (Gmail, Outlook on the web, Slack, WhatsApp Web, Messenger, Discord, X, LinkedIn and others). In a browser page whose category is unknown, Enter in a multi-line editable field is tier 2 as well.
+- Invoking a control whose name or automation id reads Send, Delete, Buy, Pay, Submit, Publish, Install, Place order, Checkout, Confirm, Transfer, Post, Share, Allow, Authorize, Accept or Uninstall (and their localized forms, from a list WP5 maintains) is tier 2.
+- Text a worker types passes the Redactor and a Luhn check first; a hit is tier 3 ("please type that yourself").
+- Desktop input in an app is allowed per app: the first time a worker drives an app, Eileen asks once ("May Claude control Resolve?") and stores the answer as a tier-1 grant (`permissions.desktop_apps`).
+- Explicit targets only, refusing when a different window has the foreground at send time; never touch Eileen's, Claude's or user-marked private windows; never elevate; third-party components run with telemetry off (`DO_NOT_TRACK=1`); "stop" and mute cancel queued input and release the lock. Tests drive only windows the test created.
+
+**App index.** `shell:AppsFolder` enumeration (222 apps here, 1.9 to 3.1 s idle, up to 41 s under load) at startup and on Start menu or package changes, never per call, persisted to `%LOCALAPPDATA%\eileen\cache\apps.json` so a restart serves the last index at once and refreshes in the background. Launch by AUMID (packaged built-ins such as Notepad are stubs in System32), always through `eileen_supervisor::user_launch` (section 2.1), so the launched app is never inside an Eileen Job Object. `desktop_launch_app` returns once the app's main window exists (not a splash), narrating if that takes more than 3 s, so a follow-up such as "snap it left" waits for the real window. Matching is Eileen's own scorer (subsequence, prefix and word-start bonuses; no MPL dependency); it launches only when the top match beats the next by a margin, otherwise it asks. Window management and launch run on their own thread, not the UIA thread, so a hung UIA provider never blocks "open X" or "snap it left".
+
+**DesktopState** answers "what is the user looking at" as one object, served from a cache the event hooks keep current: monitors with Eileen's own stable ordinals (left to right, matched by device path across reboots), visible windows with frame rects, z-order and the executable's file version, the foreground window and process, the focused element (control type, name, automation id, rect, patterns, `is_password`), the selection, the caret, recent references, the presentation state (`SHQueryUserNotificationState`, plus `Recording` while an app of the recorder category in `app-categories.toml` runs) and whether another app is using the microphone. Fields that timed out or are stale are listed in `degraded`, never reported empty. Text leaving the server goes through `eileen_contracts::desktop::sanitize` (valid UTF-8, bounded, control and bidirectional-override characters removed, wrapped as `Untrusted`).
+
+**The selection and the clipboard.** The selection comes from TextPattern. Only when the utterance refers to something copied ("what I just copied") does the server fall back to the clipboard, by sequence number and never by a synthetic copy, and only for clipboard data that does not carry `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory = 0` or `Clipboard Viewer Ignore` (the formats password managers set); the fallback text passes the Redactor. Clipboard snapshots taken by the insertion transaction never enter the input lane, logs or incidents.
+
+**Dictation insertion** lives here too, behind the same input lock (section 2.8).
+
+### 2.7 App adapters
+
+`eileen-apps.exe` is one resident Rust process: a thread per COM target with call timeouts and an `IMessageFilter` for "call rejected by callee", one SMTC manager held for the process lifetime and fed by events (a fresh manager request per read reached 2.2 s p95 under load, a held one about a microsecond), and the Resolve bridge as a supervised child. Tools: `apps_media`, `apps_open_url`, `apps_open_uri`, `apps_open_path`, `apps_resolve`, `apps_office`, `apps_explorer`, `apps_recent`, `apps_image`, `apps_photoshop`, and the worker tool `routes_lookup` (section 3.3.9). Op-style tools declare a tier, a read-only flag, idempotence and an output schema per op, so a recipe can use `apps_resolve` `timeline_info` as a check while `apply_drx` stays an action, and a later step can point into an earlier op's output. The per-app hooks sit behind the `AppHost` platform trait (section 3.4): `eileen-apps` holds the neutral tool logic and `eileen-apps-win` implements `AppHost` for Word, Excel, Explorer and Photoshop over COM and for the Resolve process gate, so a Linux port implements the same trait per app.
+
+**Media and YouTube.** SMTC from Rust: subscribe to `SessionsChanged`, `CurrentSessionChanged`, `PlaybackInfoChanged` and `MediaPropertiesChanged`; control with `TryPause`, `TryPlay` and `TryChangePlaybackPosition`, confirmed by the next event (the status returned with an action is the old one). The live position is derived from `Position`, `LastUpdatedTime` and the playback rate. YouTube: open `https://www.youtube.com/watch?v=<id>&t=<s>s` with `ShellExecuteW` in the default browser (tier 1; measured to land at 15:30 after a preroll ad); for unknown videos, a worker opens the results page in the user's own browser and picks from a screenshot. Never search YouTube headlessly (robots.txt disallows it) and leave yt-dlp out of the default path. After a load or seek, wait for the SMTC session to return with the expected title before reporting success. Every URL Eileen opens and every media title SMTC reports go into the media history of the recent-work index (title, URL, last position, when), which is what "play that timelapse" resolves against. The Playwright MCP extension (Node sidecar, Apache-2.0) is supported when the user installs it, as the DOM rung for workers. Claude in Chrome is used only inside a Claude worker started with `--chrome`, by user opt-in, and never by Eileen talking to its native host.
+
+**Files, folders and deep links.** `apps_open_path` opens a file or folder with its default app or a named one (`ShellExecuteW`), which is how "open the file I was working on" ends once `apps_recent` has found it. Its tier is computed per call (`TierRule::ByArgs`) from the path's class (section 2.12) and what opening it would do: a document or folder is tier 1; a path in Eileen's data folder, a credential store or a browser profile is tier 3; anything that runs code when opened is tier 2 and can be approved only on the HUD, never by voice: executables, scripts and installers by extension (`.exe`, `.com`, `.bat`, `.cmd`, `.ps1`, `.vbs`, `.vbe`, `.js`, `.jse`, `.wsf`, `.wsh`, `.hta`, `.msi`, `.msp`, `.scr`, `.cpl`, `.reg`, `.jar`, `.py`, `.pyw`, and any extension whose registered verb starts an interpreter), a `.lnk` classified by its resolved target and arguments, a `.url` by its URL, and any `with_app` that names a shell or interpreter (`powershell`, `pwsh`, `cmd`, `wscript`, `cscript`, `mshta`, `python`, `node`, `bash`, `wsl`, `rundll32`, `regsvr32`, `msiexec`). A worker opening a path outside its folder sets its `private_read` taint. A file whose registered handler is a web browser (`.html`, `.htm`, `.xhtml`, `.mht`, `.svg`) or a `.url` or `.website` shortcut is egress-capable (`PathFact.opens_web`): once the job is tainted and has read private data, opening one is tier 2 (section 2.12). `apps_open_uri` opens a registered URI from an allowlist (`ms-settings:`, `mailto:` composing only, and the app protocols listed in `permissions.uri_schemes`, which the user approves through the settings flow), tier 1; any other scheme is refused.
+
+**Resolve.** A Lua bridge (about 200 lines with its JSON encoder, `adapters/resolve/eileen_resolve_bridge.lua`) run by Resolve's own `fuscript.exe -q -l lua`, spawned once and supervised, gated on `Resolve.exe` running (otherwise every call stalls about 4 s). Line protocol: request `<id>\t<method>\t<arg>...`, reply one JSON object per line; parse, never compare strings (Lua key order varies). Methods:
+
+| Group | Methods |
+|---|---|
+| Readiness and navigation | `hello`, `projects_recent`, `load_project`, `timelines`, `set_timeline`, `timeline_info` (start timecode, start frame, frame rate, drop frame, current page), `open_page`, `goto_tc` (an absolute timecode computed in Rust, drop-frame aware, never the spoken offset), `current_item`, `markers`, `marker_add` |
+| Stills and versions | `export_still` (the current frame; returns its path, offset and frame), `export_stills` (every Nth frame between two offsets, default every 4th, in one call; returns the list), `add_version` (a local color version on the current clip, named `eileen-<job>` unless given), `load_version`, `versions` |
+| Edits | `import_fusion_comp` (a generated `.setting` or `.comp` file, imported under the name `eileen-<job>`), `fusion_comps` (the clip's composition names and the current one), `load_fusion_comp`, `delete_fusion_comp` (only names starting `eileen-`), `apply_drx` (with the all-node-layers option on 21.1.1 and later) |
+| Render | `render_start` (a named preset, to a new file name; returns Resolve's render job id), `render_status` (completion percent), `is_rendering` |
+
+After a launch the bridge's `hello` is polled until it answers, and Eileen says "Resolve is starting" if that takes more than 3 s. `SetCurrentTimecode` refuses on the Media and Fusion pages and before the timeline start with a bare `False`, so `goto` opens the Edit page first, then reads the playhead back and returns the target and actual frames. Known limits: no API for nodes, OFX, power windows, trackers, Face Refinement's Analyze, play or blade. Python fusionscript is a fallback only and is not built in v0.1.
+
+**Resolve's own MCP server comes first once present** (owner answer 9: the owner runs Resolve Studio and will move to 21.1 or later). When `ResolveMCP.exe` is installed, the apps sidecar connects to it as an MCP client (through `eileen-mcp`, started by the supervisor) and serves each `apps_resolve` op through it where it covers the op, falling back to the Lua bridge per op for anything it lacks and for 21.0.x; the tool contract and recipes stay the same, and each step records rung `AppMcp` or `AppApi`. WP6 maps which ops ResolveMCP covers on the owner's PC and records it; workers may also get ResolveMCP as an approved MCP server. The bridge stays a tested route after the owner's upgrade: `eileen doctor resolve --route bridge` (or `--route mcp`) runs the Resolve checks through one route only, and WP6's acceptance runs every op through the bridge as well as through ResolveMCP once both exist, so the fallback for 21.0.x and for ops ResolveMCP lacks never goes stale.
+
+**The benchmark's edit, and how to undo it.** Before any composition or grade change on a clip, the journal records the inverse for the route in use, and the op's result carries what the inverse needs. For the Fusion route, `import_fusion_comp` first reads `fusion_comps` (the names and the current composition), imports under a unique `eileen-<job>` name, and the inverse is `delete_fusion_comp` of that name followed by `load_fusion_comp` of the previous current composition (a composition is stored on the timeline item, separately from color versions, so loading a color version would not remove it). For the DRX route, Eileen calls `add_version` first and the inverse is `load_version` of the previous version. An edit op whose inverse was not recorded in the same job is tier 2, not tier 1, because Resolve's API cannot otherwise remove what it added. The correction route is chosen by WP6's spike (section 6.8, run in wave W1 on the owner's PC with only the Lua bridge), which also proves each route's undo, in this order:
+
+1. **A Fusion composition on the clip.** Eileen generates a small `.setting` file (plain-text Lua tables) from a bundled template (`FusionTemplate::SharpenEllipse`): an ellipse mask whose centre and size are keyframed from face boxes, feeding a sharpen or unsharp-mask node, and imports it with `ImportFusionComp`. Eileen tracks the face itself: one `export_stills` call writes a still every few frames across the clip under the playhead (its range from `current_item`), YuNet runs on each, `track_face` follows the confirmed face from its starting box, and the boxes in between are interpolated. Importing a file avoids the live `Comp.Lock()` writes the app-hooks report found may not render. This route is fully deterministic, so it can become a model-free recipe.
+2. **A generated DRX grade with a window** at the face box, if the spike shows a DRX can carry a window placed at a given rectangle.
+3. **A Claude worker on the Color page**, with screenshots and the input lock, only if neither works. This route cannot become a model-free recipe, so the skill stays at level 3 with a delegated step.
+
+Before any of these runs, the HUD shows the face crop and Eileen asks "This face, on the right?" (`preview_before` on the op). The spike's result, with the per-frame still and tracking costs, is recorded in `docs/wp/WP6-apps.md` before WP0's contracts are relied on by WP6; if it needs different ops, WP6 amends section 3.3.9.
+
+**Face and sharpness.** `apps_image` runs YuNet (MIT, OpenCV Zoo, a small ONNX model) through `ort` against the shipped `onnxruntime.dll` to find faces in a still, picks by position (left, right, center, largest), returns a crop for confirmation, and measures sharpness as the variance of the Laplacian inside a box.
+
+**Office and Explorer.** One late-bound `IDispatch` helper (about 120 lines, from the app-hooks probe) serves Word `Selection.Text`, Excel `ActiveCell`, Photoshop and `Shell.Application`. Attach through the running object table with `CLSCTX_LOCAL_SERVER`; bind to the foreground window's document through `AccessibleObjectFromWindow` when several instances exist. Explorer selection through `Shell.Application`, handling tabs that share one top-level window.
+
+**Recent work.** An in-memory index fed by jump lists for known AppIDs, the Recent folder (parsing `.lnk` bytes, never the 30 s cold COM resolve on the voice path), Office MRU from the registry, app-native recents through each adapter, a `ReadDirectoryChangesW` watcher on the user's folders, and the media history. Windows Search only when the index has nothing. Ranking uses name, recency and, from the ledger, how long the user actually had each document in focus. When names say nothing (`IMG_4412.psd`) or two candidates stay close, the result carries up to nine thumbnails for a contact sheet on the HUD. The index stays local.
+
+**Photoshop** (designed, compiled, tested against a fake COM target only): attach `Photoshop.Application`, `DoJavaScript` for `app.recentFiles`, open, duplicate the layer, a feathered elliptical selection at the face box (after the crop confirmation), Smart Sharpen. Generative Fill and Neural Filters are tier 2.
+
+**Later (v0.2):** Premiere through an Eileen UXP plugin connecting out to a loopback WebSocket, a VS Code extension for editor state (pulled into v0.1 only if B4 shows the window-title-and-crop route for "that variable" is unreliable, owner answer 23), Photoshop UXP for batchPlay-only features, Windows App Actions.
+
+### 2.8 Voice
+
+**Pipeline** (voice-stack report, all CPU, one shipped `onnxruntime.dll` 1.28.2):
+
+| Stage | Choice | Process |
+|---|---|---|
+| Audio I/O | cpal 0.18.2, WASAPI shared mode, 48 kHz, 10 ms buffers, plus loopback capture of the default render endpoint; the `windows` crate for the endpoint, the optional Communications category (with Windows ducking of other apps opted out) and MMCSS | core (`eileen-audio`, `eileen-audio-win`) |
+| Resample | 48 kHz stereo to 16 kHz mono, and TTS output (24 kHz) up to the device rate; WP4 picks `rubato` or its own polyphase filter by measurement and records the choice | core |
+| Echo cancellation | sonora 0.2.0 (pure Rust WebRTC AEC3 with noise suppression and high-pass; ERLE 33.3 dB on the synthetic test, 592 us p50 per 10 ms frame). The far-end reference is the system loopback (speakers' whole mix), with Eileen's own PCM as the fallback; AEC3 is bypassed after 500 ms of loopback silence. Windows' Communications-category AEC, which also uses the real speaker output, is a selectable alternative that WP4 compares with real speakers, music and video | core |
+| VAD | Silero VAD v6.2 through sherpa-onnx 1.13.8 (`shared` feature), 32 ms windows, one thread, 300 ms pre-roll; idle listening cost 5.8 percent of one logical core and 31 MB | speech |
+| ASR | Nemotron speech streaming EN 0.6B, 560 ms chunks, int8, four threads, fed only while VAD reports speech; WER 2.35 percent on the synthetic corpus, final about 0.4 s after speech ends, about 740 MB. In the low-memory profile, Kroko streaming zipformer (about 155 MB, WER 8.2 percent synthetic) if its license checks out | speech |
+| End of turn | Smart Turn v3.2 CPU through `ort` =2.0.0-rc.13 linked to the same DLL, Whisper log-mel in Rust (matches the reference within 1.1e-5), run after 200 ms of silence. The turn ends when Smart Turn says complete and the partial does not end on a continuation (a conjunction, an article, a preposition, "and", "the", "to"), or after a silence cap of 1.2 s, stretched to 2.5 s when the partial does end on one. Smart Turn alone ended unfinished synthetic utterances early, so it is one vote | speech |
+| TTS | Kokoro v1.0 fp32 from `kokoro-multi-lang-v1_0`, voice `af_heart`, four threads (int8 in the low-memory profile if WP4's equal-load test passes), with a text front end that contains no espeak-ng (owner answer 12: no GPL in release binaries; see "No GPL in the speech build" below); replies cut at clause boundaries with a first clause of three to six words; the next clause synthesized while the current one plays; stock phrases and app launch phrases cached as PCM | speech |
+| Barge-in | While Eileen speaks, VAD on the echo-cancelled signal with a stricter threshold (two windows over it while other audio plays); duck about 20 dB at the first speech window, pause at the third consecutive window (96 ms), keep the synthesized clauses, and record the samples handed to the device; about 70 to 110 ms from onset to silence. Within 600 ms the core decides: a backchannel ("mm-hm", "yeah", "right") or speech that turns out not to be addressed resumes from the paused sample; anything else cancels synthesis through the generation callback (returning `false` in the Rust crate; the Python API is inverted). An energy detector in the core is the fallback while the speech process is down | speech decides, core acts |
+| What was heard | Samples handed to the device are mapped back to the clause being played and, within it, to characters in proportion to time; the brain is told the heard prefix; "go on" plays the rest | core |
+
+**Every stage is a plug-in.** Each stage sits behind a trait in `eileen-speech`, as the voices already do behind `Synth`: `VoiceActivity` (frames in, a speech probability per window), `Recognizer` (streaming: frames in, partials and a final with confidence out), `TurnDetector` (audio and transcript in, an end-of-turn vote out) and `Synth`. Each trait reports the languages it supports and its measured cost, and the engine for each stage is a setting (`speech.vad`, `speech.asr`, `speech.turn`), so a better model is a new implementation plus a config line. v0.1's implementations: Silero (VAD); Nemotron, Kroko and Parakeet v3 (ASR; Parakeet v3, CC-BY-4.0, is the open-licensed choice selectable in settings, owner answer 13); Smart Turn (turn); Kokoro, Pocket TTS and Chatterbox (voices).
+
+**Languages come from the components** (owner answer 21). Every speech stage reports a `LanguageSupport` (section 3.3.8) read from its model's entry in `models.toml`, which records the language tags the model's publisher lists; the brain backend and the worker driver report one for their resolved model (the Claude backend and driver report `Any`). Eileen's code holds no list of supported languages anywhere. v0.1 converses in English, dictates in other languages through Parakeet v3, and sends typed requests in any language to the brain. Spoken conversation in other languages comes in a later version (ROADMAP v0.2) and works from these reports: a turn's language is served by the configured engines and the routed model when their reports include it, otherwise by another installed engine or routed model whose report does, and otherwise Eileen says on the HUD (and aloud in a language its voice supports) that it cannot listen in that language yet and offers typing.
+
+**No GPL in the speech build** (owner answer 12). The upstream sherpa-onnx prebuilt bundles espeak-ng (GPL-3.0) for its TTS front end. WP4 therefore builds sherpa-onnx 1.13.8 once from source in a pinned CI workflow (`native.yml`, running WP4's build script) with espeak-ng and piper-phonemize left out (with the build option that drops them, or with sherpa-onnx's TTS turned off if no such option exists), checks that the output contains no espeak-ng symbols or data, and publishes the archive as a release asset of this repository with its SHA256, which `cargo xtask fetch-native` pins in place of the upstream archive (section 4.1). Pocket TTS and Chatterbox need no phonemizer. Kokoro gets Eileen's own front end: a CMUdict lexicon (BSD-2-Clause) plus a small permissively licensed ONNX grapheme-to-phoneme model for unknown words, mapped to Kokoro's phoneme set and run through `ort`; if the no-espeak sherpa-onnx build turns its TTS off, Pocket TTS also runs through `ort` on the same ONNX graphs with Eileen's own glue. The release lane's license listing fails on any GPL component.
+
+Resident memory with models loaded is about 1.25 GB. Model loads take 10 to 20 s, so they load at startup, never per utterance. One ASR model stays resident. NPU and iGPU paths are out of v0.1: DirectML failed on Kokoro and Smart Turn, and only Smart Turn ran on the NPU. Windows trims the speech process's working set during long silences; WP4 measures the first command after 30 idle minutes with Chrome, VS Code and Resolve open, and `speech.pin_working_set` (off by default) keeps a hard minimum working set for users who want the first word fast after a quiet spell.
+
+**Addressee gate.** In order, first match wins:
+
+1. The name (from settings, matched phonetically with Soundex plus normalised Levenshtein, so a renamed assistant works at once).
+2. An open question, clarifying choice or approval window: the reply is addressed for that question's grammar.
+3. The conversation window: 8 s after Eileen spoke, extended to `conversation.window_s` (default 45 s) while the user is engaged (they addressed Eileen in the last 45 s, or a job they started in this conversation is running and was mentioned in the last two minutes, or a question or approval is open). The HUD shows the window as a thin ring around the mic. Inside the window an utterance that is a full match of a built-in command or a reply to an open question is addressed; any other unnamed utterance must pass the local addressee score of rule 5, goes to the brain marked `[addressee: unsure]` if it passes, and is greyed if it does not. Inside the window the score also counts a follow-up to Eileen's last turn, but only one that resolves against it: the core fills `ResolveCtx.last_turn` from its own last turn (its HUD items, the job it named, the apps, files and media it mentioned, its content words and topic; section 3.3.10) and asks the intent resolver, whose `follow_up` binds a pronoun or an ellipsis to one of those entities with the slot resolvers, or finds a content word or topic shared with that turn (`IntentResolver::follow_up`, built and golden-tested by WP7; a scripted fake in WP1's simulation, and `FollowUp::None` from the slice's minimal resolver until WP7 lands, so until then a follow-up never scores). Timing alone is never a feature: a question asked a second after Eileen finished that resolves to nothing she said scores like room talk. So "want coffee?" to a friend, which shares nothing with Eileen's last answer, stays greyed and never reaches the brain, while "and how long will it take?" after "I started the render" passes ("it" resolves to the render job). When the speaker check is adopted and the user enrolled, another voice inside the window is greyed. The window is suspended, and the name required, while other audio plays (unless the speaker check matches the enrolled user) and always while another app uses the microphone (a call), whatever the speaker check says.
+4. A full match of a built-in command (not a learned template), unless suspended as above. While other audio plays, media-control and stop words are not suspended, because the echo canceller removes the playing audio and their effect is small and reversible: pause, play, resume, stop, next, previous, skip, go to or seek a time, louder, quieter, turn it up or down, mute, cancel and "undo that". During a call they need the name like everything else.
+5. When the user is alone (no call, no other audio, and one voice if the speaker check is adopted), an unnamed request gets the local addressee score, `eileen_core::addressee::score`, a pure, table-tested function of these features, one point each: it refers to the screen ("make that bigger", "this window"), it is in the imperative form, it uses the focused app's vocabulary from introspection, and, inside the conversation window, it resolves as a follow-up (rule 3; two points). At `conversation.addressee_min_points` (default 2) it goes to the brain marked `[addressee: unsure]`, and the brain may answer `---ignore---`. **The speech level** can only take a turn away: with a reference, a turn whose level (`VoiceEvent::EndOfTurn.level_db`) is more than `conversation.level_margin_db` (default 6 dB) under it fails the score whatever its points, because a person speaking to the PC is louder and closer than one speaking across the room; within the margin the level changes nothing. The reference is the first-run calibration's `level_ref_db` (below), which reaches the core in `CoreConfig.calibration` at start and as `VoiceEvent::Calibration` when it is measured or removed; without one, the median level of the last 20 name-led turns once there are 10 (kept in the core's snapshot); with neither, the level feature is off. Rule 3 uses the same score, so the level applies inside the conversation window too.
+6. Otherwise the HUD shows the words greyed for a few seconds, and they are never stored. "That was for you", or a tap on the greyed line within 30 s, runs it.
+
+**During a call** (owner answer 19: listen only for the name and stay silent). While another app uses the microphone, only an utterance that begins with the assistant's name is addressed (rule 1); rules 2 to 5 do not apply, open questions included, and nothing heard is stored. Eileen says nothing at all: replies to named requests, clarifying questions, confirmations, earcons, narration, announcements and approvals go to the HUD only (a question waits there for a click or the user's next named reply), and the phrase cache is not played. Simulator invariant 9 checks both halves.
+
+The CAM++ speaker embedder (to ignore other voices and to strengthen voice approvals) is adopted only if it measures well in WP4; the first run's recording (below) is its enrollment. A name keyword spotter is evaluated the same way.
+
+**Dictation.** Triggers: hold the dictation key (default Right Ctrl, read through Raw Input on the core's shell thread, never a low-level keyboard hook, because Windows silently removes a hook whose callback is slow and every keystroke system-wide would wait on Eileen), tap to toggle, "Eileen, take dictation" until "stop dictating" or a long pause, or one-shot "Eileen, type: ...". The Raw Input module looks only at the configured key and records only its press and release; a tidy check fails if it stores or forwards any other key code. While dictation is active, speech goes to the field, not the brain, except an escape grammar (stop, scratch that, new line, undo that, paste it). Speech model: the already-loaded streaming recognizer (no extra memory, live words on the HUD); Parakeet TDT 0.6B v3 int8 is loaded on demand for other languages and unloaded after 5 idle minutes. Whether Parakeet Unified EN 0.6B should replace Nemotron as the single English model is one measurement in WP4.
+
+Cleanup tier 0, always, in Rust (`eileen-dictation`, a pure crate with a fuzz target, called by the core through the `DictationCleaner` port): vocabulary replacement, scratch-that, fillers per language, stutters, typed-slot self-corrections ("at 3, no, 4 pm"), spoken punctuation and layout, context formatting by app category (email, chat, code editor, terminal, search box, document), the user's own rules last; SpeakoFlow's 79 conformance cases (MIT) plus Eileen's own positives and negatives run in CI. Tier 1, opt-in: a lazily started Claude "scribe" session (fast model, no tools, connectors off, closed after ten idle minutes) that receives each finished sentence while the user is still talking, guarded by a check that rejects output adding unspoken words, dropping content words or exceeding an edit-distance budget; never for terminals, code, search boxes, password fields or private apps.
+
+Insertion ladder (desktop server): refuse password fields and secure desktops; check the target is unchanged; `EM_REPLACESEL` for Win32 Edit and RichEdit (5.8 ms measured, exact for emoji); otherwise a port of Handy's clipboard transaction (MIT, attribution kept: full-format snapshot, delayed rendering with a read receipt, guarded restore, clipboard-history and cloud opt-out formats) plus Ctrl+V, or Ctrl+Shift+V for terminal window classes; last resort paced Unicode `SendInput`; verify where UIA can read the field; record the insertion for "undo that". If focus moved, the text waits in the HUD until "paste it". `ValuePattern.SetValue` is never used to insert, because it replaces the whole field. Dictated text is recorded for learning only as its length and the field category, never the words.
+
+Vocabulary: `vocabulary` facts in the user model, used as sherpa-onnx hotwords (if the beam-search cost measures acceptable), as a Soundex plus Levenshtein post-pass, and in the scribe prompt. New words come from explicit requests and from a read-only UIA watch of the field for 30 s after insertion, with Wispr Flow's exclusions (file names, URLs, numbers, code, everyday words); two occurrences or one HUD confirmation make an entry. Names visible in the focused window may bias one utterance and are never stored without consent.
+
+**Voices.** A `Synth` trait (clauses in, PCM chunks out, cancel through the callback, a measured real-time factor) with three engines:
+
+| Engine | Use | Runtime | Notes |
+|---|---|---|---|
+| Kokoro v1.0 | The default voice, live conversation | `ort`, with Eileen's own espeak-free front end (above) | always resident |
+| Kyutai Pocket TTS | Cloning from a short reference clip | sherpa-onnx without espeak-ng (`OfflineTtsPocketModelConfig` with `reference_audio`), or `ort` on the same graphs if that build has no TTS | MIT code, CC-BY-4.0 weights, credited in the about screen and NOTICE; loaded while a cloned voice is selected |
+| Chatterbox | The more expressive cloner, per voice when the user picks it | `ort` on the shipped ONNX Runtime: Chatterbox-Turbo from Resemble's official ONNX graphs (`speech_encoder`, `embed_tokens`, `language_model`, `conditional_decoder`) in the q4 or q8 export, and Chatterbox-Nano from a community ONNX export once its license and digest check out; no PyTorch and no Python | MIT; Perth watermark off |
+
+The owner's head-to-head (owner decision 2026-10-20) is part of WP4's acceptance: Pocket TTS against Chatterbox-Nano and Chatterbox-Turbo, each cloning the owner's own voice, measuring time to first audio, real-time factor at 2, 4 and 8 threads, resident memory and a listening test, under the exclusive build slot with at least 6 GB free. **The user picks the engine per voice** as a setting, `voice.engines.<name>` (`pocket`, `chatterbox-turbo`, `chatterbox-nano`), reachable by voice ("use Chatterbox for Sam's voice"), on the HUD's settings panel and with `eileen voice use <name> --engine <engine>`. Like every setting it goes through the settings flow: the `VoiceRealtime` check times one clause in that engine on this PC first (offering the download, with its size, if the engine is not installed), the confirmation says whether the engine will speak live or keep announcements only, the change is versioned and "undo that" reverts it. The speech process reads the engine from the setting; `voices\<name>\voice.toml` keeps the reference and consent records. The engine's live use is decided by measurement: a per-reply watchdog keeps the real-time factor of the last clauses per engine; an engine at or under 0.8 may speak live; above 0.8 the next reply (never mid-reply) falls back to Kokoro for conversation and the HUD notes it, while the cloned voice keeps announcements, summaries and read-alouds. Any engine whose real-time factor is above 0.9 renders a whole line before playing it (the HUD shows "rendering in Sam's voice") instead of stuttering.
+
+Profiles live in `%LOCALAPPDATA%\eileen\voices\<name>\`. Roles: `voice.live`, `voice.narration`, `voice.announcements`, `voice.fallback`. Enrollment: the voice's owner reads a consent sentence naming the date and this install, then a passage; the speaker-embedding model must score the two as one speaker above a threshold; the engine's terms are shown once and the showing is recorded; a clip dropped onto the HUD strip or given as a file is accepted only together with that person's own consent recording, and refused otherwise. **Watermarks, opt-in.** No engine watermarks by default: the ONNX graphs Eileen runs contain no watermark stage (Resemble's Perth is a separate post-processing step of its Python package, which Eileen does not use), and a test in WP4 asserts the synthesis pipeline has no watermark stage unless the setting is on. v0.1 writes synthesized audio to disk in two places: `eileen voice render "<text>" --voice <name> --out <file.wav>` (the export command) and the audio lanes of opt-in recordings. With `voice.watermark_exports = true`, both pass through AudioSeal (MIT) first: WP4 exports AudioSeal's generator and detector to ONNX once with a pinned script, publishes them as a release asset of this repository with their SHA256 (section 4.2), and `eileen setup` downloads them only when the user turns watermarking on; `eileen voice check-mark <file>` runs the detector. Speaking as the user to other people is tier 2 per use.
+
+**First run, with a surprise path** (owner direction 2026-10-20). A state machine in `eileen-core` (`first_run`), the clickable choices on the HUD strip (WP8), the recording, checks and clone in the speech process (WP4), and the demo as a scenario (WP9):
+
+1. On the first `eileen run` after setup, Eileen says the three choices and the strip shows them: "Take the tour", "Skip" and "Show me something cool" (`HudInput::FirstRun`). Under the third is an unticked box worded truthfully without spoiling the surprise: "Let Eileen use my voice to personalise how she sounds and listens. You can delete it any time." Eileen reads that sentence aloud too. Every choice works without a mouse: by voice ("take the tour", "skip", "show me something cool", and "yes, use my voice" for the box, accepted only from the microphone while no other audio plays, and counted as consent only when said after Eileen has read the sentence), or by a physical click. The tick covers only the user's own voice; cloning anyone else still needs that person's recorded consent.
+2. Surprise with consent: Eileen (default voice) says "Say anything you like for about half a minute. Start with 'Hi Eileen', then tell me about your day." Nothing hints at what comes next, and a greeting gives away nothing. What the recording is used for, each with a recorded result in `voices\<user>\calibration.toml`:
+   - **Echo cancellation.** While Eileen speaks the prompt, its own voice is the far-end reference and the microphone picks up the echo: AEC3's delay estimate and the measured echo return loss enhancement are recorded, and if the enhancement is under 20 dB the HUD suggests headphones or the Communications-category AEC. The clip itself has no far-end playback, so it is not used for this.
+   - **Mic level.** The clip's speech level, peak and noise floor set Eileen's own digital input gain and the VAD threshold offset (never the Windows device level, which is a setting outside Eileen).
+   - **Name recognition.** The recognizer's transcript of the greeting is compared with the assistant's name; if it heard something else, that variant joins the name matcher's phonetic aliases (and the hotword list, if hotwords are adopted), so the user's way of saying "Eileen" is recognised from then on.
+   - **Accent.** Eileen itself adapts no model weights. The recognizer's mean token confidence over the clip is recorded; it is low when it falls under the 10th percentile of the confidences WP4 measured on its English corpus with the same model (the threshold ships in `models.toml`; 0.80 until WP4 measures it). Then Eileen says so and offers another English model: Parakeet Unified if WP4 adopted it, otherwise Parakeet TDT 0.6B v3, which is always selectable (owner answer 13) and is loaded once on this clip to compare confidences before the offer is made; vocabulary corrections keep teaching it afterwards.
+   - **Addressee detection.** If the speaker check is adopted, the clip becomes its enrollment, which lets the conversation window grey other voices. Without it, the clip still sets the one voice feature the local addressee score has, the user's own speech level at the microphone (people speaking to the PC are louder and closer than people speaking to someone across the room): the speech process measures the clip's active speech level the same way it measures every turn's `EndOfTurn.level_db` (the median RMS of the VAD-speech frames of the echo-cancelled signal, before Eileen's own input gain, in dB relative to full scale), writes it to `calibration.toml` as `level_ref_db` and sends it to the core as `VoiceEvent::Calibration`, and rule 5 above compares each turn's level with it; other voices that are as loud and close as the user's are then not greyed by voice, which section 7 lists as a limit.
+   - **The clone.** The clip becomes the Pocket TTS reference.
+   The consent record (the box or the spoken consent, the time, the machine hash from `fleet\machine.toml`) is stored with the profile. With the box unticked, nothing is recorded: the demo runs in the default voice, and the mic level is estimated from the first utterances of normal use instead.
+3. Two gates, the first before anything is recorded. **Before step 2:** `eileen setup` measured how long cloning and one line of synthesis take on this PC (with a bundled synthetic reference clip); if the clone's time to first audio is above `first_run.max_clone_ttfa_ms` (default 3,000), choosing "Show me something cool" says "this PC needs a moment for that one; here is the tour" and runs the normal tour in the default voice (owner direction) with nothing recorded, and "Show me something cool" stays in the tray menu. **After step 2:** if the scripted lines do not finish rendering in the user's voice within 40 s, Eileen runs the normal tour in the default voice, and the clip, the clone and every cache made from them are deleted at once, exactly as on a declined reveal (the listening calibration is kept and Eileen says so in one sentence; "forget my voice" removes it). Either way, choosing "Show me something cool" from the tray later starts again at step 1 with the consent box unticked and records a fresh clip; nothing from an earlier attempt is reused. While the scripted lines render, the HUD shows "getting ready", never what is being prepared.
+4. The demo, in the user's cloned voice. Its requests are fixed strings in Eileen's code, run as addressed turns of source `FirstRun` and marked no-learn. No-learn (a job flag, section 2.10 item 2) keeps a job out of distillation, skill statistics, facts and the ledger; it does not switch off the core's journal, the regret window or phrasing candidates, so the demo's exact repeat works. The phrasing candidate a `FirstRun` turn creates is marked `ephemeral` and deleted when the first run ends (after the reveal, the tour or a skip), because the words were Eileen's script, not the user's. The demo: what is on screen (live from DesktopState, rendered as a whole line), opening Notepad and playing a short CC0 clip bundled with Eileen in the default player, one question answered by the brain at quick depth, two small helpers started in parallel (fast model, one turn each, skipped with a sentence if the CLI is not signed in or memory admission queues them), and a request repeated to show the second time is faster: "get Notepad up for me" goes through the brain's `act` tools the first time, and the exact repeat a few seconds later is served by the fast path through the exact-repeat rule for phrasings (section 2.10); both timings are spoken ("three seconds the first time, half a second now").
+5. The reveal: "That was your voice, by the way." Keep it, pick another voice (the HUD lists Kokoro's stock voices and any saved profiles, each with a one-line sample; chosen by voice, "the second one", or by click), or go back to the default. If the clone is not kept, the clip, the clone and every cache derived from them are deleted at once, and a test asserts no such file is left. The listening calibration (no audio: levels, name variants, echo figures and, if adopted, the speaker enrollment, all covered by the consent box's "how she listens") is kept, and Eileen says so in one sentence; "forget my voice" removes it too.
+
+### 2.9 The HUD and the Claude app
+
+**HUD.** `eileen-hud.exe` draws two windows through the `windows` crate (no new dependencies): an overlay (`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, click-through) and a small strip without `WS_EX_TRANSPARENT` for the clickable parts: the mic button, Allow and Deny, Save a test, the first-run choices and checkbox, a settings panel with the common settings, and a drop target for voice clips. Text is drawn with DirectWrite into Direct2D on a DirectComposition surface, because GDI text drawn into a per-pixel-alpha layered window leaves the alpha at zero and the text invisible; a colour-keyed layered window with non-ClearType GDI text is the fallback if WP8's first measurement prefers it. Both windows call `SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE`, which WP8's first pull request probes with exactly this window type, so screenshots never include them. The HUD treats a click on Allow, Deny, the mic, a first-run choice or the consent box as the user's only if it was physical: the strip reads Raw Input and ignores button presses that arrived with no device handle (synthetic input). The tray lives on the core's shell thread, which applies the same Raw Input check to its own menu clicks (an unmute from the tray counts only when physical); the tray offers no approval. The live mini-view of a window a job works in is a DWM thumbnail (`DwmRegisterThumbnail`) inside the strip, which costs no capture and works for covered windows. The HUD hides itself in presentation and full-screen states. The core sends a full `HudState` (section 3.3.6) at most ten times a second as one JSON line; the HUD sends input back as `HudInput` lines with a `physical` flag. Layout is computed by platform-neutral code into a draw list that snapshot tests pin; only the renderer is Windows code (`eileen-hud-win`).
+
+**Tray and hotkeys** run on the shell thread inside the core (`eileen-shell-win`, built by WP2 so slice S1 already has them): tray-icon 0.26.1 without default features, global-hotkey 0.9.0 for mute (Ctrl+Alt+M), save a report (Ctrl+Alt+Shift+B), approve or deny the pending approval, and hands-off (pause every desktop-acting job); the dictation key through Raw Input. Because `RegisterHotKey` also fires on injected keystrokes, the shell thread's Raw Input keyboard watch records whether the approve, deny and unmute chords' keys came from a device within 50 ms before the hotkey message, and the core acts on those three only when they did (a match flag, never the key codes); the desktop server also refuses to press any of Eileen's hotkeys (section 2.6). The approve and deny chords must hold at least two modifiers, a bound the settings validator enforces. The tray menu is data from `eileen-contracts` (mute, pause agents, show me something cool, save a report, about Eileen, quit), so the HUD package adds items without touching shell code. **About.** "About Eileen" in the tray, the spoken "Eileen, about you" (or "what are you built on?") and `eileen about` show the version, the release channel and the credits: every component and model with its licence and attribution line, generated from `NOTICE` and `models.toml` at build time (`HudPanel::About`; `eileen about` prints the same list), so Kyutai Pocket TTS's CC-BY-4.0 attribution and the others appear in the about screen as well as in `NOTICE`. Every clickable HUD input also has a voice phrase or a hotkey; a test in `eileen-hud` walks a table from each clickable `HudInput` variant to its grammar entry or hotkey and fails on a gap, which is the accessibility rule "no task requires a mouse" as a check. Toasts (tauri-winrt-notification 0.8.1) need an AppUserModelID registered through the Start menu shortcut that `eileen setup` creates; they are for "a job finished while you were away" and pending approvals when the user is away.
+
+**The Claude app** (claude-mods report): one opt-in plugin named `eileen` in `integrations/claude-plugin/`, listed by a `.claude-plugin/marketplace.json` at the repository root and installed by the owner through Claude's own plugin flow (`eileen claude install` prints the two official commands and runs them only after a yes). It holds:
+
+- the handoff skill (`/eileen:handoff`, `disable-model-invocation: true`, passing `${CLAUDE_SESSION_ID}` to Eileen, which continues the session as a `continue_session` job with `--resume <id> --fork-session` once the user confirms by voice or on the HUD, naming the repository and the summary);
+- the `eileen` MCP server for the owner's own sessions (`eileen-shim.exe --role session`: `session_status`, `session_jobs`, `session_say` (rate-limited, spoken as "From your Claude session: ..."), `session_mute`, `session_handoff`, `session_ask`, and `session_skills` when the owner turns on `claude_plugin.share_skills`); because the model in any session might be prompt-injected, none of these can approve, and `session_handoff` always needs the user's confirmation. The session role has its own caller rule (section 2.12): its shim must run outside every Eileen-started Job Object and present the per-boot session token;
+- a display-only mod (a status entry, a band with the last utterance and Mute, and `/eileen` answered with no model turn);
+- two non-gating command hooks, so the owner's Claude sessions report to Eileen (owner direction: "Claude sessions reporting progress and approval requests to Eileen"): a `Notification` hook (the CLI fires it when a session waits for a permission decision or for input) and a `Stop` hook (a turn finished). Each runs `eileen-shim.exe --role session --notify <kind>` with a 5 s timeout; the shim reads the session token from `run\session.json`, posts the notification kind, the session id and the working folder's name to the loopback endpoint's `/v1/session/notify` (which applies the session role's caller rule), always exits 0 and never prints a decision, so the hook can neither allow, deny nor delay anything. Eileen shows "Your Claude session in <repo> is waiting for your approval" on the HUD and says it by the announcement table (as an `ApprovalRequested`-class interrupt at the PC, HUD only in a call), or "finished" when idle. The approval itself stays in the Claude app: Eileen never answers it, and nothing the notification carries is model text.
+
+`session_ask { question }` puts the question on the HUD (`HudPanel::SessionQuestion`) and speaks it as "Your Claude session asks: ..." under `session_say`'s limits (at most 200 characters, one per 30 s, HUD only in a call); the user's next addressed reply, typed answer or panel text within 120 s is returned to the session as the tool result (`Untrusted` text, marked as the user's words), and nothing else: the reply starts no job, changes no setting and approves nothing, and a timeout returns "no answer". The mod never answers `tool.check`, never approves anything, never submits prompts, and Eileen never depends on it. Learned skills do not load into the owner's own sessions by default (owner answer 16; they would cost context in every session). They are available on request instead: with `claude_plugin.share_skills` on (off by default, a Safety key because it exposes learned text to another program), `session_skills { query }` returns the matching learned skills at level 2 or above whose every line is Eileen-authored, user-provenance or approved, never a pending draft, so a Claude session can use one when the owner asks for it. CI validates the plugin and fails if the validation report gains a gating hook, any hook other than the reviewed `Notification` and `Stop` command hooks, or a new host call without a reviewed change. Nothing patches, wraps or replaces the app, and nothing turns off its updater.
+
+### 2.10 The learning loop
+
+From the learning-loop report, with the changes recorded in D27 and D44: version history lives in `learn.sqlite` instead of a git repository per skill; the decisions (the ladder, the linter, provenance, shadow agreement, the replay state machine) live in a pure crate, `eileen-skills`, that the core calls through the `SkillEngine` port inside `Core::step`, so the simulator runs learning scenarios like everything else; the IO (the store, the recorder, the per-session skill snapshots and the librarian scheduler) lives in `eileen-learn`, a component the runtime drives. The matcher lives in `eileen-intent`, which shares the template grammar with `eileen-skills`.
+
+**1. Capture.** Every tool call from every origin (brain, worker, replay, fast path) becomes a `TrajectoryStep` at the dispatcher, which is authoritative for Eileen's own tools and keeps each call's structured `output` (section 3.3.3). Fast-path commands and brain turns that ran `act` tools belong to jobs of kind `Act`, so they have trajectories too. The harness adds the worker's own tool calls from stream-json, with the input redacted and capped at 2 KB (enough for a shell command, a file path or an edit target), the cost from the `result` event, and a `SkillInvoked` event whenever the worker calls the `Skill` tool on a learned skill (namespaced `eileen-learned:<name>`, or bare when loaded another way), with the arguments it passed. For every worker call that section 2.12's observed-read table maps to a source (`WebFetch`, `WebSearch`, `Read`, `Grep` or `Glob` and shell reads outside the job's folder, Claude in Chrome, the tools of approved third-party MCP servers, approved egress commands) the harness also keeps the result text as observed text (`WorkerEvent::ToolResult.observed`: redacted, capped at 16 KB per result, stored as a blob), which only the provenance check reads; the results of Eileen's own read tools are already at the dispatcher, and an `Act` job's observed text starts with the `[desktop]`, ledger and `[jobs]` blocks of the brain turn that created it (section 2.12, "An `Act` job starts with its turn's taint"). "What was on screen" is structured app state, not screenshots. Redaction runs before anything reaches disk. Each step records the app and app version it touched, the tool's schema hash, the rung it used and, from the dispatcher, whether it was tainted; each trajectory records the facts block its job was bound with (`Trajectory.facts`). Results are truncated by cutting long string leaves while keeping every key and the JSON structure, because recipes bind to that structure. Each job gets a 120 s regret window: only addressed utterances count; a signal is attributed to the job announced last or the focus job, and when two jobs finished inside the window and the words name neither, no signal is recorded (or Eileen asks once). App-level undo counts only as Ctrl+Z seen through Raw Input while a window the job touched has the foreground (nothing else about keys is kept). A retry is a matcher hit on the same skill, or a resolver tool call with the same target, within 120 s. The flight recorder pins a job's input lane for the job's whole duration (capped at 30 minutes), so a long first run can still be saved as a test.
+
+**2. Distillation.** The librarian is a Claude worker with no built-in tools and only the `learn` toolset (`learn_trajectory_read`, `learn_skill_list`, `learn_skill_read`, `learn_skill_history`, `learn_skill_propose`, `learn_fact_propose`). It writes native `SKILL.md` folders ("lessons, not logs") with optional `reference/` files and an optional `recipe.json`. `learn_skill_propose` validates the schema, computes provenance and runs the linter, and returns every error so the librarian can retry a bounded number of times (three); nothing else can write a skill. After the third rejection the draft is dropped, the reasons are stored in `librarian_runs`, and each evidence job's row becomes `Done { Rejected }`, which is final: idle distillation never picks that job again (only a `Deferred` outcome returns a job to the queue), and a later run of the same kind of request is a new job, distilled on its own. The HUD's learning indicator shows "1 draft rejected" and "what have you learned" mentions it.
+
+- **What it sees.** Only trajectories of jobs that already ran on Claude, and only the fields that were in that job's model context; for an `Act` job that includes its brain turn's `[desktop]`, ledger and `[jobs]` blocks, which reach the librarian only as fenced observed data and are the job's observed text for provenance (item 9). Fast-path and replay jobs, and dictation, are never sent (dictation is recorded only as length and field category). `learning.distill = "claude" | "off"` controls it, and the first-run privacy note says plainly that distillation sends job records to the user's own Claude plan.
+- **What gets distilled.** A deterministic pre-filter in Rust, not a model pass: skip jobs marked no-learn (the flag keeps a job out of distillation, skill statistics, facts and the ledger, and nothing else: its journal, regret window and phrasing candidate stay; section 2.8, "First run", item 4), failed jobs, jobs with an unclear verdict and no objective check, and jobs with fewer than three non-read steps; when a job used a skill successfully with no divergence, only that skill's statistics change. The rules apply in that order, and each skip names its rule (`SkipReason`, below). Jobs that never ran on Claude (fast-path and replay jobs) pass through the same pre-filter, so each still gets exactly one outcome, and never reach the librarian: a replay is a use of its skill, so a clean one ends as `TooShort` or `StatsOnly` like any clean use (a replay that handed off continues on a worker and is distilled as a repair), and a fast-path job that no earlier rule skips ends as `NotOnClaude`. Distil new request kinds, repairs and runs that diverged from a skill, batching up to five trajectories per session.
+- **When.** On demand ("learn from that now", which takes the last job that ran on Claude, or `eileen skills distill [--job ID] [--wait]`), or whenever no Eileen job is running and available memory is above 3 GB, even while the user types, at below-normal priority. On-demand runs go through memory admission like any job. It is spawned for the batch and stopped afterwards.
+- **On demand inside the regret window.** The pre-filter needs a final verdict, so an on-demand request for a job whose 120 s regret window is still open first closes that window: "learn from that now" is an addressed utterance attributed to the job it names, recorded as an `Accepted` signal, and it ends the window at once, so `learn.verdict` fires with the verdict from the signals so far and the pre-filter runs on it (`eileen skills distill --job ID` does the same, with no signal added, and is refused for a job whose window is open unless `--close-window` is given). An "undo that" for that job said later still reverses its actions through the journal, and it also records `Undone` against the evidence: a draft whose only evidence was that job is deleted (`learn.draft_withdrawn`), and a skill that used it as one of several evidence jobs is repaired without it.
+- **One distillation per job.** The librarian scheduler keeps one row per job in `librarian_runs` (`DistillState`: `Queued`, `Running { batch }` or `Done { outcome }`, section 3.3.13), written before a batch starts and when it ends, and a job is distilled at most once: idle distillation picks only jobs with no row or with a `Deferred` outcome, and a repair is a separate librarian job, never a second distillation of the same evidence. `eileen skills distill --job ID` therefore never races idle distillation: it subscribes to the bus first, then reads the job's row; for `Done` it prints the recorded outcome and returns at once; for `Queued` or `Running` it waits for that batch's event; with no row it queues the job itself. A job whose outcome was `Deferred` is queued again. So an event that fired before `--wait` was called is never missed, and no second draft or version of the same job can land during a later run. No row outlives the batch that wrote it: when the librarian session exits mid-batch (a crash, a kill, its memory limit), the scheduler writes `Done { Deferred(LibrarianFailed { error }) }` for every job of that batch and emits `learn.distill_deferred` for each; and when the runtime starts, before it queues anything, it turns every `Queued` or `Running` row a stopped runtime left behind into `Done { Deferred(Cancelled) }` and emits the event, so idle distillation picks those jobs again. A `--wait` whose connection to the runtime drops exits 4 with the reason "runtime stopped"; run again after the restart, it reads the deferred row and queues the job.
+- **What `--wait` waits for.** Every distillation attempt of a job ends in exactly one bus event for that job, and `--wait` returns on whichever comes, or after a 10-minute timeout (which benchmarks and demos treat as invalid, never as a pass): `learn.skill_drafted { job, skill, held }`, emitted for every draft that passed the linter, whether it was committed at level 1 (`held = none`), held for line approval (`held = lines`) or held whole for review (`held = whole`); `learn.draft_rejected { job }` after the third failed lint; `learn.distill_skipped { job, reason }` when the job will never be distilled (`SkipReason`: `Failed`, `Unclear` with no objective check, `TooShort` with fewer than three non-read steps, `NoLearn`, `StatsOnly` for a skill it used cleanly, `NotOnClaude` for a fast-path job, `NothingProposed` when the librarian looked at it and proposed nothing, or `DistillOff` with `learning.distill = "off"`); or `learn.distill_deferred { job, reason }` when it could not be distilled now and stays available to a later batch (`DeferReason`: `PlanCap` for the five-hour share or the seven-day window above 70 percent, `AdmissionRefused` when memory admission queued the librarian for longer than its 5-minute wait, `LibrarianFailed` with the error, or `Cancelled`, which also covers a batch a stopped runtime left behind). `--wait` prints the event and the reason and exits 0 for drafted, 3 for rejected or skipped and 4 for deferred, so a run that fails names its cause instead of timing out. A held draft also raises the HUD's review panel as before; the event does not wait for the review. Benchmarks and the M6 demo assert these outcomes by run index (item 5, "Expected outcomes by run"): `learn.skill_drafted` with any `held` value for the run that makes the draft, and `StatsOnly` or `TooShort` as the expected outcomes of the runs that use the skill after it; B8 and B8-curve answer any review (the owner, or the scripted answer) before the next run, because a held draft reaches no snapshot until it is approved.
+- **What it may spend.** `learning.librarian_max_plan_pct` (default 50) of the five-hour window, and nothing when the seven-day window is above 70 percent. Every run's cost is stored (`librarian_runs`), so "what has learning cost me" has an answer. Librarian jobs are announced on the HUD only.
+
+**3. Retrieval.** Every worker session gets its own learned-skill snapshot: at spawn, `eileen-learn` writes `run\<session>\plugin\` (a `.claude-plugin\plugin.json` and the skill folders) from `learn.sqlite`, which is the single source of truth, and records a manifest of skill id, version and BLAKE3 hash per file. The snapshot holds the skills most relevant to the session (for a job, the matcher's hints for its task plus the focused app; for a pooled session, the most used skills of its kind), at most `learning.snapshot_k = 12`, because the CLI lists every description in context. A worker therefore never sees a skill change mid-session.
+
+- **Verification.** The folder gets a user-only ACL. The harness re-hashes every file against the manifest immediately before `claude` starts and checks that `system/init` lists exactly the snapshot's plugin; at job end `eileen-learn` hashes the files again, and every `SkillInvoked` must name a skill in the manifest. Any mismatch marks the trajectory `snapshot_tampered`: it is excluded from learning and statistics and logged as a security event. This detects tampering after the fact; it cannot stop another process running as the same user from racing the moment between the check and the CLI's read, which needs a separate account or a sandbox (v0.2, decision D40).
+- **When skills change under a live session.** A forget, a demotion below level 1, a rollback or a new version emits `LearnEvent::SkillsChanged`. The core recycles every idle pooled session whose manifest lists the changed skill and deletes its snapshot folder. A session bound to a running job keeps its snapshot until the job ends and is then recycled instead of re-armed; for a forget, that job also gets one steer turn ("do not use skill <id>; the user removed it"), and the forget report lists the folder as pending until the session exits, when it is deleted. Every snapshot folder is deleted when its session exits, and the janitor removes orphaned `run\<session>\` folders at start.
+- **Following a skill on purpose.** When the brain dispatches a job for a matched skill (`jobs_dispatch` with `skill`, and `slots` when it has them from the `[match]` or `[hints]` block), the job's first user turn says "Follow skill eileen-learned:<id>"; if a pooled session's snapshot lacks that skill, the skill's text (at most 4 KB, Eileen-authored) is carried inline in that turn instead.
+- **Attribution.** The trajectory records the snapshot manifest and every `SkillInvoked`, so each run knows which skill version it used. Each use's slot values (`SkillUse.slot_values`, copied into `UseRecord`) come from the first source that has them: the slots the job was dispatched with (validated against the skill's `SlotSpec`s by the dispatcher); else the arguments of the worker's `Skill` call, parsed by `eileen_skills::slots::from_args` with the skill's own slot resolvers (the skill's `arguments` front matter names the slots in order); else the skill's template run over the job's request utterance with the L1 slot resolvers. A use whose slots resolve nowhere is recorded as "slots unknown": it counts as a success or failure, but not toward distinct slot values, and it gets no shadow run.
+
+Locally, L1 templates can trigger replay and L2 hints only inform. WP7 probes whether claude 2.1.304 has a total listing budget and records it; the weekly contract test repeats the probe on each new CLI.
+
+**4. Recipes.** A recipe is a typed list of steps that Eileen runs with no model (section 3.3.13):
+
+- **Steps** are `call` (an Eileen tool and op), `ask` (a clarifying question through the core's question flow, whose answer fills a slot through that slot's resolver, for example "Beach Edit or Wedding?" with the options taken from an earlier step's output), `delegate` (a narrow worker sub-job with a goal and its bound inputs, for the one part a model must do; its output is the sub-job's `report`, `{ summary, artifacts, outcome }`), or `confirm` (show the user something, such as a crop, and wait for a yes; replay never skips it, and never skips an `ask` either).
+- **Asked slots.** An `ask` fills a slot the skill declares as a `SlotSpec` with `asked = true`. An asked slot is never part of the trigger template and is never read from the request; only its `ask` step fills it. When the `ask` offers options from an earlier step's output, the slot's kind is `Pick`, which the `Choice` resolver matches against exactly the options that step offered at run time ("the second one", "Wedding"). Asked slots are not part of a use's slot values, so they count toward neither distinct slot values nor the values a shadow run starts from; in shadow mode an `ask` agrees, and its slot is bound from the user's answer in that job, by the rules of item 7. The linter rejects an `ask` whose slot is not declared, is not `asked`, or has options while its kind is not `Pick`.
+- **Outputs.** Every op that a recipe may call declares an output schema in its `OpSpec` (generated by schemars from the op's result struct, snapshot-tested, and included in the tool's schema hash). The dispatcher keeps each call's structured result as `ToolResult.output`; the model sees the same JSON as text, never as structured content beside an image. Steps and checks read that output.
+- **References and operands.** Arguments, check arguments and expectations may hold a literal, a slot (`{"$slot": "t"}`), a pointer into an earlier step's output (`{"$step": "pick", "ptr": "/rect"}`), or the length of an array operand (`{"$len": {"$step": "stills", "ptr": "/stills"}}`, a non-negative integer). The linter resolves every pointer against the referenced op's output schema (a `delegate` step's output schema is the `report` schema) and its type against the argument's or expectation's type: a numeric expectation (`AtLeast`, `AtLeastRel`, `Within`, `Count`) takes only numeric operands, so an array must be wrapped in `$len`, and `Count` compares the length of the array at its own path with its numeric bounds. Scope: a main step may point to earlier main steps only; a step inside a fallback may point to earlier main steps and to earlier steps of the same fallback; no main step, and no other fallback, may point into a fallback; nothing may point to a later step. The linter rejects every other reference.
+- **Checks** may call only ops that are read-only and tier 0 (declared per op, so `apps_resolve` `timeline_info` is a check and `apply_drx` and `export_still`, which writes a file, are not). An expectation compares the value at a pointer with an operand, so a postcondition can say "the playhead frame is within one frame of the frame `goto` targeted" or "sharpness is at least 1.15 times the baseline step's value". A check that needs a side effect first (a fresh still) is written as a `call` step followed by its postcondition, never as a check.
+- **Postconditions.** Every `call` and `delegate` step has at least one postcondition, in the main list and in fallbacks alike. An `ask` step's postcondition is implicit (its slot resolved to one of the options or through its resolver; an unresolved answer asks once more, then hands off), and so is a `confirm` step's (the user said yes; a no stops the replay without a handoff), so the linter neither requires nor accepts explicit ones on them.
+- **Branching** is one construct: `on_fail = { fallback = [steps] }`. When a step's postcondition fails, the replay runs the fallback steps, then re-runs the failed step once and re-checks it; if it fails again, the replay hands off. Fallback steps cannot have fallbacks of their own and are scoped as above; the re-run step's new output replaces the old. This expresses "if no timeline is current, ask which project and load it" and "if the media history does not know the video, delegate the search, then look it up again".
+- **Retry** (`on_fail = "retry_once"`) is allowed only on idempotent steps; a second `apply_drx` would add a second node.
+- **Eligible for a recipe**: every argument of a non-read step is a slot, a pointer, or a literal from the tool's own vocabulary (a value of an enum or a boolean in the op's argument schema, or a list of such values, such as page `"edit"`, template `"sharpen_ellipse"`, kinds `["media"]`, kind `"coding"` or mode `"compete"`); free strings, paths, URLs and numbers in the arguments of non-read steps must come from slots or pointers. A `delegate` step's `goal` and an `ask` or `confirm` step's `question` are not arguments and are exempt from this vocabulary rule, because the librarian must word them; they are literals for tracing, overlap and the deny patterns (item 9), so they cannot carry text from outside unseen. Every step meets the postcondition rule above, every `delegate` is followed by a `call` step with a postcondition (in a fallback, the re-run of the failed step counts), and no step is a raw coordinate click. Steps that were denied, or are tier 2 or above, are never compiled into a recipe; at that point the procedure says to ask the user.
+- **What a replay may call.** A replayed step runs with origin `Replay` and may call only tools of the `act`, `desktop` and `apps` toolsets and `jobs_dispatch` (so an orchestration skill can start workers); everything else (settings, learned data, approvals, `ask_user`, which a replay reaches through its `ask` step instead) is refused from that origin. A `jobs_dispatch` from a replay inherits `authorized_by` from the replay job, which itself came from an addressed turn, and its usual asks (fan-out above two while plan usage is high) are raised again.
+
+**5. The promotion ladder.**
+
+| Level | Name | How a skill gets here | What it does |
+|---|---|---|---|
+| 0 | Trajectory | Every job | Evidence only |
+| 1 | Draft | Distilled from a successful job and passed the linter. A draft waits in `pending\` until the user approves it on the HUD when its evidence read free text from outside (the whole draft, item 9 below) or when any of its lines falls in a "held" cell of item 9's table (those lines: a line that overlaps observed text, a command, path or other literal that traces only to a tainted step, and a delegate goal or an ask or confirm question that traces nowhere); only a draft with neither goes straight to level 1 | Goes into matching sessions' snapshots; never replayed |
+| 2 | Trusted | Successes (the evidence job that produced the draft counts as the first) with enough distinct slot values and no recent failure | Hints first; named to the brain; its recipe runs in shadow mode beside the worker |
+| 3 | Compiled recipe | Agreeing shadow runs and one explicit approval ("I can do this without asking Claude from now on. OK?"), which only a `UserInput` answer gives | After a template match, one brain turn with the `[match]` block confirms intent by dispatching a `Replay` job; Eileen runs the recipe with checks after every step |
+| 4 | Spoken fast path | Clean replays | A template match runs the recipe with no model call at all |
+
+Thresholds are data in `LadderPolicy` and depend on risk. A **light** skill (every step tier 0, or tier 1 with a journaled inverse, touching nothing the user authored) needs 1 success with 1 slot value for level 2 (so the evidence job alone makes it trusted, and run 2 already shadows), 1 agreeing shadow run plus approval for level 3, and 3 clean replays for level 4. A **standard** skill (anything else) needs 3 successes with two distinct slot values for level 2, 3 agreeing shadow runs plus approval for level 3, and 10 clean replays with at least 95 percent clean over the last 20 for level 4. A success means: the job completed, no negative signal was attributed to it in the regret window, and at least one objective check passed (a verification hint or a skill postcondition) or the user praised it. An unclear verdict with no objective check counts toward a draft but not toward trusted, and a worker's own "done" never counts alone. Two failures in the last five uses drop a level; a change in the version of an app a recipe uses, or in the schema hash of a tool it calls, puts the recipe on probation (one shadow run before the next replay, or a migration by the linter); 30 idle days archive a skill (never automatic deletion); pinned skills are never archived. Promotion to level 4 is announced.
+
+What each benchmark should look like run by run (B8 and B8-curve assert this table; the M6 demo asserts its run-1 row):
+
+| Request | Run 1 | Run 2 | Runs 3 to 5 | Later |
+|---|---|---|---|---|
+| B1, the Resolve sharpen (standard) | Worker explores; the brain's `act` tools do the navigation; draft distilled afterwards | Worker follows the draft: fewer turns, no dead ends | Trusted after the third success with two different times or faces; recipe in shadow | Level 3 after three agreeing shadows and approval (about run 7): Eileen replays navigation, stills, face pick, the crop confirmation and the Fusion edit; a delegated step only if the edit needed computer use. Level 4 needs 10 clean replays, and the confirmation step stays |
+| E3 with a video the media history knows | Built-in grammar, no model, from the first repeat | Same | Same | Same |
+| E3 with a video nobody has played | A worker searches the results page and picks from a screenshot; draft (held whole for approval, because it read a screenshot) | The same video: built-in grammar, no model. A new video: a worker that follows the skill, with fewer turns | A new video each time: worker with the skill; trusted, but no recipe | Level 2 at most: the pick is a screenshot judgment, so it never compiles |
+| A media request the grammar does not cover (light) | Worker; draft; trusted at once (light, one success) | Worker with the skill; recipe in shadow agrees; Eileen asks for the level-3 approval | Level 3 replays (runs 3 to 5); level 4 after three clean replays | Run 6 onward: no model |
+| E5 fan-out orchestration (light, scaffolding only) | Brain plans; draft | Worker-free scaffolding in shadow | Level 3 or 4 for creating worktrees and starting jobs | The coding itself is always a worker |
+
+A run counts toward this table only when its verdict is final: the runner waits for the job's 120 s regret window to close (`learn.verdict` event) before the next run, and after every run for that job's distillation (`eileen skills distill --job <id> --wait`, which returns on `learn.skill_drafted` with any `held` value, `learn.draft_rejected`, `learn.distill_skipped` or `learn.distill_deferred`, or at once with the outcome already recorded when idle distillation got there first), then answers any review the draft is held for. Because a job is distilled at most once and `--wait` reads the recorded outcome, run 2 never races idle distillation, never meets a draft that is not yet in its snapshot, and never sees a second draft of run 1 land mid-run; a deferred outcome stops the benchmark with its reason. A "learn from that now" said inside the window closes it first (item 2), which is how the M6 demo gets its draft without waiting two minutes.
+
+**Expected outcomes by run.** The run whose job first produces the skill (run 1 of this table, and the first learned run of B8) must end in `learn.skill_drafted`, with any `held` value. Every later run of the same request kind uses the skill, so its expected outcome is `learn.distill_skipped` with `StatsOnly` (a worker that followed the skill cleanly, or a level-3 or level-4 replay) or `TooShort` (a run with fewer than three non-read steps, such as a `youtube-play-at` replay, because the pre-filter's length rule comes before its statistics rule); a later run that diverged from the skill may instead end in `learn.skill_drafted` for a new version, which the runner treats like the first draft. Any other outcome is recorded against its run, with its reason, as a learning failure: `learn.draft_rejected`, or a skip with `Failed`, `Unclear`, `NoLearn`, `NotOnClaude`, `NothingProposed` or `DistillOff` (and, for the drafting run, any skip at all, because that run must draft). A deferred outcome or a timeout stops the benchmark with its reason, as above.
+
+**6. Replay.** The replay state machine runs inside the core (`SkillEngine`), so it is simulated and replayed like any other logic. Slots resolve deterministically in Rust or the job goes to a worker before any action; an enumerated slot value no successful use has seen (a face position never seen, an app never seen) runs once at level 2 with a worker before it may replay. A level-4 match starts the replay from L1 directly; a level-3 match reaches the brain as the `[match]` block of section 2.3, and the brain's `Replay` dispatch must carry exactly that skill and those slots. Each step runs through the same dispatcher and permission gate as a worker with origin `Replay { skill, version }`; confirmations and `ask` steps are raised again; the HUD shows "replaying resolve-sharpen-face v3, step 4 of 7"; the user can interrupt between steps and "stop" cancels at once. The first failed check stops the replay and hands off to a Claude worker with a briefing (request, skill and version, steps done with results, the failed check with the observed state, steps left, continue from here). The recovery trajectory becomes a repair candidate.
+
+**7. Shadow agreement.** At level 2 a skill's recipe runs in shadow mode beside the worker: nothing is replayed, and the verdict is a pure, table-tested function in `eileen-skills`, `shadow::agree(recipe, slots, steps) -> ShadowVerdict` (section 3.3.13), over the job's trajectory steps. Only Eileen tool calls are compared; the worker's built-in tools (`Read`, `Edit`, `Bash` and the rest) lie outside every recipe and are ignored. A call is named by its tool and op, where the op of a tool that selects its operation through an `action` field is that field's variant (section 3.3.9, "Ops and selectors"). The rules, one per case:
+
+- **Slots.** The recipe is resolved with the use's slot values, from the attribution order of item 3; a use with "slots unknown" gets no shadow run. An asked slot (item 4) has no value until its `ask` step is matched: its value is the user's answer to the worker's matched `ask_user`, resolved by the slot's resolver against the options the matched earlier step offered (for `Pick`). Because an unmatched `ask` already disagrees (below), an asked slot needs no other source, so `load_project {name: $slot project}` is compared with the name the user chose in that job.
+- **Matching calls.** Each recipe `call` step is matched to one worker call with the same tool, op and bound argument values (a numeric tolerance per slot kind, for example a face box within 10 percent), later than the matches of every step it points to; order between independent steps is ignored, and pointers resolve against the worker's own call outputs. Each worker call matches at most one step. When several worker calls fit one step (the Fusion route's two `export_still` calls, which take no arguments), `agree` does not take the first fit: it searches for one assignment of worker calls to all of the recipe's steps at once that respects every pointer (a step's match is later than the matches of the steps it points to, and its bound arguments equal the values those matches produced, so `faces {path: $step still /path}` decides which `export_still` is `still`) and every span below, and it uses an assignment under which the run agrees whenever one exists; when none does, the verdict reports the first miss of the assignment that matches the most steps (ties go to the earlier worker calls). The search backtracks in step order and stops after 100,000 candidate assignments, past which the run is inconclusive with that reason; recipes are short, so the bound is a guard (section 7, "Carried into packages"). A recipe step with a non-read op that matches no worker call makes the run disagree. A recipe step with a read-only op that the worker never made is unobserved: when a later argument, postcondition or fallback decision needs its output, the run is inconclusive; otherwise it is skipped.
+- **Postconditions.** Each postcondition is evaluated on the matched call's output, or, when it names a check op, on a shadow check: the moment a worker call is matched to a recipe step whose postcondition names a check op, the core issues that read-only tier-0 op once with origin `Core` (no approval, nothing the worker sees; `SkillEngine::shadow_checks` says which), and its result enters the trajectory as a step marked `shadow_of` that recipe step; `shadow::agree` reads it. A check that could not be issued (the sidecar was down) leaves the run inconclusive.
+- **Fallbacks.** The shadow takes a fallback exactly where a replay would: when the worker call matched to a step fails that step's postcondition. It then matches the fallback's steps by the same rules, and requires a second worker call matching the failed step, later than the fallback's matches, whose postcondition holds. When the first matched call passes, the fallback is not taken and is not compared.
+- **Delegates.** A `delegate` step has no tool or op. Its span starts after the latest match of the steps before it in its own list, whether or not the delegate points to them (the preceding main steps; inside a fallback, the preceding steps of that fallback, or, for a fallback's first step, the worker call whose failed postcondition started the fallback; for a recipe's first step, the job's start), and ends at the match of the step after it (the next step of its own list, or, for a fallback's last step, the re-run of the failed step). The span holds only calls that no other rule accounts for: the worker's non-read Eileen calls of tier 1 or above in that interval that are matched to no recipe step, are not calls to ops marked `artifact_only`, are not failed calls for which the dispatcher journaled no inverse and are not the core's shadow checks, which are exactly the calls the unmatched-calls rule below would otherwise count as extra. The delegate agrees when its span holds at least one such call. Its own postcondition reads the sub-job's `report`, which a shadowed worker never writes, so it is not evaluated in shadow mode; the objective check is the step after it, which the run must match as usual (the linter requires every `delegate` to be followed by a `call` step with a postcondition, in the main list or, inside a fallback, by the re-run of the failed step). So the computer-use route's "level 3 with one delegated step" agrees when the worker's Color-page clicks fall in the span and the following sharpness `call` matches and passes, and a run with no edit at all disagrees (`EmptyDelegateSpan`), because the `stills` export between `pick` and `after_still` is matched to its own step and can never fill the span. Likewise the fallback delegate `find` of `youtube-play-at`, which points to no step, has a span that starts after the failing `match` call, so a tier-1 worker call made before `match` still counts as extra.
+- **`ask` and `confirm`** agree when the worker made an equivalent `ask_user` call in the same interval a delegate's span would have (after the latest match of the steps before it in its own list, before the match of the step after it), or the user answered one in that job; that `ask_user` is the step's match. For a step that offers options, equivalent means an `ask_user` with the same options (the step's options resolved against the matched earlier step's output, compared as sets after normalisation); for a step with no options (the `confirm` "This face, on the right?", or an `ask` whose slot resolves free text), any `ask_user` in that interval counts, whatever its wording, because the worker words its own questions.
+- **Unmatched worker calls.** A worker non-read Eileen call of tier 1 or above that matches no recipe step and falls in no delegate's span makes the run disagree, because the recipe would not have made it; tier-0 calls, calls to ops marked `artifact_only` (they only write new files into the job's own temp folder, such as an extra `export_still` the worker made to look), calls with `ok = false` for which the dispatcher journaled no inverse, and the core's own shadow checks are ignored.
+- **The verdict.** `Agree` when every step that should have run agreed and every evaluated postcondition held; `Disagree` names the first missing, differing or extra call or failed postcondition; `Inconclusive` names the unobserved output or the check that could not be issued. Only `Agree` counts toward level 3; a disagreeing or inconclusive run is not a failure of the skill (the job's own verdict decides that), and the HUD's "show me how" view lists the reason.
+
+**8. Self-healing selectors.** Steps are recorded by identity (process, window class, automation id, control type, name, ancestor chain) plus a postcondition, with the element index only as a hint. When a selector no longer resolves after an app update, the desktop server picks a candidate from evidence gathered before acting: a unique match on control type, name similarity above a threshold, the same ancestor roles. It acts once; if the postcondition fails it hands off. A selector repair, like a content repair, starts one level down.
+
+**9. Safety, and keeping poison out.** A replayed step carries no permission of its own; "always allow" grants are never written into skills. Provenance is computed by `eileen-skills`, never accepted from the librarian.
+
+- **Observed sources are one set** (`ObservedSource`, section 3.3.2), used both for a job's taint and for skills: the desktop tree (UI Automation names and values), screenshots, the selection or clipboard, web content, files outside the job's folder, and notifications. Which tool reads which source is one table in section 2.12 ("What counts as an observed read"), covering Eileen's own tools, the workers' built-in tools, shell commands, Claude in Chrome and approved third-party MCP servers. The dispatcher marks a job's steps tainted from its first read of any of them (`TrajectoryStep.tainted`), and an `Act` job's steps from its start when its brain turn's context held any of them; `Job.taint.sources` records which were read.
+- **What a literal is.** (a) Every string value in recipe arguments, check arguments and expectations, every `delegate` step's `goal` and every `ask` or `confirm` step's `question`; (b) every quoted string, inline code span and code block in `SKILL.md` and its references; (c) every URL, path, host, command line, e-mail-like token and tool name anywhere in the text, a goal or question included. Prose outside these is not a literal.
+- **Tracing literals.** Every literal of kind (a) or (b) of six tokens or more, and every literal of kind (c) whatever its length, must trace to one of: the user's own transcripts in the evidence jobs (provenance `User`); Eileen's tool registry, meaning its tool names, schemas and descriptions, plus the names of the built-in tools the job kind's `--tools` list allowed and the tool names an approved third-party MCP server listed when the apps sidecar ran `tools/list` after installing it (`cache\mcp-tools.json`, section 2.5) (`Tool`); the arguments of an untainted step in the evidence jobs, which covers the commands and paths a worker ran before it read anything from outside (`Worker`); or a line the user approved (`Approved`). A literal that traces only to a tainted step's arguments, or that overlaps observed text, is `Observed`. One that traces nowhere is rejected with a lint error that says what would trace ("quote the user's words, a tool schema or a command the worker ran"), and the librarian may retry (item 2), except a delegate goal or a question, which the librarian has to word itself: one of those that traces nowhere is held for the user's approval of that line instead, so the exact instruction a level-3 or level-4 replay would hand to a worker, or the exact question it would ask, is one the user has read. What happens next depends on the literal's class and provenance, by one table that the deny-scan below applies and nothing else overrides:
+
+| Literal class | `User`, `Tool`, `Worker` or `Approved` | `Observed` | Traces nowhere |
+|---|---|---|---|
+| URL or host | kept | rejected (a learned skill never carries a destination it learned from outside) | rejected, with the lint message |
+| Command line or path | kept, unless it hits a deny pattern below | held for the user's approval of that line, unless it hits a deny pattern | rejected, with the lint message |
+| Tool name | kept when it names a tool in Eileen's registry, the kind's built-in list or an approved third-party server's reported list; otherwise rejected | rejected unless it names such a tool, then kept | rejected |
+| A delegate goal or an ask or confirm question (six tokens or more) | kept | held for approval of that line | held for approval of that line |
+| Any other literal (quoted, code, six tokens or more) | kept | held for approval of that line | rejected, with the lint message |
+
+The deny patterns reject a line whatever its provenance, because no learned skill may carry them: an upload or send verb with a destination, a credential-like path, wording about approving, allowing, signing in or handling passwords, tokens or keys, "ignore previous" patterns, a `when_to_use` that claims every task or every session, and secret-like strings.
+
+- **Overlap with observed text.** Any run of eight tokens in a line, prose included, that also occurs in the evidence jobs' observed text (Eileen's read-tool outputs and the workers' captured `observed` results, item 1) marks that line observed.
+- **Whole-draft hold.** When an evidence job's taint sources include anything other than the desktop tree (screenshots, the selection or clipboard, web content, outside files, notifications; a tree read of a browser's web content or of a mail, chat or social app counts as web content, section 2.12, so a page or an e-mail read through UI Automation is held whole too), the model may have read instructions that no n-gram can catch, so the whole draft waits in `pending\` until the user reads and approves it on the HUD (`HudPanel::DraftReview`, one approval for the draft). Desktop-tree-only drafts are held line by line as above.
+- **What a tainted step keeps in a recipe.** Every step of a job is tainted from its first observed read (an `Act` job's from its start, item 1), so whether a step survives into a recipe depends on what each argument carries, not on the step's flag. A recipe step compiled from a tainted step keeps an argument that is a vocabulary literal of the op's own schema (an enum or boolean value, or a list of them, such as `kinds: ["media"]`, `reuse_playing: true` or page `"edit"`: Eileen's own words, provenance `Tool`), a slot, or an untainted operand. An untainted operand is a pointer into the output of an untainted step, or into a field no outside party wrote: any field of an op whose `observes` rule is none (Eileen's computed results, such as a still's path in the job's temp folder, a face box, sharpness, a frame number from timecode math or a dispatched job's id); the fields of any op that are not text (window handles, element indexes, rectangles, counts and flags, which the OS or Eileen's code computes); and the `url` and `path` of `apps_recent` items, which section 2.12's observed-read table counts as built by Eileen's code. The text fields of an observed read (names, titles, values, page or media text) are observed. An argument the op's schema marks match-only (`x-eileen-match`: it is only compared with what the app reports, to recognise the expected result, and never chooses a destination, a target or text to enter, such as `apps_open_url`'s `wait_for_media_title`) may also point into an observed field. A tainted step with any other free string, path, URL or number in its arguments (a literal the librarian copied from the evidence, or a pointer into observed text such as a window title or a link on a page) is dropped from the recipe like a denied step, and the procedure says to ask the user at that point. So `youtube-play-at` and `resolve-sharpen-face` compile from their own evidence jobs, tainted from their first read (and, for B1's navigation by the brain's `act` tools, from the start), with every step kept.
+- **Deny-scan.** The skill text is rejected when any literal falls in a "rejected" cell of the table above or hits a deny pattern, and the draft goes to `pending\` when any line falls in a "held" cell; a held line is never silently dropped, and a rejected one is reported to the librarian as a lint error with the reason. Learned frontmatter is an allowlist (`name`, `description`, `when_to_use`, `arguments`, `argument-hint`, `disable-model-invocation`, `user-invocable`, `metadata`); no `scripts/` folders, no `` !` `` sequences and no shell preprocessing; secret-like strings are rejected; auto memory and session persistence are off in every session Eileen starts. WP7 tests each of these with an injected web page through the stub harness.
+
+**10. User control** by voice and HUD: what have you learned, what do you know about me, show me how, learn from that now, that's wrong, correct it ("no, my timelines start at zero": the fact is retired and replaced with the user's version; a skill that used it is queued for repair and starts one level down), forget that (confirms once, then deletes the skill, its versions and its evidence everywhere, and writes a tombstone), forget that I ... (the matching facts, after one confirmation), don't learn from this, stop or start learning, approve, use the old version, how much time have you saved me, what has learning cost me.
+
+**11. The user model, phrasings and the episodic ledger.** Itemized facts (`user`, `feedback`, `project`, `reference`, `vocabulary`, `phrasing`) with provenance, a subject key, the source turn, a last-confirmed time and a confidence, changed by deltas (`FactDelta`: add, confirm, retire with a reason and an optional replacement), never whole rewrites; facts are deduplicated and capped per kind. A fact unconfirmed for 90 days retires as `Stale`; a successful use of a skill confirms every fact in its `facts_used`, so a fact a working skill relies on does not go stale while it is used. Workers get a facts block of about 400 tokens scoped to the job's repository and app (for example "this repo tests with cargo test", "make them compete, don't split"), plus one route line per app (section 2.5), and deep-answer jobs one sources line for their topic (below). Facts enter by three paths:
+
+- **The deterministic fact path** (core, WP1; grammar, WP7; store, WP7). The fact phrases of section 2.4 are L1 grammar entries, each producing `CoreCommand::Fact(FactCommand { kind, text, subject, scope, retire })` (section 3.3.10) with no model: the text is the user's own final transcript, normalised and capped at 200 characters, with referents resolved by the slot resolvers written in brackets ("I loved [Ramen Tatsu-ya]", the referent being the HUD item the user last opened or the top item of the last answer); the kind comes from the entry ("I like", "I prefer", "I don't like" and refinement words are `feedback`; "X means Y" is a `phrasing` slot alias; "remember that" is `user`; "my <thing> ..." is `user`, or `project` when `<thing>` names the focused repository or app). Provenance is `user`.
+  - **Feedback: subject and scope.** The subject key of "I like | I prefer | I don't like <thing>" is the `<thing>` ("spicy food", "Celsius"); that of "I loved that [place]" is the referent the slot resolver bound in the brackets (the place's name, "ramen tatsu-ya"); and a refinement word alone takes the dimension its grammar entry names (distance for "closer", price for "cheaper", noise for "quieter", size for "bigger", and the same dimension for each word's opposite, such as "further"), never the answer's topic. So "cheaper" said after "closer" about the same answer is a second preference beside it, and "further" replaces "closer". The scope is the last answer's `topic` only while that answer is current and the statement refers to it: a refinement word, "I loved that [place]", or a `<thing>` that the resolver's follow-up rule (`IntentResolver::follow_up`, section 3.3.10) resolves to an item or content word of that answer, said within 120 s of it. Otherwise the fact has no scope and applies everywhere. So "I don't like spicy food" after a food answer is scoped to that topic, and "I prefer Celsius" after a restaurant answer is not. These entries carry `RetireRule::SameSubject`, so "I don't like spicy food" retires "I like spicy food", by the scope rule below, and leaves "I like ramen" alone.
+  - **Phrasings live in the phrasing store.** A `FactCommand` of kind `phrasing` ("no, the video editor means Premiere", "X means Y") is never stored as a `UserFact`: the core turns it into a `PhrasingFact` with a `SlotAlias` target and a subject key (the normalised `<phrase>`), the same record a clarifying answer creates ("which video editor?" "Resolve" stores the alias "the video editor" with subject key "video editor"). `RetireRule::SameSubject` on a phrasing deletes every alias phrasing of the same slot kind and subject key, whatever made it (`LearnCmd::DeletePhrasings`, journaled with the deleted rows so "undo that" restores them), then stores the new one, and the resolver is rebuilt from `LearnEvent::SkillsChanged` before the next utterance. So one subject never has two live aliases. "Closer" also starts a brain turn that refines the last answer from the answers cache, so the next answer of that topic, and this one, use the fact at once.
+  - **Statements only.** These patterns would otherwise swallow ordinary requests, so they match only a whole utterance that is a single declarative clause. The tests below apply to the text the pattern's slots captured (`<text>`, `<thing>`, `<value>`, `<phrase>`), never to the entry's own literal words, so "remember that ..." and "forget that I ..." can match. The match fails, and the utterance goes on down the precedence list to the brain, when that slot text contains a second clause (a comma, "and", "so", "but", "then" or "because" followed by more words), a question (a question word, a question mark from the recognizer, or rising-intonation marking from the end-of-turn detector), any verb from the grammar's request lexicon (the imperative verbs of section 2.4's commands plus "fix", "check", "find", "show", "tell", "make", "help", "run", "start", "stop", "open", "close" and their forms), or a bare deictic object ("this one", "it", "that") outside the "I loved that [place]" entry. The `<thing>` of "my <thing> <is | are | starts at> <value>" must be a noun phrase of at most four words that is a known subject: an app in the app index, the focused repository, the subject key of an existing fact, or a word from `fact-subjects.toml` (a short data file in `eileen-intent`: timelines, frame rate, project, repository, editor, browser, birthday, location, name, team and the like); its `<value>` must be a number, a time or date, a name, or at most six words with no verb and no word from the complaint lexicon (`fact-subjects.toml` again: slow, broken, stuck, frozen, crashing, laggy, dead, not working, acting up and the like), so "my Chrome is slow" reaches the brain as the complaint it is. The learned-template rule of section 3.3.10 (a `Text` slot may not swallow a conjunction or a grammar verb) applies to these built-in patterns too. So "my tests are failing, fix them", "my laptop is slow, what's using memory", "my Chrome is slow" and "I like this one, open it" all go to the brain, while "my timelines start at zero", "I prefer Celsius" and "remember that the demo repo is flaky-login" store facts. The resolver golden file carries both lists.
+  - **Said back, and undoable.** Every fact this path stores is confirmed in one short line from the phrase templates ("Noted: your timelines start at zero.") and journaled, so "undo that" (or "that wasn't a fact") retires it at once with reason `Undone`, and the HUD shows it with an Undo button for 30 s.
+  - **Which fact a correction retires.** Each fact has a subject key: the `<thing>` (or the `<phrase>` of "X means Y", the bracketed referent of "I loved that [place]", or a refinement word's dimension), lower-cased, with stop words dropped and plural endings stripped. A correction ("my timelines start at zero", "I don't like spicy food") retires every active fact of the same kind and subject key whose scope is the statement's own scope or no scope, and a statement with no scope also retires that subject's scoped facts, because it applies everywhere; then it adds the new one. So a later "I don't like spicy food" scoped to a food answer retires an unscoped "I like spicy food", and the two never stay active together for one topic. "No, X means Y" replaces the alias phrasings of that subject key as above; the confirmation line names what it replaced ("Noted: your timelines start at zero, not one hour."). When nothing matches it only adds.
+- **`learned_correct` from the brain**, for corrections the grammar did not catch. In an addressed turn only, and its `instruction` becomes a fact with provenance `user` only when it is a contiguous span of that turn's normalised final transcript (pronouns resolved by the slot resolvers). Otherwise the core shows "Remember: <instruction>?" on the HUD and says it, and only a `UserInput` yes stores it, with provenance `approved`. For a skill target, the core issues `LearnCmd::Repair { skill, words, turn }`: the librarian repair job's briefing carries the user's words as that turn's transcript, so the repaired lines that quote them trace to provenance `user`, and the new version starts one level down.
+- **`learn_fact_propose` from the librarian**, never with provenance `observed`.
+
+Each skill records the facts it depends on (`SkillMeta.facts_used`): when a version is committed, `eileen-skills` takes the facts bound into its evidence jobs (`Trajectory.facts`) whose values appear in the skill's literals or recipe arguments. Retiring a fact as `Corrected` or `Forgotten` queues a repair of every skill that lists it, and those skills drop one level; a `Stale` or `Undone` retirement only removes the fact from future facts blocks and leaves skills alone, because nothing the user said contradicts them.
+
+**Sources that gave accepted answers** (owner direction: "the learning loop remembers which sources gave the best answers for each kind of question"; WP1 decides, WP7 stores). These are statistics, not facts, kept in a `source_stats` table (`SourceStat`: topic, host, cited, accepted, opened). When a deep answer's regret window closes, the core records, for its `topic`, every host its answer cited as cited; when the verdict is a success with a positive signal (the user opened one of its links on the HUD, praised it, or followed up with a refinement word or "I loved that place" attributed to it), it records the hosts of the opened link, or else of the top item, as accepted, and an opened link counts once more. Only registrable domains are stored, never paths or page text. The `cited` count comes from the worker's answer and is kept only as the denominator; the sources line uses only hosts with `accepted` above zero, so a host reaches a later job only through the user's own signal. A deep-answer job for that topic gets one fenced data line built by `eileen_skills::sources::line` ("for food near me, answers from yelp.com were accepted 4 of 5 times"), at most three hosts, each with `accepted > 0`; it is a hint for which sources to check first, never an instruction, and it sets no `WebFetch` rule.
+
+**Phrasings** (WP1 decides, WP7 stores and matches). A phrasing is a `PhrasingFact`: a normalised utterance and its target (a slot-free call, a grammar entry, a skill template, or a slot alias such as "the video editor" means DaVinci Resolve). It comes from a clarifying answer or from "X means Y" on the fact path (an alias, stored at once and confirmed because the user chose it, with the phrase's subject key, so a later "no, X means Z" replaces it; item 11 above), or from an `Act` job: when a brain turn's only effects were one slot-free tier-0 or tier-1 call with a journaled inverse, the core records the utterance and the call as a candidate, with the turn and the `Act` job it came from (`PhrasingFact.source_turn` and `source_job`), so forgetting that job or turn removes the phrasing too (item 12). A `FirstRun` turn's candidate is `ephemeral` and is deleted when the first run ends (section 2.8). An **exact repeat** (the same normalised utterance) of a candidate runs its call from L1 at once, even before the first regret window closes, because it is reversible and the user said exactly the same words; an undo, a "no" or a correction attributed to either use deletes the candidate. When the regret window closes clean, `confirmed` goes up by one: at 1 the phrasing serves exact repeats permanently; at `learning.phrasing_paraphrase_uses` (2) it also serves L2 paraphrases through the embedding model, still only for slot-free targets, and only under two guards: the cosine similarity between the new utterance and the phrasing is at least `learning.phrasing_min_similarity` (0.85 until WP7 measures it on the resolver golden file's paraphrases and records the value that keeps every negative case out), and every app, file, media, URL or monitor name that the L1 slot resolvers find in the new utterance equals the matching literal in the target's arguments (or the alias's value). A paraphrase that fails either guard is only a hint to the brain. So "bring Word up" never runs the confirmed "get Notepad up for me", however close their embeddings, because the `App` resolver finds Word and the target launches Notepad. Without an adopted transformer model, L2 uses the static-embedding model (section 3.3.10), so paraphrase matching never depends on a model that might not be adopted.
+
+**The episodic ledger** records Eileen's own events plus sampled focus changes (app, window title, document identity, focus time and, for a browser window, its address-bar URL after redaction, which rule 3 of section 2.12's URL rule reads) for 14 days and answers "go back to what we tried an hour ago", "what was that page I had open yesterday" and the Photoshop recall in E8; InPrivate and incognito windows, password managers and private apps are never recorded, and off-the-record mode records nothing. Ledger lines go into a brain turn only when the utterance refers to the past, or when the brain calls `ledger_search`. At most about 600 tokens per brain turn come from learning.
+
+**12. Privacy of what is stored.** `learn.sqlite` and `eileen.db` run with `PRAGMA secure_delete=ON`; after a forget, each database's WAL is checkpointed with `TRUNCATE` and blobs are reference-counted, so unreferenced ones are deleted. A forget is one plan from `eileen_skills::forget::plan`, listing the skill versions, facts, phrasings (every phrasing whose source turn or source `Act` job is in the plan, because a phrasing stores the user's own utterance), the answers-cache rows and source-statistics topics those jobs alone wrote, evidence jobs and their turns, carried out by two owners: the core emits `Effect::Learn(LearnCmd::Forget(plan))`, which `eileen-learn` (WP7) executes over `learn.sqlite`, the blobs, incidents, recordings, saved scenarios and snapshot folders, and `Effect::Persist(Record::PurgeJobs { jobs, turns })`, which `eileen-runtime::store` (WP2) executes over `eileen.db` (the jobs' rows in `jobs`, `events`, `approvals` and `journal`, and every `events` row carrying one of those turns). With `logging.include_personal` on, the runtime also rewrites that day's and older log files without the lines that carry those job or turn IDs. The forget reports done only when both `LearnEvent::Forgot` and `StoreEvent::Purged` have arrived (and any live snapshot folder holding the skill has been deleted, item 3). The acceptance test greps the whole data directory for a canary request string afterwards. The canary request is a slot-free paraphrase the brain runs through its `act` tools (so its `Act` job creates a phrasing candidate holding the canary words), said twice so the second time runs as an exact repeat, and also asked once as a deep-answer question (so it reaches the answers cache and a trajectory); then each of those jobs is forgotten (`learned_forget` with `Job { job }`). The grep decompresses every `.zst` blob and zstd frame, dumps every text column of every SQLite file and reads each WAL file raw, reads every log, and runs twice, with `logging.include_personal` off and on. At promotion, evidence shrinks to what replay and measurement need (slot values, tool names, bound arguments, checks, cost), dropping free-text results. The learning folder gets a user-only ACL and is marked not to be indexed by Windows Search. Encryption at rest is v0.2 (decision D40).
+
+**13. Measurement, and skills as tests.** Per skill: uses, successes, failures, undos, handoffs, and median duration, model turns and tokens of the first runs against the last ten; "time saved" is the difference times the uses. When a skill becomes trusted, Eileen writes local sim-lane scenarios from its evidence, and every failed job and every replay handoff becomes a local scenario automatically, with `outcome = "expected_fail"` and its incident attached (owner direction: trajectories become regression scenarios automatically). These stay in `scenarios\saved\`, capped at 200 and 500 MB with the oldest auto-generated ones removed first, and are never shared without the share flow. A librarian repair is committed only if the skill's scenarios still replay green. Once per trusted skill, the HUD offers "Save this as a test for the project?" through the normal share preview and redaction. Fleet results carry anonymous learning statistics (skills per level, handoff rate, median turns by run index; no skill names or text). Sharing skills across many machines is v0.3; the fleet will check a skill on several machines before it can ever be offered.
+
+**14. The worked recipes, with real tool names.**
+
+Pointers are written `$step <id> <pointer>`, slots `$slot <name>` and lengths `$len $step <id> <pointer>`, short for the JSON forms above; `post` checks the step's own output unless it names a check op. `call <tool> <op> {args}` names the op the same way for every tool, including those whose argument struct selects it through an `action` field (`apps_media status` is `AppsMedia { action: Status }`; section 3.3.9, "Ops and selectors").
+
+`resolve-sharpen-face` (slots `t: Offset`, `which: Position`, `amount: Choice`, and the asked slot `project: Pick`), on the Fusion route:
+
+1. `hello`: `call apps_resolve hello` (post: `/ok` is true).
+2. `info`: `call apps_resolve timeline_info` (post: `/timeline` exists). Fallback when no timeline is current: `recent`: `call apps_resolve projects_recent` (post: `/projects` count at least 1); `which_project`: `ask` "Which project?" with options from `$step recent /projects`, into the asked slot `project` (a pointer to an earlier step of the same fallback, which the scope rule allows); `load`: `call apps_resolve load_project {name: $slot project}` (post: `/loaded` is true); then `info` runs again, and a second failure hands off.
+3. `page`: `call apps_resolve open_page {page: "edit"}` (post: `/page` equals `"edit"`); `goto`: `call apps_resolve goto {offset_s: $slot t}` (post: check `apps_resolve timeline_info`, `/playhead_frame` within 1 of `$step goto /target_frame`, the frame Rust computed from the timeline's start and rate).
+4. `still`: `call apps_resolve export_still` (post: `/path` exists); `faces`: `call apps_image faces {path: $step still /path}` (post: `/faces` count at least 1); `pick`: `call apps_image pick_face {path: $step still /path, which: $slot which}` (post: `/rect` exists); `before`: `call apps_image sharpness {path: $step still /path, rect: $step pick /rect}` (post: `/sharpness` exists), the baseline.
+5. `confirm` "This face, on the right?" showing `$step pick /crop` (implicit postcondition: the user's yes).
+6. `clip`: `call apps_resolve current_item` (post: `/end_offset_s` exists); `stills`: `call apps_resolve export_stills {from_offset_s: $step clip /start_offset_s, to_offset_s: $step clip /end_offset_s}` (post: `/stills` count at least 2); `track`: `call apps_image track_face {stills: $step stills /stills, start: $step pick /rect}` (post: `/boxes` count at least and at most `$len $step stills /stills`).
+7. `edit`: `call apps_resolve import_fusion_comp {template: "sharpen_ellipse", boxes: $step track /boxes, amount: $slot amount}` (post: check `apps_resolve fusion_comps`, `/current` equals `$step edit /name`). The dispatcher journals its inverse (delete this composition, load the previous one). On the DRX route this step is two steps: `addv`: `call apps_resolve add_version` (post: check `apps_resolve versions`, `/current` equals `$step addv /name`), then `edit`: `call apps_resolve apply_drx {template: "sharpen_window", window: $step pick /rect, all_layers: true}` (post: `/applied` is true). On the computer-use route it is `edit`: `delegate` "apply a sharpen window at this box on the Color page" with inputs `{box: $step pick /rect}` (post: `/outcome` equals `"done"`); the delegate's own check is only the worker's report, and the objective check is step 8's sharpness postcondition, which runs next as an ordinary `call` (a failure there hands off). This keeps the skill at level 3 with one delegated step.
+8. `after_still`: `call apps_resolve export_still` (post: `/path` exists); `after`: `call apps_image sharpness {path: $step after_still /path, rect: $step pick /rect}` (post: `/sharpness` at least 1.15 times `$step before /sharpness`).
+
+Every non-read argument is a slot, a pointer or a vocabulary literal (`"edit"`, `"sharpen_ellipse"`, `"sharpen_window"`, `true`, `"done"`), every `call` and `delegate` step has a postcondition, and every check calls only read-only tier-0 ops (`fusion_comps`, `versions`, `timeline_info`), so the recipe is eligible, and on the Fusion route it is model-free from end to end.
+
+`youtube-play-at` (slots `video: Media`, `t: Offset`), for phrasings the built-in grammar does not cover:
+
+1. `match`: `call apps_recent {query: $slot video, kinds: ["media"]}` (post: `/confident` is true). Fallback: `find`: `delegate` "find this video on YouTube and play it" with inputs `{video: $slot video}` (post: `/outcome` equals `"done"`, and check `apps_media status`, `/title` exists); the worker's `apps_open_url` call and SMTC put the video into the media history, so when `match` runs again it finds it; a second failure hands off.
+2. `open`: `call apps_open_url {url: $step match /best/url, start_s: $slot t, wait_for_media_title: $step match /best/title, reuse_playing: true}` (post: `/media_title_seen` is true). With `reuse_playing`, an SMTC session that already shows that title is sought to `start_s` through SMTC instead of the URL being opened again (`/reused` is true), so after the fallback's worker has already opened and played the video, the recipe does not open it a second time.
+3. `pos`: `call apps_media status` (post: `/position_s` within 3 of `$slot t`, read after any ad has passed).
+
+The fallback's delegate goal ("find this video on YouTube and play it", eight tokens the librarian wrote) traces to nothing in the evidence, so the draft holds that one line for the user's approval (item 9) rather than failing the lint; once approved it traces as `Approved`. The computer-use route's goal in `resolve-sharpen-face` is held the same way.
+
+`launch-agents-fanout` (slots `n: Count`, `task: Text`, `repo: File`): `call jobs_dispatch {kind: "coding", fanout: $slot n, mode: "compete", repo: $slot repo, task: $slot task}` (post: `/jobs` count at least and at most `$slot n`, queued ones included). `jobs_dispatch` is allowed from origin `Replay` by item 4, with `authorized_by` taken from the replay job. The coding itself is always a worker; only the orchestration is compiled.
+
+### 2.11 Settings by voice, and configuration
+
+**Files.** TOML with comments (`toml` 1.1.8), in `%LOCALAPPDATA%\eileen\config\`: `eileen.toml` (the user's settings, every key documented in a comment), `profiles\<name>.toml` (overlays), and a generated `eileen.schema.json` for editor completion. The commented default file and the schema are generated from the config types' doc comments by `cargo xtask codegen` and checked fresh by a test. `eileen config explain` prints every effective value and where it came from (default, file, profile, voice, HUD).
+
+**The settings model** (`eileen-config`, section 3.3.11). Every setting has a `SettingSpec`: key, type, default, doc, whether it is reachable by voice and on the HUD (all are, unless stated), its risk class, how it applies (on the next turn, live, or restart of one component) and its safety bound. A test fails unless every leaf key of the config schema has exactly one `SettingSpec` with a matching doc, and the reverse. Changes go through one flow, whatever the source:
+
+1. **Propose.** The brain calls `settings_propose` with the changes and the user's words, the L1 grammar does it for fixed phrasings, or the HUD's settings panel does it for a click. The proposal is validated against the schema and the safety bounds. The utterance the brain passes is informational only and is never evidence of consent.
+2. **Check before applying** when a choice could misfire. A new name: not on a common-word list, not close to a household member's name in the user model, and recognised in three of three sentences Eileen synthesizes and transcribes with its own recognizer. A new hotkey: a trial `RegisterHotKey` that fails if another app owns it (and approve and deny chords need at least two modifiers). A new voice or a new engine for a voice: the real-time factor of one clause in that engine, which decides whether it may speak live. A new brain or deep backend: the brain benchmark of section 2.3 against the current backend, with a warning when it is noticeably slower or less reliable.
+3. **Confirm** in one sentence. Low-risk changes apply at once with "say undo that to go back"; changes with a warning ask first.
+4. **Apply and version.** Every applied change writes a row in `settings_versions` (full snapshot, diff, source, the utterance); "undo that" or "go back to how it was" applies an earlier snapshot as a new version, so history only grows. Hand edits of the file are picked up by a watcher, validated (an invalid file keeps the previous version and the HUD names the line), and versioned with source `file`. Comments survive every apply.
+5. **Profiles** ("work mode", "editing mode") are overlays switched by voice and exportable as one TOML file.
+
+**Safety bounds.** Tier 3 can never be relaxed. A relaxation for a tier-1 action is allowed by voice. Skipping confirmation for a tier-2 action needs an explicit, logged decision: Eileen names the action, the user says "yes, always allow <action>" (or clicks it on the HUD), and the decision is stored with the approval that made it; it can never cover credentials, payments, sending messages as the user or deleting outside a repository. **Safety-relevant keys** (risk `Safety`) change only with an approval built from the user's own voice or click, never because the brain proposed it: every `desktop.*` key (including `desktop.visible_intent_ms` and `desktop.lease_idle_s`), every `privacy.*` key, `logging.include_personal`, `permissions.*` (private apps, desktop apps, grants, `uri_schemes`), the approvals rows of `announcements`, `approvals.*`, every `fleet.*` key (`opt_in`, `mode`, `upload`, `schedule`), `recording.audio`, `learning.distill`, `mcp.servers`, every `hotkeys.*` key, `conversation.window_s`, `routing.brain`, `routing.deep`, `routing.fallback_brain` and every per-kind `route` (another backend sends data to another vendor), and `claude_plugin.share_skills`. This list is a constant in `eileen-config` (prefixes such as `desktop.` cover every key under them), and the registry test fails if any key it covers lacks risk `Safety`, so a key added later under one of these prefixes is safe by default. The product and repository stay Eileen; the user's assistant name, voice and personality are the user's own.
+
+**Rename and personality** ("I want to call you Nova now", "be funnier") change `assistant.*`, which the addressee gate, the recognizer hint list, the phrase cache and the per-turn `[assistant]` block read. Because personality travels in the turn, not the system prompt, the change applies on the next turn with no brain restart; the cache re-renders phrases that contain the name.
+
+### 2.12 Permission tiers and security
+
+| Tier | Name | Examples | Behaviour |
+|---|---|---|---|
+| 0 | Observe | DesktopState, a screenshot, read a file in the job's folder, read a page, read a job | Silent |
+| 1 | Reversible | Move or snap a window, change the volume, open an app, a file or a site, play or pause, edit files in the job's repository, create a branch, merge locally, add a Resolve version and an edit on top of it, insert dictated text | At once, journaled with its inverse |
+| 2 | Consequential | Send a message, delete outside a repository, push, install software, spend credits, change settings outside Eileen, speak as the user to others, publish a scenario or results, any shell command not on the allowlist, read outside the job's folder, open a file that runs code, run a repository's build or tests after the job read untrusted content, network egress once a job is tainted and has read private data (section "One URL rule") | Confirm first |
+| 3 | Blocked | Enter credentials, make payments, disable security features, bypass a CAPTCHA, read vendor credential files or Eileen's own data folder (beyond the job's own folders and snapshot), type text that looks like a secret or a card number | Never; explain and hand the step to the user |
+
+Every tool declares its tier in its `ToolSpec`, per op where a tool has ops; a few depend on arguments (a control named Send is tier 2; a blocked combo is tier 3). An undeclared tool, including any tool of an approved third-party MCP server the user has not relaxed, is tier 2.
+
+**Worker built-in tools** are classified by a deterministic policy in the core (`eileen_core::tiers::claude_tool_tier`), from facts the runtime adds to each `PreToolUse` request before the core sees it (the core does no IO, so the runtime canonicalises every path argument and classifies it, expanding `%VAR%`, `$env:VAR`, `$VAR` and `~` against the worker's environment and following junctions, symbolic links, 8.3 short names and `.lnk` targets to their final path; a UNC path is `Elsewhere`). The same classes apply to the path arguments of Eileen's own tools from every origin (fields marked with the `x-eileen-path` schema extension, such as `apps_open_path`, `apps_explorer` `OpenFolder`, `apps_image` and `apps_photoshop` paths): a credential, Eileen-data or browser-profile path is tier 3 for them too, and a worker's read of an `Elsewhere` path sets `private_read`. A built-in tool outside the job kind's list (section 3.3.9), and every subagent tool, is tier 3.
+
+| Path class | Read, Grep, Glob | Edit, Write |
+|---|---|---|
+| `JobFolder`, `JobTemp`: the job's repository or worktree, its scratch folder (`run\<session>\cwd`), the job's temp folder | 0 | 1 |
+| `GitInternals`: a path inside the job's own folders (`JobFolder` or `JobTemp`) with a component named `.git` below the folder's root (a directory or a worktree's pointer file, so a nested repository's `sub\.git\config` and a rewritten `.git` file are both caught), plus the job repository's git directory and common directory wherever they live (a worktree's `gitdir` target, found when the job starts by reading its `.git` file and `commondir`, never by running git), including `hooks\`, `config`, `info\attributes` and `modules\`. A `.git` component is recognised the way git's own `core.protectNTFS` recognises one: without case, with trailing dots and spaces stripped, with any alternate-data-stream suffix removed (`.git::$INDEX_ALLOCATION`, `.git:$I30:$INDEX_ALLOCATION`), and, for a path that does not exist yet and so cannot be canonicalised, the short form `GIT~<n>` too | 0 | 2, HUD only |
+| `SkillSnapshot`: the session's own learned-skill snapshot (`run\<session>\plugin`) | 0 | 3 |
+| `Toolchain`: cargo registry and git, rustup toolchains, npm global modules, uv cache | 0 | 2 |
+| `EileenData`: every other path under Eileen's data folder (`%LOCALAPPDATA%\eileen`, including other sessions' folders, other jobs' worktrees, `run\bus.json` and `run\session.json`); `Credential`: credential stores (`.ssh`, `.aws`, `.config\gh`, `.git-credentials`, `.netrc`, vendor CLI credential files, Windows credential folders); `BrowserProfile`: browser profile folders | 3 | 3 |
+| `Elsewhere`: anywhere else | 2 | 2 |
+
+The classes are tried in one fixed order and the first whose rule matches wins: `Credential` and `BrowserProfile` (tier 3 wherever they sit), then `GitInternals` (whose rule includes lying inside the job's own folders or git directories), then `SkillSnapshot`, then `JobFolder` and `JobTemp`, then `EileenData`, then `Toolchain`, then `Elsewhere`. A `.git` component anywhere else (another repository on the disk, another job's worktree, a git checkout in the cargo registry) does not make a path `GitInternals`: the path keeps the class it has without that rule, so a read of `D:\other\.git\config`, which often holds remote URLs with tokens in them, is `Elsewhere` (tier 2, asked, and it sets `private_read`), and another job's worktree's `.git` file is `EileenData` (tier 3); a write to such a path takes the higher of its class's write tier and tier 2, HUD only (`PathFact.git_component`). So an in-place job's `.git\hooks\pre-commit`, inside the job folder, is `GitInternals`; a worktree under `%LOCALAPPDATA%\eileen\worktrees\` is the job's folder for that job and Eileen's data for every other job; and the session's snapshot is never Eileen's data for its own session.
+
+**Git runs code too.** A repository's hooks, `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, credential helpers, filter drivers, `diff.<driver>.textconv`, `diff.external` and `!` aliases all run programs on ordinary git commands (`git status` can run an fsmonitor hook, `git diff` a textconv driver), and git runs the configuration of whichever repository it finds, which need not be the job's. So:
+
+- Writes into `GitInternals` (a `.git` component inside the job's folders, the job's own git directory) are tier 2 and HUD only, and so are writes to a `.git` path of any other class (at that class's tier when it is higher), through the file tools, shell redirections and every other path, so a worker cannot build a nested repository's configuration or hooks, or point a worktree's `.git` file at a directory it made, without the user.
+- `git config` in any form that sets, unsets, adds or edits a value, `git -c <key>=...`, and the global options that choose another repository, configuration or program (`--git-dir`, `--work-tree`, `--config-env`, `--exec-path`, `--namespace`, `--bare`) are tier 2 and HUD only. `git -C <path>` is treated like `cd <path>`: the path is classified, and the rules below apply to the repository found there.
+- Environment assignments choose what runs too: `HOME` or `XDG_CONFIG_HOME` makes git load a `.gitconfig` the worker wrote as its global configuration (it can set `diff.external`, a textconv driver or `core.hooksPath`, and it is not a `.git` path, so writing it is an ordinary job-folder write), `GIT_*` variables reconfigure git directly, and `EDITOR`, `GIT_EDITOR`, `PATH` or `NODE_OPTIONS` pick the program a command starts. So any environment assignment in a command line makes the whole command tier 2 and HUD only, whatever the command: a `VAR=value` prefix, `env VAR=value`, `export`, `set` and `setx`, `$env:VAR = ...`, `Set-Item env:...` and `[Environment]::SetEnvironmentVariable`. The only exceptions are five variables that name no program, file or folder (`RUST_BACKTRACE`, `RUST_LOG`, `CARGO_TERM_COLOR`, `NO_COLOR` and `CI`) set to one word with no path separator, quote or `$`, which leave the command's tier as it was.
+- Every worker's environment pins `core.fsmonitor=false` and `safe.bareRepository=explicit` through `GIT_CONFIG_COUNT=2` and `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n` (command-scope configuration outranks the repository's), so no fsmonitor hook runs and git never adopts a bare repository it merely finds in a folder; this costs only speed.
+- For every git command, the runtime finds the repository the command will use by walking up from the command's working folder (tracked through `cd`, `git -C` and `&&` chains) to the first `.git` entry, never by running git, and adds a `GitFact` to the `PreToolUse` request (section 3.3.3): whether that repository is the job's own, and whether it has hooks (any non-sample file in its hooks directory, or `core.hooksPath` set in its configuration file). Hooks that were already in the job's repository are trusted as much as the repository itself, like its build scripts, and writes to a hooks directory always ask, so a hook present at call time was either there at the start or approved. But once the job is tainted, the git commands that run hooks (`commit`, `merge`, `pull`, `checkout`, `switch`, `rebase`, `cherry-pick`, `am`) are tier 2 when that repository has any hook, for the same reason build and test commands are; and once tainted, any git command whose repository is not the job's own (a nested or vendored repository) is tier 2, because its configuration can run drivers on `git diff` or `git add`.
+
+**Shell commands** (`Bash`, `PowerShell`) are parsed with a small tokenizer (never evaluated) and default to tier 2. An allowlist makes the usual work tier 0 or 1: read-only commands (`git status`, `git diff`, `git log`, `ls`, `dir`, `cat`, `type`, `rg`, `grep`), local git (`add`, `commit`, `branch`, `switch`, `checkout`, `stash`, `merge`, `worktree list`, subject to "Git runs code too" above), `cd` into a folder of the job, and build and test commands inside the job's folder (`cargo build|check|test|clippy|fmt|xtask`, `npm test`, `npm run test`, `pnpm test`, `pytest`, `python -m pytest`, `uv run pytest`, `go test`, `dotnet build|test`). A command line holding an environment assignment is never on the allowlist ("Git runs code too" above). Paths in commands are classified like file-tool paths: the tokenizer marks every path-like argument (anything with a slash or backslash, a drive letter, `~`, an environment-variable reference, or a bare word that names an existing file relative to the command's working folder, tracked through `cd` and `&&` or `;` chains), the runtime classifies each into a `PathFact`, and the command's tier is the higher of its own tier and the path table's (the Read column for reads, the Edit and Write column for writes and redirections such as `>`, `>>`, `Out-File` and `Set-Content`). So `type %LOCALAPPDATA%\eileen\run\bus.json` or `cat ~/.ssh/id_rsa` is tier 3, and `rg secret C:\Users\<name>\Documents` is tier 2 and sets `private_read`. A glob (`*`, `?`) or an environment variable that does not resolve makes the path unknown and the command unparseable. Known egress binaries and subcommands (`curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`, `ssh`, `scp`, `gh`, `git push|fetch|pull|clone|remote add`, `npm install|publish`, `pip install`, `cargo install|publish`, `winget`) are tier 2; security settings (`Set-ExecutionPolicy`, `netsh`, `bcdedit`, `reg add` under policy keys, `icacls` and `takeown` outside the job's folder) are tier 3. A command the tokenizer cannot fully parse (command substitution, `-EncodedCommand`, `Invoke-Expression`, `iex`, unknown parts in a pipeline, globs and unresolved variables in path positions) is tier 2 and can be approved only by a HUD click, never by voice, because its spoken summary would not be trustworthy.
+
+**Build and test commands run code.** `cargo test`, `npm test`, `pytest` and the rest execute code the worker may have edited (build scripts, `package.json` scripts, tests) with the user's network access and the user's git, GitHub CLI and SSH credentials, which neither the tokenizer nor the environment denylist can see (the denylist removes tokens from the environment, not the credential helper or the SSH agent). Two rules narrow this: the allowlisted build and test commands are tier 1 only while the job is untainted; once it has read anything from an observed source (below), each of them is tier 2, asked once per job and command ("Claude wants to run the tests, which runs code it changed after reading a web page. Allow?"). Beyond that, running the repository's own code is trusted as much as the repository is; this is a known v0.1 limit (section 7), and a real sandbox is v0.2 (decision D40).
+
+**Taint.** Each job carries a taint record in the core (`Taint`, section 3.3.2): the observed sources it has read (`ObservedSource`: the desktop tree, a screenshot, the selection or clipboard, web content, a file outside its folder, a notification), from which `untrusted_seen` follows, and `private_read` (after it read anything outside its folder and the learned-skill snapshot, by any tool, shell commands and Eileen's own path tools included). This is the same set the learning loop uses to mark tainted steps and hold drafts (section 2.10, item 9); there is no second, narrower list.
+
+**What counts as an observed read.** One pure function, `eileen_core::tiers::observed_source(tool, op, args, paths, ctx) -> Option<ObservedSource>`, table-tested by WP1, decides it for every call from a worker, the brain or a replay, before the call runs (the taint is set when the call is allowed, so a result can never arrive untainted), and the same table tells the harness which results to keep as observed text for provenance (`WorkerEvent::ToolResult.observed`, redacted, at most 16 KB) and the dispatcher which of Eileen's own results to keep:
+
+| Call | Source |
+|---|---|
+| `desktop_tree`, `desktop_state` (window titles and the focused element) | `Tree`, except `Web` when the window is a browser and the tree includes its web content (the `Dom` rung of section 2.6), and `Web` for any window of an app in the mail, chat or social category of `app-categories.toml` (message bodies are third-party free text) |
+| `desktop_windows` (every top-level window's title), `desktop_wait_for` (it returns the element or window that matched) | by the same target rule: `Tree`, or `Web` when a listed or matched window belongs to an app in the mail, chat or social category or the match is in a browser's web content |
+| The verification hint of any desktop action (`ToolResult.verification.observed`: the value, name or title read back after `desktop_click_element`, `desktop_set_value`, `desktop_type_text`, `desktop_press_keys`, `desktop_click`, `desktop_scroll`, `desktop_drag`, `desktop_window` and `desktop_launch_app`) | by the same target rule for the window acted on; an action whose verification reads back only Eileen's own values (a window rectangle, a volume level) is none |
+| `apps_media` `status` (the media session's title and artist, set by whoever published the media) | `Web` |
+| `apps_recent` (media-history titles and URLs, recent document names) | `Web` when `kinds` includes media or is empty, else `File`; its URLs and paths still count as built by Eileen's code for the URL rule below, because the media history and the recent-work index record only what the user opened |
+| `desktop_screenshot`, `desktop_look` | `Screen` |
+| `desktop_selection`, the clipboard fallback | `Selection` |
+| `WebFetch`, `WebSearch`, `routes_lookup` (registry descriptions anyone can publish) | `Web` |
+| `Read`, `Grep`, `Glob`, and shell read commands (`cat`, `type`, `rg`, `grep`, `Get-Content`) whose path is outside the job's folder, its snapshot and its temp folder; `apps_office` and `apps_explorer` reads of a document's text or selection | `File` |
+| Notification hooks and toasts read by a worker | `Notification` |
+| Claude in Chrome tools (only in a job the user opted in with `chrome`) | `Web`, every tool, reads and actions alike |
+| Tools of an approved third-party MCP server | the `observes` class recorded with the server in `mcp.servers.<app>` at approval (default `Web`; the user may record `Tree` for a server that only reports the app's own state, such as ResolveMCP), for every tool of that server |
+| An egress shell command the user approved (`curl`, `Invoke-WebRequest`, `gh`, `git fetch` and the rest of the egress list) | `Web` |
+| An `Act` job's own brain turn (the job starts with what that turn's context held, below), and `ledger_search` results | `Tree` for a `[desktop]` block or ledger lines, `Web` when they include a window of a mail, chat or social app or a browser's web content, and each `[jobs]` line's source job's sources |
+| `jobs_status` (each listed job's narration, summary and question lines, which its worker wrote) | the same rule as a `[jobs]` line: the union of the listed jobs' own `Taint.sources`, none when none of them read anything from outside (`ByJobs`) |
+| Anything else (Eileen's computed results: timecode math, sharpness, job ids and states; the user's own Resolve projects and timelines; settings and learned items) | none |
+
+Each tool's `OpSpec` declares the class of its own ops (`observes`, which covers everything the op returns, its verification hint included: `ByTarget` for the desktop rows above, `ByArgs` for `apps_recent`, `ByJobs` for `jobs_status`), the third-party and Chrome rows come from configuration, and the shell rows from the tokenizer, so the function needs no list of its own beyond this table. An op that returns text neither the user nor Eileen wrote must declare a class other than none; WP1's table test walks every `ToolSpec` and fails on an op whose output schema has a free-text field and whose rule is `None`, unless `contracts/observes-none.toml` lists that op with the reason (the user's own Resolve project names, Eileen's settings).
+
+**An `Act` job starts with its turn's taint.** A brain turn is not a call, but its context already holds observed text: the `[desktop]` block's window titles and focused element, any ledger lines and the `[jobs]` block's worker lines. So when a brain turn runs `act` tools, the core starts the `Act` job's `Taint.sources` with the sources that context held (by the row above), and sends the text of those blocks, redacted and capped at 16 KB, with the job's `LearnCmd::Begin` (its `observed` field), which `eileen-learn` stores as the job's observed-text blob exactly as it stores a read tool's result. Its steps are therefore tainted from the start, a literal in a draft from that job that came from a window title traces as `Observed`, and the eight-token overlap sees the titles; the librarian still receives those blocks only as fenced observed data. The job's `private_read` is not set, because the brain's exits rule below already treats every brain call as holding private data.
+
+**One URL rule.** Every URL check below is one pure function, `eileen_core::tiers::url_vouched(fact: &UrlFact, ctx: &UrlCtx) -> UrlVerdict` (section 3.3.3), table-tested by WP1 and called by the brain's exits, the dispatch rule and the worker's after-taint egress alike. A URL is vouched only when one of these holds: (1) the whole URL was built by Eileen's code (a grammar entry or resolver, the YouTube URL builder) or copied verbatim from Eileen's media history or recent-work index; (2) its host was named in the authorizing turn's transcript (or the job's dispatched task, once that dispatch passed this rule) and its path, query and fragment are empty or `/`, or appear verbatim in that transcript, that task or an untainted step's arguments; or (3) the full URL, path and query included, is one the user visited, from the media history or the browser part of the ledger. A host the user has merely visited vouches for nothing beyond rule 3: data split across short path segments, or carried in a query, to a visited host is not vouched. And a host whose pages appear in the current turn's own context (the foreground window, or any window title in the turn's `[desktop]` block) is vouched only by the transcript, never by rule 3, because that page may be the source of the text asking for the visit; a verbatim copy from the media history or the recent-work index (rule 1) adds nothing to what is already there, so it still counts.
+
+**What the rule reads.** The core does no IO, so the runtime attaches a `UrlFact` for every URL in a call before the core sees it, the way it attaches `PathFact`s: the URL of a `WebFetch`, the target of `apps_open_url` and `apps_open_uri`, the URL arguments of a shell command, and every URL and host the tokenizer finds in a `jobs_dispatch` call's `task`, `subtasks` and `subquestions`. For each it looks the URL up in the apps sidecar's media history and recent-work index (`in_index`, rule 1) and in the media history and the ledger's browser lines, which record the address-bar URL of each focused browser window (`visited`, rule 3: the full URL, path and query included). The core builds the `UrlCtx` from its own state: whether its own code built the URL (a grammar entry, a resolver, the YouTube URL builder, or a replay step's pointer into an `apps_recent` URL), the authorizing turn's transcript, the job's dispatched task once that dispatch passed, the string arguments of the job's untainted steps, and the context hosts. For the brain's exits and a dispatch, the context hosts are the address-bar hosts of the foreground window and of every browser window in that turn's `[desktop]` block (`WindowInfo.url_host`, read over UI Automation by the desktop server, the same read the category rule of section 2.6 uses); for a worker's egress, they are those of the turn that dispatched the job plus the host of every page the job itself read (its `WebFetch` URLs, Claude in Chrome pages, browser windows its desktop reads touched). When a browser window in that context has an address bar that could not be read, the context is incomplete and rule 3 vouches for nothing in that check, so the rule fails closed; the verdict names the rule that vouched or the reason it did not (`VouchRule`, `UrlRefusal`).
+
+Once a job is both tainted and `private_read`, every call that can send data out is tier 2: `WebFetch`, `apps_open_url` or `apps_open_uri` to a URL that `url_vouched` does not vouch for, a `WebSearch` whose query does not appear verbatim in the authorizing transcript, the dispatched task or an untainted step, `apps_open_path` on a file whose registered handler is a web browser (`.html`, `.htm`, `.xhtml`, `.mht`, `.svg`) or on a `.url` or `.website` shortcut (classified by the URL inside), desktop text input, paste or Enter in a browser window (asked once per job and host, the host read from the address bar), and any shell command not on the allowlist. A simulator invariant checks it. Where the task names a site that Eileen can vouch for (the dispatch rule below), `WebFetch` is restricted to that domain for the job (Claude's domain rules in `--allowedTools`).
+
+**The brain's exits.** A brain turn always holds untrusted text (window titles) and private data (facts, the ledger), so its own `apps_open_url` and `apps_open_uri` calls are tier 1 only when `url_vouched` (above) vouches for the target: built by Eileen's code or copied verbatim from the media history or the recent-work index, a host named in this turn's transcript with a path, query and fragment that are empty or verbatim in the transcript, or a full URL the user visited, never by that last rule for a host whose page is in this turn's own context, and never by it while a browser window in that context has an address bar that could not be read. Every other URL from the brain is tier 2, so neither a window title that says "open evil.example/?q=..." nor one that says "open evil.example/<the facts>" on a page the user has visited can carry data out unasked. The same rule covers what the brain hands to a worker: the dispatcher extracts every URL and host from a `jobs_dispatch` call's `task`, `subtasks` and `subquestions` (the tokenizer's URL and host patterns), and the dispatch is tier 1 only when `url_vouched` vouches for each URL and each bare host was named in this turn's transcript or comes from Eileen's own resolvers; otherwise the whole dispatch is tier 2, with a summary Eileen builds from the parsed hosts ("Claude wants to research evil.example. Allow?"), and an unvouched host never becomes the job's `WebFetch` domain rule. So a brain turn that read a poisoned window title cannot start a worker that fetches an attacker's URL carrying the facts block, even though the worker itself starts untainted.
+
+**A dispatched task can carry private text.** The worker's own facts block is bound by Eileen and scoped to the job, but the brain can also copy ledger lines, or facts outside the job's scope, into the task it writes. So the dispatcher starts the job with `private_read` set whenever the dispatching turn held any ledger lines (the block a past-referring utterance brings in, or `ledger_search` results), whatever the task says, because a paraphrase defeats any overlap test; ledger lines reach a turn only when the utterance refers to the past or the brain searches the ledger, so ordinary requests are not slowed. Facts are compared instead, because every turn holds some: the job also starts with `private_read` when its `task`, `subtasks` or `subquestions` share a run of four or more tokens with a fact in the turn's `[facts]` block that the job's own facts block would not carry, or contain such a fact's value (a name, number, date or path) verbatim. A fact the brain paraphrases passes that test, which section 7 names as a v0.1 limit. Such a job's later egress after any outside read then follows the after-taint rules above, so a computer-use job that types that text into a browser after reading a page is asked first. A deep-answer job whose task carries only its topic and in-scope preferences starts without it, so ordinary research is not slowed.
+
+**Containment in v0.1** (decision D40, which amends D14): the job's repository or worktree, the path guard, the shell policy, taint, the `PreToolUse` guard failing closed, per-app desktop grants and Job Objects. The CLI's `--restricted` mode (section 2.5) is the second fence if WP3's test shows workers still work under it; other sandbox and Windows container options are measured by WP3 and recorded; a real sandbox and encryption at rest are v0.2.
+
+**Credential boundary.** Eileen spawns the unmodified, installed `claude` binary and never reads, copies, logs or refreshes vendor credentials, never runs a login flow, and never writes the user's Claude settings for workers (all worker configuration is per-session flags). The binary is resolved to the real `.exe`: on this PC `claude` on `PATH` is the npm shim (`%APPDATA%\npm\claude.cmd` and `claude.ps1`), which points at `node_modules\@anthropic-ai\claude-code\bin\claude.exe`; the resolver parses the npm shim and the native installer's versioned layout and never picks the copy bundled inside the Claude desktop app. `eileen doctor` checks sign-in with `claude auth status` (exit code), never by reading files, and compares the installed CLI version with the one the brain is running. Because the always-on brain and spare keep the executable open, which can block an npm update on Windows, Eileen offers an update window: it drains workers, stops the brain and spare, lets the update run, and restarts them (WP3 verifies the behaviour once).
+
+**Environments.** Two policies, built by `eileen-harness`:
+
+- **Brain, librarian and scribe** (no shell): a constructed allowlist. It starts empty and adds only `SystemRoot`, `SystemDrive`, `windir`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `PATH` (system directories, git, the claude install directory), `PATHEXT`, `COMSPEC`, `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE`, `OS`, plus the session's own variables.
+- **Workers** (they run the user's builds and tests): the user's own environment, with system plus user `PATH` read from the registry so a freshly installed toolchain is seen, plus `GIT_CONFIG_COUNT=2`, `GIT_CONFIG_KEY_0=core.fsmonitor`, `GIT_CONFIG_VALUE_0=false`, `GIT_CONFIG_KEY_1=safe.bareRepository` and `GIT_CONFIG_VALUE_1=explicit` (section "Git runs code too"), minus a denylist: every `CLAUDE*`, `ANTHROPIC*`, `MCP_*`, `OPENAI*`, `CODEX_*`, `XAI_*` and `DEEPSEEK*` variable, anything ending in `_API_KEY`, `_TOKEN` or `_SECRET`, `GH_TOKEN`, `GITHUB_TOKEN` and `AWS_*`. A short pass-through list survives the denylist: `CLAUDE_CODE_GIT_BASH_PATH` (the CLI uses it to find Git Bash on Windows), `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS`. For coding jobs, toolchain folders Eileen can detect (`%USERPROFILE%\.cargo\bin`, Node, uv) are prepended when missing. Then the session's own variables are added.
+
+A tidy check fails if any source names a vendor credential path or the persistent MCP registration command.
+
+**Untrusted input.** Window titles, UIA text, page text, file contents, transcripts of other voices, tool results and model output are data. In the contracts they are wrapped as `Untrusted<T>` or `Personal<T>` (section 3.3.1), and a test fails if a free-text field reachable from `Input`, `ToolResult` or `DesktopState` is left unwrapped. They can never approve, raise a tier, create an override, start a job from an ambient turn, or become a skill without the user's approval. The core's approval type can only be built from `UserInput`.
+
+**Who is calling.** Tokens sit in files any process of the same user can read (`run\<session>\mcp.json`, `run\bus.json`), so a token alone proves nothing:
+
+- The dispatcher calls `GetNamedPipeClientProcessId` on every pipe connection and accepts the brain, worker, librarian and dev roles only from an `eileen-shim.exe` from Eileen's own install folder running inside the Job Object of the session that token belongs to (`IsProcessInJob` with the supervisor's job handle). A worker that copies the brain's token is still inside its own job and is refused.
+- The `session` role is the opposite case, because the owner's Claude app starts that shim from the plugin's `.mcp.json`: it is accepted only from an `eileen-shim.exe` from the install folder that runs outside every Eileen-started Job Object, presenting the per-boot session token, which the shim reads itself from `run\session.json` (user-only ACL, separate from `bus.json` and every worker token). It gets only the `session` toolset, every call it makes is ambient, and the brain, worker, librarian and dev tokens are refused on it. A shim inside any Eileen job presenting the session token is refused, so a worker cannot reach the session tools.
+- The loopback server maps each client socket to its process (`GetExtendedTcpTable`). Hook endpoints accept only a process inside the matching session's job; every other endpoint (state, control, `say`, `handoff`) refuses any process inside any Eileen-started Job Object.
+- `eileen say` enters as `TurnSource::Cli`, which can never answer an approval, confirm a safety setting or create a grant, and gets read-only brain tools (Turn authority, section 2.3).
+- The path guard denies workers every part of Eileen's data folder (tier 3) except the job's own worktree, `cwd` and temp folder and the session's own snapshot (read only), by the most-specific-class rule above, through the file tools, through path arguments in shell commands and through Eileen's own path tools alike; so a worker can never read `bus.json`, `session.json`, another session's tokens or another job's worktree.
+
+WP2's acceptance includes a process inside a worker Job Object, holding every token file, being refused by every endpoint and every other role's pipe, and the session role's rule both ways.
+
+**Loopback endpoint.** Binds 127.0.0.1 only on a random port, with a per-boot bearer token in `%LOCALAPPDATA%\eileen\run\bus.json` (user-only ACL). That token reaches status and control (mute, say) only; no endpoint reachable with it can approve anything.
+
+**Secrets.** Only one is allowed now (the DeepSeek key, used by no v0.1 route), plus connector tokens later. They sit behind the `SecretStore` platform trait (section 3.4): `eileen-config` asks the trait, and `eileen-shell-win` implements it on Windows Credential Manager through keyring-core 1.0.1 and windows-native-keyring-store 1.1.0 (a Linux port implements it on Secret Service). Secrets are typed as `secrecy::SecretString` and are never in config files, logs or model-visible text.
+
+**Privacy.** Everything stays on the PC except what a Claude session sends to the owner's own plan.
+
+- Speech that was not addressed to Eileen stays in memory only: the HUD shows it for a few seconds, and every persisted sink (the `events` table, logs, the flight recorder's input lane when an incident or recording is written, scenarios) stores "[not addressed, n words]" instead, unless the user opts in. Partial transcripts never leave the core and the HUD state: `BusEvent::Heard` carries only a final transcript, and only once its turn is routed somewhere other than "ignored" (for an `[addressee: unsure]` turn, when the brain's first output is not `---ignore---`), so nothing the gate later rejects reaches the event log, the loopback endpoint or the plugin. Nothing heard while another app uses the microphone (a call) is stored at all.
+- The `events` and `approvals` tables keep 30 days; trajectories, the ledger, recordings and incidents are local, size-capped and deletable by voice (section 2.15). Screenshots are not stored by default.
+- The public repository never receives the owner's voice, screen or personal paths (tidy enforces it for fixtures and scenarios).
+- The HUD's privacy note says plainly that Eileen can delete what it stores but not what a vendor retains.
+
+### 2.13 Observability
+
+From the observability report. Typed, prefixed ULIDs: `sess_`, `turn_` (the request ID), `job_`, `ws_` (a worker session), `call_`, `speak_`, `appr_`, `inc_`, `rec_`. `TraceCtx { turn, job, call }` rides on every bus envelope, every speech frame (the header carries the turn; JSON commands carry the full `TraceCtx` and the parent span id), every MCP request (`_meta.traceparent` built from the turn ULID, plus the IDs under an `eileen/` key; rmcp 3.6.0 has the accessors) and every worker environment (`TRACEPARENT`, which `claude -p` reads at start, and `EILEEN_SESSION_ID`; hooks name the session and the core maps it to the bound job). One trace per turn; a job is a child span of the turn that started it and may outlive it. A pooled session read `TRACEPARENT` when the pool started it, before any job existed, so the CLI's own telemetry (when the user enables it) belongs to the pool's start span; Eileen's side stays exact, because every hook, shim call and stream event of a bound session is attributed through the session-to-job map to the job's `TraceCtx`, and the bind itself opens a `pool.bind` span with span links to both the pool start and the job. Span and event names are constants in `eileen_trace::names`; user content travels only in fields prefixed `pii.`; a span-parent table is checked in every simulation run. Every task is started through `eileen_rt::task::spawn`, which names it, keeps the current span and registers it with `await-tree`; bare `tokio::spawn` is banned by clippy everywhere else.
+
+Sinks in every process: JSON-lines files at INFO (`%LOCALAPPDATA%\eileen\logs\<process>.<date>.jsonl`, daily rotation, a janitor caps the total at 500 MB, `pii.` fields reduced to length and keyed hash unless `logging.include_personal`), an in-memory flight recorder at DEBUG (10 minutes or 32 MB in the core, 8 MB per sidecar, plus the core's input lane with a checkpoint every minute, so every incident is replayable; a running job's input lane is pinned for its whole duration, up to 30 minutes), a console at WARN when started from a terminal, and the slow-span layer. The WASAPI callback never calls `tracing`; it bumps a heartbeat counter and pushes fixed-size ticks into a real-time-safe ring. OpenTelemetry, ETW and `tokio-console` are opt-in features that the PR lane never compiles (v0.2). When the input lane is written to disk (an incident, a recording, a saved scenario), speech that was not addressed to Eileen is replaced by "[not addressed, n words]", which no grammar or name rule matches, so a replay still reaches the same decisions.
+
+Incidents are written on a panic, crash, watchdog trip, supervisor kill, "Eileen, something went wrong", the hotkey or the tray, into `%LOCALAPPDATA%\eileen\incidents\<time>_inc_<id>\` with `manifest.toml` (section 3.3.16), merged events, the replayable input lane, `timeline.json` for Perfetto, the async task tree, the last DesktopState, the job snapshot, redacted config, log tails and minidumps. `eileen-guard.exe` writes minidumps from outside the crashing or hung process (Embark's crash-handler 0.8.1 and minidumper 0.11.0), hang-dumps a sidecar before the supervisor kills it, and restarts a hung core at most once per 10 minutes.
+
+Replay (section 3.3.16 and `eileen-replay`): L1 replays the core logic from a recording and reports the first divergent event (strict mode, for incidents and `--doublecheck`); scenario mode replays a saved or shared scenario against a fresh core and checks its expectations (section 4.8); L2 adds the real speech process on recorded audio; L3 is a live re-run by hand. `eileen replay inc_... --level core` tells logic bugs from model, desktop or timing problems. A redaction canary test injects fake secrets, a spoken card number and a password-manager clipboard, and fails if any sink writes them where policy forbids. The end-to-end smoke run asserts that every JSON log line written by any process between a turn's open and close spans carries its turn or job ID, or comes from a short allowlist of background targets.
+
+Code navigation for people and Eileen's own Claude workers: the generated `docs/CODEMAP.md` (crate and process graph, module trees, and the event map of which code constructs and handles each `BusEvent` and `Input` variant), and a read-only toolset `dev` on the `eileen` MCP server (`dev_codemap`, `dev_crate_doc`, `dev_event_map`, `dev_trace_get`, `dev_logs_query`, `dev_incident_list`, `dev_incident_read`, `dev_replay_core`, `dev_scenario_list`) that applies the share-pack redaction policy to everything it returns. Its handlers live in `eileen-runtime::dev` (WP2); `dev_replay_core` calls `eileen-replay`'s strict mode, which `eileen-runtime` may depend on (section 3.1). No language server runs for Eileen's own coding workers in v0.1: the repo-local `eileen-dev` plugin carries skills and the `dev` tools but no `.lsp.json`, because rust-analyzer runs build scripts and proc macros outside every build slot and would need about 1.5 GB this PC does not have; the agents that build Eileen itself run without one too (section 6.1).
+
+**Errors that explain themselves** (owner direction on using AI where it helps). Every error a user can meet is a `UserError` (section 3.3.4): a stable kind, one plain sentence built from a template in Eileen's own code ("Resolve's external scripting is off, so I can't reach it"), and, when one exists, a fix (`FixAction`: open a settings page through `apps_open_uri`, run a doctor check, change a setting through the settings flow, retry). Eileen says the sentence and the HUD shows it with a Fix button; "fix it" runs the fix through the normal tools and tiers. Errors with no template (an unexpected failure) say what failed in one sentence and offer "explain that", which captures an incident and starts a short worker job on the user's own plan (kind `research`, with an explain prompt shipped in `eileen-harness` and the `dev` toolset's redacted incident and code-map tools) that answers in two sentences on the HUD. WP1 owns the error kinds and the policy, WP2 the incident hand-off, and each package writes the templates for its own errors.
+
+### 2.14 Connectors and platforms
+
+**Connectors.** A connector is a capability provider: it publishes a `ConnectorManifest` (section 3.3.12) with its tools (name, schema, and per op the tier, read-only flag, idempotence and whether it needs the foreground), its event streams, its read-only check ops for recipes, where it runs (a task in the core for pure network code, or a supervised sidecar for anything with FFI or drivers), and whether it senses the room. The router, the permission gate, the job registry and the learning recorder see only manifests and tool calls. v0.1 ships two: `pc.desktop` and `pc.apps`. Third-party MCP servers the user approves per app (section 2.5) are not connectors in this sense: they talk to workers directly, and the `PreToolUse` guard tiers their calls. The phone (Telegram and ntfy, then voice from anywhere), Home Assistant (and Matter through it), other devices on the user's network and earbuds as microphones are new connectors with the same tiers, learning loop and job model. Audio-producing connectors deliver 16 kHz frames into the same VAD, ASR and gate, tagged with their own `source` in the speech frame header (section 3.3.7), each with its own echo handling. Room-sensing connectors are opt-in per device, processed locally, and contribute only derived events to trajectories; the registry refuses to start one without a recorded opt-in.
+
+**Windows first, not Windows only.** Every OS-touching piece sits behind traits in `eileen-platform` (section 3.4), including the app hooks (`AppHost`), credential storage (`SecretStore`) and system volume (`SystemVolume`), and is implemented in a per-area Windows crate (`eileen-audio-win`, `eileen-desktop-win`, `eileen-apps-win`, `eileen-shell-win`, `eileen-hud-win`). The sidecar binaries hold platform-neutral server logic and pick the implementation by target. Native libraries (cpal, sherpa-onnx, ort, the keyring store, tray-icon, global-hotkey, the toast crate, crash-handler) are declared only under `[target.'cfg(windows)'.dependencies]`, per the native dependency table in section 4.1, so the neutral logic around them (the speech pipe protocol, turn fusion, the log-mel, the clause splitter, `WavSource`, `RoomMixer`, timecode math, face picking) builds and tests on Linux. A Linux port means new `-linux` crates (AT-SPI, PipeWire, Wayland or X11 input and capture, MPRIS over D-Bus, Secret Service), not a redesign. Every platform-neutral crate builds, lints and tests on `ubuntu-latest` in CI from the first commit; Windows-only crates compile to an empty library on other targets.
+
+### 2.15 Data directory
+
+```
+%LOCALAPPDATA%\eileen\
+  config\           eileen.toml, profiles\<name>.toml, eileen.schema.json
+  eileen.db         jobs, events (with seq and TraceCtx; 30 days), approvals (30 days), settings_versions, journal,
+                    plan_usage, memory samples (5 s samples for 1 day, for the memory admission record)
+  learning\         learn.sqlite (trajectories, skills, skill_versions, uses, facts, phrasings, ledger, answers cache,
+                    route_proposals, route_stats, source_stats, librarian_runs, tombstones); pending\ (drafts held for approval: whole
+                    drafts from free-text taint, or their observed lines); user-only ACL, not indexed
+  models\           vad\, stt\, turn\, tts\, voice\, embed\, face\ (downloaded by eileen setup, SHA256-checked)
+  voices\           <name>\ voice.toml (consent record; the engine is the setting voice.engines.<name>), reference.wav,
+                    consent.wav, state cache, calibration.toml (the user's own profile: levels, name variants, echo figures)
+  phrases\          <voice>\<hash>.pcm (stock and app-launch phrase cache)
+  cache\            apps.json (the last app index), recent.json (the recent-work and media index), mcp-tools.json (the tool
+                    names each approved third-party MCP server listed in the apps sidecar's tools/list run
+                    after its install)
+  logs\             <process>.<date>.jsonl
+  incidents\        <time>_inc_<id>\ ...; pending\
+  recordings\       rec_<id>\ manifest.toml, inputs.jsonl, audio\ (opt-in)
+  blobs\            <2 hex>\<blake3>.zst (shared by recordings, incidents and trajectories; reference-counted)
+  scenarios\        saved\<id>\ (local scenarios, including those generated from trusted skills), outbox\<id>\
+                    (redacted, approved for sharing)
+  fleet\            results\<date>.jsonl, machine.toml (the random install id, created by eileen setup or the first
+                    eileen run, and the machine hash the runtime recomputes from it at every start: salted, one-way,
+                    from the OS machine id and the install id; never hardware serials, user names or accounts; owner
+                    answer 6; scenario save, voice consent records, fleet results and benchmark lines read it here)
+  worktrees\        <repo-hash>\<job-slug>\
+  mcp\              <app>\ (an approved third-party MCP server, installed once at its exact registry version)
+  run\              bus.json, session.json (the session role's token), models.json (aliases resolved per CLI version),
+                    brain\, <session>\ (claude-settings.json, mcp.json, plugin\ snapshot, cwd\), guard socket
+  build-slot-0.lock, build-slot-1.lock, desktop.lock   (the build guard's locks, section 6.1)
+  buildguard.toml   (the build guard's thresholds from the W0 baseline day)
+  machine\          memory-samples.jsonl (5 s samples, 24 h, from guard processes and the runtime), paging-30s.jsonl
+                    (30 s paging averages with a slot_held mark, 7 days, for memory.max_paging_kb_s = auto;
+                    both formats and their writers in eileen_buildguard::samples, section 6.1)
+```
+
+The locks, `buildguard.toml` and `machine\` are machine-wide: they stay under `%LOCALAPPDATA%\eileen` whatever `EILEEN_DATA_DIR` says, because they describe the PC, not one data directory.
+
+Retention defaults: trajectories 30 days unless cited by a skill (200 MB cap; evidence shrinks at promotion), the ledger 14 days, facts retire after 90 days unconfirmed, `events` and `approvals` 30 days, recordings 7 days and 2 GB, incidents 30 days and 1 GB, logs 14 days and 500 MB. A janitor in the core enforces them; "delete my recordings" and "forget that" remove data at once, including the rows and blobs that referenced it. `EILEEN_DATA_DIR` (and `eileen run --data-dir`) points everything else at another root, which every test uses; a test with a fake memory source never writes the machine-wide files.
+
+## 3. Workspace and contracts
+
+### 3.1 The Cargo workspace
+
+One workspace (resolver 3, edition 2024, `rust-version = "1.99"`, toolchain pinned to 1.99.0), flat `crates/*`, `publish = false` everywhere. The root manifest uses `members = ["crates/*", "xtask", "tools/repo-tools"]` and `exclude = ["fuzz"]`, so a package adds or fills its crate without touching the root manifest. Every third-party dependency is declared once in `[workspace.dependencies]` (section 4.1); members write `foo.workspace = true`. Members may add features to other dependencies, but not to `windows`, `windows-sys` or `tokio`: their feature sets are declared once as the union every package needs, so `cargo xtask check -p <crate>` and the workspace build compile them once instead of alternating (a check enforces it). A package that needs one more feature of those three opens a one-line `amendment` pull request against the root manifest; that is the only way a later package touches it. Internal crates are declared in `[workspace.dependencies]` too.
+
+WP0 creates every crate below as a documented stub that compiles on Windows and Linux: the crate doc with the guidance sections (section 4b.4), the public types and signatures this section specifies, the real native dependencies under their target tables (so native build failures surface in W0, not in WP4's first pull request), and bodies that return a typed `Unavailable` error or do nothing. When WP0's phase A has merged, each stub belongs to the package named in the table, which replaces the stub body and keeps the signatures (or changes them through an amendment pull request to this file).
+
+| Crate | Kind | Platform | Process | Unsafe | Owner | May depend on (internal) |
+|---|---|---|---|---|---|---|
+| `eileen-contracts` | lib | neutral | all | forbid | WP0 | none |
+| `eileen-stdx` | lib | neutral | all | forbid | WP0 | contracts |
+| `eileen-trace` | lib | neutral | all | forbid | WP0 | contracts, stdx |
+| `eileen-rt` | lib | neutral | all async processes | forbid | WP0 | contracts, stdx, trace |
+| `eileen-platform` | lib | neutral | all | forbid | WP0 | contracts |
+| `eileen-supervisor` | lib | neutral, Windows module | all | `ffi` only | WP0 | contracts, stdx, trace, rt |
+| `eileen-buildguard` | lib | neutral, Windows module | tools, core | `ffi` only | WP0 | none (std and `windows-sys` only) |
+| `eileen-core` | lib | neutral | core | forbid | WP1 | contracts, stdx, trace (the resolver, dictation cleaner, settings validator and skill engine arrive through ports in `eileen-contracts`) |
+| `eileen-record` | lib | neutral | core, tools | forbid | WP1 | contracts, stdx, trace |
+| `eileen-replay` | lib | neutral | core, tools | forbid | WP1 | core, record, contracts, stdx, trace |
+| `eileen-sim` | lib, dev only | neutral | tests | forbid | WP1 (skeleton WP0) | core, record, replay, intent, dictation, skills, contracts, stdx, trace |
+| `eileen-runtime` | lib | neutral | core | forbid | WP2 | core, record, replay, config, mcp, supervisor, buildguard (only its `samples` module: the machine-wide memory samples and paging windows, the `buildguard.toml` reader and the `auto` paging limit), platform (the `SystemMemory` and `MachineIdentity` traits and `eileen_platform::machine`), rt, contracts, stdx, trace |
+| `eileen-mcp` | lib | neutral | core, sidecars, shim | forbid | WP2 | rt, contracts, stdx, trace |
+| `eileen-crash` | lib | neutral, Windows module | all | `ffi` only | WP2 | contracts, trace |
+| `eileen-shell-win` | lib | Windows | core | `ffi` only | WP2 | platform, contracts, stdx, trace |
+| `eileen-scenarios` | lib | neutral | core, tools | forbid | WP2 | record, replay, supervisor, rt, contracts, stdx, trace |
+| `eileen-cli` | bin `eileen` | neutral | core | forbid | WP2 | runtime, core, config, harness, audio, learn, skills, intent, dictation, mcp, record, replay, scenarios, fleet, crash, rt, supervisor, stdx, trace; shell-win (Windows target) |
+| `eileen-shim` | bin `eileen-shim` | neutral | shim | forbid | WP2 | mcp, rt, contracts, stdx, trace |
+| `eileen-guard` | bin `eileen-guard` | neutral, Windows module | guard | none of its own | WP2 | crash, contracts, stdx, trace |
+| `eileen-harness` | lib | neutral | core | forbid | WP3 | supervisor, buildguard, rt, contracts, stdx, trace |
+| `eileen-stub-harness` | bin, dev only | neutral | tests | forbid | WP3 | harness, contracts, stdx |
+| `eileen-audio` | lib | neutral logic, Windows devices | core | forbid | WP4 | platform, rt, contracts, stdx, trace; audio-win (Windows target) |
+| `eileen-audio-win` | lib | Windows | core, speech | `ffi` only | WP4 | platform, contracts, stdx, trace |
+| `eileen-speech` | lib and bin | neutral logic, Windows models | speech | forbid | WP4 | supervisor, rt, contracts, stdx, trace; audio-win (Windows target) |
+| `eileen-dictation` | lib | neutral | core | forbid | WP4 | contracts, stdx |
+| `eileen-desktop` | lib and bin | neutral logic | desktop | forbid | WP5 | mcp, platform, supervisor, rt, contracts, stdx, trace; desktop-win (Windows target) |
+| `eileen-desktop-win` | lib | Windows | desktop | `ffi` only | WP5 | platform, contracts, stdx, trace |
+| `eileen-apps` | lib and bin | neutral logic | apps | forbid | WP6 | mcp, platform, supervisor, rt, contracts, stdx, trace; apps-win (Windows target) |
+| `eileen-apps-win` | lib | Windows | apps | `ffi` only | WP6 | platform, contracts, stdx, trace |
+| `eileen-intent` | lib | neutral | core | forbid | WP7 | skills, contracts, stdx |
+| `eileen-skills` | lib | neutral | core | forbid | WP7 | contracts, stdx |
+| `eileen-learn` | lib | neutral | core | forbid | WP7 | skills, record, rt, contracts, stdx, trace |
+| `eileen-config` | lib | neutral | core | forbid | WP7 | platform, contracts, stdx, trace |
+| `eileen-hud` | lib and bin | neutral layout | hud | forbid | WP8 | rt, contracts, stdx, trace; hud-win (Windows target) |
+| `eileen-hud-win` | lib | Windows | hud | `ffi` only | WP8 | platform, contracts, stdx, trace |
+| `eileen-fleet` | lib | neutral | core, tools | forbid | WP9 | scenarios, replay, record, supervisor, rt, contracts, stdx, trace |
+| `eileen-e2e` | lib and bin, dev only | neutral, Windows fixtures | tests | forbid | WP9 | scenarios, fleet, replay, record, supervisor, mcp, config, rt, contracts, stdx, trace |
+| `xtask` | bin, not shipped | neutral | tools | `ffi` through buildguard only | WP0 | buildguard; third-party: `serde_json`, `toml` |
+| `tools/repo-tools` | bin, not shipped | neutral | tools | forbid | WP0 | contracts, trace (the `Redactor` and `eileen_trace::privacy` for `scenarios check`); third-party: `syn`, `serde_json`, `toml` |
+
+What changed from the first draft and why: `eileen-rt` holds the task-spawn wrapper and bounded channels, so every async crate can obey the spawn rule without depending on the runtime, while the named-thread and sleep helpers live in `eileen-stdx` (std only), so the `-win` crates, which run UIA, COM and input on their own threads, can obey the thread and sleep bans too; the `-win` crates may use `eileen-trace` so their spans use the declared names; `eileen-runtime` may use `eileen-replay` for `dev_replay_core`; `eileen-config` reaches secrets through the `SecretStore` trait instead of linking the keyring store; `tools/repo-tools` may use `eileen-trace`'s `Redactor` for the scenario privacy check; `eileen-buildguard` holds the build slots, shared by `cargo xtask` and the harness's build-heavy coding jobs; `eileen-replay` (shipped) holds both replay modes and the expectation matcher, so `eileen replay` and the fleet work in the installed product while `eileen-sim` stays development-only; `eileen-scenarios` (shipped) holds save, share, submit and the real-desktop runner, so contributors can share from the first slice; `eileen-fleet` (shipped) holds the fleet runner; `eileen-skills` holds the pure half of the learning loop so the core can call it; `eileen-shell-win` moves the tray, hotkeys and Raw Input into WP2 for slice S1, and `eileen-hud-win` holds the HUD renderer.
+
+Rules the table encodes, each checked by a repository check (section 4b.3):
+
+- `eileen-core`, `eileen-intent`, `eileen-skills`, `eileen-dictation`, `eileen-replay` and `eileen-config` link no platform or vendor native library and nothing that can hang. `eileen-core` performs no IO at all. Vendored C with no IO of its own (bundled SQLite in `rusqlite`, `zstd`) is allowed only in the store and blob modules (`eileen-record::blob`, `eileen-learn::store`, `eileen-runtime::store`), whose calls run on the runtime's blocking pool.
+- Only `eileen-mcp` (and the binaries through it) knows rmcp. Only `eileen-harness` knows vendor CLI flags and protocols. Only `eileen-contracts` types are serialized across a process, pipe, file or socket.
+- Every crate may depend on `eileen-stdx` (the clock, IDs, checked casts, named threads and sleep) and every async crate on `eileen-rt`, so the clock, ID, thread, sleep and spawn bans hold everywhere. The only crates outside that rule are the three with listed exemptions in section 4b.2: `eileen-buildguard` (std and `windows-sys` only, so xtask stays small), `eileen-guard` (it restarts the core from outside its Job Object) and the development tools `xtask` and `tools/repo-tools`.
+- The shipped `eileen` binary links no ONNX Runtime and no app automation: `eileen voice ...` runs `eileen-speech.exe voice ...` through the supervisor (or asks the running speech process over its pipe), `eileen doctor resolve` runs `eileen-apps.exe doctor resolve`, and `eileen setup` runs `eileen-speech.exe setup` (speech model download and verification, the Kokoro and Pocket TTS self-test and the clone timing) and `eileen-apps.exe setup` (the face model) for its model steps.
+- `-win` crates, and the Windows modules of `eileen-supervisor`, `eileen-buildguard`, `eileen-crash` and `eileen-guard`, are gated with `#![cfg(windows)]` (or a `cfg(windows)` module), so `cargo clippy --workspace` and the neutral tests run on Linux. Native dependencies appear only under the target tables section 4.1 allows.
+- Unsafe code lives only in a private module named `ffi` (`ffi.rs`, or `ffi/` with one file per API area such as `ffi/uia.rs` and `ffi/input.rs`) declared with `#[expect(unsafe_code, reason = "...")]`; one unsafe operation per block, each with a `// SAFETY:` comment.
+
+Non-crate directories and their owners:
+
+| Path | Contents | Owner |
+|---|---|---|
+| root files, `.cargo/`, `.config/`, `.github/` (workflows, templates, `CODEOWNERS`, `fleet-contributors.txt`), `.githooks/`, `.claude/` (settings, rules, skills) | Workspace, gates, CI, templates, agent settings | WP0 |
+| `AGENTS.md`, `CLAUDE.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `NOTICE` | Guidance and policy | WP0 |
+| `TESTING.md` | The testers' guide: install, try, save, share, submit, the fleet | WP2 (written from section 4.8 with slice S1) |
+| `docs/FLEET.md` | Maintainers' guide to fleet ingest, clustering and triage | WP9 |
+| `docs/CODEMAP.md`, `docs/reference/`, `.claude/rules/crate-*.md` | Generated by `cargo xtask codegen`; any package regenerates them, nobody edits them by hand | generator |
+| `docs/wp/WP<n>-<topic>.md` | Living work package file | that package |
+| `docs/DEBUGGING.md` | Debugging guide (observability report section 7) | WP2 |
+| `docs/PLAYBOOK.md`, `templates/` | The project-agnostic engineering playbook and the reusable templates (section 4b.6) | WP0 (later changes through amendments) |
+| `fuzz/Cargo.toml`, `fuzz/README.md`, `fuzz/rust-toolchain.toml` | Fuzz workspace with every target from section 4.7 pre-declared | WP0 |
+| `fuzz/fuzz_targets/<target>.rs`, `fuzz/corpus/<target>/`, `fuzz/regressions/<target>/` | One target each | the package owning the parser (section 4.7) |
+| `scenarios/README.md`, `scenarios/_schema/`, `scenarios/core/` | Scenario format, examples | WP0 |
+| `scenarios/<area>/` (with `_fixtures/` templates inside each area) | Scenarios per area | `feel/`, `jobs/`, `first-run/` WP1; `runtime/` WP2; `claude/` WP3; `voice/`, `dictation/` WP4; `desktop/` WP5; `apps/` WP6; `learning/`, `settings/` WP7; `hud/`, `claude-plugin/` WP8; `bench/` WP9 |
+| `tests/harness-scripts/` | Recorded stream-json scripts for the stub harness | WP3 (learning scripts live in `crates/eileen-learn/tests/scripts/`, WP7) |
+| `adapters/resolve/` | Lua bridge, Fusion and DRX templates, the spike's scripts | WP6 |
+| `integrations/claude-plugin/`, `.claude-plugin/marketplace.json` | The `eileen` Claude plugin | WP8 |
+| `tools/claude-plugins/eileen-dev/` | Dev plugin for Eileen's own coding workers | WP0 |
+
+`Cargo.lock` is shared. Packages only add entries for dependencies already declared in the workspace. After a merge conflict, take `main`'s lockfile and run `cargo xtask lock` (which runs `cargo update --workspace` and fails if any third-party version changed). Generated files are resolved the same way: take `main`'s copy and run `cargo xtask codegen`.
+
+### 3.2 What stays Python, and the Python scaffold
+
+Nothing in the v0.1 build is Python. The rust-architecture report measured why: the same one-tool adapter answered in 1.7 to 2.9 s as a stdlib-only JSON-RPC shim and in 37 to 69 s with the Python MCP SDK on the loaded PC, and a bare interpreter took 4.5 to 6.9 s to start. Resolve, the one place Python looked unavoidable, runs through a Lua bridge under Resolve's own interpreter, and Chatterbox runs from its ONNX graphs through `ort`. If a later adapter needs Python (Resolve's fusionscript fallback), it is a stdlib-only JSON-RPC shim at startup, run with `python -I` from a uv venv pinned by its own lockfile, long-lived and supervised, never a global install.
+
+The Python scaffold under `src/eileen`, `tests/*.py`, `pyproject.toml` and the Python CI job is retired by WP0 in the pull request that replaces CI (`wp0/ci-bootstrap`, section 6.2), in the order the owner's repository settings require: the new `all-green` check first reports while the Python jobs still run, the owner switches the required checks, and only then does the same pull request delete the scaffold. Its pydantic schemas are superseded by `eileen-contracts`, and `policy/default.yaml` by the TOML defaults. Before deleting, WP0 tags the current `main` commit as `python-scaffold-final`, so the history stays one command away.
+
+### 3.3 Contracts
+
+Everything here lives in `eileen-contracts` unless a path says otherwise. Every serialized type derives `serde` and `schemars`; every wire shape and tool input schema is pinned by an insta snapshot, so any change is a reviewed diff. The crate is split into one module per producing area (`ids`, `jobs`, `core_io`, `bus`, `desktop`, `hud`, `speech`, `harness`, `tools/<toolset>`, `intent`, `config`, `connectors`, `learn`, `scenario`, `record`, `fleet`, `ports`), each with its own snapshot file, so packages that add fields in parallel rarely touch the same file. WP0 pins the snapshots of the modules on slice S1's path (`ids`, `jobs`, `core_io`, `bus`, `speech`, `harness`, `ports`, `record`); the other modules compile from WP0 on but are marked provisional (a `#![doc]` line and a `provisional = true` entry in `contracts/modules.toml`), and the first pull request of the package that owns their producer pins them. Until then that package may change a provisional module without an amendment, and packages that consume it adapt; afterwards the normal amendment rule applies. Maps that reach an effect or a snapshot are `BTreeMap` or `IndexMap`, never `HashMap`. Field additions inside a sub-enum belong to the package that owns the producing component and update the snapshots; a new top-level `Input`, `Effect` or `BusEvent` variant is an architectural change and needs an amendment to this file.
+
+#### 3.3.1 Identifiers, time, correlation and text
+
+```rust
+// ids.rs: prefixed ULIDs. Display writes "job_01K8...", FromStr requires the prefix.
+// The core mints them from MonoTime plus the injected RNG; drivers go through the eileen_stdx Ids port.
+macro_rules! prefixed_ulid { ($name:ident, $prefix:literal) => { /* newtype over ulid::Ulid */ } }
+prefixed_ulid!(SessionId, "sess");   prefixed_ulid!(TurnId, "turn");   prefixed_ulid!(JobId, "job");
+prefixed_ulid!(WorkerSessionId, "ws"); prefixed_ulid!(CallId, "call"); prefixed_ulid!(SpeakId, "speak");
+prefixed_ulid!(ApprovalId, "appr");  prefixed_ulid!(IncidentId, "inc"); prefixed_ulid!(RecordingId, "rec");
+prefixed_ulid!(ProposalId, "prop");  prefixed_ulid!(RouteProposalId, "route");
+
+/// The fleet's machine identity (owner answer 6): 64 hex characters, BLAKE3 over a fixed Eileen salt, the OS machine
+/// id from the MachineIdentity platform trait (section 3.4: Windows MachineGuid; Linux /etc/machine-id, falling back
+/// to /var/lib/dbus/machine-id; macOS later, the platform UUID) and the random 128-bit install id Eileen creates on
+/// first run (fleet\machine.toml), so cloned virtual machines and disk images that share an OS id still differ; with no
+/// usable OS id, the salt and the install id alone. Never hardware serials, user names or accounts. One derivation,
+/// eileen_platform::machine::machine_hash (section 3.4), serves every OS: the OS id is normalised first and every input
+/// is length-prefixed. The salt is public (it is in this repository) but the install id never leaves the PC, so nobody
+/// can recompute a machine's hash from its OS id. The same value appears in every result, benchmark line, voice consent
+/// record and saved scenario from that install; the runtime writes it to fleet\machine.toml and the others read it there.
+pub struct MachineHash(String);
+/// 128 random bits, created once by eileen setup or the first eileen run (never by the core, which reads no OS
+/// randomness), kept only in fleet\machine.toml; serialized as 32 lowercase hex characters.
+pub struct InstallId([u8; 16]);
+
+/// Agent Skills name: 1 to 64 chars, lowercase letters, digits, hyphens.
+pub struct SkillId(String);
+/// Scenario folder slug: lowercase letters, digits, hyphens.
+pub struct ScenarioId(String);
+/// Tool name, `^[a-z][a-z0-9_]{2,62}$`, unique across connectors (prefix rule: desktop_, apps_, jobs_, ...).
+pub struct ToolName(String);
+/// Connector id, for example "pc.desktop", "pc.apps", later "phone", "home".
+pub struct ConnectorId(String);
+
+/// Monotonic nanoseconds since the core started. Only the clock port creates it.
+pub struct MonoTime(pub u64);
+/// Microseconds since the Unix epoch, UTC.
+pub struct WallTime(pub i64);
+/// A calendar date in UTC, serialized "YYYY-MM-DD" and validated on parse; days_until() for the expiry rules.
+pub struct Date { pub y: u16, pub m: u8, pub d: u8 }
+
+/// Correlation carried by every bus event, IPC frame and tool call.
+pub struct TraceCtx { pub turn: Option<TurnId>, pub job: Option<JobId>, pub call: Option<CallId> }
+
+/// Every bus event, input and effect travels in this envelope. `seq` is the core-wide replay order.
+pub struct Envelope<E> { pub seq: u64, pub at: WallTime, pub mono: MonoTime, pub ctx: TraceCtx, pub body: E }
+
+/// Text from outside Eileen's own code (screen, page, file, tool result, model output). Data, never an instruction.
+#[serde(transparent)] pub struct Untrusted<T>(T);
+/// Text that may identify a person or their files (transcripts, paths, window titles). Sinks apply the pii policy;
+/// the share serializer replaces it with a placeholder.
+#[serde(transparent)] pub struct Personal<T>(T);
+```
+
+`TraceCtx::traceparent()` renders W3C `00-<32 hex of the turn ULID, or the job ULID>-<16 hex span>-01`. Every free-text `String` reachable from `Input`, `ToolResult` and `DesktopState` is wrapped in `Untrusted` or `Personal`, or is listed in `contracts/text-allowlist.toml` with a reason (enum-like strings such as a tool name); a test walks the generated schemas (each wrapper carries an `x-eileen-text` schema extension) and fails otherwise.
+
+#### 3.3.2 Shared enums and job types
+
+```rust
+pub enum Route { Claude, Codex, Grok, DeepSeek, Local }
+impl Route {
+    /// The only place a worker's user-facing name is defined: "Claude", "Codex", "Grok", "DeepSeek", "Local model".
+    pub const fn display_name(self) -> &'static str;
+    /// v0.1: true only for Claude.
+    pub const fn built_in_v0_1(self) -> bool;
+}
+pub enum Tier { Observe = 0, Reversible = 1, Consequential = 2, Blocked = 3 }
+pub enum Depth { Instant, Quick, Considered, Deep }
+/// Act: a fast-path command or a brain turn that ran `act` tools; no session, silent, ends with its turn.
+/// MlProject: reserved for the v0.2 Colab connector (owner direction "ML projects end to end"); refused in v0.1.
+pub enum JobKind { Coding, ComputerUse, General, Research, DeepAnswer, Librarian, Replay, ContinueSession, AppTask, Act,
+                   MlProject }
+impl JobKind {
+    /// v0.1: false only for MlProject; the dispatcher refuses such a dispatch with UserError JobKindUnavailable (2.5).
+    pub const fn built_in_v0_1(self) -> bool;
+}
+pub enum JobStatus { Queued, Running, Blocked, AwaitingApproval, Completed, Failed, Cancelled, Interrupted }
+pub enum FanoutMode { Compete, Split }
+pub enum Toolset { Brain, Act, Worker, Desktop, Apps, Learn, Session, Dev }
+pub enum TurnSource { Voice, Typed, Hud, Hotkey, Tray, Cli, ClaudeSession, JobEvent, Scenario, FirstRun, Connector(ConnectorId) }
+/// Addressed: began from addressed user input (voice after the gate, typing in Eileen's UI, the HUD) or from the
+/// first-run demo's fixed requests; full brain tools.
+/// Ambient: everything else (job events, announcements, Cli, ClaudeSession); read-only brain tools.
+pub enum TurnAuthority { Addressed, Ambient }
+pub enum PoolClass { ComputerUse, Deep }
+pub enum CallOrigin {
+    Brain { turn: TurnId, authority: TurnAuthority },
+    Worker { job: JobId, session: WorkerSessionId, route: Route },
+    Replay { job: JobId, skill: SkillRef },
+    FastPath { turn: TurnId },
+    Session,            // the owner's own Claude session through the plugin
+    Core,               // Eileen's own bookkeeping calls (checks, intent highlight, media pause during approvals)
+}
+
+pub struct JobSpec {
+    pub kind: JobKind,
+    pub task: String,                     // up to 8,000 characters
+    pub title_hint: Option<String>,
+    pub depth: Depth,
+    pub route: Option<Route>,             // None: policy decides
+    pub model: Option<String>,            // a name from routing.models (or a full id); None: policy decides; the
+                                          // harness resolves it to the full id it passes and records
+    pub fanout: u8,                       // 1..=8
+    pub mode: FanoutMode,
+    pub subtasks: Vec<String>,            // Split mode: one per worker
+    pub subquestions: Vec<String>,        // DeepAnswer: at most 4
+    pub repo: Option<Personal<String>>,   // repo name or absolute path
+    pub resume_session: Option<String>,   // ContinueSession only
+    pub skill: Option<SkillRef>,          // a learned skill to follow (Replay: the recipe to run)
+    pub slots: SlotValues,                // Replay: the slots of the [match] block; with any other skill job: the slots
+                                          // the use is attributed with (validated against the skill's SlotSpecs)
+    pub topic: Option<String>,            // DeepAnswer: a short topic key ("food near me") that scopes feedback facts
+                                          // and the answers cache
+    pub anticipated: bool,                // DeepAnswer started by anticipation; results go to the cache and HUD only
+    pub authorized_by: TurnId,            // the addressed turn that caused it; checked by the dispatcher
+    pub parent: Option<JobId>,            // fan-out children point at their parent
+    pub chrome: bool,                     // the user opted this job in to Claude in Chrome
+}
+
+pub struct Job {
+    pub id: JobId, pub name: String, pub slug: String, pub ordinal: Option<u8>, pub spec: JobSpec,
+    pub status: JobStatus, pub route: Route, pub model: String, pub session: Option<WorkerSessionId>,
+    pub created: WallTime, pub updated: WallTime,
+    pub last_progress: Option<Untrusted<String>>, pub progress_pct: Option<u8>,
+    pub salience_pct: u8,                 // drives announcement order
+    pub worktree: Option<Personal<String>>, pub branch: Option<String>, pub snapshot_ref: Option<String>,
+    pub cost: Cost, pub grants: Vec<Grant>, pub taint: Taint, pub focus: bool,
+    pub override_words: Option<Personal<String>>,   // the spoken override that routed it, verbatim
+    pub approval_deadline: Option<WallTime>,
+}
+
+pub struct Cost { pub duration_ms: u64, pub api_ms: u64, pub model_turns: u32,
+                  pub tokens_in: u64, pub tokens_out: u64, pub tokens_cache_read: u64 }
+pub struct Grant { pub matcher: GrantMatcher, pub tier: Tier, pub scope: GrantScope, pub granted_by: ApprovalId, pub summary: String }
+pub enum GrantMatcher {
+    ExactCall { tool: String, input_digest: String },   // the normalised call that was shown to the user
+    ToolPattern { pattern: String },                    // tier 1 only
+    DesktopApp { process: String },                     // "May Claude control Resolve?"
+}
+pub enum GrantScope { ThisJob, Always /* tier 1, or tier 2 with a logged decision id */ }
+/// The one set of observed sources (section 2.12): a job's taint and the learning loop's tainted steps both use it.
+pub enum ObservedSource { Tree, Screen, Selection, Web, File, Notification }
+/// untrusted_seen() is !sources.is_empty(); private_read: read outside the job's folder and its skill snapshot, or
+/// started so because the dispatching turn held ledger lines or the task repeats an out-of-scope fact (section 2.12).
+pub struct Taint { pub sources: BTreeSet<ObservedSource>, pub private_read: bool }
+pub struct PlanUsage { pub five_hour_pct: Option<u8>, pub seven_day_pct: Option<u8>, pub resets_at: Option<WallTime> }
+pub struct MemoryPressure {
+    pub available_mb: u32,                // GlobalMemoryStatusEx ullAvailPhys (free plus standby)
+    pub commit_headroom_mb: u32,          // commit limit minus commit charge
+    pub paging_kb_s: u32,                 // hard-fault paging rate over the last 30 s: PDH \Memory\Pages Input/sec (pages,
+                                          // mapped-file reads included) times the page size; judged against a baseline
+    pub paging_limit_kb_s: u32,           // the effective memory.max_paging_kb_s: the setting, or for `auto` the value the
+                                          // runtime computes once an hour from the stored 7-day averages
+    pub largest_process: Option<(Personal<String>, u32)>,   // the biggest non-Eileen process and its working set, MB
+}
+```
+
+#### 3.3.3 Inputs and effects of the core
+
+The core is a state machine with one entry point. Drivers turn the outside world into `Input` and carry out `Effect`; they hold no decisions.
+
+```rust
+// eileen-core
+impl Core {
+    pub fn new(config: CoreConfig, ports: CorePorts, snapshot: Option<CoreSnapshotV1>) -> Self;
+    pub fn step(&mut self, now: MonoTime, rng: &mut CoreRng, input: Envelope<Input>, effects: &mut Vec<Envelope<Effect>>);
+    pub fn snapshot(&self) -> CoreSnapshotV1;   // a contracts type (3.3.16), for checkpoints and replay
+}
+pub struct CorePorts {                           // section 3.3.15
+    pub resolver: Box<dyn IntentResolver>, pub cleaner: Box<dyn DictationCleaner>,
+    pub settings: Box<dyn SettingsValidator>, pub skills: Box<dyn SkillEngine>,
+}
+pub struct CoreConfig {                          // built by the runtime at start from what it read from disk
+    pub config: Config,                          // section 3.3.11
+    pub calibration: Option<VoiceCalibration>,   // voices\<user>\calibration.toml, when the first run measured one
+    pub cost_estimates: BTreeMap<JobKind, u32>,  // measured peak working set per job kind, MB (section 2.5)
+}
+```
+
+```rust
+pub enum Input {
+    Voice(VoiceEvent),
+    Playback(PlaybackEvent),
+    Brain(BrainEvent),
+    Worker(WorkerSessionId, WorkerEvent),
+    Hook(WorkerSessionId, HookRequest),
+    ToolCall(ToolCallRequest),            // from a shim (caller verified by PID and Job Object), a replay or the core
+    ToolResult(CallId, ToolResult),       // from a sidecar or the core-side executor
+    Sidecar(SidecarId, SidecarEvent),
+    Learn(LearnEvent),
+    User(UserInput),                      // hotkeys, HUD, tray, typed text, Cli; never screen or model text
+    Activity(ActivityEvent),
+    Memory(MemoryPressure),               // every 5 s
+    Settings(SettingsEvent),
+    Store(StoreEvent),
+    Timer(TimerId),
+}
+
+pub enum VoiceEvent {
+    SpeechStarted { turn: TurnId, source: u16 },
+    Partial { turn: TurnId, text: Personal<String>, stable: bool },
+    SpeechEnded { turn: TurnId },
+    EndOfTurn { turn: TurnId, text: Personal<String>, smart_turn_pct: u8, silence_ms: u32,
+                asr_confidence_pct: u8, reason: TurnEndReason, source: u16,
+                level_db: i16 },                  // active speech level: median RMS of the turn's VAD-speech frames,
+                                                  // echo-cancelled, before Eileen's input gain, in dBFS
+    Calibration(Option<VoiceCalibration>),        // after the first-run clip is measured; None after "forget my voice"
+    BargeInWindow { speak: SpeakId, window: u8, prob_pct: u8 },     // only while Eileen speaks
+    ClauseReady { speak: SpeakId, clause: u16, chars: u32, samples: u32 },
+    SpeakDone { speak: SpeakId },
+    Embedding { request: u64, vector: Vec<f32> },
+    CheckResult { request: u64, result: SpeechCheck },             // name recognisability, speaker match, clone timing
+    SpeakerMatch { turn: TurnId, score_pct: u8 },                  // only if the speaker check is adopted and enrolled
+    Health { rtf_by_engine: BTreeMap<String, u16> },               // per-mille real-time factor
+}
+/// The listening half of the first run's calibration (section 2.8), as stored in calibration.toml: the addressee
+/// score's level reference and the name matcher's extra aliases reach the core only through this type.
+pub struct VoiceCalibration { pub level_ref_db: i16, pub noise_floor_db: i16, pub name_aliases: Vec<Personal<String>> }
+pub enum PlaybackEvent {
+    Played { speak: SpeakId, clause: u16, samples_played: u32 },   // at most every 50 ms
+    Paused { speak: SpeakId, clause: u16, samples_played: u32 },
+    Stopped { speak: SpeakId, clause: u16, samples_played: u32 },
+    Drained { speak: SpeakId },
+    DeviceChanged, Stalled,
+}
+/// `instance` numbers every brain process the runtime starts (monotonic, never reused), so the core can tell a late
+/// delta from a stalled process apart from the fallback's answer to the same turn: it accepts TextDelta and TurnDone
+/// for a turn only from the instance it last sent that turn to, and drops (and counts) the rest.
+pub enum BrainEvent {
+    Ready { which: BrainSlot, instance: u32, route: Route, model: String },   // model: the resolved full id
+    TextDelta { instance: u32, turn: TurnId, text: Untrusted<String> },
+    TurnDone { instance: u32, turn: TurnId, cost: Cost, context_tokens: u64, is_error: bool },
+    RateLimit(PlanUsage),
+    Exited { which: BrainSlot, instance: u32, code: Option<i32> },
+}
+pub enum WorkerEvent {
+    Init { session_id: String, pid: u32, model: String, tools: Vec<String>, mcp_servers: Vec<String>,
+           plugins: Vec<String>, capabilities: Vec<String> },
+    Narration { line: Untrusted<String> },
+    Text { delta: Untrusted<String> },
+    ToolUse { tool_use_id: String, name: String, input: Untrusted<serde_json::Value> },   // redacted, at most 2 KB
+    ToolResult { tool_use_id: String, ok: bool,
+                 observed: Option<Untrusted<String>> },   // every call section 2.12's observed-read table maps to a
+                                                          // source (built-ins, shell reads, Claude in Chrome, third-party
+                                                          // MCP tools, approved egress commands): the result text,
+                                                          // redacted, at most 16 KB, for provenance only
+    SkillInvoked { name: String, args: Untrusted<String> },
+    MemoryLimit { limit_mb: u32 },        // the session's Job Object hit memory.worker_job_limit_mb
+    TurnDone { cost: Cost, is_error: bool, summary: Untrusted<String> },
+    RateLimit(PlanUsage),
+    AuthFailed { message: String },       // parsed from the result event, not the exit code
+    Malformed { line_len: u32 },
+    Exited { code: Option<i32> },
+}
+pub enum HookRequest {
+    PreToolUse { request: u64, tool_name: String, tool_input: Untrusted<serde_json::Value>, tool_use_id: String,
+                 paths: Vec<PathFact>,    // added by the runtime: each path argument canonicalised and classified
+                 git: Vec<GitFact>,       // added by the runtime: one per git command in a shell command line
+                 urls: Vec<UrlFact> },    // added by the runtime: one per URL in the call (WebFetch, shell arguments)
+    PermissionRequest { request: u64, tool_name: String, tool_input: Untrusted<serde_json::Value>, tool_use_id: String },
+    Notification { kind: String, message: Untrusted<String> },
+    PermissionDenied { tool_name: String }, PostToolUseFailure { tool_name: String, error: Untrusted<String> },
+    SubagentStart, SubagentStop, Stop { last_message: Option<Untrusted<String>> }, StopFailure { error: String },
+}
+/// Built by the runtime for each path argument of a file tool, of a shell command (from the tokenizer's path
+/// positions; access says whether the command reads or writes it) and of an Eileen tool field marked x-eileen-path.
+pub struct PathFact { pub arg: String, pub class: PathClass, pub access: PathAccess, pub canonical: Personal<String>,
+                      pub runs_code: bool,    // an executable, script, installer or a shortcut to one
+                      pub opens_web: bool,    // its registered handler is a web browser, or it is a .url or .website
+                      pub git_component: bool }   // a component is a git directory or pointer file by the protectNTFS
+                                              // rule of section 2.12; outside GitInternals it keeps its class and
+                                              // raises a write to tier 2, HUD only
+/// The repository a git command will use (section 2.12, "Git runs code too"), found by the runtime by walking up from
+/// the command's working folder to the first .git entry, never by running git; claude_tool_tier reads it.
+pub struct GitFact { pub command: u16,          // index of the git command within the command line
+                     pub git_dir: Personal<String>, pub job_repo: bool, pub has_hooks: bool }
+/// Built by the runtime for each URL in a call (a WebFetch url, the targets of apps_open_url and apps_open_uri, a shell
+/// command's URL arguments, every URL and host the tokenizer finds in a jobs_dispatch task, subtasks and
+/// subquestions), the way it builds PathFacts, so url_vouched (section 2.12, "One URL rule") needs no IO.
+pub struct UrlFact { pub arg: String, pub url: Personal<String>, pub host: Option<String>,
+                     pub in_index: bool,      // verbatim in the media history or the recent-work index (rule 1)
+                     pub visited: bool }      // the full URL, path and query included, is in the media history or the
+                                              // ledger's browser lines (rule 3)
+/// What the core supplies from its own state for each url_vouched check.
+pub struct UrlCtx {
+    pub built_by_eileen: bool,                // the core's own code built the URL: a grammar entry or resolver, the
+                                              // YouTube URL builder, a replay step's pointer into an apps_recent url
+    pub transcript: Personal<String>,         // the authorizing turn's normalised final transcript
+    pub task: Option<Personal<String>>,       // the job's dispatched task, subtasks and subquestions, once it passed
+    pub untainted_args: Vec<Personal<String>>,    // the string arguments of the job's untainted steps
+    pub context_hosts: Vec<String>,           // hosts whose pages are in the deciding context (section 2.12)
+    pub context_complete: bool,               // false when a browser window there had no readable address bar
+}
+pub enum UrlVerdict { Vouched(VouchRule), NotVouched(UrlRefusal) }
+pub enum VouchRule { BuiltByEileen, InIndex, NamedHost, Visited }
+pub enum UrlRefusal { Unparsed, HostNotNamed, NotVerbatim, VisitedHostOnly, ContextHost, ContextIncomplete }
+/// Tried in this order, first match wins (section 2.12): Credential, BrowserProfile, GitInternals (a `.git` path
+/// component inside the job's own folders, and the job's own git and common directories; a `.git` component elsewhere
+/// keeps its class and sets PathFact.git_component), SkillSnapshot, JobFolder, JobTemp, EileenData, Toolchain,
+/// Elsewhere.
+pub enum PathClass { JobFolder, JobTemp, GitInternals, SkillSnapshot, Toolchain, EileenData, Credential, BrowserProfile,
+                     Elsewhere, Unknown /* a glob or an unresolved variable: the command is unparseable */ }
+pub enum PathAccess { Read, Write, Open }
+pub struct ToolCallRequest {
+    pub caller: Caller,                    // which shim session or internal origin, to route the reply
+    pub origin: CallOrigin,
+    pub tool: ToolName,
+    pub args: Untrusted<serde_json::Value>,
+    pub paths: Vec<PathFact>,              // added by the runtime before the core sees the call
+    pub urls: Vec<UrlFact>,                // likewise, for every URL in the arguments (section 2.12, "One URL rule")
+    pub traceparent: Option<String>,
+}
+pub struct ToolResult { pub content: Vec<Content>, pub is_error: bool, pub verification: Option<Verification>,
+                        pub output: Option<Untrusted<serde_json::Value>>,   // the op's structured result, matching its
+                                                                             // OpSpec.output_schema; recipes point into it
+                        pub duration_ms: u32, pub rung: Option<Rung> }
+pub enum Content { Text(Untrusted<String>), Image { mime: String, base64: String } }   // never structured content beside an image;
+                                                       // models see `output` as one JSON text block
+pub struct Verification { pub kind: String, pub observed: Untrusted<serde_json::Value> }
+pub enum Rung { AppApi, AppMcp, DeepLink, AppActions, Uia, Dom, Vision }
+pub enum SidecarEvent { Ready { manifest: ConnectorManifest }, Heartbeat, Event(ConnectorEvent), Exited { code: Option<i32> } }
+pub enum ConnectorEvent { Desktop(DesktopDelta), Media(MediaState), App { app: String, event: AppEvent } }
+pub enum AppEvent { RenderStarted { render_job: String }, RenderProgress { render_job: String, pct: u8 },
+    RenderDone { render_job: String, ok: bool }, VersionChanged { version: String }, Other(Untrusted<serde_json::Value>) }
+pub enum ActivityEvent {
+    PhysicalInput,                        // from Raw Input; at most one per 250 ms; carries no key or position
+    OtherAudio { playing: bool },         // loopback energy Eileen's own stream does not explain, or SMTC Playing
+    MicInUseElsewhere(bool),
+    SessionLocked(bool),
+    Presentation(PresentationState),
+}
+pub enum LearnEvent {
+    SkillsChanged { skills: Vec<SkillMeta>, recipes: Vec<Recipe>, phrasings: Vec<PhrasingFact>, facts: Vec<UserFact> },
+    SnapshotWritten { session: WorkerSessionId, manifest: SnapshotManifest },
+    SnapshotTampered { session: WorkerSessionId, file: String },
+    Proposed { skill: SkillId, outcome: ProposeOutcome },   // committed, pending approval, rejected with lint errors
+    LibrarianFinished { cost: Cost, distilled: u16, rejected: u16 },
+    Forgot { report: ForgetReport },
+    RouteProposed { proposal: RouteProposal },
+    RouteStats { stats: Vec<RouteStat> },   // after each update (a job's verdict was final); the core rebuilds the
+                                            // SkillEngine and the resolver's introspection with them
+    SourceStats { stats: Vec<SourceStat> }, // after each update; deep-answer jobs' facts blocks read them
+}
+pub enum UserInput {
+    SetMute(bool), ToggleMute, Approve(ApprovalId), Deny(ApprovalId), CancelJob(JobId), PauseDesktopJobs,
+    StartAnyway(JobId),                   // admits one job queued for memory (rule 4 of section 2.5)
+    Typed { text: Personal<String> }, Cli { text: Personal<String> },
+    Hud { input: HudInput, physical: bool }, DictationKey(KeyEdge), SaveIncident, SaveScenario,
+}
+// The shell emits Approve, Deny and an unmuting SetMute or ToggleMute from a hotkey or the tray only when Raw Input
+// saw the keys or the click come from a device.
+pub enum SettingsEvent { FileChanged { valid: bool, error_line: Option<u32> }, ChecksDone { proposal: ProposalId, checks: Vec<CheckResult> } }
+pub enum StoreEvent { Loaded { jobs: Vec<Job>, settings_version: u64 }, Purged { jobs: Vec<JobId>, rows: u64 } }
+```
+
+```rust
+pub enum Effect {
+    Speech(SpeechCmd),          // Speak { speak, voice, clauses, whole_line }, Cancel { speak }, Resume { speak }, SetMode(ListenMode),
+                                // SetHotwords, Embed { request, text }, Check { request, check }, LoadModel, UnloadModel,
+                                // Enroll { kind }, CloneFromRecording { voice }, DeleteVoice { name }
+    Audio(AudioCmd),            // SetCapture(bool), Duck { db }, Unduck, Pause { speak }, Resume { speak }, Stop { speak },
+                                // PlayPhrase { key, voice }, Earcon(Earcon), Record { seconds, purpose }
+    Brain(BrainCmd),            // Turn { slot, turn, message, authority }, Interrupt { slot }, Recycle { slot, summary },
+                                // Promote (the spare becomes the primary; the old primary is killed, a new spare
+                                // starts), Start { slot }, Stop { slot } (the fallback slot: started on first need,
+                                // stopped after 10 idle minutes); every command names a BrainSlot
+    Worker(WorkerSessionId, WorkerCmd),   // Start(SessionSpec), Bind(JobBinding), Prompt { text }, Interrupt, Cancel,
+                                          // Recycle, RemoveWorktree, RestoreSnapshot { snapshot_ref }
+    Hook(WorkerSessionId, HookReply),     // PreToolUse { request, decision: HookDecision },
+                                          // PermissionRequest { request, decision: PermissionDecision }
+    ToolForward { call: CallId, connector: ConnectorId, tool: ToolName, args: serde_json::Value, deadline_ms: u32 },
+    ToolReply { caller: Caller, call: CallId, result: ToolResult },
+    Sidecar(SidecarId, SidecarCmd),   // Start, Restart, HangDumpThenKill
+    Hud(HudState),              // full snapshot; the driver rate-limits to 10 per second
+    Learn(LearnCmd),            // Begin { job, taint, observed: Option<Untrusted<String>> } (an Act job's turn context,
+                                // section 2.12), Step, Signal, Finish, WriteSnapshot { session, select }, RunLibrarian { batch },
+                                // Commit { doc, reason }, Forget(ForgetPlan), Rollback, FactDelta(FactDelta),
+                                // Phrasing { utterance, target, confirm, turn, job, subject, ephemeral },
+                                // DeletePhrasings { ids } (journaled with the rows, so "undo that" restores them),
+                                // Repair { skill, words, turn }, SourceStat { topic, cited, accepted, opened },
+                                // RouteProposal(RouteProposal), RouteStat(RouteStat)
+    Settings(SettingsCmd),      // RunChecks { proposal }, WriteVersion(SettingsVersion), ApplyLive(Vec<SettingKey>)
+    Persist(Record),            // JobUpsert, EventAppend, ApprovalRow, JournalRow, SettingsVersion, PlanUsage,
+                                // PurgeJobs { jobs, turns } (a forget: the jobs' rows and every event of those turns)
+    Emit(BusEvent),
+    SetTimer { id: TimerId, at: MonoTime }, CancelTimer(TimerId),
+    Incident(IncidentTrigger),
+    Notify(Toast),
+}
+pub enum HookDecision { None, Ask { reason: String }, Deny { reason: String } }   // never Allow
+pub enum PermissionDecision { Allow { approval: ApprovalId }, Deny { reason: String } }   // Allow only from a UserInput approval
+```
+
+#### 3.3.4 Bus events
+
+Published to the HUD, the loopback endpoint, the Claude plugin and the `events` table, each in an `Envelope`. Speech that was not addressed to Eileen is not a bus event, and neither is any partial transcript: partials reach only the HUD state while they are current, and `Heard` is emitted once per turn, with the final transcript, after the turn has been routed somewhere other than "ignored" (section 2.12, Privacy).
+
+```rust
+pub enum BusEvent {
+    TurnStarted { source: TurnSource, authority: TurnAuthority },
+    Heard { text: Personal<String> },                          // final, and only once the turn is not ignored
+    TurnRouted { route: TurnRoute, reason: String },           // FastPath, Act, Replay, Brain, Clarify, Ignored, Dictation
+    Speaking { speak: SpeakId, cause: SpeakCause, text: String },
+    SpeakingStopped { speak: SpeakId, heard_chars: u32, interrupted: bool, resumed: bool },
+    MuteChanged { muted: bool },
+    ConversationWindow { open: bool, until_ms: u32 },
+    BrainReady { model: String },
+    JobAccepted { job: JobId, name: String, ordinal: Option<u8>, kind: JobKind, route: Route, model: String, reason: String },
+    JobQueued { job: JobId, reason: QueueReason },             // Memory, BuildSlot, Plan
+    JobStarted { job: JobId, warm: bool },
+    JobNarration { job: JobId, line: Untrusted<String> },
+    JobProgressed { job: JobId, line: Untrusted<String>, pct: Option<u8> },
+    JobBlocked { job: JobId, reason: String },
+    ApprovalRequested { approval: ApprovalId, job: Option<JobId>, tier: Tier, summary: String, voice: VoiceApproval,
+                        deadline: WallTime },
+    ApprovalResolved { approval: ApprovalId, allowed: bool, by: ApprovalSource },
+    ApprovalExpired { approval: ApprovalId },
+    JobCompleted { job: JobId, summary: Untrusted<String>, artifacts: Vec<Personal<String>> },
+    JobFailed { job: JobId, error: String },
+    JobCancelled { job: JobId, by: CancelSource },
+    JobInterrupted { job: JobId },
+    DesktopIntent { rect: Rect, label: String, until_ms: u32 },
+    InputLock { holder: Option<JobId> },
+    ForegroundLease { job: JobId, seconds_left: u16 },
+    UserTookOver { job: JobId },
+    DesktopJobsPaused { paused: bool },
+    PlanUsage(PlanUsage),
+    Learn(LearnBusEvent),       // SkillDrafted { job, skill, held: DraftHold } (every draft that passed the linter;
+                                // DraftHold: None | Lines | Whole), DraftRejected { job },
+                                // DistillSkipped { job, reason: SkipReason } (Failed | Unclear | TooShort | NoLearn
+                                // | StatsOnly | NotOnClaude | NothingProposed | DistillOff: never distilled),
+                                // DistillDeferred { job, reason: DeferReason } (PlanCap | AdmissionRefused
+                                // | LibrarianFailed { error } | Cancelled, also for rows a stopped runtime left Queued
+                                // or Running, turned into Deferred at the next start: available to a later batch),
+                                // DraftWithdrawn { job, skill }, PendingApproval, Promoted, Demoted, Forgot, ReplayStep,
+                                // ReplayHandoff, Verdict { job, verdict } (the regret window closed), RouteProposed,
+                                // SnapshotTampered; dotted names learn.skill_drafted, learn.verdict, ... Each distillation
+                                // attempt of a job ends in exactly one of SkillDrafted, DraftRejected, DistillSkipped or
+                                // DistillDeferred, and a job is distilled at most once (section 2.10 item 2)
+    UserError(UserError),       // one plain sentence and an optional fix (section 2.13)
+    SettingChanged { key: String, from: String, to: String, version: u64 },
+    FirstRun(FirstRunPhase),
+    RecordingChanged { on: bool },
+    IncidentCaptured { id: IncidentId },
+    SidecarRestarted { which: SidecarId, reason: String },
+    Lagged { missed: u64 },
+}
+pub enum VoiceApproval { ActionWord { word: String, speaker_match_required: bool },
+                         HudOnly { reason: HudOnlyReason } }   // OtherAudio, MicInUse, Unparsed, RunsCode, Fleet
+/// Which form of the user's input resolved an approval; recorded in the approvals table and on the bus.
+pub enum ApprovalSource {
+    HudClick,                              // physical, from the strip's Raw Input check
+    Hotkey,                                // physical, from the shell's Raw Input check
+    Voice { action_word: String, speaker_match: Option<bool> },   // None when the speaker check is not enrolled
+    Deadline,                              // declined when approvals.deadline_min passed
+    JobEnded,                              // the job was cancelled or failed while the question was open
+}
+pub struct UserError { pub kind: UserErrorKind, pub sentence: String, pub fix: Option<FixAction> }
+pub enum FixAction { OpenUri { uri: String }, Doctor { area: String }, Setting { change: SettingChange }, Retry { job: JobId },
+                     Explain { incident: IncidentId } }
+```
+
+`JobNarration`, `JobCompleted` and friends replace the old `Task*` names. Event names in the past tense, commands in the imperative. The snake_case dotted names used in scenarios and timing budgets (`turn.ended`, `speaking.started`, `job.completed`) are generated from these variants and the span constants into `docs/reference/events.md`, and `cargo xtask scenarios check` rejects any name not in it.
+
+#### 3.3.5 DesktopState
+
+The October version of the old ARCHITECTURE section 2 object (physical pixels, virtual-screen coordinates):
+
+```rust
+pub struct DesktopState {
+    pub captured_at: WallTime,
+    pub monitors: Vec<Monitor>,          // ordinal, device_path, friendly_name, rect, work_rect, dpi, is_primary
+    pub windows: Vec<WindowInfo>,        // hwnd (i64), pid, process, exe_version, title (Untrusted), class, monitor_ordinal,
+                                         // frame_rect, z_order, is_minimized, is_cloaked, is_foreground, is_eileen, is_private,
+                                         // url_host (a browser window's page host from its address bar over UIA; None for
+                                         // other windows, and for a browser window whose bar could not be read; for a
+                                         // private window it serves only the URL rule and is never shown or stored)
+    pub foreground: Option<WindowRef>,
+    pub focused_element: Option<ElementInfo>, // control_type, name (Untrusted), automation_id, rect, patterns, is_password, window
+    pub selection: Option<Selection>,    // text (at most 4,000 chars, Untrusted), source: TextPattern | ClipboardFallback
+    pub caret: Option<Rect>,
+    pub recent_references: Vec<Reference>,   // at most 8, newest first
+    pub presentation: PresentationState, // Normal, Busy, FullScreen, Presentation, Recording, QuietHours
+    pub mic_in_use_elsewhere: bool,
+    pub now_playing: Option<MediaState>, // merged in by the core from pc.apps
+    pub degraded: Vec<String>,           // fields that timed out or are stale: unknown, not empty
+}
+pub struct DesktopDelta { pub seq: u64, pub changes: Vec<DesktopChange> }
+```
+
+`eileen_contracts::desktop::sanitize(&str, max_chars) -> Untrusted<String>` is the only way text from UIA enters a contract type. `selection` with `source = ClipboardFallback` is filled only when the request refers to something copied, never from clipboard data marked for exclusion from monitoring or history (section 2.6), and always after the Redactor.
+
+#### 3.3.6 HUD state
+
+```rust
+pub struct HudState {
+    pub v: u16,
+    pub layout: HudLayout,               // corner, scale_pct, opacity_pct, show_transcript, high_contrast
+    pub mic: MicState,                   // LoadingSpeech, Listening, Hearing { level_pct }, Muted, Dictating { target }, SpeechRestarting
+    pub conversation: Option<u16>,       // seconds left in the conversation window
+    pub heard: Option<HeardLine>,        // text, is_final, addressed: Option<bool>, turn (for "that was for you")
+    pub speaking: Option<String>,
+    pub jobs: Vec<HudJob>,               // at most 8: id, name, ordinal, route display name, status, line, pct, focus, paused
+    pub approvals: Vec<HudApproval>,     // id, summary, tier, seconds_left_voice, deadline, voice (ActionWord | HudOnly)
+    pub intent: Option<HudIntent>,       // rect, label
+    pub input_lock: Option<String>,      // job name holding the mouse and keyboard
+    pub lease: Option<HudLease>,         // job, seconds_left; or took_over
+    pub watch: Option<HudWatch>,         // hwnd (i64), label: the live thumbnail of a window a job works in
+    pub panel: Option<HudPanel>,         // Markdown (the brain's ---hud--- part) | Learned | Facts | ScenarioPreview
+                                         // | Confirm { image: Option<BlobRef>, question, options, id } | ContactSheet { items, id }
+                                         // | Diff { job, stat, tests } | Settings(SettingsPanel)
+                                         // | DraftReview { skill, text, held_lines } | RouteProposal { proposal, app, server,
+                                         //   publisher (the verified namespace's display), from_app_vendor, verified,
+                                         //   package, source_url, note (Claude's `why`, fenced) }
+                                         // | VoicePicker { voices, samples } | Error { sentence, fix_label }
+                                         // | About { version, channel, credits } (credits from NOTICE and models.toml:
+                                         //   each component and model with its licence and attribution line)
+                                         // | SessionQuestion { id, repo, question } (session_ask, answered by voice,
+                                         //   typing or the panel's text box)
+    pub suggestions: Vec<String>,        // at most 3
+    pub first_run: Option<FirstRunView>, // choices, consent checkbox state, progress, reveal
+    pub indicators: Indicators,          // learning, recording, off_the_record, plan_usage_pct, brain_warming,
+                                         // rendering_voice, low_memory, desktop_jobs_paused
+}
+pub enum HudInput {
+    ToggleMute, Approve(ApprovalId), Deny(ApprovalId), CancelJob(JobId), PauseDesktopJobs, ContinueDesktopJobs,
+    SaveScenario, DismissPanel, ApproveSkillLine { skill: SkillId, line: u32 }, ApproveDraft { skill: SkillId },
+    Answer { id: u64, option: u8 },      // Confirm panels, contact sheets, clarifying questions, route proposals
+    RunHeardLine { turn: TurnId },       // "that was for you" by tap
+    SetSetting { key: String, value: serde_json::Value },   // goes through the normal settings flow
+    FirstRun { choice: FirstRunChoice, consent_own_voice: bool },   // Tour | Skip | Surprise
+    StartAnyway(JobId), Fix { error: u64 }, Back,   // admit a queued job; run an error's fix; return the foreground
+    DropFile { path: Personal<String> }, // an audio clip dropped on the strip: starts voice enrollment
+}
+```
+
+Wire: core to HUD `{"v":1,"state":{...}}` per line; HUD to core `{"v":1,"input":{...},"physical":true}` per line; at most 64 KiB per line. `physical` is false when the click arrived with no Raw Input device handle; the core ignores non-physical approvals, mute changes, draft and line approvals, "start it anyway" and first-run consent. Every variant a click can send has a grammar entry or a hotkey (the accessibility test of section 2.9); spoken first-run choices and consent are recognised by the core's first-run state machine from the microphone (section 2.8), never accepted from a HUD line.
+
+#### 3.3.7 The speech pipe
+
+Named pipe `\\.\pipe\eileen-speech-<session>` (Unix socket under `$XDG_RUNTIME_DIR` on Linux tests), user-only ACL, created by the core, opened by `eileen-speech` with a token from its environment; the core checks the client process is the `eileen-speech.exe` it spawned.
+
+```rust
+#[repr(C)] pub struct FrameHeader { pub kind: u8, pub flags: u8, pub source: u16, pub len: u32, pub seq: u64, pub turn: [u8; 16] }
+// source 0 is the PC microphone; later audio connectors (earbuds, a phone) get their own number
+// kind 1 Audio   core -> speech  512 samples of i16, 16 kHz mono (one 32 ms window), len = 1024
+// kind 2 Command core -> speech  JSON { ctx: TraceCtx, span: u64, cmd: SpeechCmd }
+// kind 3 Event   speech -> core  JSON { ctx: TraceCtx, span: u64, event: VoiceEvent }
+// kind 4 Pcm     speech -> core  JSON PcmHeader { speak, clause, sample_rate } then i16 samples, at most 1 MiB
+// kind 5 Ping, kind 6 Pong       heartbeat every 1 s
+```
+
+`len` is validated against the kind's maximum before any allocation (fuzz target `speech_frame`). VAD, ASR and barge-in state are keyed by `source`. PCM goes straight to the audio driver; the core only sees `ClauseReady`, `Played` and `Paused`.
+
+#### 3.3.8 Worker and brain drivers
+
+```rust
+// eileen-contracts::speech
+/// The languages a component handles, as BCP 47 tags, reported by the component itself: a speech stage from its
+/// model's entry in models.toml, a brain backend or worker driver for its resolved model (the Claude backend and
+/// driver report Any). Eileen's code holds no list of supported languages (owner answer 21; section 2.8).
+pub enum LanguageSupport { Any, Listed(Vec<String>) }
+
+// eileen-harness
+pub trait WorkerDriver: Send {
+    fn route(&self) -> Route;
+    fn languages(&self) -> LanguageSupport;
+    /// Spawn a session (pooled or for one job) and wait for its init event.
+    fn start(&mut self, spec: SessionSpec) -> impl Future<Output = Result<WorkerSession, DriverError>> + Send;
+    /// Give a started session its job: the first user turn.
+    fn bind(&mut self, binding: JobBinding) -> impl Future<Output = Result<(), DriverError>> + Send;
+    fn send(&mut self, cmd: WorkerCmd) -> impl Future<Output = Result<(), DriverError>> + Send;
+    /// None when the session has ended and every event has been delivered.
+    fn next_event(&mut self) -> impl Future<Output = Option<WorkerEvent>> + Send;
+}
+pub enum AnyWorker { Claude(ClaudeWorker), Codex(CodexWorker), Acp(AcpWorker) }   // enum dispatch, no dyn
+pub fn worker_for(route: Route, cfg: &HarnessConfig) -> Result<AnyWorker, DriverError>; // RouteUnavailable unless built
+
+pub struct SessionSpec {
+    pub session: WorkerSessionId, pub pool: Option<PoolClass>, pub kind: JobKind,
+    pub route: Route, pub model: String, pub effort: Option<Effort>,
+    pub cwd: String, pub worktree: Option<WorktreeSpec>, pub snapshot_ref: Option<String>,
+    pub append_system_prompt: String,
+    pub toolsets: Vec<Toolset>, pub allowed_tools: Vec<String>, pub extra_mcp_servers: Vec<ApprovedMcpServer>,
+    pub builtin_tools: Vec<String>,       // --tools: the kind's built-in tools, nothing else exists in the session
+    pub disallowed_tools: Vec<String>,    // --disallowedTools: the subagent tools from the harness's flag constant
+    pub plugin_dirs: Vec<String>,         // the session's learned-skill snapshot first
+    pub snapshot: Option<SnapshotManifest>,   // re-hashed before spawn and checked against system/init
+    pub resume_session: Option<String>, pub chrome: bool,
+    pub env: EnvPolicy,                   // WorkerDenylist or ConstructedAllowlist (section 2.12)
+    pub build_slot: Option<BuildSlotTicket>,   // held for build-heavy coding jobs; carries the memory-scaled cargo jobs
+    pub memory_limit_mb: Option<u32>,     // JOB_OBJECT_LIMIT_JOB_MEMORY when memory.worker_job_limit_mb is set
+    pub trace: TraceCtx, pub hook_endpoint: HookEndpoint,
+    pub shim: ShimEndpoint,               // pipe name and per-session token for the generated MCP config
+}
+pub struct JobBinding {
+    pub job: JobId, pub kind: JobKind, pub task: String, pub skill: Option<SkillRef>,
+    pub inline_skill: Option<String>,     // at most 4 KB when the snapshot lacks the skill
+    pub facts: Vec<String>,               // at most about 400 tokens, scoped to the repo and app
+    pub trace: TraceCtx,
+}
+
+pub trait BrainBackend: Send {
+    fn route(&self) -> Route;
+    fn languages(&self) -> LanguageSupport;
+    fn turn(&mut self, turn: TurnId, message: String) -> impl Future<Output = Result<(), DriverError>> + Send;
+    fn interrupt(&mut self) -> impl Future<Output = Result<(), DriverError>> + Send;
+    fn recycle(&mut self, summary: String) -> impl Future<Output = Result<(), DriverError>> + Send;
+    fn next_event(&mut self) -> impl Future<Output = Option<BrainEvent>> + Send;
+}
+pub enum AnyBrain { Claude(ClaudeBrain), Codex(CodexBrain), DeepSeek(DeepSeekBrain), Local(LocalBrain) }   // enum dispatch
+/// RouteUnavailable for every route but Claude in v0.1. The runtime (the harness component, WP3) holds up to three:
+/// Primary (routing.brain), Spare (the same route), and Fallback (routing.fallback_brain, started only when it differs
+/// from the primary). It routes each BrainCmd by its slot and stamps every BrainEvent with the process's instance.
+pub fn brain_for(route: Route, cfg: &HarnessConfig) -> Result<AnyBrain, DriverError>;
+pub enum BrainSlot { Primary, Spare, Fallback }
+/// The brain benchmark (B10, `eileen bench brain`, CheckKind::BrainBenchmark): time to first spoken word over 20
+/// turns, the right action on the brain cases of the resolver golden file, interruption handling.
+pub fn brain_benchmark(brain: &mut AnyBrain, suite: &BrainSuite) -> impl Future<Output = BrainBenchResult> + Send;
+```
+
+| Operation | Claude (v0.1) | Codex app-server (slot) | ACP, for Grok and others (slot) |
+|---|---|---|---|
+| Start | Spawn `claude -p` with the flags of section 2.5 through the supervisor; wait for `system/init`; read `session_id`, model, tools, MCP status, plugins, `capabilities` | `initialize`, `initialized`, `thread/start` (`baseInstructions`, `developerInstructions`, `model`, `approvalPolicy`, `ephemeral`) | `initialize`, `session/new` with stdio `mcpServers` (every ACP agent must accept stdio MCP) |
+| Bind a job | The first stream-json `{"type":"user",...}` line, with the task, "Follow skill eileen-learned:<id>" and the facts block | `turn/start` | `session/prompt` |
+| User turn | One stream-json user line | `turn/start` | `session/prompt` |
+| Steer | Interrupt, then a user turn | `turn/steer` | `session/cancel`, then `session/prompt` |
+| Interrupt | `control_request` subtype `interrupt` (feature-detected from `system/init`, verified against the real CLI by WP3) | `turn/interrupt` | `session/cancel` |
+| Cancel | Kill the Job Object | Kill the Job Object | Kill the Job Object |
+| Approvals | `PreToolUse` HTTP guard answers `ask`; the user is reached through the route WP3's contract test picks (the `PermissionRequest` hook, `--permission-prompt-tool`, or deny then steer, section 2.5) | `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` answered by the core | `session/request_permission` answered by the core |
+| Tool events | `assistant` tool_use blocks, `user` tool_result blocks, hook events; a `Skill` tool_use becomes `SkillInvoked` | `item/*` notifications | `session/update` |
+| Narration | Text lines starting with `> ` | Same convention in agent messages | Same convention |
+| Cost and usage | `result` event (`duration_ms`, `duration_api_ms`, `num_turns`, `usage`) | turn completion | n/a |
+| Rate limits | Rate-limit stream events | `account/rateLimits/read` | n/a |
+| Eileen's tools | Generated `--mcp-config` with the shim (and approved third-party servers), `--strict-mcp-config` | MCP server config at `thread/start` | stdio `mcpServers` in `session/new` |
+| Learned skills | `--plugin-dir run\<session>\plugin` | Unverified (Codex not installed); check when added | Per agent |
+| Sign-in check | `claude auth status` exit code; auth failures also parsed from the `result` event | `account/read` | agent's own status command |
+
+Every vendor process is spawned by `eileen_supervisor` in a Job Object; the ACP crate's own `process` feature is never used (it does not job-wrap on Windows), and the Codex types are generated from `codex app-server generate-json-schema` when that driver is built.
+
+#### 3.3.9 MCP tools
+
+One MCP server name, `eileen`, served by `eileen-shim` and forwarded to the core's dispatcher, so Claude sees `mcp__eileen__<tool>`. Each session's hello names its role, the dispatcher verifies the caller (section 2.12), and the core answers with the toolsets for that role; `tools/list` shows only those.
+
+| Toolset | Who gets it | Tools |
+|---|---|---|
+| `brain` | the brain | `jobs_dispatch`, `jobs_status`, `jobs_control`, `desktop_state`, `desktop_look`, `capabilities`, `settings_get`, `settings_propose`, `settings_apply`, `settings_undo`, `learned_query`, `learned_forget`, `learned_correct`, `ledger_search`, `scenario_save`, `ask_user`, `hud_show` |
+| `act` | the brain (addressed turns only) | `desktop_launch_app`, `desktop_window`, `desktop_volume`, `apps_open_url`, `apps_open_uri`, `apps_open_path`, `apps_media`, `apps_recent`, `apps_resolve` (navigation and render ops only) |
+| `worker` | every worker | `ask_user`, `report`, `routes_lookup`, `routes_propose`, and `approve` only if WP3's contract test picks the permission-prompt-tool route |
+| `desktop` | computer-use and general workers | the 18 `desktop_*` tools of section 2.6 |
+| `apps` | computer-use and general workers | `apps_media`, `apps_open_url`, `apps_open_uri`, `apps_open_path`, `apps_resolve`, `apps_office`, `apps_explorer`, `apps_recent`, `apps_image`, `apps_photoshop` |
+| `learn` | the librarian only | `learn_trajectory_read`, `learn_skill_list`, `learn_skill_read`, `learn_skill_history`, `learn_skill_propose`, `learn_fact_propose` |
+| `session` | the owner's own Claude sessions, through the plugin (a shim outside every Eileen job, with the session token) | `session_status`, `session_jobs`, `session_say`, `session_mute`, `session_handoff`, `session_ask`, and `session_skills` only with `claude_plugin.share_skills` on |
+| `dev` | coding workers in an Eileen worktree, and "explain that" jobs (section 2.13) | `dev_codemap`, `dev_crate_doc`, `dev_event_map`, `dev_trace_get`, `dev_logs_query`, `dev_incident_list`, `dev_incident_read`, `dev_replay_core`, `dev_scenario_list` |
+
+In an ambient brain turn (section 2.3) the dispatcher accepts only `jobs_status`, `desktop_state`, `hud_show` and `learned_query`. From origin `Replay` it accepts only the `act`, `desktop` and `apps` toolsets and `jobs_dispatch` (section 2.10, item 4).
+
+Built-in tools per job kind (`--tools` lists exactly these, so no other built-in tool exists in the session; `--allowedTools` repeats them with `mcp__eileen__*`, before the tier guard narrows them): coding and continue_session get `Read`, `Grep`, `Glob`, `Edit`, `Write`, `Bash`, `PowerShell`, `WebSearch` and `WebFetch`; general gets the same plus the desktop and apps toolsets; computer_use gets `Read`; research and deep_answer get `Read`, `WebSearch` and `WebFetch`; the librarian gets `--tools ""` and only `mcp__eileen__learn_*`; the reserved `ml_project` has no list, because the dispatcher refuses it before any session exists (section 2.5). `WebFetch` is narrowed to a domain rule when the task names a site. No kind gets `Task`, `Agent` or other subagent tools in v0.1: they are in `--disallowedTools` for every session and tier 3 in `claude_tool_tier`, and the contract test's subagent case is recorded for v0.2.
+
+Every tool has a `ToolSpec`:
+
+```rust
+pub struct ToolSpec {
+    pub name: ToolName, pub connector: ConnectorId, pub toolset: Toolset,
+    pub description: String,             // at most 600 characters, written for the model
+    pub ops: Vec<OpSpec>,                // one entry named "" for tools without ops
+    pub selector: Option<String>,        // "op" or "action": the argument field whose enum variant is the op; None
+                                         // for tools without ops ("Ops and selectors" below)
+    pub timeout_ms: u32,
+    pub input_schema: serde_json::Value, // generated by schemars from the argument struct below; path fields carry the
+                                         // x-eileen-path extension so the runtime classifies them, and match-only fields
+                                         // x-eileen-match (section 2.10 item 9, "What a tainted step keeps")
+    pub schema_hash: String,             // BLAKE3 of input_schema and every op's output_schema; recipes record it
+    pub rung: Rung,                      // the route this tool represents
+}
+pub struct OpSpec {
+    pub op: String,
+    pub tier: TierRule,                  // Fixed(Tier) | ByArgs (the server computes it per call)
+    pub read_only: bool,                 // usable as a recipe check (tier 0 only)
+    pub idempotent: bool,                // a recipe may retry it once
+    pub artifact_only: bool,             // only writes new files into the job's temp folder (export_still): an extra
+                                         // call of it does not break shadow agreement (section 2.10 item 7)
+    pub needs_foreground: bool,          // takes the input lock and a lease
+    pub preview_before: bool,            // show the target or crop and ask before running (hard-to-undo edits)
+    pub inverse: Option<String>,         // how the journal reverses it ("delete_fusion_comp then load_fusion_comp",
+                                         // "load_version", "restore window rect", ...); the op's output carries its inputs
+    pub output_schema: Option<serde_json::Value>,   // schemars from the op's result struct; required for any op a
+                                                    // recipe may call or point into, and snapshot-tested
+    pub observes: ObservesRule,          // None | Fixed(ObservedSource) | ByTarget | ByArgs | ByJobs: the class of everything the op
+                                         // returns, its verification hint included (section 2.12's observed-read table);
+                                         // feeds eileen_core::tiers::observed_source
+}
+```
+
+**Ops and selectors.** A tool whose argument struct chooses its operation through one enum field (`op` for `apps_resolve`, `apps_image`, `apps_office`, `apps_explorer` and `apps_photoshop`; `action` for `apps_media`, `desktop_window`, `desktop_volume` and `jobs_control`) names that field in `ToolSpec.selector` and has one `OpSpec` per variant, whose `op` is the variant's snake_case tag (`timeline_info`, `status`, `snap`). `TrajectoryStep.op`, `StepKind::Call.op`, `Check.op` and `OpSpec.op` all hold that tag, and the step's `args` are one flat object holding the variant's own fields together with the struct's fields outside the selector (`DesktopWindow.hwnd`, `AppsMedia.session`, `JobsControl.job`), so a `desktop_window` `focus` step keeps the window it acts on and can be recorded and replayed. The dispatcher rebuilds the wire form (`{"action": "status", "session": null}`, `{"hwnd": 4523, "action": "focus"}`, `{"op": {"goto": {"offset_s": 930.0}}}`) from the tag, the struct's other fields and the variant's fields, and the recorder splits a call back into the tag and one flat `args` object the same way. A variant field whose name repeats one of the struct's other fields would make that split ambiguous, so WP1's walk over every `ToolSpec` (section 2.12) fails on it; none of today's tools has one. So `call apps_media status` and a check on `apps_media status` name the same op, and shadow agreement compares tags, never raw argument JSON.
+
+Argument structs (the JSON Schemas are generated from these and snapshot-tested; `hwnd` is an `i64` because `HWND` is not `Send`; coordinates are physical virtual-screen pixels):
+
+```rust
+// brain toolset
+pub struct JobsDispatch { pub kind: JobKind, pub task: String, pub title_hint: Option<String>, pub depth: Option<Depth>,
+    pub fanout: Option<u8>, pub mode: Option<FanoutMode>, pub subtasks: Vec<String>, pub subquestions: Vec<String>,
+    pub repo: Option<String>, pub route: Option<Route>, pub model: Option<String>,
+    pub skill: Option<SkillId>, pub slots: Option<serde_json::Value>,   // kind Replay: must equal the [match] block's
+        // skill and slots; any other kind with a skill: the worker is told to follow it, and the slots (validated
+        // against the skill's SlotSpecs) are what the use is attributed with
+    pub topic: Option<String>, pub anticipated: bool }                  // DeepAnswer only (section 2.3)
+    // returns { jobs: [{ job, name, ordinal, queued }], ack: String }    tier 1 (asks first when plan usage is high and fanout > 2)
+pub struct JobsStatus { pub job: Option<JobRef> }                       // JobRef: id, slug, name or ordinal; None = all live jobs. Tier 0
+pub struct JobsControl { pub job: JobRef, pub action: JobAction }
+    // Cancel | Interrupt | Steer { text } | Reroute { route, model, depth } | Focus | ShowChanges | Keep | Undo. Tier 1, Keep with cleanup tier 2
+pub struct DesktopStateArgs { pub detail: Detail, pub since_seq: Option<u64> }   // Summary | Full. Tier 0
+pub struct DesktopLook { pub target: LookTarget, pub max_edge_px: Option<u32> }  // Screen | Foreground | Window { hwnd }; default 1280. Tier 0
+pub struct Capabilities { pub scope: CapabilityScope }                   // FocusedApp | Everything. Tier 0
+pub struct SettingsGet { pub keys: Vec<String> }                         // empty: a short summary. Tier 0
+pub struct SettingsPropose { pub changes: Vec<SettingChange>, pub utterance: String }   // returns a Proposal (3.3.11). Tier 0
+pub struct SettingsApply { pub proposal: ProposalId }                    // tier per the proposal's risk; Safety keys need a UserInput approval
+pub struct SettingsUndo { pub steps: Option<u8>, pub to_version: Option<u64> }           // tier 1
+pub struct LearnedQuery { pub about: Option<String>, pub kind: Option<LearnedKind>, pub since: Option<String>, pub limit: Option<u8> }  // Skills | Facts | Both. Tier 0
+pub struct LearnedForget { pub target: ForgetTarget }                    // Skill { id } | Fact { id } | About { text } | LastUsed | Job { job }. Tier 2
+    // "forget that I <text>" maps to About { text } through the grammar; the brain uses it for other phrasings
+pub struct LearnedCorrect { pub target: CorrectTarget, pub instruction: String }   // Fact { id } | Skill { id }. Tier 1
+    // addressed turns only; the instruction is stored with provenance user only if it is a contiguous span of the
+    // turn's normalised transcript, else after a UserInput yes as approved; a skill target queues LearnCmd::Repair
+pub struct LedgerSearch { pub query: String, pub since_hours: Option<u32>, pub limit: Option<u8> }      // tier 0
+pub struct ScenarioSave { pub which: SaveTarget, pub failed: bool, pub expected: Option<String> }      // Last | Turn { turn } | Job { job }. Tier 1
+pub struct AskUser { pub question: String, pub options: Vec<String>, pub timeout_s: Option<u16>, pub image: Option<BlobRef> }
+    // at most 140 chars, 4 options. Tier 0. Refused when it asks for a password, PIN, one-time code or card number
+pub struct HudShow { pub markdown: String, pub title: Option<String> }  // at most 8 KiB. Tier 0
+
+// worker toolset
+pub struct Report { pub summary: String, pub artifacts: Vec<String>, pub outcome: ReportOutcome }      // Done | Blocked | Failed
+pub struct RoutesLookup { pub app: String }
+    // Eileen's apps sidecar queries the official MCP registry (one fixed host, curl.exe through the supervisor, 10 s,
+    // 256 KB cap, cached a day); returns { servers: [{ registry_id, name, namespace, from_app_vendor: bool, status,
+    // description, source_url, packages: [{ registry_type, identifier, version }] }] } as Untrusted: namespace is the
+    // registry-verified part of the server name before the "/", from_app_vendor is computed by Eileen from
+    // app-vendors.toml, and the registry's _meta "official" block is never read as an endorsement. Tier 0; observes Web
+pub struct RoutesPropose { pub app: String, pub kind: RouteKind, pub registry_id: Option<String>,
+    pub uri_scheme: Option<String>, pub link: Option<String>, pub why: String }
+    // AppMcp (registry_id required; must match an active routes_lookup entry cached for this job and app, and every
+    // shown field is copied from that entry) | AppApi (link, stored as source_url) | DeepLink (uri_scheme); AppApi and
+    // DeepLink are stored as unverified.
+    // Records a RouteProposal in learn.sqlite and shows it on the HUD; installs nothing. Accepting: AppMcp becomes the
+    // tier-2 Safety change mcp.servers.<app>; DeepLink adds to permissions.uri_schemes; AppApi stores an approved
+    // reference fact. Tier 0
+pub struct Approve { pub tool_name: String, pub input: serde_json::Value, pub tool_use_id: String }
+    // only if WP3's test picks the permission-prompt-tool route; accepted only for a pending ask with this tool_use_id;
+    // reply shape recorded from the real CLI by WP3
+
+// desktop toolset
+pub struct DesktopWindows { pub include_minimized: bool }                                             // tier 0
+pub struct DesktopTree { pub hwnd: i64, pub query: Option<String>, pub max_depth: Option<u8>, pub max_elements: Option<u16> }   // 12 and 250 by default. Tier 0
+pub struct DesktopScreenshot { pub target: ShotTarget, pub marks: bool, pub max_edge_px: Option<u32> }  // Screen | Monitor { ordinal } | Window { hwnd } | Region { rect }. Tier 0
+pub struct DesktopClickElement { pub hwnd: i64, pub element: u32, pub selector: Option<Selector> }    // tier 1, or 2 for send-like names
+pub struct DesktopSetValue { pub hwnd: i64, pub element: u32, pub value: String }                    // tier 1; refuses password fields
+pub struct DesktopTypeText { pub hwnd: i64, pub element: Option<u32>, pub text: String }             // tier 1 (2 in terminals and unknown targets); foreground
+pub struct DesktopPressKeys { pub hwnd: i64, pub keys: String }                                       // "ctrl+s"; tier 1, ByArgs (Enter in mail or chat 2, blocked combos 3)
+pub struct DesktopClick { pub hwnd: i64, pub x: i32, pub y: i32, pub button: MouseButton, pub count: u8 }   // tier 1, ByArgs; foreground
+pub struct DesktopScroll { pub hwnd: i64, pub x: i32, pub y: i32, pub dx: i32, pub dy: i32 }          // tier 1
+pub struct DesktopDrag { pub hwnd: i64, pub from: Point, pub to: Point, pub button: MouseButton }    // tier 1; foreground
+pub struct DesktopWindow { pub hwnd: i64, pub action: WindowAction }
+    // Focus | Minimize | Maximize | Restore | Move { rect } | Snap { monitor, zone, fraction_pct } | Close
+    // | Show { reason: ShowReason }  (bring a window forward because the user should look; section 2.6).
+    // Tier 1; Close is tier 1 when the app reports nothing unsaved, else 2 (WM_CLOSE through SendMessageTimeout)
+pub struct DesktopLaunchApp { pub name: String, pub dry_run: bool, pub wait_main_window_ms: Option<u32> }   // tier 1; ambiguous names return candidates
+pub struct DesktopWaitFor { pub condition: WaitCondition, pub timeout_ms: u32 }   // at most 30,000. Tier 0
+pub struct DesktopSelection { pub hwnd: Option<i64>, pub allow_clipboard: bool }  // tier 0
+pub struct DesktopInsertText { pub text: String, pub target: InsertTarget, pub category: Option<FieldCategory> }   // tier 1
+pub struct DesktopVolume { pub action: VolumeAction }    // Set { pct } | Step { delta_pct } | Mute(bool) | Get. Tier 1 (Get 0); inverse journaled;
+    // served by eileen-desktop through the SystemVolume platform trait (section 3.4)
+pub struct Selector { pub process: String, pub window_class: Option<String>, pub automation_id: Option<String>,
+    pub control_type: Option<String>, pub name: Option<String>, pub ancestors: Vec<SelectorStep> }
+
+// apps toolset
+pub struct AppsMedia { pub action: MediaAction, pub session: Option<String> }
+    // Status | Play | Pause | Toggle | Next | Previous | Seek { seconds } | SeekBy { seconds }. Status tier 0, else 1;
+    // Status output { title, position_s, playing, session }
+pub struct AppsOpenUrl { pub url: String, pub start_s: Option<u32>, pub wait_for_media_title: Option<String>,
+    pub reuse_playing: bool }
+    // https only. Tier 1, ByArgs for the brain (section 2.12's URL rule) and for tainted workers (egress); with
+    // reuse_playing, an SMTC session already showing wait_for_media_title is sought to start_s instead of opening the
+    // URL again; output { media_title_seen: bool, reused: bool }. Idempotent when reuse_playing is set.
+    // wait_for_media_title is match-only (x-eileen-match): it only recognises the session, never picks what opens
+pub struct AppsOpenUri { pub uri: String }   // allowlisted schemes only (ms-settings:, mailto: compose, permissions.uri_schemes). Tier 1
+pub struct AppsOpenPath { pub path: String, pub with_app: Option<String> }
+    // ByArgs (section 2.7): 1 for a document or folder; 2, HUD only, when it runs code or with_app is a shell or
+    // interpreter; 3 for a credential, Eileen-data or browser-profile path
+pub struct AppsResolve { pub op: ResolveOp }
+    // tier 0: Hello | TimelineInfo | ProjectsRecent | Timelines | CurrentItem | Versions | FusionComps | Markers
+    //         | RenderStatus | IsRendering
+    // tier 1: OpenPage { page: ResolvePage } | Goto { offset_s: f64 } | GotoTimecode { tc } | SetTimeline { name }
+    //         | ExportStill | ExportStills { from_offset_s: f64, to_offset_s: f64, every_n_frames: Option<u16> }
+    //         | AddVersion { name: Option<String> } | LoadVersion { name } | LoadFusionComp { name }
+    //         | DeleteFusionComp { name } (only names starting eileen-) | MarkerAdd { offset_s, name, color }
+    // ByArgs: LoadProject { name } (2 if the open project has unsaved changes) | RenderStart { preset, file_name } (2 if it would overwrite)
+    //         | ImportFusionComp { template: FusionTemplate, boxes: Vec<FrameBox>, amount: Choice }
+    //           (1 when its inverse, the prior composition list, was recorded in the same job, else 2; preview_before)
+    //         | ApplyDrx { template: DrxTemplate, window: Option<Rect>, all_layers: bool }
+    //           (1 after AddVersion in the same job, else 2; preview_before)
+    // outputs (examples): Goto -> { target_tc, target_frame }; TimelineInfo -> { timeline, start_tc, fps, drop_frame,
+    //   page, playhead_frame, playhead_tc }; ExportStill -> { path, offset_s, frame }; ExportStills -> { stills: [...] };
+    //   CurrentItem -> { name, start_offset_s, end_offset_s }; ImportFusionComp -> { name, previous_current };
+    //   FusionComps -> { names, current }; AddVersion -> { name, previous }; Versions -> { names, current };
+    //   ApplyDrx -> { applied }; RenderStart -> { render_job }
+    // the act toolset exposes only the tier-0 ops and OpenPage, Goto, GotoTimecode, SetTimeline, LoadProject and
+    //   RenderStart (their ByArgs tiers still apply), and MarkerAdd
+pub struct AppsImage { pub op: ImageOp }
+    // Faces { path } | PickFace { path, which: Position } | Crop { path, rect } | Sharpness { path, rect }
+    // | TrackFace { stills: Vec<StillRef>, start: Rect }. Tier 0; outputs: PickFace -> { rect, crop }, Sharpness ->
+    //   { sharpness }, TrackFace -> { boxes: [{ frame, rect }] }
+pub struct AppsOffice { pub op: OfficeOp }    // WordSelection | ExcelActiveCell. Tier 0
+pub struct AppsExplorer { pub op: ExplorerOp }   // Selection | OpenFolder { path }. Tier 0 or 1
+pub struct AppsRecent { pub query: String, pub kinds: Vec<FileKind>, pub limit: Option<u8>, pub thumbnails: bool }   // FileKind includes Media. Tier 0;
+    // output { best: Option<{ title, url, path, kind, confidence }>, confident: bool, items: [...] }
+pub struct AppsPhotoshop { pub op: PhotoshopOp }
+    // Recent | Open { path } | DuplicateLayer | SelectEllipse { rect, feather_px } | SmartSharpen { amount_pct, radius_px }. Tier 1;
+    // SmartSharpen has preview_before; Generative Fill and Neural Filters, if ever added, are tier 2
+
+// learn toolset
+pub struct LearnTrajectoryRead { pub job: JobId }
+pub struct LearnSkillRead { pub id: SkillId }
+pub struct LearnSkillHistory { pub id: SkillId }
+pub struct LearnSkillPropose { pub doc: SkillDoc, pub reason: CommitReason, pub evidence: Vec<JobId> }
+    // returns Committed { version } | PendingApproval { lines } | PendingReview (the whole draft, free-text taint)
+    //   | Rejected { errors: Vec<LintError>, attempts_left: u8 }
+pub struct LearnFactPropose { pub kind: FactKind, pub text: String, pub evidence: Vec<JobId> }   // never with observed provenance
+
+// session toolset
+pub struct SessionHandoff { pub session_id: String, pub cwd: String, pub summary: String, pub next: String }
+    // creates a pending handoff the user confirms by voice or HUD (naming the repo and the summary); never starts a job alone
+pub struct SessionSay { pub text: String }     // at most 200 characters, at most one per 30 s, spoken as "From your Claude session: ..."
+pub struct SessionMute { pub muted: bool }
+pub struct SessionAsk { pub question: String }
+    // at most 200 characters, one per 30 s; shown on the HUD and spoken as "Your Claude session asks: ..." (HUD only in
+    // a call); returns { answer: Option<String> } within 120 s: the user's next addressed reply, typed answer or panel
+    // text, which starts nothing and approves nothing. Tier 0
+pub struct SessionSkills { pub query: String, pub limit: Option<u8> }
+    // only with claude_plugin.share_skills on: learned skills at level 2 or above whose every line is Eileen-authored,
+    // user-provenance or approved; never a pending draft. Tier 0
+
+// dev toolset (read-only, redacted)
+pub struct DevCrateDoc { pub krate: String }
+pub struct DevEventMap { pub event: String }
+pub struct DevTraceGet { pub id: String, pub max_lines: Option<u16> }      // at most 400
+pub struct DevLogsQuery { pub filter: String, pub since_minutes: Option<u32>, pub limit: Option<u16> }
+pub struct DevIncidentRead { pub id: IncidentId, pub part: IncidentPart }
+pub struct DevReplayCore { pub id: String }
+```
+
+Shim to core protocol: named pipe `\\.\pipe\eileen-dispatch-<session>` (for the session role, `\\.\pipe\eileen-dispatch-owner`), user-only ACL, JSON lines (at most 16 MiB per line, for images). First line `{"hello":{"v":1,"token":"...","role":"brain"|{"worker":"ws_..."}|"librarian"|"session"|"dev"}}`; the dispatcher checks the token, then the caller's process (an `eileen-shim.exe` from Eileen's install folder inside the matching session's Job Object for every role but `session`, and outside every Eileen-started Job Object for `session`, section 2.12), and answers `{"welcome":{"tools":[ToolSpec...]}}`; then `{"call":{"id":n,"tool":"...","args":{...},"meta":{...}}}` answered by `{"result":{"id":n,"content":[...],"is_error":false}}`. A wrong token or the wrong process closes the pipe and logs a security event. The shim never decides anything. WP0's stub shim already answers MCP `initialize` and an empty `tools/list`, so the claude CLI never waits `MCP_TIMEOUT` (30 s) on it during W1.
+
+#### 3.3.10 The intent resolver
+
+```rust
+// eileen-intent
+pub struct Resolver { /* grammar table, skill templates, BM25 index, confirmed phrasing pairs */ }
+impl Resolver {
+    pub fn new(grammar: Grammar) -> Self;
+    pub fn rebuild(&mut self, skills: &[SkillMeta], phrasings: &[PhrasingFact]);
+    /// L1 and the lexical part of L2; pure and deterministic.
+    pub fn resolve(&self, utterance: &str, ctx: &ResolveCtx) -> Resolution;
+    /// L2 with an embedding the core requested from the speech process.
+    pub fn resolve_semantic(&self, utterance: &str, embedding: &[f32], ctx: &ResolveCtx) -> Resolution;
+    /// Pronouns and ellipses bound by the slot resolvers against ctx.last_turn, else a shared content word or topic.
+    pub fn follow_up(&self, utterance: &str, ctx: &ResolveCtx) -> FollowUp;
+}
+pub struct ResolveCtx { pub focused_app: Option<String>, pub media_active: bool, pub dictation: bool,
+    pub awaiting: Option<Awaiting>, pub assistant_name: String, pub monitors: u8, pub media_history: Vec<MediaRef>,
+    pub last_turn: Option<LastTurnRefs> }
+/// What Eileen's own last turn mentioned, filled by the core from that turn (never from screen or model text it did
+/// not speak or show): the addressee gate's follow-up feature and the fact path's feedback scope read it.
+pub struct LastTurnRefs { pub age_ms: u32,
+    pub items: Vec<String>,               // HUD items of that turn (answer items, contact-sheet entries), in order
+    pub job: Option<JobRef>,              // the job it announced or named
+    pub apps: Vec<String>, pub files: Vec<String>, pub media: Vec<String>,   // what it mentioned, as slot values
+    pub content_words: Vec<String>,       // its spoken content words, normalised (stop words dropped, stems)
+    pub topic: Option<String> }           // the deep answer's topic, when it was one
+/// IntentResolver::follow_up's answer: whether an unnamed utterance resolves against Eileen's last turn.
+pub enum FollowUp { None,
+    Referent { slot: String, value: serde_json::Value },   // a pronoun or ellipsis the slot resolvers bound to one of
+                                                          // last_turn's items, job, apps, files or media
+    Shared { word: String } }             // a content word or the topic shared with last_turn
+pub enum Resolution {
+    Command { command: CoreCommand, slots: SlotValues },        // L1 safety and control, built-in commands, and the fact
+                                                                // phrases (CoreCommand::Fact(FactCommand))
+    Tool { tool: ToolName, args: serde_json::Value, source: ToolSource },   // Grammar | ConfirmedPhrasing | ExactRepeat
+                                                                // (slot-free only)
+    Skill { skill: SkillRef, slots: SlotValues, level: Level }, // L1 template: level 4 replays now; level 3 goes to the
+                                                                // brain as the [match] block; levels 1 and 2 come back as Hints
+    Ambiguous { question: String, options: Vec<String> },       // including an ambiguous slot ("15 seconds or 15 minutes?")
+    Hints(Vec<(SkillRef, u16)>),                                // L2: for the brain only
+    Brain { depth: Option<Depth>, addressee_unsure: bool },     // L3, with any depth override
+}
+pub enum SlotValue { Resolved(serde_json::Value), Ambiguous { candidates: Vec<serde_json::Value> } }
+/// What a grammar entry of section 2.4 asks the core to do itself (entries that are plain tool calls resolve to
+/// Resolution::Tool instead). One variant per entry family; snapshot-tested with the grammar.
+pub enum CoreCommand {
+    // safety and control (precedence 1)
+    Mute, Unmute, Stop, Cancel { job: Option<JobRef> }, GoOn, ThatWasForYou, Undo, UndoFact, Forget(ForgetTarget),
+    SomethingWentWrong, SaveScenario, StopRecording, OffTheRecord(bool), PauseAgents,
+    // built-in grammar (precedence 2)
+    WhatTime, HowsItGoing, WhatHaveYouLearned, WhatDoYouKnowAboutMe, LearnFromThatNow, RecordSession,
+    UseVoice { name: String, engine: Option<String> }, BackToNormal, ForgetMyVoice, Rename { name: String },
+    TakeDictation, StopDictating, Depth(Depth), ShowMeHow, WhatCanYouDoHere, ShowChanges { job: JobRef },
+    OpenRecentWork, StartAnyway, FixIt, AddThatServer, ShowRouteSuggestions, ExplainThat, About,
+    Fact(FactCommand),
+}
+pub struct FactCommand {
+    pub kind: FactKind,
+    pub text: Personal<String>,           // the user's normalised final transcript, at most 200 chars, referents in brackets
+    pub subject: Option<String>,          // the subject key (section 2.10 item 11): the <thing>, the <phrase> of "X means
+                                          // Y", the bracketed referent of "I loved that [place]", the dimension a
+                                          // refinement word's entry names (distance, price, ...); None for "remember that"
+    pub scope: Option<String>,            // feedback: the current answer's topic only when the statement refers to it
+                                          // (follow_up resolves it within 120 s), else None; project: the repository or app
+    pub retire: RetireRule,               // None | SameSubject: retire active facts of this kind and subject key whose
+                                          // scope is this one or none (every scope when this one is None); for
+                                          // kind Phrasing, delete the alias phrasings of this slot kind and subject key
+}
+// A FactCommand of kind Phrasing is stored as a PhrasingFact (SlotAlias target, subject set), never as a UserFact.
+/// Ranks each app's routes by its declared rungs and the recorded route statistics (eileen_skills::routes::rank).
+pub fn introspect(tools: &[ToolSpec], app_caps: &[AppCapability], skills: &[SkillMeta], routes: &[RouteStat],
+    focused: Option<&str>) -> Capabilities;
+```
+
+Rules the resolver enforces, each with a golden-file test in WP7: the precedence of section 2.4 (safety and control, then built-in grammar, then learned templates); a full match accounts for every content word, and an unknown descriptor demotes a template hit to a hint; a slot resolver returns `Ambiguous` for bare numbers and times without units, and replay never runs on an ambiguous slot; a confirmed L2 phrasing runs directly only when its target has no slots, the similarity is at least `learning.phrasing_min_similarity`, and every entity name the L1 slot resolvers find in the new utterance equals the matching literal in the target's arguments, otherwise it is a hint (for a slotted target, the L1 slot resolvers must extract every slot from the new utterance, stored values are never reused, and the skill's own level rules still apply); and the linter rejects a learned template that matches any phrase in the grammar golden file, has fewer than two literal tokens, or has a `Text` slot that could swallow a conjunction or a grammar verb. The template grammar itself (parse, validate, normalise) lives in `eileen-skills::template`, shared by the matcher and the linter.
+
+Latency budgets, tested in CI with loose bounds and measured on the owner's PC: `resolve` under 1 ms p99 with 5,000 skills and the full grammar; `resolve_semantic` under 5 ms p99 for the comparison; the embedding round trip under 20 ms p95 for a 12-word utterance. **L2 always has a model** (owner direction: a local semantic matcher on the device). WP4 measures two candidates and adopts the one with the better accuracy on the resolver golden file's paraphrase cases that meets the budget: a small transformer of the all-MiniLM-L6-v2 class (Apache-2.0, about 23 MB as int8 ONNX, through `ort`), and a static-embedding model of the model2vec class (MIT, about 30 MB, a token-embedding table averaged in plain Rust, microseconds per utterance, no ONNX at all), which always meets the budget and is the floor. WP4 verifies license, size, digest and accuracy before adopting either and records the result; L2 runs lexical only only if both fail their license check, which `eileen doctor` reports.
+
+#### 3.3.11 Settings and configuration
+
+```rust
+// eileen-contracts::config: the whole configuration as types; doc comments become the commented default file
+pub struct Config {
+    pub assistant: AssistantConfig,   // name ("Eileen"), personality (free text, at most 400 chars), verbosity, humor
+    pub voice: VoiceConfig,           // live, narration, announcements, fallback, rate_pct, watermark_exports,
+                                      // engines: per voice name, pocket | chatterbox-turbo | chatterbox-nano
+    pub hud: HudConfig,               // corner, scale_pct, opacity_pct, show_transcript, suggestions
+    pub conversation: ConversationConfig,     // window_s (45), follow_up_s (8), alone_scoring (on),
+                                              // addressee_min_points (2), level_margin_db (6)
+    pub announcements: AnnouncementsConfig,   // per event kind: Interrupt | WhenIdle | Silent | HudOnly; per job kind overrides
+    pub approvals: ApprovalsConfig,   // voice_window_s (20), deadline_min (30), hook_hold_s (120), action_word_tier2 (true)
+    pub routing: RoutingConfig,       // models: names to vendor aliases or full ids (fast = "haiku", mid = "sonnet",
+                                      // strong = "opus"); brain and deep: { backend: Route, model: name };
+                                      // fallback_brain (Claude); per kind: route, model name, depth; hot_spare;
+                                      // recycle thresholds; speculative
+    pub anticipation: AnticipationConfig,     // enabled (false), max_plan_pct (50)
+    pub memory: MemoryConfig,         // profile (auto | full | low), reserve_mb (auto: 10 percent of RAM, 768 to 2048),
+                                      // max_paging_kb_s (auto: 75th percentile plus 25 percent of 7 days of machine-wide
+                                      // 30 s averages outside build slots, 2,000 to 40,000; the guard's baseline until
+                                      // a day exists, 5,000 when there is neither; samples::auto_paging_limit),
+                                      // queue_ask_min (10),
+                                      // pool_computer_use (1), pool_deep (1), pool_order (deep, computer_use),
+                                      // max_build_heavy_jobs (1), worker_job_limit_mb (0 = off)
+    pub permissions: PermissionsConfig,       // grants (tier 1, or tier 2 with a logged decision), private apps, desktop
+                                              // apps, uri_schemes (app protocols the user approved for apps_open_uri)
+    pub desktop: DesktopConfig,       // lease_idle_s (5), visible_intent_ms (400), web_tree (true)
+    pub hotkeys: HotkeysConfig,       // mute, report, approve, deny, hands_off, dictation
+    pub dictation: DictationConfig,   // polish, categories, key, languages
+    pub learning: LearningConfig,     // enabled, distill ("claude" | "off"), librarian_max_plan_pct (50), snapshot_k (12),
+                                      // regret_window_s, phrasing_paraphrase_uses (2), phrasing_min_similarity
+                                      // (0.85 until WP7 measures it), ladder thresholds
+    pub mcp: McpConfig,               // servers: per app, approved third-party MCP servers: registry id, package type,
+                                      // exact version, command and arguments in %LOCALAPPDATA%\eileen\mcp\<app>\, the
+                                      // install's lockfile or file digest, the job kinds that get it, its rung
+                                      // (app_mcp | dom) and its observes class (web by default, section 2.12); the
+                                      // tool names it lists in the sidecar's tools/list run after the install go to
+                                      // cache\mcp-tools.json, not here
+    pub privacy: PrivacyConfig,       // location, off_the_record, ledger_days, keep_unaddressed (false)
+    pub focus: FocusConfig,           // quiet_during_calls, quiet_full_screen, quiet_recording
+    pub first_run: FirstRunConfig,    // done, max_clone_ttfa_ms (3000)
+    pub speech: SpeechConfig,         // vad, asr, turn (engine names), pin_working_set (false), low-memory models
+    pub claude_plugin: ClaudePluginConfig,    // share_skills (false)
+    pub logging: LoggingConfig, pub flight: FlightConfig, pub incidents: IncidentsConfig,
+    pub recording: RecordingConfig,   // audio (false: opt-in audio lanes)
+    pub fleet: FleetConfig,           // opt_in, schedule, upload, mode (recorded | live), turn_budget
+}
+
+// eileen-config
+pub struct SettingSpec {
+    pub key: &'static str,            // "assistant.name"
+    pub doc: &'static str,
+    pub voice: bool, pub hud: bool,
+    pub risk: Risk,                   // Low | Misfire(CheckKind) | Safety(SafetyBound)
+    pub apply: ApplyMode,             // NextTurn | Live | Restart(Component)
+}
+pub enum CheckKind { NameRecognisable, HotkeyFree, VoiceRealtime, BrainBenchmark, None }
+pub enum SafetyBound { NeedsUserApproval, Tier1Only, Tier2WithLoggedDecision, Never }
+pub struct SettingChange { pub key: String, pub value: serde_json::Value }
+pub struct Proposal { pub id: ProposalId, pub changes: Vec<SettingChange>, pub diff: Vec<DiffLine>,
+    pub checks: Vec<CheckResult>, pub confirm_sentence: String, pub needs_yes: bool, pub utterance: String,
+    pub source: SettingsSource }
+pub struct SettingsVersion { pub version: u64, pub at: WallTime, pub source: SettingsSource, pub utterance: Option<String>,
+    pub approval: Option<ApprovalId>, pub diff: Vec<DiffLine>, pub snapshot_toml: String }
+pub enum SettingsSource { Voice, Hud, File, Profile(String), Undo, Default, BrainProposal }
+
+pub fn registry() -> &'static [SettingSpec];
+pub fn load(dir: &Path) -> Result<(Config, Vec<Diagnostic>), ConfigError>;          // every error names a line
+pub fn validate(current: &Config, changes: &[SettingChange]) -> Result<Proposal, ConfigError>;
+pub fn apply(current_toml: &str, changes: &[SettingChange]) -> Result<String, ConfigError>;   // keeps comments (toml_edit)
+pub fn explain(config: &Config, layers: &Layers) -> Vec<Explained>;
+```
+
+The flow itself (propose, check, confirm, apply, version, undo) is a state machine in `eileen-core::settings`, so it is simulated like everything else; `eileen-config` provides the pure parts and the file IO used by the runtime's driver. Which keys are `Safety` is listed in section 2.11.
+
+#### 3.3.12 Connectors
+
+```rust
+pub struct ConnectorManifest {
+    pub id: ConnectorId, pub version: String,
+    pub runs: RunsIn,                    // CoreTask | Sidecar { binary: String }
+    pub platforms: Vec<Platform>,        // Windows, Linux, MacOs
+    pub tools: Vec<ToolSpec>,
+    pub events: Vec<String>,             // event kinds it publishes
+    pub checks: Vec<(ToolName, String)>, // (tool, op) pairs recipes may use as checks; each op is read_only and tier 0
+    pub senses_room: bool,               // camera, room microphone: opt-in per device, local only
+    pub requires_opt_in: bool,
+}
+pub struct AppCapability { pub app: String, pub verbs: Vec<String>, pub version: Option<String>, pub rungs: Vec<Rung> }
+```
+
+Each sidecar answers a `connector_manifest` call (core-only, never shown to models) right after the MCP handshake. Each adapter fills `AppCapability.version` from the app itself (Resolve's `GetVersionString`, the executable's file version otherwise), which is what puts a recipe on probation after an app update.
+
+#### 3.3.13 Learning types
+
+The types of the learning-loop report section 6.2, with the changes the reviews and the verification round required: no Gemini route; steps keyed by `CallId`; recipes with typed operands, four step kinds and fallbacks; checks per op; skill use attributed with defined slot values; provenance computed; facts changed by deltas with subject keys; phrasings with exact repeats and their sources; route proposals matched to the registry, route statistics and source statistics; versions in SQLite.
+
+```rust
+// eileen-contracts::learn
+pub enum Level { Draft, Trusted, Recipe, FastPath }
+/// User: the user's own transcript. Worker: an untainted step's arguments. Tool: Eileen's schemas and descriptions.
+/// Observed: overlaps observed text or traces only to a tainted step. ObservedSource is the shared enum of 3.3.2.
+pub enum Provenance { User, Worker { route: Route }, Tool { tool: ToolName }, Observed { source: ObservedSource }, Librarian, Approved { approval: ApprovalId } }
+pub enum JobOrigin { Worker, Replay, FastPath, Act }
+
+pub struct Trajectory {
+    pub schema: u16, pub job_id: JobId,
+    pub request: Personal<String>, pub task: String,
+    pub context: DesktopContext,          // focused app, app versions touched, document identity (redacted), connectors
+    pub route: Route, pub origin: JobOrigin,
+    pub snapshot: Option<SnapshotManifest>,   // which skill versions the session had
+    pub snapshot_tampered: bool,          // a hash or manifest mismatch: excluded from learning and statistics
+    pub skills_used: Vec<SkillUse>,
+    pub facts: Vec<String>,               // ids of the facts bound into the job (its facts block)
+    pub taint: Taint,                     // the observed sources the job read (section 2.12)
+    pub steps: Vec<TrajectoryStep>,
+    pub cost: Cost, pub outcome: Option<Outcome>, pub redactions: u32, pub no_learn: bool,
+}
+/// slot_values, first source that has them: the job's dispatched slots; the Skill call's args parsed with the skill's
+/// slot resolvers (eileen_skills::slots::from_args); the skill's template over the request. Else SlotsUnknown.
+pub struct SkillUse { pub skill: SkillRef, pub args: Untrusted<String>, pub slot_values: SlotValuesOrUnknown }
+pub struct TrajectoryStep {
+    pub call: CallId, pub at_ms: u64,
+    pub tool: ToolName, pub op: Option<String>, pub schema_hash: String,
+    pub args: Untrusted<serde_json::Value>,      // redacted
+    pub ok: bool,
+    pub result: Untrusted<serde_json::Value>,    // redacted; long string leaves cut, every key and the structure kept
+    pub tier: Tier, pub approval: Option<bool>,
+    pub provenance: Provenance,                  // computed by eileen-skills, never taken from the librarian
+    pub tainted: bool, pub rung: Option<Rung>, pub app: Option<(String, String)>,   // app and version touched
+    pub shadow_of: Option<String>,               // set only on the core's shadow checks (section 2.10 item 7): the
+                                                 // recipe step whose postcondition this read evaluated; never compiled
+}
+/// shadow::agree's result (section 2.10 item 7). Only Agree counts toward level 3; neither of the others is a failure.
+pub enum ShadowVerdict { Agree, Disagree { step: String, reason: ShadowMiss }, Inconclusive { step: String, reason: String } }
+pub enum ShadowMiss { MissingCall, DifferentArgs { arg: String }, ExtraCall { call: CallId }, PostconditionFailed,
+    EmptyDelegateSpan, AskNotAsked }
+pub enum Signal { Accepted, Praised, Corrected { text: Personal<String> }, Undone { after_ms: u64 },
+    Retried, Cancelled, PostcheckPassed, PostcheckFailed { step: String } }
+pub enum Verdict { Success, Failure, Unclear }
+pub struct Outcome { pub status: JobStatus, pub signals: Vec<Signal>, pub verdict: Verdict, pub objective_check: bool }
+
+pub struct SkillRef { pub id: SkillId, pub version: u32 }
+/// Pick: one of the options an `ask` step offered at run time, matched by the Choice resolver against that list.
+pub enum SlotKind { Offset, Count, Text, App, File, Url, Media, Position, Monitor, Choice { options: Vec<String> }, Pick }
+pub struct SlotSpec { pub name: String, pub kind: SlotKind, pub required: bool, pub default: Option<serde_json::Value>,
+    pub asked: bool,                      // filled only by the skill's `ask` step; never in the template, never from the
+                                          // request, not part of a use's slot values
+    pub seen_values: Vec<serde_json::Value> }   // enumerated kinds: values a successful use has seen
+pub struct SkillMeta {
+    pub id: SkillId, pub version: u32, pub level: Level, pub risk: RiskClass,   // Light | Standard
+    pub description: String, pub triggers: Vec<String>, pub slots: Vec<SlotSpec>,
+    pub apps: Vec<(String, String)>,      // app, version range the recipe was proven on
+    pub tool_hashes: Vec<(ToolName, String)>,   // schema hashes the recipe was proven with
+    pub has_recipe: bool, pub evidence: Vec<JobId>, pub phrasings: Vec<String>,
+    pub facts_used: Vec<String>,          // facts bound into the evidence jobs whose values appear in the skill's literals
+                                          // or recipe arguments; retiring one queues a repair and drops a level
+    pub pinned: bool, pub untrusted_origin: bool,
+}
+pub struct Recipe { pub skill: SkillRef, pub pre: Vec<Check>, pub steps: Vec<RecipeStep> }
+pub struct RecipeStep { pub id: String, pub kind: StepKind, pub pre: Vec<Check>, pub post: Vec<Check>,
+    pub timeout_ms: u32, pub on_fail: OnFail }
+/// A value in arguments, check arguments and expectations. Serialized as a plain JSON literal, {"$slot": "t"},
+/// {"$step": "id", "ptr": "/json/pointer"} or {"$len": <operand>} (the length of the array the inner operand resolves
+/// to); the linter types every pointer against the op's output_schema (a Delegate step's against the report schema).
+pub enum Operand { Lit(serde_json::Value), Slot(String), Step { step: String, ptr: String }, Len(Box<Operand>) }
+pub enum StepKind {
+    Call { tool: ToolName, op: Option<String>, args: serde_json::Value },   // values may be Operands
+    Ask { question: String, options: Option<Operand>, slot: String },       // the core's clarifying question; `slot` names
+                                                                             // a SlotSpec with asked = true (kind Pick when
+                                                                             // options is set); never skipped
+    Delegate { goal: String, inputs: serde_json::Value },                   // a narrow worker sub-job; its output is the
+                                                                             // sub-job's report { summary, artifacts, outcome }
+    Confirm { question: String, show: Option<Operand> },                    // never skipped by replay
+}
+// Ask.question, Delegate.goal and Confirm.question are literals of kind (a) for tracing, overlap and the deny patterns
+// (section 2.10 item 9) and are exempt from the vocabulary rule; one of six tokens or more that traces nowhere is held
+// for line approval, never silently kept.
+/// RecipeStep.post: required (non-empty) on Call and Delegate steps, empty on Ask and Confirm, whose postconditions
+/// are implicit (the slot resolved; the user said yes). Every Delegate is followed by a Call step with a postcondition
+/// (in a fallback, the re-run of the failed step), which is its objective check in shadow mode.
+/// Fallback: run these steps (no fallbacks of their own), then re-run the failed step once and re-check it; a second
+/// failure hands off. Scope: a fallback step may point to earlier main steps and earlier steps of its own fallback;
+/// no main step and no other fallback may point into it.
+pub enum OnFail { Handoff, RetryOnce /* idempotent ops only */, Abort, Fallback(Vec<RecipeStep>) }
+/// Checks may only call ops that are read_only and tier 0; the linter enforces it against the connector manifests.
+/// With tool None, the check reads the step's own output.
+pub struct Check { pub tool: Option<ToolName>, pub op: Option<String>, pub args: serde_json::Value, pub path: String, pub expect: Expect }
+/// AtLeast, AtLeastRel, Within and Count take numeric operands only (an array is wrapped in Len); Count compares the
+/// length of the array at `path` with its bounds.
+pub enum Expect { Equals(Operand), Contains(Operand), AtLeast(Operand), AtLeastRel { of: Operand, factor: f64 },
+    Within { of: Operand, tol: f64 }, Count { min: Operand, max: Option<Operand> }, Exists, Truthy }
+
+pub struct UserFact { pub id: String, pub kind: FactKind, pub text: Personal<String>, pub provenance: Provenance,
+    pub subject: Option<String>,          // the subject key a correction matches (section 2.10 item 11)
+    pub scope: Option<String>,            // a topic, repository or app the fact applies to
+    pub source_turn: Option<TurnId>, pub source_job: Option<JobId>, pub confidence_pct: u8,
+    pub created: WallTime, pub confirmed: WallTime }
+pub enum FactKind { User, Feedback, Project, Reference, Vocabulary, Phrasing }   // sources are SourceStat, not facts;
+                                          // Phrasing names the kind in commands and queries, stored as PhrasingFact
+/// RetireReason: Corrected | Forgotten (both queue repairs of skills listing the fact) | Stale | Undone (neither does)
+pub enum FactDelta { Add { fact: UserFact }, Confirm { id: String, at: WallTime },
+    Retire { id: String, reason: RetireReason, replaced_by: Option<String> } }
+pub struct PhrasingFact { pub id: String, pub utterance: Personal<String>, pub target: PhrasingTarget, pub embedding: Vec<f32>,
+    pub confirmed: u16, pub provisional: bool,    // provisional: exact repeats only, until the first clean regret window
+    pub source_turn: TurnId, pub source_job: Option<JobId>,   // the turn and Act job it came from; forget plans use them
+    pub subject: Option<String>,          // SlotAlias targets: the subject key of the phrase ("video editor"), from a
+                                          // clarifying answer or "X means Y"; a SameSubject correction deletes the others
+    pub ephemeral: bool }                 // made from a first-run demo turn: deleted when the first run ends
+pub enum PhrasingTarget { SlotFreeCall { tool: ToolName, args: serde_json::Value }, GrammarEntry { id: String },
+    SkillTemplate { skill: SkillId }, SlotAlias { kind: SlotKind, value: serde_json::Value } }
+/// app: a key of Eileen's app index, validated by the dispatcher; registry_id, McpPackage.version and
+/// Publisher.namespace: validated formats (a registry id, an exact semantic version, a reverse-DNS or io.github.<user>
+/// namespace); all are listed in contracts/text-allowlist.toml with that reason. For AppMcp every other field but
+/// `why` comes from the registry entry the proposal matched; `why` is the worker's note.
+pub struct RouteProposal { pub id: RouteProposalId, pub app: String, pub kind: RouteKind,
+    pub verified: bool,                   // AppMcp matched to a registry entry; AppApi and DeepLink are always false
+    pub registry_id: Option<String>, pub name: Untrusted<String>,
+    pub publisher: Option<Publisher>,     // the registry-verified namespace of the server name, never a free-text field
+    pub from_app_vendor: bool,            // the namespace is a domain listed for this app in app-vendors.toml; there is
+                                          // no "official" flag (the registry's _meta "official" block is bookkeeping)
+    pub source_url: Untrusted<String>,    // AppMcp: the registry entry's repository; AppApi: the worker's link
+    pub package: Option<McpPackage>, pub uri_scheme: Option<Untrusted<String>>,
+    pub why: Untrusted<String>, pub job: JobId, pub status: ProposalStatus }   // Open | Accepted | Dismissed | Refused
+/// GitHub { user } for io.github.<user> (verified by the registry through that account); Domain { domain } for a
+/// reverse-DNS namespace (verified through DNS or HTTP); `display` is what the HUD shows and Eileen speaks.
+pub struct Publisher { pub namespace: String, pub kind: PublisherKind /* GitHub | Domain */, pub display: String }
+pub struct McpPackage { pub registry_type: PackageType /* Npm | Pypi | AppBundled */, pub identifier: Untrusted<String>,
+    pub version: String }                 // an exact version; installed once into %LOCALAPPDATA%\eileen\mcp\<app>\
+pub struct RouteStat { pub app: String, pub app_major: String, pub task: String, pub rung: Rung,
+    pub successes: u32, pub failures: u32, pub median_ms: u32, pub rung_skipped: u32 }
+/// Which sources gave accepted deep answers per topic (section 2.10 item 11). host: a registrable domain, nothing more,
+/// validated and listed in contracts/text-allowlist.toml with that reason; topic: the deep answer's topic key.
+pub struct SourceStat { pub topic: Personal<String>, pub host: String, pub cited: u32, pub accepted: u32, pub opened: u32,
+    pub last: WallTime }
+
+/// One row per job in librarian_runs (section 2.10 item 2): idle distillation takes only jobs with no row or a Deferred
+/// outcome, and `eileen skills distill --job` reads this row after subscribing to the bus, so it never misses an event.
+/// Done { Rejected } is final. A librarian that exits mid-batch leaves Deferred(LibrarianFailed) for its batch, and at
+/// start the runtime turns every Queued or Running row left behind into Deferred(Cancelled), emitting the event.
+pub enum DistillState { Queued, Running { batch: u32 }, Done { outcome: DistillOutcome } }
+pub enum DistillOutcome { Drafted { skill: SkillRef, held: DraftHold }, Rejected, Skipped(SkipReason), Deferred(DeferReason) }
+pub struct SkillVersion { pub skill: SkillId, pub version: u32, pub at: WallTime, pub reason: CommitReason,
+    pub evidence: Vec<JobId>, pub doc: SkillDoc }           // full content of SKILL.md, references and recipe
+pub enum CommitReason { Distill, Repair, UserEdit, UserCorrection, Rollback, Promote, Demote }
+pub struct SnapshotManifest { pub session: WorkerSessionId, pub files: Vec<(SkillRef, String /* path */, String /* blake3 */)> }
+pub struct LadderPolicy { pub light: Thresholds, pub standard: Thresholds, pub demote_failures_in_last5: u8,
+    pub archive_idle_days: u16 }   // defaults in section 2.10
+/// Per level: level 2 { successes, distinct_slot_values }, level 3 { agreeing_shadows } plus approval,
+/// level 4 { clean_replays, clean_pct_last_20 }. Light: 1 and 1; 1; 3. Standard: 3 and 2; 3; 10 at 95 percent.
+pub struct Thresholds { pub l2_successes: u8, pub l2_distinct_slot_values: u8, pub l3_agreeing_shadows: u8,
+    pub l4_clean_replays: u8, pub l4_clean_pct_last_20: u8 }
+pub struct UseRecord { pub job: JobId, pub at: WallTime, pub verdict: Verdict, pub objective_check: bool,
+    pub slot_values: SlotValuesOrUnknown, pub replay: bool, pub handoff: bool, pub app_versions: Vec<(String, String)> }
+/// phrasings: every PhrasingFact whose source_turn or source_job is in the plan (an Act job's utterance is personal text);
+/// answers: the answers-cache rows those jobs wrote; source_topics: SourceStat topics no other job contributed to.
+pub struct ForgetPlan { pub skills: Vec<SkillRef>, pub facts: Vec<String>, pub phrasings: Vec<String>,
+    pub answers: Vec<String>, pub source_topics: Vec<String>, pub jobs: Vec<JobId>, pub turns: Vec<TurnId>,
+    pub blobs: Vec<String>, pub incidents: Vec<IncidentId>, pub recordings: Vec<RecordingId>, pub scenarios: Vec<ScenarioId>,
+    pub live_sessions: Vec<WorkerSessionId> }   // the jobs and turns also go to Persist(PurgeJobs) for eileen.db
+```
+
+`eileen-skills` exposes, as pure functions: `template::{parse, validate, normalize}`, `ladder::next_level(meta, uses, policy) -> Transition`, `lint::lint(doc, evidence, manifests) -> Vec<LintError>` (every rule of the learning-loop report section 3.11 plus the rules of section 2.10: pointers typed against output schemas with the fallback scope rule and `$len` for array lengths, the postcondition rule per step kind, asked slots, per-op checks, fallbacks, idempotent retries, eligibility with vocabulary literals, the tools a replay may call, rung order, the deny-scan, template collisions with the grammar), `provenance::compute(doc, evidence) -> ProvenanceReport` (literals, tracing, eight-token overlap, the whole-draft hold), `slots::from_args(skill, args) -> SlotValuesOrUnknown`, `facts::used(doc, bound_facts) -> Vec<String>`, `routes::rank(stats, caps) -> Vec<RankedRoute>` and `routes::facts_line(stats, caps) -> Option<String>`, `sources::line(stats, topic) -> Option<String>`, `shadow::checks(recipe, slots, steps) -> Vec<CheckPlan>` and `shadow::agree(recipe, slots, steps) -> ShadowVerdict` (the rules of section 2.10 item 7), `verdict::success(outcome) -> bool`, the replay state machine (`ReplayMachine`), and `forget::plan(target, store_index) -> ForgetPlan`. `eileen-learn` implements the IO: `Recorder`, the `learn.sqlite` store, the snapshot writer and verifier, the librarian scheduler and the `learn` toolset handlers, the user-model, phrasing, route-proposal, route-statistics and ledger stores, and the forget executor.
+
+#### 3.3.14 Scenarios
+
+The scenario format is a contract because packages, contributors and CI all write and read it. `scenarios/<area>/<id>/scenario.toml`, validated by deserializing into these types and against a JSON Schema generated from them into `scenarios/_schema/scenario.schema.json`:
+
+```rust
+pub struct Scenario {
+    pub schema: u16,                     // 1
+    pub id: ScenarioId, pub title: String, pub area: String, pub tags: Vec<String>,
+    pub origin: ScenarioOrigin,          // Synthetic | SyntheticFromUser | ContributedConsentedAudio | FromSkill
+    pub contributor: Option<String>,     // GitHub handle, never an email
+    pub machine: Option<MachineHash>,    // the machine that recorded it (owner answer 6): set by eileen scenario save
+                                         // from fleet\machine.toml on every saved scenario and kept by share (it is
+                                         // neither Personal nor Untrusted); None only on hand-written scenarios
+    pub recorded_at_commit: Option<String>,
+    pub outcome: ExpectedOutcome,        // Pass | ExpectedFail (a saved failure, until fixed)
+    pub intent: ScenarioIntent,          // utterances (text, placeholders allowed), optional consented audio, stock voice,
+                                         // expected: Option<String> (the user's "what should have happened")
+    pub environment: ScenarioEnv,        // min Windows build, requires (capabilities: "resolve-studio>=21.0", "monitors>=2",
+                                         // "real-claude", "photoshop"), lanes: Sim | Desktop | Bench
+    pub world: Option<SimWorld>,         // for hand-written sim scenarios: brain script, worker scripts by fan-out index,
+                                         // sidecar latency and faults, sim profile, memory pressure
+    pub fixtures: Fixtures,              // files from templates in the area's _fixtures/, apps to launch, window layout
+    pub steps: Vec<Step>,
+    pub expect: Vec<Expectation>,
+    pub timing: BTreeMap<String, TimingBudget>,   // "turn.ended -> job.completed" = { max_ms, ci_factor }
+    pub sim: Option<SimReplay>,          // inputs = "replay/inputs.jsonl" (plain JSONL of RecordLine, size-capped), expected = "replay/expected.trace"
+    pub quarantine: Option<Quarantine>,  // Quarantine { issue, since: Date, expires: Date }; required for a known-flaky
+                                         // scenario, at most 90 days
+    pub status: ScenarioStatus,          // Active | Stale { since_commit, since: Date, issue, expires: Date } (at most 30
+                                         // days; an expired stale scenario fails CI, like an expired quarantine)
+}
+/// The part of a scenario the expiry rule reads; both callers build it from the parsed file.
+pub struct ScenarioMeta { pub id: ScenarioId, pub status: ScenarioStatus, pub quarantine: Option<Quarantine> }
+pub enum StatusProblem { Expired { what: StatusKind, expires: Date }, TooLong { what: StatusKind, days: u16, cap: u16 },
+    SinceInFuture { what: StatusKind, since: Date }, NoIssue { what: StatusKind } }   // StatusKind: Stale | Quarantine
+/// The one expiry rule, pure, called by both `cargo xtask scenarios check` (check 18, tools/repo-tools) and
+/// `eileen scenario check` (WP2) with today's UTC date: a problem when a Stale status or a Quarantine has passed its
+/// `expires`, names an `expires` more than 30 days (stale) or 90 days (quarantine) after its own `since`, has a `since`
+/// after today, or has no issue link. `since` is written into the file when the status is set (`eileen scenario stale`
+/// writes today's date); check 18 also fails a `since` later than the UTC calendar date of the committer time of
+/// the commit that introduced that line (`git blame` at the checked commit, in repo-tools only; a line not yet
+/// committed is compared with today's UTC date), so `since` never claims a date after the change that wrote it, and an
+/// edit that moves it is its own commit, visible in review.
+pub fn status_problems(meta: &ScenarioMeta, today: Date) -> Vec<StatusProblem>;
+pub enum Step {
+    Say { utterance: u16 },              // index into intent.utterances
+    Type { text: String }, Hotkey { keys: String }, Hud { input: HudInput },
+    WaitFor { event: String, timeout_ms: u32 },   // a name from docs/reference/events.md
+    Approve, Deny, Pause { ms: u32 }, PhysicalInput,   // PhysicalInput simulates the user touching the mouse
+}
+pub enum Expectation {
+    Event { pattern: String },           // matched against the event trace with [ANY], [ANYLINE], [UNORDERED] (3.3.16)
+    Call { tool: ToolName, args_contain: serde_json::Value },
+    Spoken { contains: String },  NotSpoken,
+    JobStatus { status: JobStatus },
+    WindowOnMonitor { process: String, ordinal: u8 },
+    WindowSnapped { process: String, zone: String },
+    FieldText { selector: Selector, contains: String },
+    File { path: String, sha256: Option<String>, contains: Option<String> },
+    ResolvePlayhead { timecode: String, tolerance_frames: u32 },
+    MediaPosition { seconds: f64, tolerance_s: f64 },
+    SharpnessIncrease { min_pct: u16 },
+    SettingEquals { key: String, value: serde_json::Value },
+    NoFileLeft { glob: String },         // for deletion checks (first run declined, forget)
+}
+```
+
+Example:
+
+```toml
+schema = 1
+id = "resolve-goto-timecode"
+title = "Go to a time in the Resolve timeline"
+area = "apps/resolve"
+tags = ["resolve", "navigation"]
+origin = "synthetic"
+outcome = "pass"
+
+[intent]
+utterances = ["Open Resolve and go to 15:30", "uh go to fifteen thirty in resolve"]
+voice = "kokoro:af_heart"            # used when a runner needs audio; the text is the source of truth
+
+[environment]
+requires = ["resolve-studio>=21.0"]
+lanes = ["sim", "desktop"]
+
+[fixtures]
+apps = [{ launch = "resolve", project_template = "_fixtures/eileen-test" }]
+
+[[steps]]
+say = { utterance = 0 }
+
+[[steps]]
+wait_for = { event = "turn.ended", timeout_ms = 20000 }
+
+[[expect]]
+kind = "resolve_playhead"
+timecode = "01:15:30:00"
+tolerance_frames = 0
+
+[[expect]]
+kind = "call"
+tool = "apps_resolve"
+args_contain = { op = { goto = { offset_s = 930.0 } } }
+
+[timing]
+"turn.ended -> speaking.started" = { max_ms = 2500, ci_factor = 3.0 }
+
+[sim]
+inputs = "replay/inputs.jsonl"
+expected = "replay/expected.trace"
+```
+
+Sim-lane expectations are the ones the simulator can check (events, calls, spoken text, job status, settings, files in a simulated store); desktop-lane expectations need a real desktop and run on the owner's PC and on fleet PCs. Contributed scenarios may use only fixture templates already in the repository; they carry no binary files of their own.
+
+#### 3.3.15 Ports
+
+The interfaces that let `eileen-core` stay free of every other crate, and let the runtime compose components it does not know. They use only std types, so `eileen-contracts` needs no async runtime.
+
+```rust
+// eileen-contracts::ports
+/// Implemented by eileen_intent::Resolver. Pure and deterministic; called inside Core::step.
+pub trait IntentResolver: Send {
+    fn rebuild(&mut self, skills: &[SkillMeta], phrasings: &[PhrasingFact]);
+    fn resolve(&self, utterance: &str, ctx: &ResolveCtx) -> Resolution;
+    fn resolve_semantic(&self, utterance: &str, embedding: &[f32], ctx: &ResolveCtx) -> Resolution;
+    /// The conversation window's follow-up feature (section 2.8 rule 3), from ctx.last_turn; None without it.
+    fn follow_up(&self, utterance: &str, ctx: &ResolveCtx) -> FollowUp;
+    fn introspect(&self, tools: &[ToolSpec], app_caps: &[AppCapability], routes: &[RouteStat], focused: Option<&str>)
+        -> Capabilities;
+}
+/// Implemented by eileen_dictation::Cleaner. Pure.
+pub trait DictationCleaner: Send {
+    fn clean(&self, raw: &str, category: FieldCategory, vocabulary: &[VocabularyEntry]) -> Cleaned;
+}
+/// Implemented by eileen_config::Validator. Pure: validation, diff and safety bounds, no file IO.
+pub trait SettingsValidator: Send {
+    fn validate(&self, current: &Config, changes: &[SettingChange]) -> Result<Proposal, ValidationError>;
+    fn specs(&self) -> &[SettingSpecView];
+}
+/// Implemented by eileen_skills::Engine. Pure; the core drives replay and the ladder through it.
+pub trait SkillEngine: Send {
+    fn rebuild(&mut self, skills: &[SkillMeta], recipes: &[Recipe], manifests: &[ConnectorManifest], routes: &[RouteStat]);
+    /// The one-line route summary for an app that goes into a worker's facts block (eileen_skills::routes::facts_line),
+    /// for example "Resolve: scripting worked 14 of 14 times for navigation; use apps_resolve before the screen".
+    fn route_line(&self, app: &str, caps: &AppCapability) -> Option<String>;
+    fn next_level(&self, skill: &SkillId, uses: &[UseRecord]) -> Transition;
+    fn success(&self, outcome: &Outcome) -> bool;
+    fn start_replay(&self, skill: &SkillRef, slots: &SlotValues) -> Result<ReplayState, ReplayRefusal>;
+    /// Feed the last step's result (or None to begin); get the next thing to do:
+    /// Call(ToolCallPlan) | Check(CheckPlan) | Ask(Question) | Delegate(JobSpec) | Confirm(AskUser) | Done
+    /// | Handoff(HandoffBrief); a failed postcondition with a fallback yields the fallback's steps, then the re-run.
+    fn next(&self, state: &mut ReplayState, last: Option<&StepResult>) -> ReplayStep;
+    /// After each Eileen tool result in a shadowed job: the check ops the core must issue now with origin Core,
+    /// because the newest step was just matched to a recipe step whose postcondition names one (section 2.10 item 7).
+    fn shadow_checks(&self, skill: &SkillRef, slots: &SlotValues, steps: &[TrajectoryStep]) -> Vec<CheckPlan>;
+    fn shadow_agree(&self, skill: &SkillRef, slots: &SlotValues, steps: &[TrajectoryStep]) -> ShadowVerdict;
+}
+
+/// A component the runtime starts: audio, speech client, harness, sidecar clients, learning, HUD client, shell.
+pub trait Component: Send + 'static {
+    fn name(&self) -> &'static str;
+    /// Which effect families this component consumes (the runtime routes accordingly).
+    fn accepts(&self) -> &'static [EffectFamily];
+    fn start(self: Box<Self>, ctx: ComponentCtx) -> Pin<Box<dyn Future<Output = Result<(), ComponentError>> + Send>>;
+}
+pub struct ComponentCtx {
+    pub inputs: Box<dyn InputSink>,       // bounded; returns Backpressure instead of growing
+    pub effects: Box<dyn EffectSource>,
+    pub data_dir: PathBuf,
+    pub session: SessionId,
+    pub shutdown: Box<dyn ShutdownSignal>,
+}
+pub trait InputSink: Send + Sync { fn send(&self, input: Envelope<Input>) -> Result<(), Backpressure>; }
+pub trait EffectSource: Send { fn recv(&mut self) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>>; }
+pub trait ShutdownSignal: Send + Sync { fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>; }
+```
+
+Each component crate exposes one constructor, for example `eileen_harness::component(cfg: &HarnessConfig) -> Box<dyn Component>`, `eileen_audio::component(cfg)`, `eileen_learn::component(cfg)`, `eileen_shell_win::component(cfg)`. `eileen-replay` also provides a component, `eileen_replay::responder(scenario)`, that answers brain and worker commands from a recording; `eileen run --replay-models <dir>` swaps it in for the harness, which is how fleet PCs run scenarios with no model (section 4.8). WP0's stubs return a component that accepts its effects and does nothing, so `eileen-cli` wires everything from the first day.
+
+#### 3.3.16 Recording, replay and fleet formats
+
+The simulator, the replayer, the flight recorder, the stub harness, scenarios and the fleet share these formats, so they are contracts (`eileen-contracts::{record, scenario, fleet}`), snapshot-tested, and each parser of them has a fuzz target.
+
+```rust
+pub struct InputRecord { pub seq: u64, pub mono: MonoTime, pub at: WallTime, pub ctx: TraceCtx, pub input: Input }
+    // large values replaced by {"$blob": "b3:..."}; unaddressed speech replaced by a placeholder when written
+/// One line of replay/inputs.jsonl and of the flight recorder's input lane.
+pub enum RecordLine { Input(InputRecord), HookAnswer(HookAnswerRecord) }
+/// The core's Effect::Hook answer to a gating hook input (PreToolUse or PermissionRequest), written by the recorder when
+/// the core emits it; `input` is the seq of the Input::Hook record it answers. Scenario mode compares the live answer
+/// with it ("Hooks in replay"), strict mode compares it like a bus event, and `record trim` keeps it with its input.
+pub struct HookAnswerRecord { pub input: u64, pub mono: MonoTime, pub reply: HookReply }
+pub struct Checkpoint { pub seq: u64, pub mono: MonoTime, pub rng_state: [u64; 4], pub core: CoreSnapshotV1 }
+pub struct CoreSnapshotV1 { pub v: u16, /* jobs, mute, conversation window, approvals, input lock, settings version,
+    skill versions, plan usage, first-run phase, id counters: every field the core needs to resume */ }
+    // eileen-core converts to and from it; a new field is added with a default so old checkpoints still load
+pub struct RecordingManifest { pub id: RecordingId, pub origin: Origin, pub started: WallTime, pub ended: WallTime,
+    pub eileen_version: String, pub recorded_at_commit: String, pub config_hash: String,
+    pub audio: Vec<AudioLane>, pub turns: Vec<TurnId>, pub jobs: Vec<JobId> }
+pub struct IncidentManifest { pub id: IncidentId, pub trigger: String, pub note: Option<Personal<String>>, pub at: WallTime,
+    pub session: SessionId, pub turns: Vec<TurnId>, pub jobs: Vec<JobId>, pub eileen_version: String,
+    pub recorded_at_commit: String, pub build_profile: String, pub os: String, pub cpu_load_pct: u8, pub free_ram_mb: u32,
+    pub processes: Vec<String>, pub contains_personal: bool, pub contains_audio: bool, pub redactions: u32,
+    pub dumps: Vec<String> }   // the observability report's section 4.3 fields
+pub enum StubScriptLine {                     // tests/harness-scripts/*.ndjson, played by eileen-stub-harness
+    Event { json: serde_json::Value },        // one stream-json line, emitted as is
+    Delay { ms: u32 }, Crash { code: i32 }, Malformed { bytes: String },
+    PermissionRequest { tool_name: String, tool_input: serde_json::Value },
+    Narration { line: String },
+    AwaitUser,                                // wait for the next user line before continuing
+}
+pub struct SimRegression {                    // crates/eileen-sim/regressions/<name>.toml
+    pub profile: String, pub seed: Option<u64>, pub found_at_commit: String,
+    pub inputs: Vec<InputRecord>,             // decoded inputs, never a buffer of random bytes
+    pub faults: Vec<FaultRecord>,             // each injected fault as an explicit record, never a buggify site ordinal
+    pub invariant: String,
+}
+pub struct FleetResult {                      // one JSON line per scenario run
+    pub machine: MachineHash, pub run: String, pub scenario: ScenarioId, pub scenario_commit: String,
+    pub mode: FleetMode,                      // Recorded (no model) | Live (real Claude, within a turn budget)
+    pub passed: bool, pub expectations: Vec<(String, bool)>, pub phases_ms: BTreeMap<String, u32>,
+    pub os: Platform,                         // Windows, Linux, MacOs (section 3.3.12), so a result from any OS reads alike
+    pub os_build: String,                     // the Windows build number in v0.1; the distribution and kernel on Linux later
+    pub monitors: u8, pub dpi: Vec<u16>, pub app_versions: BTreeMap<String, String>,
+    pub locale: String, pub cpu_class: String, pub ram_gb: u8, pub free_ram_mb: u32, pub user_became_active: bool,
+    pub learning: Option<LearningStats>,      // skills per level, handoff rate, median turns by run index; no names
+}
+pub struct FleetRun { pub machine: MachineHash, pub eileen_version: String, pub started: WallTime, pub results: Vec<FleetResult> }
+```
+
+**The expected-trace grammar** (`replay/expected.trace`): one event per line, `<dotted.event.name> <key>=<value> ...`, values compared after the same normalisation the recorder applies; `[ANY]` matches any one line, `[ANYLINE]` any number of lines, and a block between `[UNORDERED]` and `[END]` matches its lines in any order. IDs are written as `@1`, `@2` (first appearance order), never as real ULIDs, so traces survive ID changes.
+
+**Two replay modes** (`eileen-replay`):
+
+- **Strict**, for incidents, recordings and `--doublecheck`: start from the checkpoint, feed every recorded input in order with its recorded time and RNG state, compare every bus event and every recorded hook answer with the recording, and stop at the first difference with its sequence number and span path. It is valid only on the commit that recorded it.
+- **Scenario**, for saved and shared scenarios: start a fresh core from the scenario's config and fixtures (never an old snapshot; `eileen record trim` emits the setup inputs needed instead), and feed every input family by one of three rules, so a change in the core cannot leave a recorded reaction stranded at its old time:
+
+| Rule | Input families |
+|---|---|
+| **Scheduled** by recorded time, relative to the previous scheduled input: things the user or the environment did | `User` (typing, hotkeys, HUD, Cli); `Voice` `SpeechStarted`, `Partial`, `SpeechEnded`, `EndOfTurn`, `BargeInWindow`, `SpeakerMatch` (speech that interrupted Eileen is anchored to the start of the playback it interrupted, not to the clock), and `Health`; `Playback` `DeviceChanged` and `Stalled`; `Activity`; `Memory`; `Settings` `FileChanged`; `Sidecar` `Exited`, `Brain` `Exited` and `Worker` `Exited` that no effect asked for (a crash is something the environment did; a brain stall is the absence of events, which the stalled sequence below reproduces); `ToolCall` with origin `Session` (the owner's own Claude session acted); connector events that no matched call caused (a window the user moved, media the user started) |
+| **Reactive**, served when the live core emits the matching effect, by the family's stable key below, with the recorded delay | `Brain`: the turn's text, its `TurnDone`, any `RateLimit` in its stream and the brain's own `ToolCall`s during that turn, replayed as one recorded sequence in their recorded order after the `Turn` effect, with each tool call held until the core has answered the previous one; `Ready` after a `Start`, `Promote` or `Recycle` for that slot (and for the primary and spare at the scenario's start); `Exited` after a `Stop`, `Recycle` or `Promote` that ends a process. `Worker`: likewise the session's events in their recorded order after a `Bind`, `Prompt`, steer or interrupt, its `RateLimit`, `MemoryLimit`, `AuthFailed` and `Malformed` events in place, its `ToolCall`s held as above, and its `Hook` requests in place, each held until the core has answered it (`Effect::Hook` for `PreToolUse` and `PermissionRequest`; the non-gating `Notification`, `Stop` and the rest are served without waiting); `Init` after a `Start(SessionSpec)`, whether the session is pooled or bound to a job; `Exited` after a `Cancel`, `Recycle` or kill. `ToolResult`; `Voice` `Embedding`, `CheckResult` and `Calibration`; `Settings` `ChecksDone`; `Learn` events (served by the replayer's in-memory learning-store model, as in the simulator, so `SkillsChanged` follows a `Commit`); `Store` `Purged`; connector events recorded after a matched call (render progress after `render_start`), re-anchored to that call's reply |
+| **Synthesized** by the replayer's world model from the live core's own effects, never taken from the recording | `Timer` (fired in virtual time from `SetTimer`); `Playback` `Played`, `Paused`, `Stopped` and `Drained`, and `Voice` `ClauseReady` and `SpeakDone` (from `Speech` and `Audio` effects at the recorded synthesis and playback rates); `Sidecar` `Ready` (after a `Start` or `Restart`) and `Heartbeat`; `ToolCall` with origin `Replay`, `FastPath` or `Core` (the core's own calls, fed back as the runtime does); `Store` `Loaded` (from the fixtures) |
+
+  **Stable keys for reactive families.** A key must not change when prompts or context blocks are reworded, or when an earlier request moves off the brain (to L1 or L2), so none of them digests a composed message and none counts all brain turns: a brain turn is matched by its `TurnSource`, a digest of the user's final transcript (never the composed message) and the occurrence index of that digest among the scenario's brain turns, and a turn with no transcript (a job event, an announcement) by its source, the key of the job that caused it and its occurrence index; the occurrence index counts turns, not sends: a turn the core sends again with its transcript unchanged (to the fallback slot after a stall, to the spare after a crash, or again after an interrupt that added no words) keeps its key, and each send is told apart by its ordinal among that turn's sends, so the recorded stalled sequence is served for send 1 and the fallback's for send 2 whichever slot the live core picks (a different slot is reported as a warning), while a send whose transcript changed (an interrupt that merged new words) is keyed by the new transcript's digest and its own occurrence; a brain process command (`Start`, `Promote`, `Recycle`, `Stop`) by its slot and its ordinal among commands of that kind for that slot; a worker session's `Start` by its pool class, or the kind of the job it was started for, and the ordinal of `Start` commands of that class; a worker command by its job's key (the job's kind, the digest of its authorizing turn's transcript, the occurrence index of that pair and, for fan-out children, the child's index), the command kind (`Bind`, `Prompt`, steer, interrupt) and its ordinal within the job; a hook by the session's job key and the remapped `tool_use_id`; a tool result by tool, op and ordinal among calls of that tool and op within the same turn or job, with a digest of the arguments compared afterwards (a mismatch is a warning in the replay report, and a failure only when an expectation names that call); an embedding or check by request kind and a digest of the text it was asked about; a settings check by the proposal's ordinal. WP1 acceptance 13 changes the brain prompt's wording and one context block's format and shows a saved scenario still passing.
+
+  **Brain instances in replay.** Every `BrainEvent` carries the instance of the process that produced it, and the core drops text from any instance other than the one it last sent the turn to (invariant 15), so the replayer plays the runtime's part: it mints its own instance numbers per slot in live order (one each for the primary and spare at the start, then one per `Start`, `Promote` or `Recycle` the live core issues, never reusing a number) and stamps every `Ready`, `TextDelta`, `TurnDone` and `Exited` it serves with the live instance it assigned to that slot, never the recorded number. A recorded stall-then-fallback therefore replays as it happened: the stalled sequence is served with the stalled instance's live number (its late text arriving after the fallback's, as recorded), and the fallback's sequence with the fallback's, so the core drops the late text in replay exactly as it did live.
+
+  **Hooks in replay.** A worker's recorded `PreToolUse` or `PermissionRequest` is served in its place in the session's sequence, and the sequence waits for the live core's `Effect::Hook` answer. If the live decision differs from the recorded one (the `HookAnswerRecord` the recorder wrote for that hook input: the live tier table now answers `Ask` or `Deny` where the recording had no decision, or the reverse), the replayer stops serving that session, answers its job's further commands "unavailable", and fails the replay with a hook divergence naming the tool and both decisions, because a changed security decision must be reviewed (re-blessed or marked `stale`), never passed silently.
+
+  Recorded IDs are remapped to live IDs by first appearance. An effect with no recorded reaction gets a typed "unavailable" answer (an embedding request falls back to lexical L2, a tool call returns an error) and is reported. It checks the scenario's expectations, not full-trace equality. A scenario that no longer replays after a change is either re-blessed as a reviewed diff or marked `stale` with an issue and an expiry date, never silently skipped. `eileen scenario bless <id>` (WP2, in `eileen-scenarios`) re-runs the scenario in scenario mode on the current core and, only if every expectation still passes, rewrites `replay/expected.trace` and drops recorded reactions nothing asked for; when an expectation fails it refuses and suggests `stale`. `cargo xtask scenarios replay|bless` dispatch to `eileen scenario replay|bless` (section 4b.5), so no later package edits xtask.
+
+### 3.4 Platform traits
+
+`eileen-platform` holds the traits every OS implements. Windows implementations live in the `-win` crates; fakes for tests live next to each trait under `cfg(any(test, feature = "fake"))`.
+
+```rust
+pub trait AudioEndpoints: Send + Sync {          // eileen-audio-win; cpal does the streaming itself
+    fn default_capture(&self, category: StreamCategory) -> Result<EndpointInfo, PlatformError>;
+    fn default_render_loopback(&self) -> Result<EndpointInfo, PlatformError>;   // the far-end reference for AEC
+    fn set_communications_ducking(&self, opt_out: bool) -> Result<(), PlatformError>;
+    fn register_audio_thread(&self) -> Result<ThreadTicket, PlatformError>;   // MMCSS
+}
+pub trait SystemVolume: Send + Sync {            // eileen-desktop-win (IAudioEndpointVolume), served as desktop_volume
+    fn get(&self) -> Result<VolumeState, PlatformError>;                       // percent and mute
+    fn set(&self, state: &VolumeState) -> Result<(), PlatformError>;
+}
+pub trait SystemMemory: Send + Sync {            // eileen-shell-win: GlobalMemoryStatusEx, commit figures and the PDH paging
+                                                 // counter; the runtime's sampler turns it into Input::Memory every 5 s
+    fn sample(&self) -> Result<MemoryPressure, PlatformError>;
+}
+pub trait MachineIdentity: Send + Sync {         // eileen-shell-win: HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid;
+                                                 // Linux: machine::FileMachineIdentity below; macOS later: IOPlatformUUID.
+                                                 // The runtime hashes it with the install id at every start (3.3.1)
+    fn os_machine_id(&self) -> Result<Option<String>, PlatformError>;          // None when the OS has no usable id
+}
+pub mod machine {                                // neutral (std and blake3), tested on Windows and Linux from v0.1
+    /// A fixed, public domain-separation string; it changes only with a new hash version.
+    pub const SALT: &str = "eileen fleet machine hash v1";
+    /// Lowercase hex digits only (braces and hyphens dropped, so Windows' GUID form and Linux's plain 32-character
+    /// form follow one rule); None unless exactly 32 hex digits remain, and for an all-zero or "uninitialized" value.
+    pub fn normalise_os_id(raw: &str) -> Option<String>;
+    /// BLAKE3 over SALT, the normalised OS id and the install id, each length-prefixed; with no usable OS id, over
+    /// SALT and the install id alone. The length prefixes make the encoding unambiguous, so the two cases never
+    /// hash the same bytes.
+    pub fn machine_hash(os_id: Option<&str>, install: &InstallId) -> MachineHash;
+    /// MachineIdentity from <root>/etc/machine-id, then <root>/var/lib/dbus/machine-id (root "/" on Linux; a temporary
+    /// folder in tests on every OS).
+    pub struct FileMachineIdentity { pub root: PathBuf }
+}
+pub trait SecretStore: Send + Sync {             // eileen-shell-win (Windows Credential Manager through keyring-core);
+                                                 // Linux later: Secret Service. eileen-config receives it from eileen-cli
+    fn get(&self, name: &str) -> Result<Option<SecretString>, PlatformError>;
+    fn set(&self, name: &str, value: &SecretString) -> Result<(), PlatformError>;
+    fn delete(&self, name: &str) -> Result<(), PlatformError>;
+}
+pub trait AppHost: Send + Sync {                 // eileen-apps-win: Word, Excel, Explorer, Photoshop over COM, and the
+                                                 // Resolve process gate; Linux later: per app (LibreOffice, a file manager)
+    fn app(&self) -> &'static str;
+    fn running(&self) -> Result<Option<AppProcess>, PlatformError>;            // pid and version, or None
+    fn call(&self, op: &AppOp, deadline: Deadline) -> Result<serde_json::Value, PlatformError>;   // AppOp: the contracts'
+                                                                               // OfficeOp, ExplorerOp, PhotoshopOp
+}
+pub trait Grounding: Send + Sync {               // eileen-desktop-win
+    fn monitors(&self) -> Result<Vec<Monitor>, PlatformError>;
+    fn windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, PlatformError>;
+    fn foreground(&self) -> Result<Option<WindowRef>, PlatformError>;
+    fn window_from_point(&self, p: Point) -> Result<Option<WindowRef>, PlatformError>;
+    fn focused_element(&self, deadline: Deadline) -> Result<Option<ElementInfo>, PlatformError>;
+    fn element_from_point(&self, p: Point, deadline: Deadline) -> Result<Option<ElementInfo>, PlatformError>;
+    fn selection(&self, allow_clipboard: bool, deadline: Deadline) -> Result<Option<Selection>, PlatformError>;
+    fn presentation_state(&self) -> Result<PresentationState, PlatformError>;
+    fn mic_in_use_elsewhere(&self) -> Result<bool, PlatformError>;
+    fn subscribe(&self, sink: Box<dyn Fn(DesktopChange) + Send + Sync>) -> Result<Subscription, PlatformError>;
+}
+pub trait Automation: Send + Sync {              // eileen-desktop-win (UIA on its own MTA thread, abandoned and replaced on a hang)
+    fn tree(&self, hwnd: i64, limits: TreeLimits, deadline: Deadline) -> Result<ElementTree, PlatformError>;
+    fn invoke(&self, element: &ElementHandle, deadline: Deadline) -> Result<Verification, PlatformError>;
+    fn set_value(&self, element: &ElementHandle, value: &str, deadline: Deadline) -> Result<Verification, PlatformError>;
+    fn find(&self, hwnd: i64, selector: &Selector, deadline: Deadline) -> Result<Vec<ElementCandidate>, PlatformError>;
+}
+pub trait Input: Send + Sync {                   // eileen-desktop-win
+    /// Physical idle time from Raw Input; synthetic input does not reset it. The only other source of "physical"
+    /// events is the `test-physical` Cargo feature, which no shipped binary enables: it adds a named-pipe injector
+    /// whose mouse and key events the guard treats exactly like Raw Input device events, so WP5's real-desktop test
+    /// can drive the abort path; a recorded manual check covers Raw Input itself.
+    fn user_idle_ms(&self) -> Result<u32, PlatformError>;
+    fn take_foreground(&self, hwnd: i64) -> Result<ForegroundOutcome, PlatformError>;   // Taken | Refused
+    /// Sends events one at a time; stops within one event when physical input or a focus change is seen.
+    fn send(&self, hwnd: i64, events: &[InputEvent], guard: ForegroundGuard) -> Result<SendOutcome, PlatformError>;
+    fn restore(&self, token: RestoreToken, cursor_if_unmoved: bool) -> Result<(), PlatformError>;
+}
+pub trait Capture: Send + Sync {
+    fn capture(&self, target: &ShotTarget) -> Result<RgbaImage, PlatformError>;
+}
+pub trait Apps: Send + Sync {                    // index and launch
+    fn index(&self) -> Result<Vec<AppEntry>, PlatformError>;
+    fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError>;     // pid
+    fn main_window(&self, pid: u32, deadline: Deadline) -> Result<Option<WindowRef>, PlatformError>;
+    fn open_url(&self, url: &str) -> Result<(), PlatformError>;
+    fn open_uri(&self, uri: &str) -> Result<(), PlatformError>;
+    fn open_path(&self, path: &str, with_app: Option<&AppEntry>) -> Result<(), PlatformError>;
+}
+pub trait TextInsertion: Send + Sync {
+    fn insert(&self, text: &str, target: &InsertTarget, method: InsertMethod) -> Result<InsertOutcome, PlatformError>;
+}
+pub trait MediaSessions: Send + Sync {           // eileen-apps-win (SMTC); Linux later: MPRIS
+    fn sessions(&self) -> Result<Vec<MediaState>, PlatformError>;
+    fn control(&self, session: &str, action: &MediaAction) -> Result<(), PlatformError>;
+    fn subscribe(&self, sink: Box<dyn Fn(MediaState) + Send + Sync>) -> Result<Subscription, PlatformError>;
+}
+pub trait RecentSources: Send + Sync {
+    fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError>;
+    fn watch(&self, roots: &[String], sink: Box<dyn Fn(RecentItem) + Send + Sync>) -> Result<Subscription, PlatformError>;
+    fn thumbnail(&self, item: &RecentItem, edge_px: u32) -> Result<Option<RgbaImage>, PlatformError>;
+}
+pub trait ShellHost: Send + Sync {               // eileen-shell-win, on the core's shell thread
+    fn register_hotkey(&self, chord: &str, id: u32) -> Result<(), PlatformError>;   // fails if another app owns it
+    fn set_tray(&self, state: TrayState) -> Result<(), PlatformError>;               // menu items are data
+    fn toast(&self, toast: &Toast) -> Result<(), PlatformError>;
+    /// Raw Input sink: edges of the configured dictation key and a timestamp of the last physical input, nothing else.
+    fn watch_input(&self, dictation_key: VirtualKey, sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>) -> Result<Subscription, PlatformError>;
+    fn set_run_at_sign_in(&self, on: bool) -> Result<(), PlatformError>;            // HKCU Run entry
+    /// Display-required and system-required power request (PowerSetRequest) for an armed run; dropped on release.
+    fn keep_awake(&self) -> Result<PowerRequest, PlatformError>;
+    fn lock_workstation(&self) -> Result<(), PlatformError>;                       // at the end of an armed run
+    fn session_locked(&self) -> Result<bool, PlatformError>;
+}
+pub trait HudSurface {                           // eileen-hud-win, driven by eileen-hud
+    fn draw(&mut self, list: &DrawList) -> Result<(), PlatformError>;
+    fn set_watch(&mut self, hwnd: Option<i64>, rect: Rect) -> Result<(), PlatformError>;   // DWM live thumbnail
+    fn next_input(&mut self) -> Option<(HudInput, bool /* physical */)>;
+}
+```
+
+COM automation of Office, Explorer and Photoshop and the Resolve process gate are implementations of `AppHost` inside `eileen-apps-win`; the neutral server in `eileen-apps` holds the tool logic and calls the trait, so a Linux port adds `AppHost` implementations per app. The Resolve bridge itself is platform-neutral (Resolve's own `fuscript` exists on Linux too).
+
+### 3.5 The command line
+
+`eileen.exe` subcommands, wired in `eileen-cli` by WP0's stub and implemented in the owning crate's `cli` module:
+
+| Command | What it does | Implemented in |
+|---|---|---|
+| `eileen run [--data-dir D] [--audio-source wav:F] [--audio-sink capture:F] [--stub-harness SCRIPT] [--replay-models DIR] [--muted] [--no-hud] [--console] [--test-harness]` | Start everything; `--console` prints what is heard, what Eileen says and the jobs, one line each; `--test-harness` enables the runner's tool endpoint (never in normal runs) | runtime and cli (WP2) |
+| `eileen say "<text>"` | Typed request into the running instance (an ambient `Cli` turn) | runtime |
+| `eileen bench brain [--backend B]` | The brain benchmark (B10) for the current or a candidate backend; the settings flow runs the same check before a switch | harness (WP3) |
+| `eileen status`, `eileen jobs [list \| tail ID \| cancel ID]` | Status from the loopback endpoint | runtime |
+| `eileen about` | Version, channel and the credits (every component and model with its licence and attribution, from `NOTICE` and `models.toml`) | runtime (WP2) |
+| `eileen setup`, `eileen doctor [claude \| audio \| resolve [--route mcp\|bridge] \| desktop]` | Models, checks, Start menu and sign-in entries, the install id and machine hash (section 3.3.1), self-test; the model steps run `eileen-speech.exe setup` and `eileen-apps.exe setup`, and `doctor resolve` (through one Resolve route when `--route` is given, section 2.7) and `doctor desktop` run `eileen-apps.exe` and `eileen-desktop.exe` subcommands, all through the supervisor | runtime (framework), speech (models), harness (claude), apps (resolve) |
+| `eileen config [explain \| edit \| undo \| profiles \| export \| import]` | Settings | config (WP7) |
+| `eileen skills [list \| show \| history \| rollback \| forget \| distill [--job ID] [--wait]]`, `eileen facts [list \| forget]`, `eileen apps proposals` | Learned skills, facts and route proposals | learn (WP7) |
+| `eileen voice [list \| learn \| use NAME [--engine E] \| delete \| render TEXT --voice NAME --out FILE \| check-mark FILE]` | Voices, the engine per voice (through the settings flow), export, watermark check; runs `eileen-speech.exe voice ...` through the supervisor, or asks the running speech process | speech (WP4) |
+| `eileen scenario [save \| list \| show \| share \| submit \| run \| replay \| bless \| stale \| check]` | Scenario corpus; `replay` and `bless` are what `cargo xtask scenarios replay\|bless` dispatch to; `stale <id> --issue <url> [--days N]` marks a scenario stale with today's date as `since`; `check` runs the same privacy and schema rules as CI (`eileen_trace::privacy`, shared with `tools/repo-tools`) and the shared expiry rule | scenarios (WP2), replay (WP1) |
+| `eileen test --fleet [--once \| --nightly \| --arm-tonight] [--filter] [--mode recorded\|live] [--submit [--push] [--file F]]` | Fleet runner; `--submit` opens the results pull request from the contributor's own account, `--push` commits the file straight to the `devhub` branch for a contributor with write access, and `--file` submits a results file someone else sent (how the owner relays results) | fleet (WP9) |
+| `eileen trace ID \| last`, `eileen logs`, `eileen incident [list \| show \| capture \| pack]` | Debugging | runtime |
+| `eileen record [start \| stop \| list \| trim]`, `eileen replay ID [--level core] [--mode strict\|scenario]` | Recording and replay | record and replay (WP1) |
+| `eileen debug [stats \| tasks \| dump]` | Live internals | runtime |
+| `eileen claude [install \| uninstall \| update-window]` | Prints the official plugin commands and runs them after a yes; drains and restarts Claude sessions around a CLI update | harness (WP3) |
+| `eileen apps add-mcp <app> <server>` | Approve a third-party MCP server for an app (tier 2, a Safety change) | config (WP7) |
+| `eileen mcp-probe`, `eileen bench` | Developer probes | runtime |
+
+## 4. Pins, models, setup, budgets and tests
+
+### 4.1 Dependency pins
+
+WP0 writes this into the root `Cargo.toml`. The versions are the ones the rust-architecture, voice-stack, computer-use and observability reports verified on 2026-10-20 (the skeleton compiled and passed clippy, tests, cargo-deny and cargo-machete on the async, data, protocol and Windows rows). Several were released within two weeks of that date; they are the verified starting set, and the 14-day cooling-off rule applies to every update after WP0. Protocol and native-inference crates are pinned exactly because they change weekly. The feature lists of `tokio`, `windows` and `windows-sys` are the union every package needs, declared once here (section 3.1); members never add features to those three.
+
+```toml
+[workspace.dependencies]
+# Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1.
+
+# Async and plumbing
+tokio = { version = "1.54.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
+tokio-util = { version = "0.7.20", default-features = false }
+
+# Data and contracts
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+schemars = "1.2.3"
+ulid = { version = "3.0.0", default-features = false, features = ["std", "serde"] }
+toml = "1.1.8"
+# toml_edit: the version toml 1.1.8 itself depends on, so the tree holds one copy (WP0 reads it from cargo tree)
+
+# Errors, tracing, secrets
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "fmt", "json", "env-filter", "std", "tracing-log", "smallvec"] }
+tracing-appender = "0.2.5"
+tracing-error = "0.2.1"
+secrecy = "0.10.3"
+await-tree = { version = "0.3.1", features = ["tokio"] }
+
+# Storage and recording
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+blake3 = { version = "1.8.7", features = ["pure"] }
+zstd = "0.14.3"
+hound = "3.5.1"
+
+# Protocols
+rmcp = { version = "=3.6.0", default-features = false }
+agent-client-protocol = { version = "=3.4.0", default-features = false }   # declared for the ACP slot; no v0.1 crate uses it
+
+# Processes
+process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "job-object", "kill-on-drop", "creation-flags"] }
+
+# Windows
+windows = { version = "0.62.2", default-features = false, features = [   # take core types from windows::core; never mix windows-core 0.100
+  "Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant",
+  "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Power", "Win32_System_Registry",
+  "Win32_System_Performance",
+  "Win32_System_DataExchange", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_NetworkManagement_IpHelper",
+  "Win32_Storage_FileSystem", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem",
+  "Win32_UI_Controls", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_DirectComposition", "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints", "Media_Control", "Foundation", "Foundation_Collections",
+] }   # WP0 starts from this list and adds what the stubs show is missing; later additions go through an amendment pull request
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects",
+  "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_Storage_FileSystem", "Win32_Security",
+  "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging"] }
+  # buildguard (procinfo: working set, threads, GDI and USER counts for measure-idle) and supervisor
+tray-icon = { version = "0.26.1", default-features = false }   # drops the Linux libappindicator default
+global-hotkey = "0.9.0"
+tauri-winrt-notification = "0.8.1"
+keyring-core = "1.0.1"
+windows-native-keyring-store = "1.1.0"
+crash-handler = "0.8.1"
+minidumper = "0.11.0"
+
+# Audio and speech
+cpal = "0.18.2"
+sonora = "0.2.0"
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["shared"] }   # static fails to link on MSVC 14.42
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "copy-dylibs"] }   # rc.14 and rc.15 are too new; copy-dylibs puts the DLLs beside test binaries
+realfft = "3.5.0"
+# rtrb: WP0 pins the newest non-yanked release crates.io lists (the observability report saw 0.4.0 and 0.3.5 listed inconsistently)
+
+# Images
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+fast_image_resize = "6.1.0"
+jpeg-encoder = { version = "0.7.1", features = ["simd"] }   # license (MIT OR Apache-2.0) AND IJG: allow IJG in deny.toml, attribution in NOTICE
+base64 = "0.23.1"
+
+# Command line and repository tools
+clap = { version = "4.6.7", features = ["derive"] }
+# syn: WP0 pins the newest 2.x release at least 14 days old (tools/repo-tools only)
+
+# Tests
+insta = { version = "1.49.0", features = ["json", "redactions", "glob"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+proptest-state-machine = "0.9.0"
+arbitrary = { version = "1.5.0", features = ["derive"] }
+loom = "0.7.2"
+# shuttle and shuttle-tokio: WP0 pins the newest releases at least 14 days old (0.9.7 and 1.0.0 on 2026-10-20; 0.9.8 was
+# still inside the cooling-off period); WP2 uses them behind a `shuttle` feature no shipped binary enables
+```
+
+Deliberately not used: `chacha20poly1305` and DPAPI wrapping (encryption at rest is v0.2, decision D40), `uiautomation` (it initialises COM on every construction; Eileen owns one MTA thread), `nucleo-matcher` (MPL-2.0; Eileen writes its own scorer), `xcap` (no gain over the own capture code), `gix` (skill history is in SQLite), `serde_yaml` and `serde_yml` (deprecated or unsound; config is TOML), `hyper` (the loopback endpoint is a small hand-written HTTP/1.1 server with strict limits and a fuzz target), the OpenTelemetry crates (v0.2, behind a feature). Any new dependency is an architectural change: say so in the pull request, and it must pass cargo-deny.
+
+Tools, installed prebuilt (never `cargo install` from source; four tools took 59 minutes that way):
+
+| Tool | Version | Use |
+|---|---|---|
+| cargo-nextest | 0.9.148 | tests |
+| cargo-deny | 0.20.2 | licenses, advisories, bans, sources |
+| cargo-machete | 0.9.2 | unused dependencies |
+| cargo-insta | 1.49.0 | snapshot review |
+| typos | 1.51.1 | spelling |
+| sccache | 0.18.0 | local compile cache (owner installs once) |
+| cargo-binstall | 1.26.0 | prebuilt installs (GPL-3.0-only; a tool we run, never link) |
+| zizmor | 1.31.1, action 0.7.1 | workflow analysis |
+| cargo-fuzz | 0.13.2 with a pinned nightly | fuzzing (Linux only) |
+| cargo-mutants | 27.1.0 | mutation testing |
+| cargo-llvm-cov | 0.9.1 | coverage |
+| cargo-modules | 0.28.0 | nightly module maps (CI only) |
+| dump_syms, minidump-stackwalk | 2.3.9, 0.27.0 | symbols and stack walks |
+| Markdown linter, link checker | rumdl (Rust) and lychee: WP0 pins the newest release at least 14 days old and records the exact versions and licenses | docs checks |
+
+GitHub Actions, pinned by commit SHA with the version in a comment: `actions/checkout` v7.0.1 `3d3c42e5aac5ba805825da76410c181273ba90b1`; `Swatinem/rust-cache` v2.9.3 `d1527c8f67ef9af357290475d4af4b0fab8f12e0`; `taiki-e/install-action` v2.87.29 `8cca0918f8471c33515202b73f56ab27f2bed283`; `actions/upload-artifact` v7.0.2 `cf430e030ddbb5b0abf93d22962f4752f3646cd9`; `dorny/paths-filter` v4.0.1 `fbd0ab8f3e69293af611ebaee6363fc25e6d187d`; `EmbarkStudios/cargo-deny-action` v2.1.1 `3c6349835b2b7b196a839186cb8b78e02f7b5f25`; `crate-ci/typos` v1.51.1 `7f9d0819ca1c008ade73f4b41fa9d258d48f605b`; `zizmorcore/zizmor-action` v0.7.1 `85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e`. The toolchain comes from `rust-toolchain.toml` through `rustup show`. `windows-latest` is Windows Server 2025 with Rust 1.99.0, VS 2022 17.14 and SDK 10.0.26100.
+
+**Native dependencies, and where they may appear.** Every crate below that wraps a platform or vendor native library is declared only under `[target.'cfg(windows)'.dependencies]` of the crates in the right-hand column, so `ubuntu-latest` never builds ALSA, never downloads an unverified Linux prebuilt, and never meets `ort`'s link error without `ORT_LIB_LOCATION`. Check 15 of section 4b.3 enforces the table.
+
+| Native dependency | Allowed in (Windows target table only) | Neutral logic tested on Linux beside it |
+|---|---|---|
+| `cpal` | `eileen-audio`, `eileen-audio-win` | ring buffer, resampler, AEC wiring with a fake device, `WavSource`, `CaptureSink`, `RoomMixer`, playback accounting |
+| `sherpa-onnx`, `ort` | `eileen-speech` (and `ort` in `eileen-apps` for YuNet) | the pipe protocol, turn fusion, the log-mel, the clause splitter, the phrase cache, enrollment checks over stored embeddings, timecode math, face picking and the Laplacian on decoded images |
+| `keyring-core`, `windows-native-keyring-store` | `eileen-shell-win` (the `SecretStore` implementation) | everything in config, which reaches secrets through the trait |
+| `tray-icon`, `global-hotkey`, `tauri-winrt-notification` | `eileen-shell-win` | n/a (Windows crate) |
+| `crash-handler`, `minidumper` | `eileen-crash`, `eileen-guard` | the panic-hook message cleaning |
+| `windows`, `windows-sys` | `-win` crates and the Windows modules of `eileen-supervisor`, `eileen-buildguard`, `eileen-crash`, `eileen-guard` | n/a |
+
+**The speech build.** `.cargo/config.toml` sets `rustflags = ["-C", "target-feature=+crt-static"]` for `x86_64-pc-windows-msvc`. `cargo xtask fetch-native` downloads the pinned sherpa-onnx 1.13.8 shared MT archive into a cache directory and verifies its hash. Until WP4's espeak-free build exists, that is upstream's `sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-lib.tar.bz2` (8,032,957 bytes, SHA256 `b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7`), which is fine for development; from WP4's `native.yml` on it is Eileen's own build without espeak-ng (section 2.8, "No GPL in the speech build"), published as a release asset of this repository, and the pin changes in one line of xtask's native table. The release lane refuses to package the upstream archive. `fetch-native` deletes DLLs left from an older pin, and from then on every cargo invocation `cargo xtask` makes on Windows (and every Windows CI job, through the same subcommand) gets `SHERPA_ONNX_ARCHIVE_DIR` pointing there, `ORT_LIB_LOCATION` at the extracted lib folder and `ORT_PREFER_DYNAMIC_LINK=1`, so `ort` links the same `onnxruntime.dll` and nothing downloads unverified binaries. `ort`'s `copy-dylibs` feature copies the DLLs into `target/<profile>`, `deps` and `examples`, so test binaries load them from beside themselves: `System32` holds an older `onnxruntime.dll` (10.7 MB on this PC) that the loader searches before `PATH`. `eileen-speech` and `eileen-apps` check at start that the loaded `onnxruntime.dll` sits beside the executable and reports version 1.28.2, and exit with a clear error otherwise. Shipped beside the binaries: `onnxruntime.dll` 1.28.2 (17,799,168 bytes), `onnxruntime_providers_shared.dll` (104,960 bytes), `sherpa-onnx-c-api.dll` (4,605,952 bytes). `sherpa-onnx-sys` finds its output folder by searching for a folder named after `$PROFILE`, which breaks under a custom profile, so releases build with `--release` and the release workflow sets `CARGO_PROFILE_RELEASE_LTO=fat` and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` instead of a separate `dist` profile. `sherpa-onnx-sys` build-depends on `ureq` with its default TLS, which brings `webpki-roots` (CDLA-Permissive-2.0); `deny.toml` carries a license exception scoped to that one crate (section 4b.3). The espeak-ng question is answered (owner answer 12: no GPL in release binaries), which is why release binaries use WP4's espeak-free build.
+
+### 4.2 Models and `eileen setup`
+
+`crates/eileen-speech/models.toml` (and `crates/eileen-apps/models.toml` for the face model) lists every model with URL, size, SHA256, license and residency. Full digests where the research recorded them; where only a prefix was recorded, the owning package fetches the full digest from the release API and pins it.
+
+| Model | File | Size | SHA256 | License | Residency |
+|---|---|---|---|---|---|
+| Silero VAD v6.2 | `silero_vad.onnx` from snakers4/silero-vad | 2,327,524 B | `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3` | MIT | always |
+| Nemotron streaming EN 0.6B, 560 ms, int8 | `sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25.tar.bz2` | 463,945,051 B | `78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358` | NVIDIA Open Model License | always |
+| Smart Turn v3.2 CPU | `smart-turn-v3.2-cpu.onnx` | 8,679,182 B | `2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f` | BSD-2-Clause | always |
+| Kokoro v1.0 fp32 | `kokoro-multi-lang-v1_0.tar.bz2` | 349.9 MB | prefix `c5f7e2d2caf08`, full digest pinned by WP4 | Apache-2.0 | always |
+| Pocket TTS int8 | `sherpa-onnx-pocket-tts-int8-2026-01-26.tar.bz2` | 98,336,520 B | `2f3b88823cbbb9bf0b2477ec8ae7b3fec417b3a87b6bb5f256dba66f2ad967cb` | CC-BY-4.0 (archive README says non-commercial; confirmed with the maintainers before a downloader ships, owner answer 14) | while a cloned voice is selected |
+| WeSpeaker CAM++ | `wespeaker_en_voxceleb_CAM++.onnx` | 29,292,684 B | `c46fad10b5f81e1aa4a60c162714208577093655076c5450f8c469e522ec54ef` | per WeSpeaker repository, WP4 verifies | during enrollment, and always if speaker filtering is adopted |
+| Parakeet TDT 0.6B v3 int8 | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2` | 487,170,055 B | `5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf` | CC-BY-4.0 | on demand (multilingual dictation), unloaded after 5 idle minutes |
+| Sentence embedding (candidate, all-MiniLM-L6-v2 class) | int8 ONNX plus `vocab.txt` | about 23 MB | pinned by WP4 if adopted | Apache-2.0, verified by WP4 | always if adopted |
+| Static embedding (candidate and floor, model2vec class) | token-embedding table plus tokenizer | about 30 MB | pinned by WP4 | MIT, verified by WP4 | always, unless the transformer is adopted |
+| Kokoro front end | CMUdict lexicon plus a small ONNX grapheme-to-phoneme model for unknown words | a few MB | pinned by WP4 | BSD-2-Clause (CMUdict); the G2P model's permissive license verified by WP4 | always (with Kokoro) |
+| AudioSeal generator and detector (opt-in watermark) | ONNX, exported once by WP4's pinned script and published as a release asset of this repository | measured by WP4 | pinned by WP4 | MIT | downloaded only when `voice.watermark_exports` is turned on |
+| YuNet face detector | OpenCV Zoo `face_detection_yunet` ONNX | well under 1 MB | pinned by WP6 | MIT | loaded in `eileen-apps` on first use |
+| Kokoro v1.0 int8 | `kokoro-int8-multi-lang-v1_0` (already downloaded on the owner's PC) | recorded by WP4 | pinned by WP4 | Apache-2.0 | low-memory profile only, if WP4's equal-load test passes |
+| Kroko streaming zipformer EN | `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2` | 57,267,600 B | `c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834` | per Banafo's Kroko-ASR page; WP4 verifies before shipping a downloader | low-memory profile only |
+| Chatterbox-Turbo (official ONNX, q4 or q8) | `speech_encoder`, `embed_tokens`, `language_model`, `conditional_decoder` graphs | pinned by WP4 | pinned by WP4 | MIT | downloaded only when the user picks Chatterbox for a voice; loaded while that voice speaks |
+| Chatterbox-Nano (community ONNX export) | per export | pinned by WP4 | pinned by WP4 | MIT for the model; the export's own license checked by WP4 and confirmed with its maintainer (owner answer 14) | as above |
+| Bundled demo clip | a few seconds of CC0 audio or video for the first-run demo | under 1 MB | committed | CC0 | in the install folder |
+
+`eileen setup`, run once by the user (and safe to rerun):
+
+1. Check Windows build, CPU, RAM and free disk; warn below 4 GB free disk or 8 GB RAM, and choose the memory profile (section 4.4).
+2. Find the installed `claude` binary (resolve the npm shim or the native installer's layout to the real `.exe`; never the copy bundled in the Claude desktop app), check its version against the tested range, and run `claude auth status`. If it is not signed in, say "Please run `claude auth login` yourself, then run setup again" and stop that part. Never read credential files, never run a login.
+3. Show every model's license and total size and ask once; download into `%LOCALAPPDATA%\eileen\models\`, verify each SHA256, and delete anything that fails (this step and step 7's speech checks run inside `eileen-speech.exe setup` and `eileen-apps.exe setup`, started through the supervisor, because the `eileen` binary links no ONNX Runtime). Chatterbox is not downloaded here; it is offered when the user picks it for a voice. The AudioSeal files are offered only when the user turns watermarking on.
+4. Create the Start menu shortcut with Eileen's AppUserModelID (needed for toasts) and, if the user wants it, the "start at sign-in" `HKCU` Run entry.
+5. Write the commented default `eileen.toml` if none exists, and create the install id and `fleet\machine.toml` with the machine hash if they do not exist yet (owner answer 6, section 3.3.1).
+6. Offer the Claude plugin (prints the two official commands, runs them after a yes) and the Playwright browser extension (link only).
+7. Self-test: EcoQoS opt-out applied, capture, render and loopback devices open, the loaded `onnxruntime.dll` is the shipped one, models load, one Kokoro clause synthesizes, one Pocket TTS clause from a bundled stock reference is timed (the first run's surprise path uses this number), the brain session reaches `system/init`; then Eileen says hello and the first run (E18) begins on the next `eileen run`.
+
+`eileen doctor` repeats steps 1, 2 and 7 without changing anything, plus `eileen doctor resolve` (bridge `hello` when Resolve runs, ResolveMCP's tool list when it is installed, and the exact preference to change if External scripting is not set to Local; `--route mcp|bridge` runs the checks through one route only, section 2.7), `eileen doctor desktop` (DPI awareness, UIA thread health, Raw Input) and `eileen doctor audio` (devices, AEC mode and reference, measured idle CPU).
+
+### 4.3 Latency budget per stage
+
+From the end of the user's speech. "Quiet" is the best measured runs; "typical load" is the owner working (Chrome, VS Code and the Claude app open), which is what he will feel. The voice-stack, brain-latency, computer-use and subscription-harnesses reports are the sources; every row is measured again by WP9's benchmarks, with the resolved model id recorded beside every model timing.
+
+| Stage | Quiet | Typical load | Measured basis |
+|---|---|---|---|
+| Silence before the end-of-turn check | 200 ms (setting) | same | design |
+| Smart Turn features plus model | 70 to 100 ms, overlapping the next row | up to about 250 ms | four threads, 2026-10-11 |
+| Nemotron tail flush (final transcript) | about 400 ms (740 ms if Parakeet is also loaded) | 0.5 to 1 s | 2026-10-11, 2026-10-20 |
+| Addressee gate plus L1 resolver | under 1 ms | same | matcher measurement |
+| L2 semantic (embedding round trip plus comparison) | under 25 ms | to measure | WP4 and WP7 |
+| Earcon when routed to the brain or a job | under 150 ms | same | design |
+| Fast-path action | window move 8 to 10 ms; SMTC control 1 to 50 ms; app launch by AUMID to measure | SMTC up to 2.2 s with a fresh manager, so one is held | computer-use, app-hooks |
+| Cached phrase to first sound | one 10 ms buffer | same | 2026-10-20 |
+| **Fast path, end of speech to first sound** | **about 0.5 to 0.6 s** | **about 0.8 to 1.2 s** | sum |
+| Brain warm turn, first text | 1.0 to 1.5 s | 2.2 to 4.2 s | brain-latency, connectors off |
+| TTS first clause (three to six words) | about 0.5 s with Kokoro direct; WP4 measures the shipped sherpa-onnx path on a quiet PC | 1.1 to 2.9 s (2.88 s p50 per sentence at 73 percent load; 4.5 to 13.3 s while paging) | voice-stack |
+| **Brain turn, end of speech to first word** | **target 1.5 s p50; about 2 to 3 s today** | **3 to 5 s** | sum |
+| Paraphrase through the brain's `act` tools, end of speech to first effect | about 3 s | 4 to 6 s | sum; B9 phase |
+| Worker start, warm pool | 1 to 2 s to the first turn | 2 to 5 s, when the pool fits; on the owner's PC under typical load it usually does not (section 2.5), and the cold row applies | one user turn on a warm session |
+| Worker start, cold | 11 to 30 s | 30 to 111 s | learning-loop row 7 (34.5 s), brain-latency (39 to 48 s cold), subscription-harnesses (1.2 to 1.6 s to init on a light day) |
+| Barge-in, speech onset to silence | at most 150 ms (designed 70 to 110 ms) | same; the stop is checked by invariant 2 | measured parts |
+| Mute, key to capture stopped | one 10 ms buffer | same | stop flag seen 1.5 ms after it was set |
+| Dictation, key release to text in the field | 0.4 to 0.8 s (local path) | to measure | dictation report |
+| Computer-use step (screenshot, model turn, action) | seconds per step, dominated by the model turn | longer | claude read a screenshot in 3 turns and 6.2 s |
+| Deep answer, end of speech to the better answer spoken | 20 to 40 s with the deep session pooled (one bind plus a research turn with parallel searches); never blocks the conversation | 40 to 60 s when the deep session is pooled; about 1 to 2 minutes when it is not and the worker starts cold (30 to 111 s plus the research), which is the owner's usual case under typical load (section 7 lists it as a v0.1 limit); B6 records which | design; B6 measures |
+
+The owner asked for "within about a second" from the fast brain. The fast path and cached acknowledgements reach that; the earcon gives the feel of being heard at once; a synthesized brain answer takes about two seconds on a quiet machine because the first clause costs 0.5 s or more. The levers, in order: a short first clause, cached phrases (including per-app launch phrases rendered after indexing), WP4's measurement of the shipped Kokoro path and of Kokoro int8 under equal load, the Pocket TTS v4 small models if they exist and measure well, and speculative brain turns on stable partials (an opt-in experiment, section 2.3). Benchmarks publish p50 end of speech to first word, quiet and typical.
+
+### 4.4 Memory budget
+
+| Process | Budget | Basis |
+|---|---|---|
+| `eileen.exe` | under 60 MB working set while idle | the debug skeleton idled at 26.6 MB |
+| `eileen-speech.exe` | about 1.25 GB with VAD, Nemotron, Smart Turn and Kokoro; plus about 0.6 GB while Pocket TTS is loaded; plus about 0.75 GB while Parakeet is loaded; Chatterbox by WP4's measurement | voice-stack |
+| `eileen-desktop.exe`, `eileen-apps.exe`, `eileen-hud.exe` | under 60 MB each while idle | proof server 4.9 MB idle; to measure |
+| Brain plus hot spare | two `claude -p` processes, 128 to 750 MB each as measured | harness and claude-mods reports |
+| Warm pool | one or two `claude -p` processes | same |
+| Each bound worker | one `claude -p` process, plus its build if it runs one (a cold Rust workspace build took 4 to 5 GB at 6 jobs) | same, rust-architecture |
+
+The owner's real working set leaves little: a live read on 2026-10-20 showed 1.27 GB free with one `rustc` running, Chrome at 2.95 GB working set, the Claude processes at 3.6 GB private, a WSL virtual machine at 4.1 GB private and VS Code at 1.3 GB private. So memory is managed, not assumed:
+
+- **Admission** (section 2.5, decision D54): "free" means available physical memory (free plus standby), and a job starts by the first of four rules: never if commit headroom would fall under 1 GB; at once if available memory stays above the reserve (1.6 GB on this PC by the `auto` default); when the paging rate has been low for 30 s, because Windows can then trim idle working sets (a background Chrome tab, an idle editor) without thrashing; or when the user says "start it anyway". The 1 to 2 GB the owner usually has available therefore admits a Claude session (about 400 MB, measured per kind) by the paging rule on a quiet minute, rather than never; while the PC is paging hard, jobs queue with a reason that names the biggest process. The pool and the spare are dropped first; build-heavy coding jobs take a build slot. WP9 records, on the owner's PC with his usual apps and Resolve open, which rule admitted each of the M6 demo's jobs and the paging rate before and after, and the defaults are tuned from that record by an amendment.
+- **Profiles.** `memory.profile = "auto"` picks `low` when available memory stays under 3 GB for a minute at start, which is the owner's usual state: Kroko instead of Nemotron if its license checks out (else Nemotron stays), Kokoro int8 if WP4's equal-load test shows it is not slower, no hot spare, the computer-use pool session only when admission rule 2 fits it and the deep one also by rule 3 with nothing queued (section 2.5), Parakeet never loaded automatically. Chatterbox is not barred: whether it may load is memory admission's call on its measured size, and whether it speaks live is the real-time watchdog's, as everywhere. The HUD shows a "low memory" indicator and `eileen doctor` explains.
+- **Residency.** One ASR model resident; the cloned voice engine and Parakeet load on demand; `speech.pin_working_set` (off by default) keeps the speech process's working set from being trimmed during silences, after WP4 measures the cost of the first command after 30 idle minutes.
+- B1 runs with the hot spare off, because Resolve Studio itself needs several gigabytes.
+- **No hot spare means a slower recovery.** In the low profile a brain crash or stall restarts the brain cold (39 to 48 s measured under load); the fast path keeps working meanwhile and the HUD says "brain restarting". This is the honest cost of the PC's memory, recorded as a risk in section 7.
+
+### 4.5 Idle budget
+
+Idle and listening, unmuted, with nothing playing, measured with real WASAPI capture (not only with stub sidecars):
+
+| Process | Idle CPU (one logical core) | Basis |
+|---|---|---|
+| `eileen.exe` | under 2 percent with AEC bypassed (loopback silent); about 6 percent extra while AEC runs (592 us per 10 ms frame), plus the loopback capture's own cost, which WP4 measures | voice-stack, design |
+| `eileen-speech.exe` | under 8 percent (VAD alone measured 5.8 percent) | voice-stack |
+| `eileen-desktop.exe`, `eileen-apps.exe` | under 1 percent each (event-fed, no polling) | to measure |
+| `eileen-hud.exe` | under 1 percent idle; measured again while updating ten times a second | WP8 measures |
+| `claude -p` sessions | near zero between turns | harness report |
+
+No growth in working set, handles, GDI objects or threads after warm-up. The soak tests in section 4.7 enforce slopes, not absolute numbers.
+
+### 4.6 What runs where
+
+A `plan` job classifies each pull request by the paths it touches: `docs-only` (every changed file is Markdown or under `docs/`), `scenarios-only` (every changed file is under `scenarios/`), `neutral-rust`, `windows-rust` (a `-win` crate, a `cfg(windows)` module or a native dependency), `plugin`, `workflow`. A change to any `Cargo.toml`, to `Cargo.lock`, to `rust-toolchain.toml`, to `.cargo/` or `.config/`, or to anything under `.github/` selects every class, so a Dependabot bump of a pure-Rust crate or an action SHA gets the Windows lanes too. Jobs whose inputs are untouched skip cleanly, and `all-green` counts a skip as a pass.
+
+| Lane | Contents | Budget |
+|---|---|---|
+| Every push to a pull request | **Linux:** fmt, typos, cargo-deny, cargo-machete, zizmor, `cargo xtask lint-repo`, `cargo xtask codegen --check`, Markdown lint, internal links, clippy and nextest of neutral crates, simulator PR seeds and stored regressions, exhaustive turn-taking to depth 6, fuzz corpus replay, `cargo fuzz build` when a parser changed, loom when `eileen-audio` changed, shuttle tests when `eileen-runtime` changed, scenario validation and scenario-mode replay of every sim-lane scenario (sharded by hash beyond a 2-minute budget), the `evidence` job for fix pull requests (its own workflow, re-run when the description or labels change), `cargo mutants --in-diff` (advisory). **Windows** (skipped for `docs-only` and `scenarios-only`): clippy `-D warnings` on the workspace, nextest for `-win` crates and Windows-only tests (modules named `win`), doc tests, end-to-end smoke scenarios with the stub harness and transcript injection. **`pr-meta`** (its own workflow, re-run when the description or labels change) and `claude-plugin` (when `integrations/claude-plugin/` exists) | under about 15 minutes with a warm cache |
+| Merge to `main` | Full Windows nextest of the workspace, random simulator seeds for 10 minutes, a thin-LTO release smoke build, cache saves. There is no merge queue on a user-owned repository, and branches are up to date before merging, so the pull request lane is not repeated | 20 minutes |
+| Nightly | Simulator random seeds per profile for 30 minutes (Linux, plus one Windows run), fuzzing 10 minutes per target, exhaustive depth 8, the full end-to-end set not marked `requires`, a 30-minute soak, flake hunt (`retries = 2`, `flaky-result = "fail"`), shuttle and loom suites, coverage, external link check, `cargo deny check --all-features`, build timings, models downloaded from their pinned URLs and verified (never kept in the Actions cache), the real speech process on cached WAVs, the credential-free CLI drift job (below), fleet-results ingest and clustering, the scenario catalogue and benchmark results rendered to the repository's GitHub Pages site (section 4.8). Failures open or update one issue per failing job, labelled `nightly`; ordinary test failures on `main` go to the `flake` issue | about 1 hour per job, in parallel |
+| Long runs on demand (`long.yml`) | `workflow_dispatch` with inputs (ref, fuzz targets, minutes, simulator profiles, soak hours), and pull request labels `fuzz-10m` and `sim-30m` that run the changed targets on the pull request's head and post a summary; packages link these runs as evidence for their "clean for 10 minutes" acceptance lines | as requested |
+| Weekly | Full mutation run (four shards), 4-hour soak, one hour per hot fuzz target, Dependabot's grouped `cargo` and `github-actions` update pull requests with their 14-day cooldown, which run every lane like any pull request (protocol crates are updated by hand with the probe subcommands as smoke tests; no workflow opens pull requests itself), a job that reads the pull request lane's durations through the API and opens an issue when the p50 passes 15 minutes | hours |
+| Release (tag `v*`) | Everything above on the tagged commit; `cargo build --release` with `CARGO_PROFILE_RELEASE_LTO=fat` and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` on `windows-latest`; `.pdb` files and a Breakpad symbols zip; checksums; a license listing that includes the shipped native DLLs and fails on any GPL component; end-to-end smoke from the built artifacts; a draft release the owner publishes. Tags `v*-beta.*` publish as GitHub pre-releases: the beta channel | owner signs off |
+| Nightly prebuilt (owner answer 5) | An unsigned zip of the thin release build with checksums, published as a `nightly` pre-release so testers need no Rust toolchain. Nightly, beta and stable are the three channels v0.1 publishes; signed automatic updates with one-step rollback need the signing certificate and come in v0.2 (ROADMAP) | part of nightly |
+| Owner's PC, nightly (owner answer 10: opted in, unattended desktop scenarios allowed overnight, Task Scheduler entry and keep-awake allowed) | `cargo xtask nightly-local` from Task Scheduler: benchmarks B1 to B10 with real Claude within a nightly turn budget, the stream-json and approval contract tests against the installed CLI and again against the latest CLI (installed into `%LOCALAPPDATA%\eileen\cli-latest\` by npm; it runs under the owner's own sign-in, which Eileen never reads), the skill-listing probe, weekly an overnight soak. The lane is unattended from its first night, with no attended trial period and no per-night arming: every night counts as armed by that standing answer, and `cargo xtask nightly-local --install` creates the per-user Task Scheduler entry once, recording owner answer 10 as the yes, after which each package's owner-PC jobs join the lane as they merge. A run holds a display-required and system-required power request (`PowerSetRequest`) for its duration so the session neither sleeps nor locks mid-run; if a policy locks it anyway, the run stops and records `skipped: locked`. It stops at physical input, auto-denies every tier-2 approval with voice approval off, uses only owned fixtures and no signed-in accounts, refuses to start during a call or a full-screen app, and locks the workstation when it ends. Skips when memory admission would refuse a Claude session by its rules 1 to 3 for 30 minutes in a row (never because of a fixed free-memory figure, since the owner's PC usually has 1 to 2 GB available) or the owner used the PC in the last 30 minutes. Results to the `devhub` branch | the owner's plan limits |
+| Contributors' PCs (opt-in) | `eileen test --fleet` (section 4.8), attended or armed | the contributor's choice |
+
+**CLI drift, credential-free (nightly).** Install the pinned and the latest claude CLI from npm into separate prefixes, parse `claude --help` for every flag listed in `eileen-harness`'s flag constant, check that a hook settings file and the generated MCP config are accepted, and run `claude plugin validate --strict` on `tools/claude-plugins/eileen-dev` and the plugin where that works signed out. A mismatch opens an issue. The behavioural contract test (real sign-in) runs nightly in the owner's lane against both the installed and the latest CLI, so a breaking CLI change fails a night before users meet it.
+
+**Cache budget.** GitHub gives a repository 10 GB of Actions cache. Windows keeps two keys (`win-clippy`, `win-test`), Linux one (`linux`), fuzzing one, each saved only from `main` and restored elsewhere; nightly jobs restore and never save; models are never cached. `rust-toolchain.toml` lists no extra targets, so Linux jobs do not download the Windows standard library.
+
+The owner's PC is never a self-hosted runner for this public repository: a fork's pull request could run code on it. First-time contributors' workflow runs need the owner's approval (GitHub's default, kept on).
+
+### 4.7 Test strategy
+
+**Layers.**
+
+| Layer | Proves | Tool | Runs on |
+|---|---|---|---|
+| Unit and property | One module, including invalid input | `#[test]`, proptest | every OS |
+| Snapshot | Wire formats, tool schemas, HUD draw lists, user-facing text | insta (`--unreferenced reject`) | every OS |
+| Integration per crate | A crate through its public API, one test binary at `tests/it/main.rs` | nextest | every OS for neutral crates, Windows for `-win` crates |
+| Exhaustive | Turn-taking and barge-in for every input sequence up to a length | own enumerator | Linux |
+| Deterministic simulation | The whole core, including the skill engine and memory admission, under random inputs and injected faults, checked by invariants, replayable from a seed | `eileen-sim` | Linux on pull requests, both OSes nightly |
+| Concurrency | The tokio glue (bus fan-out with a slow subscriber, a supervisor restart racing a cancel, two workers finishing at once, a shim pipe dropping mid-call), deadlines, heartbeats and backoff with paused time, and the audio ring buffer | paused tokio time, shuttle (WP2), loom (WP4) | Linux |
+| Fuzzing | Untrusted parsers never panic, stay bounded, round-trip | cargo-fuzz, corpus replay tests | fuzzing on Linux, replay everywhere |
+| End to end | Real Eileen processes, real desktop, recorded or synthesized audio in, event trace out | `eileen-scenarios` runner | `windows-latest` with stubs; the owner's PC and fleet PCs with real Claude and apps |
+| Timed scenarios | The owner's benchmark requests stay fast | `eileen-e2e --bench`, A/B against the base binary | the owner's PC |
+| Soak | Memory, handles, GDI objects, threads, idle CPU, orphans, log and store sizes | `cargo xtask soak` | `windows-latest` nightly and weekly; the owner's PC weekly |
+| Mutation and coverage | Tests check what they cover | cargo-mutants, cargo-llvm-cov | Linux, coverage also Windows |
+
+**Tests that need the owner's PC or real Claude** live in modules named `owner_pc::` or `real_claude::`. Nextest's `default-filter` excludes them in the `default` and `ci` profiles; the `owner` profile, which `cargo xtask nightly-local` and `cargo xtask test --owner` use, includes them; xtask prints how many it excluded. `#[ignore]` is banned, and a check fails if such a test lives outside those modules, so a skip never looks like a pass.
+
+**Simulation.** The core is built for it from the first commit (section 3.3.3): one `Core::step`, closed `Input` and `Effect` enums, time and randomness injected, ordered maps, every queue bounded, `buggify!` fault points activated per run (a runtime switch, never a Cargo feature), `never!` and `always!` soft assertions that log, count and dump the flight recorder in production and panic under tests. `eileen-sim` owns a `World` of simulated parts (microphone and speech with several sources, other audio playing, playback in 10 ms callbacks, physical input, the brain with delay distributions and failures, workers replaying stub scripts with faults, sidecars with latency, hangs past the deadline and crashes, Job Object semantics, memory pressure, an in-memory model of the store and of the learning store). Each run picks a profile, seeds a PRNG, generates inputs from an `arbitrary::Unstructured` buffer (so the same generator is a seeded test, a fuzz target and a minimiser), steps the core, applies effects to the world and checks every invariant after every step. A failure prints the replay command with the commit; `--doublecheck` runs a seed twice and compares trace hashes; minimised failures are stored as `SimRegression` files (decoded inputs with every fault as an explicit record) in `crates/eileen-sim/regressions/` and replayed on every pull request; pull requests use a fixed seed set, `main` and nightly use fresh seeds. The simulator thread gets an explicit large stack (Windows' default main-thread stack is small). Nextest gives the simulator, `turn::exhaustive` and end-to-end tests longer slow-timeouts (section 4b.3), and the PR seed set is split into one test per seed.
+
+Invariants checked after every step (each a named function):
+
+1. The voice path is never starved: every voice input is consumed within two audio frames of virtual time.
+2. Barge-in: after the first speech window while Eileen speaks, playback is ducked by the next output callback and paused by the third window; onset to silence never exceeds 150 ms of virtual time. A pause resolves within 600 ms to a resume or a cancel.
+3. What the brain is told the user heard equals the text mapped from samples actually handed to the device.
+4. Every job ends in exactly one terminal state within its deadline plus the supervisor's kill bound; no job stays running without a live worker past one heartbeat timeout.
+5. Job state changes follow the legal graph (also checked against a proptest-state-machine reference model).
+6. Every bus event carries a turn ID or a job ID where it belongs; nothing is emitted for a job after its terminal event; per-job order is preserved; a slow subscriber gets an explicit `Lagged`, never silent loss; no unaddressed speech becomes a bus event.
+7. A tool call above tier 1 is always preceded by an approval built from `UserInput` (for tier 2 by voice, with the action word and, when enrolled, a speaker match, never while voice approval is off, and never from speech that began before the voice window opened after the question drained); a hotkey approval counts only when flagged physical; a replayed skill never raises a tier and calls only the tools its origin allows; a learned skill never skips a confirmation or an `ask`; once a job is tainted and has read private data, every egress-capable call is tier 2; a build or test command after taint is tier 2; an ambient brain turn never runs a non-read tool.
+8. A crashed or hung child restarts with bounded backoff, at most N times per window; killed children leave no descendants.
+9. Mute stops audio reaching recognition within one frame; nothing is spoken (no clause, phrase or earcon) while muted or while another app uses the microphone, and during a call no utterance is addressed unless it begins with the name; "cancel" reaches the worker as an interrupt within its bound; physical input during a lease stops synthetic input within one event.
+10. Two utterances never overlap; the announcement queue stays bounded.
+11. Two speeds: the deep answer either replaces the fast one or goes to the HUD; the user never hears both in full; an interruption sends the deep answer to the HUD.
+12. After a simulated core restart, running jobs are marked interrupted and no ID repeats.
+13. The span-parent table holds for every span the run produced, and every log line inside a turn carries its turn ID.
+14. Memory admission: no job starts when commit headroom after its estimate is under 1 GB; a job starts only by rule 2 (available above the reserve), rule 3 (paging low for 30 s, then 30 s with no further admission) or rule 4 (a `StartAnyway` from user input for that job); the computer-use pool session starts only by rule 2 and the deep pool session only by rule 2, or by rule 3 with nothing queued; at most `max_build_heavy_jobs` build-heavy jobs and two builds run at once.
+15. The brain fallback: a turn whose primary brain stalls is answered by the fallback slot when one is configured (else by the promoted spare), text for a turn is accepted only from the brain instance it was last sent to, and the user never hears two answers to one turn, even when the stalled instance sends its answer late.
+
+Exhaustive tests enumerate every sequence of the turn-taking inputs (speech start, speech end, end of turn, clause ready, playback tick, mute, unmute, brain text, a backchannel, other audio starting, physical input) up to length 6 on pull requests and 8 nightly, checking invariants 2, 3, 9 and 10.
+
+**End to end without a sound card or credentials.** `eileen-audio` defines `AudioSource` and `AudioSink` from day one: production uses WASAPI; tests use `WavSource { path, pace }`, a `CaptureSink` that writes what Eileen says to a WAV, and a `RoomMixer` that feeds a delayed, attenuated copy of playback, plus an optional music or speech-video bed, back into the input so echo cancellation and barge-in see real bleed. `eileen run --audio-source wav:<file> --audio-sink capture:<file>` selects them. For pull requests, a transcript-injection speech stub replaces the models (the hosted runner has no audio device and the models are 1.3 GB); nightly runs the real speech process with models downloaded and verified. `eileen-stub-harness` speaks the same stream-json as `claude -p` and plays `StubScriptLine` scripts from `tests/harness-scripts/*.ndjson` (section 3.3.16); the scripts start as redacted recordings of real sessions on the owner's PC. The contract test on the owner's PC runs the same prompts through the real CLI nightly and compares event shapes (types and fields, not text) with the scripts, plus the approval cases of section 2.5, so CLI changes show up as a failing check. CI never holds vendor credentials. Desktop tests run in one nextest group with `max-threads = 1`, use only windows the test created (owned fixtures such as a corrected testpad, isolated Edge profiles, Notepad launched by AUMID and closed unsaved), and the first nightly proves the hosted runner gives UIA an interactive desktop before more depend on it. Small synthetic WAV fixtures (two distinct synthetic speakers) are committed for the enrollment and speaker tests, so CI never runs a TTS model to make them.
+
+**Benchmarks** (timed scenarios, phases measured from event-log spans, judged by A/B against the base binary with alternating runs and a Mann-Whitney test, reporting only differences that are significant and larger than about 10 percent). Runs are judged by the same test memory admission uses, not by a fixed free-memory figure, because the owner usually has 1 to 2 GB available: every run records available memory, commit headroom, the paging rate and the admission rule that admitted each of its jobs; A/B pairs are compared only within one stratum ("roomy": every job admitted by rule 2; "tight": some by rule 3), and the results table reports both strata; a run is excluded only when a job needed "start it anyway" or the paging rate during a timed phase stayed above twice `memory.max_paging_kb_s` for more than 30 s (thrashing), and the exclusion is recorded with its reason:
+
+| ID | Request | Phases | Where |
+|---|---|---|---|
+| B1 | "Open the video editor, go to 15:30 and make the face of the girl on the right less blurry" | end of speech to Resolve ready (including a cold launch if needed); to playhead at 15:30 (read back through the bridge); worker start (pooled bind or cold, and which admission rule admitted it); to the crop confirmation; to the correction applied; sharpness gain (pass at 15 percent or more plus the owner's yes); total; worker turns; hot spare off | owner's PC |
+| B2 | The Photoshop beach request | same shape | skipped until Photoshop is present (`requires = ["photoshop"]`) |
+| B3 | "Launch three agents to fix the flaky login tests in the demo repo" (the `flaky-login` fixture) | warm or cold start per agent; first narration per job; all finished; HUD shows all three; peak memory | CI with stubs; owner's PC with real Claude |
+| B4 | Writing code by speaking | end of speech to text in the editor; word error rate against the script; "that variable" resolved correctly | both |
+| B5 | Interrupting Eileen mid-sentence, and a backchannel | onset to silence; correctness of the heard prefix; backchannel resumed | both, strict on the owner's PC |
+| B6 | "What's the best place to eat near me" | fast answer start; no unsourced current facts in it; deep worker start (pooled bind or cold, and the admission rule); deep answer arrival, with targets of 40 s p50 when the deep session was pooled and 120 s p50 when it started cold (section 4.3); spoken length; HUD content; then "closer" answered from the cache with the new fact applied | owner's PC (network, location set by voice) |
+| B7 | Dictation into a field | key release to text; filler and self-correction accuracy | both |
+| B8 | The same hard request kind, learning off against learning on | A/B on the same machine: a fresh data directory (learning off) against the learned skill, alternating, at least three pairs, each pair with new slot values (15:30 right, 42:10 left, 1:02:10 largest); time, tokens, worker turns, success. Before each learned run the runner waits for the previous run's final verdict (`learn.verdict`, after the 120 s regret window) and its distillation outcome (`eileen skills distill --job <id> --wait`, 10-minute timeout; a timeout or a `learn.distill_deferred` marks the pair invalid with its reason, never a pass); the outcome is judged by run index (section 2.10 item 5, "Expected outcomes by run"): the learned arm's drafting run must end in `learn.skill_drafted`, and its later runs, which use the skill, are expected to end in `learn.distill_skipped` with `StatsOnly` or `TooShort` (or in a new version's draft); any other outcome is recorded as a learning failure for that pair with its reason; the owner answers any draft review or level-3 question himself before the next run | owner's PC (three real-Claude B1 pairs at most, to spare the plan) |
+| B8-curve | A cheap recipe-eligible request repeated 12 times (YouTube play-at on a phrasing outside the grammar, or a testpad fixture skill) | per run index: level, model turns, tokens, duration, success, handoff; must match the table in section 2.10. Runs unattended under `--test-harness` in a throwaway data directory: after each run it waits for `learn.verdict` (the regret window closes) and then for that run's distillation outcome (`distill --job <id> --wait`, which returns at once when the job was already distilled or skipped), checked against section 2.10's expected outcomes by run (the drafting run's `learn.skill_drafted`, then `StatsOnly` or `TooShort`, or a new version's draft, for every later run); the scenario's steps answer the draft review and the level-3 question ("I can do this without asking Claude...") with a scripted `Hud` `Answer` that the test endpoint delivers as `UserInput`. That endpoint exists only under `--test-harness`, never in a normal run, and its answers reach only the throwaway store; tier-2 tool approvals stay auto-denied. About 40 minutes with the waits | owner's nightly lane |
+| B9 | "Open Premiere", "pause", "snap this to the left half", and a paraphrase ("get Premiere up for me") said twice | end of speech to effect: fast path; through the brain's `act` tools (about 3 s); the exact repeat from the fast path | both |
+| B10 | The brain benchmark: 20 scripted turns, the brain cases of the resolver golden file, and interruptions mid-answer | time to first spoken word (p50, p95), right-action rate, interruption handled (stopped, heard prefix correct, the new turn merged); per backend and resolved model id | owner's PC; also run by the settings flow before a backend switch (section 2.3) |
+
+Every run appends one JSON line (scenario, phase, milliseconds, commit, binary hash, the machine hash from `fleet\machine.toml` in the user's own data directory, never a benchmark's throwaway one (owner answer 6), claude CLI version, resolved model id, available memory, paging rate, CPU load, whether the owner was active) to the results history on the `devhub` orphan branch of this repository (owner answer 3). The nightly workflow commits there with a job-scoped `contents: write` permission, renders `RESULTS.md` on that branch (the public results table, per benchmark and machine class, with A/B outcomes) and builds the Pages benchmark page from it; `main` never holds results, so pull request checks stay hermetic.
+
+**Fuzz targets**, each calling a `#[doc(hidden)] pub mod fuzz_entry { pub fn <target>(data: &[u8]) }` in a neutral crate, each with a minimised seed corpus (size-capped, checked) that the owning crate's `tests/it/fuzz_corpus.rs` replays as an ordinary test on every OS, together with `fuzz/regressions/<target>/`. The corpus nightly fuzzing grows is kept as an artifact, not committed.
+
+| Target | Input | Owner |
+|---|---|---|
+| `stream_json_line`, `control_message` | lines from `claude -p` | WP3 |
+| `mcp_client_message`, `mcp_tool_arguments`, `dispatch_line` | JSON-RPC from sidecars, tool arguments from workers, shim pipe lines | WP2 |
+| `shell_command` | worker shell commands into the tokenizer and path extraction | WP1 |
+| `registry_reply` | MCP registry replies for `routes_lookup` | WP6 |
+| `worker_hook_payload`, `http_request` | hook bodies and the loopback HTTP parser (fail closed) | WP2 |
+| `scenario_file` | contributed scenarios and their `inputs.jsonl` lines | WP2 |
+| `uia_text`, `desktop_state` | UIA strings through `sanitize`, DesktopState snapshots | WP0 (contracts) |
+| `config_toml` | the user's config files | WP7 |
+| `skill_record` | learned skill files, front matter and `recipe.json` | WP7 |
+| `command_grammar` | transcripts into the fast path | WP7 |
+| `speech_frame` | speech pipe frames | WP4 |
+| `dictation_cleanup` | transcripts into the cleaner | WP4 |
+| `hud_line` | HUD protocol lines | WP8 |
+| `resolve_reply` | Resolve bridge replies | WP6 |
+| `fleet_result` | fleet result lines and fleet issue comments | WP9 |
+| `recording`, `expected_trace` | recording input lines, expected-trace files | WP1 |
+| `sim` | simulator scenarios from bytes, checked by every invariant | WP1 |
+
+`cargo fuzz build` runs on every pull request that touches a parser crate; a crash is minimised into `fuzz/regressions/<target>/` with a focused regression test before its fix counts. A bug found any other way in a fuzzed parser is first treated as a gap in the fuzz target.
+
+**Soak.** `cargo xtask soak` runs the real processes with WAV input and stub workers, plays a scripted request every few minutes, samples once a second through `cargo xtask measure-idle`'s sampler, and judges slopes after a 10-minute warm-up: working set and private bytes (under 1 MB per hour for the core), handles, GDI and USER objects, threads, idle CPU (within the table of section 4.5), live children (exactly the expected set), log, SQLite and recorder sizes (within caps), and the scripted request's latency (no upward trend).
+
+### 4.8 Real use becomes tests: the community scenario corpus and the test fleet
+
+The owner's friends install Eileen on their own PCs and test it. Everything they and the owner try feeds the test suite, so the suite grows from real use instead of only from what developers think of. Capture and sharing ship with slice S1 (WP2), so friends can contribute from the first build they can run; the fleet arrives in M6 (WP9).
+
+**Capture.** "Eileen, save that as a test", the HUD's Save button or `eileen scenario save [--last | --turn ID | --job ID] [--failed]` turns a request into a scenario folder under `%LOCALAPPDATA%\eileen\scenarios\saved\<id>\`:
+
+1. The flight recorder's input lane is trimmed to that turn and its jobs (`eileen record trim`), together with the setup inputs a fresh core needs to reach the same starting state, which gives the sim-lane replay (`replay/inputs.jsonl`, plain JSON lines, and `replay/expected.trace`). Speech that was not addressed to Eileen is already a placeholder in the lane.
+2. The utterance is stored as text. The person's real voice is stored only if they explicitly allow it and record the consent sentence; otherwise runners regenerate audio with a stock voice.
+3. The starting state becomes fixtures where Eileen can describe it generically (which app was focused, how many monitors, which app version), drawn only from fixture templates already in the repository; steps come from the trajectory.
+4. Expectations are inferred from what changed: a window moved becomes `window_on_monitor` or `window_snapped`; inserted text becomes `field_text`; a changed file becomes `file`; a Resolve playhead becomes `resolve_playhead`; a media seek becomes `media_position`; a setting becomes `setting_equals`; the dispatcher's calls become `call` expectations. The person can say "and it should also ..." to add one.
+5. A failure is saved the same way with `outcome = "expected_fail"`; Eileen asks once "what should have happened?" and stores the answer as `intent.expected`, and the incident bundle is attached locally.
+6. The scenario records the machine hash from `fleet\machine.toml` (owner answer 6), so a shared scenario and that machine's fleet results carry the same identity; the hash holds no name, path or account, so sharing keeps it.
+
+**Generic and private.** Nothing leaves the PC until `eileen scenario share <id>`, which generalises and redacts: every value wrapped as `Personal` or `Untrusted` in the contracts (section 3.3.1) is replaced by a placeholder (`{HOME}`, `{DOCS}`, `{WORK}`, `{NAME}`, `{TITLE}`), the Redactor runs over every line, unaddressed utterances are replaced with stock sentences of the same length, window titles keep only the app name, screen text is removed and screenshots are off. Then `share` replays the redacted copy in scenario mode locally: if it no longer passes, the scenario is offered for the desktop lane only, never with a sim replay that tests something else. A preview shows exactly the files that would be shared, with every redaction highlighted, in the terminal and on the HUD. Only after the person approves is the result written to `scenarios\outbox\<id>\` with `origin = "synthetic-from-user"` (or `contributed-consented-audio` when audio is included with its consent record).
+
+**Sharing.** `eileen scenario submit <id>` uses the contributor's own GitHub account through the `gh` CLI they signed in to themselves (Eileen never handles GitHub credentials, the same rule as for vendor CLIs): it forks if needed, creates a branch `scenario/<id>`, adds `scenarios/<area>/<id>/`, and opens a pull request whose title and filled scenario template (type `scenario`, evidence: the local replay result) satisfy `pr-meta`, after one confirmation (publishing is tier 2). Without `gh`, it copies the folder as a zip and opens the scenario issue form (`.github/ISSUE_TEMPLATE/scenario.yml`), whose fields map one to one to the schema (utterances, app, requires, steps, expectations), so a contributor can also fill it by hand; `cargo xtask scenarios from-issue <n>` turns a form into a draft pull request for a maintainer.
+
+**CI on scenario pull requests.** The `plan` job classifies a pull request that touches only `scenarios/<area>/<id>/` as `scenarios-only`: the Windows jobs skip, and Linux runs `cargo xtask scenarios check` (the schema, the privacy rules: no `origin = "user"`, only placeholders in personal fields, the Redactor and a PII scan over every input line for e-mail addresses, phone numbers, `C:\Users\<name>`, machine names and token prefixes, no audio without a consent record and a synthetic or consented marker, no binary files and no fixtures that are not repository templates, size caps, an area that exists, event names from the generated list, no expired `stale` status or quarantine) and `cargo xtask scenarios replay` in scenario mode, which builds the Linux `eileen` binary from the neutral crates with stubs once for the pull request (section 4b.5). A contributed scenario enters the desktop and fleet lanes only after a maintainer adds the `scenario-reviewed` label (`CODEOWNERS` routes `scenarios/` to the owner), because a merged scenario is code that real desktops run.
+
+**The fleet.** Contributors opt in once (`eileen test --fleet` asks for consent and writes `fleet.opt_in`). The runner pulls scenarios from the installed version's tag and keeps those whose `requires` the PC meets. It runs in one of two modes, recorded in every result: **recorded** (the default) starts Eileen with `--replay-models`, so recorded brain and worker responses are served reactively while the real sidecars act on the real desktop with selectors re-resolved on this machine and no model calls, which tests exactly what a fleet uniquely covers (DPI, monitors, app versions, locale); **live** (opt-in, with a turn budget) uses the contributor's own Claude plan. Runs use a throwaway data directory and profile and owned fixtures (never the user's documents, browser profile or signed-in accounts), and start in one of two ways. **Attended:** the user starts it (`eileen test --fleet --once`, or "run the tests now"), Eileen counts down "hands off for 10 minutes" and runs at once, with no idle requirement, because many PCs lock after a few idle minutes. **Armed:** the contributor armed the night (`--arm-tonight`) or set a nightly schedule (a per-user Task Scheduler entry created only after an explicit yes); the run starts once the user has been idle for 30 minutes and holds a display-required and system-required power request for its duration, so the session neither sleeps nor locks mid-run. Either way a run refuses to start during a call or with a full-screen app, skips a locked session (and records `skipped: locked` if a policy locks it anyway), stops at physical input, auto-denies every tier-2 approval with voice approval off, and an armed run locks the workstation when it ends. Results go to `fleet\results\<date>.jsonl` as `FleetResult` lines (section 3.3.16): pass or fail per expectation, phase timings, the operating system and its build, monitors, DPI, app versions, locale, CPU class, RAM, available RAM, whether the user became active, anonymous learning statistics and the machine hash (owner answer 6: salted and one-way from the OS machine id, read through the `MachineIdentity` platform trait on whatever OS the machine runs, mixed with a random install id so cloned images differ, or from the install id alone where the OS has no id; never hardware serials, user names, accounts or paths). The runner reads the hash from `fleet\machine.toml` in the user's own data directory, never from the run's throwaway one, so every line from one install carries the same value. The contributor sees the file and approves the upload. Results arrive in one of three ways, all from someone's own account (owner answer 6): `eileen test --fleet --submit` opens a pull request from the contributor's own account that adds the file under `fleet/<date>/<machine-hash>.jsonl` on the `devhub` branch; `--submit --push` commits the same file straight to `devhub` for a contributor with write access; and the owner relays a results file someone sent him with `--submit --file <path>`, which shows him the same preview and opens the pull request from his account. `devhub.yml` validates every arrival (schema, the `fleet_result` parser, the PII scan): a pull request merges automatically for accounts listed in `.github/fleet-contributors.txt` (the owner's included) while others wait for the owner, and a pushed file that fails is reported in an issue and skipped by ingest. The week's "Fleet results" issue stays an optional channel. `fleet-contributors.txt` maps machine hashes to contributors only where the contributor chooses.
+
+**Learning from it.** A nightly workflow ingests the week's fleet results from the `devhub` branch, whichever way each file arrived (and from comments on the optional weekly issue, accepted only from accounts listed in `.github/fleet-contributors.txt`), treating every result line and comment body as untrusted data (the `fleet_result` fuzz target covers the parser). It clusters failures by signature (scenario, failing expectation, error kind, first divergent event, app version, operating system and build); each cluster gets one issue with counts and machine classes. Triage by a Claude worker runs on the owner's PC (`cargo xtask triage <issue>`), reading the redacted cluster data, the replay and the code map, and drafting an explanation that points at the code; the deterministic clustering stays in CI. A fixed bug always leaves its scenario behind: a pull request of type `fix` must add or change a file under `scenarios/`, `fuzz/regressions/`, `crates/eileen-sim/regressions/` or a test file, or `pr-meta` fails. Flaky scenarios (some failures and some passes on the same machine class over the last 20 runs) are flagged in the catalogue and tracked in the `flake` issue; quarantine needs an issue link and an expiry date, and an expired quarantine fails CI. Learned skills are checked across machines through the fleet before they can ever be offered for sharing (v0.3).
+
+**Licenses.** Contributed scenarios are MIT like the code; consented audio is CC-BY-4.0 and enters only with the speaker's consent record (owner answer 18). The scenario pull request template states both.
+
+**Visible.** The nightly workflow renders the scenario catalogue to the repository's GitHub Pages site (owner answer 4; also attached as an artifact): scenarios grouped by app, each with the utterance people actually say, what it checks, its last result, how many machines passed it and whether it is flaky, plus a coverage view (app against capability, with scenario and machine counts) and the benchmark results page. Nothing about results is committed to `main` (they live on the `devhub` branch), so a pull request's checks never depend on what nightly ingested and friends' scenario pull requests never need to regenerate a file. `README.md` and `TESTING.md` link to the site.
+
+**For testers.** `TESTING.md` (WP2, with slice S1) tells friends how to install (the nightly prebuilt zip, owner answer 5, or a build), that most scenarios need their own Claude plan signed in on their own CLI and spend its allowance, which scenarios run with no Claude at all (fast path, dictation, desktop and apps with the recorded mode), what to try (a short list per app, from the catalogue), how to say "save that as a test", how to share a scenario, how to run the fleet suite, and exactly what leaves their PC. `docs/FLEET.md` (WP9) is the maintainers' side: ingest, clustering, triage and quarantine.
+
+**Who builds what.** WP0: the schema, the validation and privacy checks, the issue and pull request templates, the CI lanes and path classes, the first example scenarios, `eileen_platform::machine` (the hash derivation and the Linux reader). WP1: both replay modes, the expectation and expected-trace matcher, the recording formats. WP2: the install id and the machine hash at setup and every start, save, share, submit, the real-desktop runner, `TESTING.md`. WP9: the fleet runner and upload, ingest, clustering, flake tracking, the Pages catalogue data, the triage command, `docs/FLEET.md`. Every package ships scenarios for what it builds in its own `scenarios/<area>/`.
+
+## 4b. The spotless bar as configuration
+
+WP0 checks these files in; every later package leaves them green and never weakens them without a decision record.
+
+### 4b.1 Toolchain, formatting, profiles, line endings
+
+`rust-toolchain.toml`:
+
+```toml
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"                 # no extra targets: the host target is installed anyway, and Linux jobs skip the Windows std
+```
+
+`cargo xtask setup` installs it once (pinning `1.99.0` while `stable` is also 1.99.0 makes rustup install a second copy the first time). Fuzzing uses a nightly pinned by date in `fuzz/rust-toolchain.toml`.
+
+`rustfmt.toml` (stable options only):
+
+```toml
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+use_small_heuristics = "Max"
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+reorder_imports = true
+reorder_modules = true
+```
+
+Profiles in the root `Cargo.toml`:
+
+```toml
+[profile.dev]
+debug = "line-tables-only"          # useful backtraces, small PDBs
+
+[profile.dev.package."*"]
+opt-level = 2                       # audio, ONNX glue and SQLite are unusable at opt-level 0
+debug = false                       # no debug info for dependencies: less link memory on a 16 GB PC
+
+[profile.release]                   # local checks, CI smoke builds and tagged releases
+opt-level = 3
+lto = "thin"                        # release.yml overrides with CARGO_PROFILE_RELEASE_LTO=fat and CODEGEN_UNITS=1
+panic = "unwind"                    # the core survives a panicking task
+debug = "line-tables-only"
+incremental = false
+strip = "none"                      # MSVC keeps symbols in the .pdb, which ships to the symbol store
+```
+
+There is no custom `dist` profile: `sherpa-onnx-sys` locates its output by the profile name and fails under one (section 4.1), so tagged releases use `release` with the two environment overrides, in CI only, never on the owner's PC.
+
+Once the speech crates exist, WP4 narrows `opt-level = 2` to the crates that need it if `cargo xtask build --timings` (the guarded wrapper around `cargo build --timings`) shows proc macros built at opt-level 2 dominating.
+
+`.cargo/config.toml`:
+
+```toml
+[alias]
+xtask = "run --package xtask --"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+```
+
+Build parallelism (`CARGO_BUILD_JOBS`) is not set in the repository, so contributors with bigger machines and CI are not throttled; the build guard sets it from measured free memory on the owner's PC (section 6.1). The native-library environment (`SHERPA_ONNX_ARCHIVE_DIR`, `ORT_LIB_LOCATION`, `ORT_PREFER_DYNAMIC_LINK`) is not in this file either, because the cache path differs per machine; `cargo xtask` sets it for every cargo call (section 4.1).
+
+`.gitattributes`:
+
+```gitattributes
+* text=auto eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.ndjson text eol=lf
+*.jsonl text eol=lf
+*.trace text eol=lf
+*.setting text eol=lf
+*.snap text eol=lf
+*.lua text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.wav binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.zst binary
+*.drx binary
+*.drp binary
+*.pdb binary
+```
+
+### 4b.2 Lints, clippy configuration and unsafe policy
+
+Workspace lints (the rust-architecture report's table, checked against the stable lint index on 2026-10-20; every member has `[lints] workspace = true`; local builds warn, CI runs `-D warnings`):
+
+```toml
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_unsafe_on_extern = "deny"
+non_ascii_idents = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+let_underscore_drop = "warn"
+elided_lifetimes_in_paths = "warn"
+explicit_outlives_requirements = "warn"
+meta_variable_misuse = "warn"
+unit_bindings = "warn"
+unused_macro_rules = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+bare_urls = "warn"
+unescaped_backticks = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"        # every fallible fn returns a typed error enum that documents itself
+missing_panics_doc = "allow"        # panics are denied below
+multiple_crate_versions = "allow"   # windows-sys has two majors in the tree; cargo-deny reports duplicates
+cargo_common_metadata = "allow"     # publish = false
+use_self = "warn"
+or_fun_call = "warn"
+redundant_clone = "warn"
+needless_collect = "warn"
+significant_drop_tightening = "warn"
+significant_drop_in_scrutinee = "warn"
+option_if_let_else = "allow"
+missing_const_for_fn = "warn"
+equatable_if_let = "warn"
+debug_assert_with_mut_call = "warn"
+useless_let_if_seq = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "warn"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+exit = "deny"
+mem_forget = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+allow_attributes = "deny"           # use #[expect(...)] so a stale suppression fails the build
+allow_attributes_without_reason = "deny"
+get_unwrap = "deny"
+indexing_slicing = "warn"
+string_slice = "deny"
+clone_on_ref_ptr = "warn"
+rc_buffer = "warn"
+rc_mutex = "deny"
+str_to_string = "warn"
+lossy_float_literal = "deny"
+float_cmp_const = "deny"
+empty_structs_with_brackets = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+tests_outside_test_module = "warn"
+unused_result_ok = "warn"
+let_underscore_must_use = "deny"
+let_underscore_untyped = "warn"
+verbose_file_reads = "warn"
+mod_module_files = "deny"           # foo.rs plus foo/, never foo/mod.rs
+infinite_loop = "warn"
+large_include_file = "deny"
+fn_to_numeric_cast_any = "deny"
+if_then_some_else_none = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+unseparated_literal_suffix = "warn"
+wildcard_enum_match_arm = "warn"
+missing_assert_message = "warn"
+create_dir = "warn"
+filetype_is_file = "warn"
+cfg_not_test = "deny"
+```
+
+`clippy.toml`:
+
+```toml
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+avoid-breaking-exported-api = false
+too-many-lines-threshold = 80
+too-many-arguments-threshold = 6
+cognitive-complexity-threshold = 20
+
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "blocks a runtime worker; use tokio::time::sleep, or eileen_stdx::thread::sleep on a named thread" },
+  { path = "std::thread::spawn", reason = "use eileen_stdx::thread::spawn_named: every thread has a name in logs and dumps" },
+  { path = "std::thread::Builder::spawn", reason = "use eileen_stdx::thread::spawn_named" },
+  { path = "std::env::set_var", reason = "process-global and unsound with threads" },
+  { path = "std::env::remove_var", reason = "process-global and unsound with threads" },
+  { path = "std::process::Command::new", reason = "start children through eileen_supervisor (Job Object, kill on close)" },
+  { path = "tokio::process::Command::new", reason = "start children through eileen_supervisor", allow-invalid = true },
+  { path = "std::process::exit", reason = "skips destructors and log flushing; return from main" },
+  { path = "std::time::Instant::now", reason = "core logic gets time from the clock port; everything else uses eileen_stdx::clock" },
+  { path = "std::time::SystemTime::now", reason = "core logic gets time from the clock port; everything else uses eileen_stdx::clock" },
+  { path = "ulid::Ulid::generate", reason = "IDs come from the Ids port so replay is deterministic", allow-invalid = true },
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "every queue has a maximum", allow-invalid = true },
+  { path = "tokio::spawn", reason = "use eileen_rt::task::spawn: it names the task, keeps the span and registers it", allow-invalid = true },
+  { path = "tokio::task::spawn", reason = "use eileen_rt::task::spawn", allow-invalid = true },
+  { path = "tokio::task::spawn_blocking", reason = "use eileen_rt::task::spawn_blocking (named, bounded pool)", allow-invalid = true },
+]
+disallowed-types = [
+  { path = "std::sync::mpsc::Sender", reason = "use bounded tokio::sync channels" },
+]
+disallowed-names = ["foo", "bar", "baz", "tmp", "data2"]
+```
+
+**The sanctioned exceptions, all of them.** Each carries an `#[expect(clippy::disallowed_methods, reason = "...")]` on one small function, and check 14 holds the list:
+
+- `eileen-stdx`: the one real clock, the one ID generator, `thread::spawn_named` and `thread::sleep` (std only, so every crate, the `-win` crates included, can obey the thread and sleep bans).
+- `eileen-rt`: `task::spawn` and `task::spawn_blocking`.
+- `eileen-supervisor`: the one `Command::new` for every child of the running product.
+- `eileen-buildguard`: `spawn_cargo` (cargo inside the guard's own kill-on-close Job Object) and its sampling clock and sleep. It depends on nothing but std and `windows-sys` so that xtask stays a seconds-long compile, which is why it cannot use the supervisor or stdx.
+- `eileen-guard`: `restart_core` (the guard restarts a hung core from outside the core's Job Object, so the supervisor, which lives in that job, cannot do it).
+- The development tools `xtask` and `tools/repo-tools`, which run cargo, git, curl, rumdl, lychee, typos and zizmor and time them: each has its own `clippy.toml` (the root file without the `Command::new`, `Instant::now`, `SystemTime::now` and `thread::sleep` entries); they are never shipped, and tidy keeps their other entries in sync with the root file.
+
+`crates/eileen-core/clippy.toml` is the root file plus a `disallowed-types` entry for `std::collections::HashMap` (use `BTreeMap` or `IndexMap` where order can reach an effect); clippy reads the nearest file and does not merge, so a tidy check keeps the copies in sync. Lookup-only maps are fine elsewhere. Span and event names in every crate, the `-win` crates included, come from `eileen_trace::names` (check 21).
+
+**Unsafe policy.** The workspace denies `unsafe_code`. Every crate without FFI adds `#![forbid(unsafe_code)]`. An FFI crate keeps every unsafe call in one private module declared as `#[expect(unsafe_code, reason = "...")] mod ffi;`, one unsafe operation per block, each with a `// SAFETY:` comment saying which precondition holds and why, exposing only safe functions and converting every `HRESULT` and `BOOL` into the crate's error type there. COM calls run on the crate's own apartment thread with a deadline, never on a tokio worker. Prefer crates that own their unsafe code (process-wrap, tray-icon, cpal). Write "safety comment" in prose docs (the word with a colon trips `unnecessary_safety_comment`) and never link a private `ffi` module from public docs.
+
+**Casts and indexing in numeric code.** Pedantic clippy under `-D warnings` fires on every `as` cast and every slice index in DSP, log-mel, resampling, DPI math, YuNet decoding and the Laplacian. The rule, decided once in WP0: everywhere else, use `eileen_stdx::num` (checked conversions that return a typed error or saturate, named for what they do); in modules whose job is numeric (a named list in `xtask/tidy/numeric-modules.toml`, for example `eileen-audio::dsp`, `eileen-speech::mel`, `eileen-desktop::dpi`, `eileen-apps::image`), a module-level `#![expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_precision_loss, clippy::indexing_slicing, reason = "numeric kernel; bounds checked at the module boundary")]` is allowed, and the module's public functions check lengths once at the boundary. The rmcp `#[tool_handler]` macro trips `unused_async`; one `#[expect]` per server type with the reason "rmcp tool handler signature" is pre-approved.
+
+### 4b.3 cargo-deny, nextest and CI
+
+`deny.toml` is the rust-architecture report's file with three changes: `IJG` added to the license allow list for `jpeg-encoder` (with the attribution in `NOTICE`); a `[[licenses.exceptions]]` entry allowing `CDLA-Permissive-2.0` for the `webpki-roots` crate only (it arrives through `sherpa-onnx-sys`'s build-time download client); and the graph targets extended to `x86_64-unknown-linux-gnu` so the Linux lane is checked too. WP0 confirms that `ring`'s `Apache-2.0 AND ISC` expression passes. Licenses allowed: MIT, MIT-0, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, Unicode-3.0, Unlicense, CC0-1.0, BSL-1.0, IJG. `openssl-sys` and `native-tls` are banned; unknown registries and git sources are denied; yanked versions are denied. cargo-deny cannot see downloaded native libraries or models, so the release lane lists their licenses separately.
+
+`.config/nextest.toml`:
+
+```toml
+[profile.default]
+slow-timeout = { period = "10s", terminate-after = 3 }
+leak-timeout = { period = "500ms", result = "fail" }   # a test that leaves a child process running fails
+default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+
+[profile.ci]
+fail-fast = false
+retries = 0
+failure-output = "immediate-final"
+slow-timeout = { period = "15s", terminate-after = 4 }
+default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+
+[profile.ci.junit]
+path = "junit.xml"
+
+[profile.nightly]
+retries = 2
+flaky-result = "fail"
+fail-fast = false
+
+[profile.owner]                     # cargo xtask nightly-local and cargo xtask test --owner
+default-filter = "all()"
+fail-fast = false
+
+[test-groups]
+desktop = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "test(/::desktop::/) | package(eileen-desktop-win) | package(eileen-apps-win) | package(eileen-shell-win) | package(eileen-hud-win) | package(eileen-e2e) | test(/::e2e::/)"
+test-group = "desktop"
+
+[[profile.default.overrides]]
+filter = "package(eileen-sim) | test(/turn::exhaustive/) | test(/::e2e::/)"
+slow-timeout = { period = "60s", terminate-after = 5 }
+```
+
+The guard's `cargo xtask test` takes `%LOCALAPPDATA%\eileen\desktop.lock` before running the `desktop` group on the owner's PC.
+
+Workflows, all with `permissions: contents: read` at the top (a job that must write, such as the Pages deploy, the nightly issue reporter or the nightly pre-release, names only the permissions it needs), `persist-credentials: false` on checkout, actions pinned by SHA, zizmor on every change, Dependabot for action SHAs, `concurrency` cancelling superseded runs, `CARGO_INCREMENTAL=0`, the Windows target directory on the runner's `D:` drive if it measures faster, rust-cache saved only from `main`:
+
+| Workflow | Trigger | Jobs |
+|---|---|---|
+| `ci.yml` | pull request, push to `main` | `plan` (path classes, section 4.6), `hygiene` (ubuntu), `logic-linux` (ubuntu), `scenarios` (ubuntu), `windows-clippy`, `windows-test`, `claude-plugin` (only if `integrations/claude-plugin/` exists; `continue-on-error` until validation without sign-in is proven), `mutants-diff` (advisory, `continue-on-error`), and `all-green`, which runs with `if: always()`, needs every blocking job, and fails unless each succeeded or was skipped. Jobs whose inputs do not exist yet skip cleanly |
+| `pr-meta.yml` | `pull_request` types `opened`, `edited`, `synchronize`, `reopened`, `labeled`, `unlabeled`, `ready_for_review` | `pr-meta`, which runs `cargo xtask pr-meta --body-file <body> --base <sha>` (title, template, evidence, type rules, scenario-only rules; no compilation beyond xtask). Separate so that editing the description re-runs it without re-running or skipping the heavy jobs; it writes the body from the event payload to a file through an environment variable, never a template expression. Exists from `wp0/ci-bootstrap` with checks 7, 8 and the fix-type half of 19; check 28 and 30 join in phase B |
+| `evidence.yml` | `pull_request` types `opened`, `edited`, `synchronize`, `reopened`, `labeled`, `unlabeled`, `ready_for_review` | `evidence` (ubuntu), which runs `cargo xtask evidence --base <sha> --body-file <body>` for `fix` pull requests and passes at once for every other type and for `deps`; `concurrency` cancels a run superseded by a newer event, so the check GitHub keeps for the head commit is the one for the current description. From phase B; the same pull request adds `evidence` to `main`'s required checks |
+| Dependabot (`.github/dependabot.yml`) | weekly | the `cargo` and `github-actions` ecosystems, with a 14-day `cooldown` for new versions (the cooling-off period of check 13), minor and patch updates grouped, and the protocol crates (`rmcp`, the ACP crate, `sherpa-onnx`, `ort`) ignored, because they are updated by hand with the probe subcommands. Dependabot's pull requests start `pull_request` workflows like anyone's, so they get the full lanes, `pr-meta`, `evidence` and `all-green` before they can merge. No workflow of this repository creates pull requests (a pull request opened with `GITHUB_TOKEN` would start no workflows and could never pass the required checks), so the repository setting that lets Actions create pull requests stays off |
+| `nightly.yml` | daily, manual | the nightly lane of section 4.6, the Pages build, then `report` (one issue per failing job) |
+| `long.yml` | manual (`workflow_dispatch`), labels `fuzz-10m` and `sim-30m` | long fuzzing, simulation and soak on a chosen ref |
+| `weekly.yml` | weekly | the weekly lane |
+| `release.yml` | tag `v*`, manual | the release lane |
+| `native.yml` | manual, and on a change to `crates/eileen-speech/tools/` | runs WP4's script that builds sherpa-onnx without espeak-ng, checks it and publishes it as a release asset (section 2.8), with `contents: write` on that one job |
+| `devhub.yml` | pull requests and pushes to the `devhub` branch | `cargo xtask fleet-validate` on result files; auto-merge of pull requests from listed contributors; a pushed file that fails is reported in an issue and skipped by ingest |
+
+The required checks on `main` are `all-green` and `pr-meta` from phase A (section 6.2 says when they replace `test (3.12)` and `test (3.13)`), and `evidence` from the phase B pull request that adds `evidence.yml`. The engineering-practice report's `ci.yml` skeleton (section 6.2 there) is the starting point.
+
+**One command.** `cargo xtask ci` runs locally what the pull request lane runs (through the build guard) and prints, at the end, the CI-only steps it skipped and why (on Windows: `cargo fuzz build` and the `cfg(not(windows))` compilation; `mutants --in-diff` is never run locally because it is heavy on this PC). `cargo xtask lint-repo` runs only the fast repository checks, in seconds. `cargo xtask pr-meta --body-file <file>` checks a drafted pull request description and title locally exactly as CI will, and `cargo xtask evidence --base main --body-file <file>` runs the fix evidence job locally through the build guard. `cargo xtask pre-push` runs fmt, clippy, the changed crates' tests and `lint-repo`; `.githooks/pre-push` calls it (`cargo xtask setup` sets `core.hooksPath`).
+
+**The conventions, each enforced by a check.** `xtask` keeps a registry of checks (id, name, rule, how to fix it, the local command, the CI job, whether it is a `lint-repo` check or delegated to another tool). `cargo xtask codegen` renders the registry into the table between markers in `CONTRIBUTING.md` and into `docs/reference/checks.md`, kept fresh by check 9; the root `AGENTS.md` carries a short summary and the link. Every failure prints the check id, the file and line, the fix and the one command that reproduces it. Checks marked "delegated" have a config assertion as their fixture test (for example, that the workspace lints contain `undocumented_unsafe_blocks = "deny"`) plus one end-to-end failing fixture in the nightly lane.
+
+| # | Convention | Check | Kind |
+|---|---|---|---|
+| 1 | Every crate's guidance is in its crate doc (in `src/lib.rs`; a binary's `main.rs` holds one line pointing to it) with the required headings of section 4b.4, within 80 lines | parses the doc comments | lint-repo |
+| 2 | Nested `AGENTS.md` only where section 4b.4 lists one, each with a sibling `CLAUDE.md` whose first line is `@AGENTS.md` and a "Why this folder has its own rules" heading; root `AGENTS.md` at most 150 lines; root `CLAUDE.md` starts with `@AGENTS.md` | file scan | lint-repo |
+| 3 | `ARCHITECTURE.md`'s code map lists exactly the workspace crates, both ways, and every backticked path or type in it resolves | `cargo metadata` and `syn` | repo-tools |
+| 4 | Every `cargo xtask <command>` named in any guidance file exists | parses guidance files and xtask's command list | lint-repo |
+| 5 | Markdown is linted, internal links resolve (external links nightly), spelling passes | rumdl, lychee offline, typos | delegated |
+| 6 | House style: no em dash (U+2014) in Markdown, doc comments or user-facing strings; the product is only ever "Eileen"; no old working names; workers named only by route; no vendor product name used as part of an Eileen name, a feature name or a worker name; no film or trademark names. The denylist is stored as salted SHA-256 hashes of normalised tokens and two- and three-word phrases (`xtask/tidy/denylist.toml`, entries added with `cargo xtask tidy denylist-add`, which reads the name from standard input), so the names never appear in the repository; WP0 seeds the real entries in phase B (section 6.2); a failure shows the matched text from the scanned file, never from the list; files that may quote third-party text verbatim (the research reports in `docs/research/`) are exempt by name in `xtask/tidy/exempt.toml` with a reason each, while the dated records were scrubbed instead (owner answer 15; `docs/DECISIONS.md`, `docs/RESEARCH.md` and `docs/NAMING.md`, completed on 2026-10-21); the fixture test uses a synthetic entry, and phase B's acceptance proves the seeded ones | a scan of Markdown, doc comments and string literals against the character rules and the hashed denylist | lint-repo |
+| 7 | The pull request title is a valid squash subject: imperative, capitalised, under 72 characters, no trailing period (the squash default is the title and description, owner answer 2). Per-commit messages are checked as advice only | `cargo xtask pr-meta` | pr-meta, from phase A |
+| 8 | The pull request description follows the template: `## Evidence` first, then `## Type` (one line `type: <value>`, one of `feature`, `fix`, `refactor`, `docs`, `scenario`, `amendment`, `deps`), then What, Why, Tests at which layer, Seen failing before the fix (for fixes), Scenario, Suggested guidance changes, Architectural changes and Playbook. The Evidence section runs from its heading to the next `## ` heading, with HTML comments removed, and has a fixed grammar: prose lines, plus at most one of each of these field lines, each starting at the beginning of a line: `tests: <path>, <path>, ...` (a test path is `<package>::<module>::...::<fn>`, the package being any workspace member's name with hyphens or underscores, including `xtask` and `repo-tools`; for a unit test the modules are its module path from the crate root, `eileen-core::turn::tests::barge_in_pauses`, and for an integration test the first segment after the package is the test target, the file stem directly under `tests/` or the folder holding `main.rs` as nextest names the binary, then the module path inside it, so WP1's `tests/it/job_model.rs` test is `eileen-core::it::job_model::<fn>`), `scenarios: <area>/<id>, ...`, `numbers: <free text>`, `replay: rec_<ulid>`, `incident: inc_<ulid>`, `owner-run: <URL of an Actions run of this repository or a file on the devhub branch>`, `override: <reason>`. Only the `tests:` and `scenarios:` lines are read as ids, so hyphenated words in prose are never taken for scenario ids. The section is never empty and never the template's placeholder, for every type: it needs at least one prose line or field line. **The type must fit the files.** `pr-meta` reads the changed files and the `plan` job's path classes (section 4.6) and allows `docs` only when the class is `docs-only`, `scenario` only when it is `scenarios-only`, and `deps` only when the pull request changes nothing but dependency manifests, `Cargo.lock` and `uses:` lines; an `amendment` that changes any file outside the `docs-only` class is held to the feature rule below. So a code change typed `docs` fails `pr-meta` instead of skipping evidence. For feature, fix and refactor pull requests (and such amendments) it must also list at least one id on a `tests:` or `scenarios:` line, and every one listed must exist at the head: `pr-meta` resolves a test without compiling by reading the root `Cargo.toml`'s `members` and each member's package name to find the package's directory (so `crates/<crate>/`, `xtask/` and `tools/repo-tools/` all resolve), then searching the head tree (`git grep`) for `fn <name>` in a file under that directory whose module path matches; and a scenario id by the file `scenarios/<area>/<id>/scenario.toml`. Bot pull requests have a fixed rule instead: Dependabot writes its own pull request body and reads no repository template, so `pr-meta` identifies such a pull request by its author (`dependabot[bot]`, read from the event payload), skips the Evidence and Type checks for it, treats it as type `deps`, and checks only that it changes nothing but dependency manifests, the lockfile and `uses:` lines; its evidence is the full CI lanes it runs. Fixture tests: a hyphenated word in prose is not an id; a `type:` line is not evidence; a `tests:` line naming an `xtask` test resolves, and so does `eileen-core::it::job_model::<fn>` against a fixture crate with `tests/it/main.rs` and `tests/it/job_model.rs`; a `scenarios:` id with no folder fails; a `docs` pull request that changes a `.rs` file, a `scenario` pull request that touches a file outside `scenarios/`, a `deps` pull request by a person that changes source, and an `amendment` that changes a crate's source with no `tests:` line each fail; a Dependabot-authored pull request with its own body and no Type heading passes when it only bumps the lockfile | `cargo xtask pr-meta` | pr-meta, from phase A |
+| 9 | Generated files are current and hermetic (derived only from the tree, sorted, no timestamps or line counts): `docs/CODEMAP.md`, `docs/reference/*` (telemetry names, events, MCP tools, config keys, checks), `.claude/rules/crate-*.md`, the config schema and commented default, contract schemas, the scenario schema | `cargo xtask codegen --check` | lint-repo |
+| 10 | Every unsafe block has a safety comment, one unsafe operation per block, and unsafe code appears only in `ffi` modules | clippy (`undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`) plus a scan | delegated plus lint-repo |
+| 11 | Public items are documented | `missing_docs` under `-D warnings`, `cargo doc` with `RUSTDOCFLAGS=-D warnings` | delegated |
+| 12 | Decision records follow the grammar of the existing log: `## D<n>. <title>`, then Date, Status (`accepted`, `proposed` or `superseded by D<n>`, optionally `; amended by D<n>` with further `, D<m>` or `and D<m>`, and optional parenthetical notes), optional Supersedes and Amends, Decision, Why, Consequences, Source; numbers sequential; every referenced record exists | parses `docs/DECISIONS.md` | lint-repo |
+| 13 | Dependencies pass the license, advisory, ban and source policy; no unused dependencies; new crate versions respect the cooling-off period on update pull requests | cargo-deny, cargo-machete, `cargo xtask deps-age` (queries crates.io with `curl`, which ships with Windows 11 and the runners) | delegated |
+| 14 | The credential boundary: no source names a vendor credential path or the persistent MCP registration command; no process spawn outside the supervisor except the listed exemptions of section 4b.2 (`eileen-buildguard::spawn_cargo`, `eileen-guard::restart_core`, and the `xtask` and `tools/repo-tools` directories), and no other `#[expect(clippy::disallowed_methods)]` anywhere | scan plus clippy `disallowed-methods` | lint-repo |
+| 15 | Platform and native boundaries: neutral crates do not depend on `-win` crates; the native crates of section 4.1's table appear only in the target tables it allows; members add no features to `windows`, `windows-sys` or `tokio` | `cargo metadata` | repo-tools |
+| 16 | No `#[ignore]`, no `#[should_panic]`, no real-time sleeps in tests; tests needing the owner's PC or real Claude live only in `owner_pc::` or `real_claude::` modules; modules over 800 lines listed in `xtask/tidy/allow.toml` with a reason | scan | lint-repo |
+| 17 | Fuzz targets each have a size-capped seed corpus and a `fuzz_entry` function, and their corpus replay test exists; simulator regression files parse | scan | lint-repo |
+| 18 | Scenarios are valid and private (section 4.8): schema, Redactor and PII scan on every input line, no `origin = "user"`, no unmarked audio, no personal paths, no binary files, known event names; no `stale` status or quarantine past its expiry, longer than its cap or without an issue link (`eileen_contracts::scenario::status_problems`, the same function `eileen scenario check` calls), and none whose `since` is later than the UTC date of the commit that introduced its line (repo-tools, `git blame`) | `cargo xtask scenarios check` | lint-repo |
+| 19 | A pull request of type `fix` adds or changes a regression (a scenario, a fuzz regression, a simulator regression or a test); `pr-meta` checks that from phase A. From phase B, the `evidence` job (`cargo xtask evidence --base <sha> --body-file <body>`, on Linux, fix pull requests only) shows it failing before and passing after: (1) it runs each listed neutral test at the head, which must pass; (2) it builds a "base plus tests" tree: the base commit, with the head's version of every changed file under a crate's `tests/` folder copied in, and, for unit tests inside `src/` files, the head's `#[cfg(test)]` modules spliced into the base's version of the same file by `repo-tools` (a `syn` item replacement, so the base's non-test code stays); (3) it runs each listed test there, which must not pass: a failure counts, a compile error counts only when it is in the listed test's own module or file (the test uses what the fix adds), and any other compile error is reported as "could not show it failing before" and flagged for the reviewer, never silently passed; (4) each listed scenario id is replayed in scenario mode with the base binary and the head binary, expected to fail and pass. Two cases cannot be shown on Linux, and both fail the job until the owner looks: "could not show it failing before" (step 3's other compile errors), and a fix that only Windows can show (its listed tests live only in `-win` crates or `cfg(windows)` modules). Either passes only when the Evidence section has an `override:` line with the reason and, for the Windows case, an `owner-run:` line or a `replay:` line, and the pull request carries the `evidence-reviewed` label, which only the owner applies (the job reads the label's actor through the API with its read-only token) and which counts only for the commit the owner reviewed: the label's latest `labeled` event (issue events API, its `created_at`) must be later than the time GitHub received the head commit (the `created_at` of the head SHA's earliest check suite), so a push after the review voids the label until the owner removes and re-applies it. A fixture shows a label applied before a later push failing and the same label re-applied passing. An `owner-run:` link must be an Actions run of this repository that the API reports as successful, or a file on the `devhub` branch; a `replay:` id must exist under `scenarios/` or in the pull request's changed files. The job runs in its own workflow, `evidence.yml`, on every `pull_request` event including `edited`, `labeled` and `unlabeled`, so its result always reflects the current description and labels; it passes at once for types other than `fix` | `cargo xtask pr-meta` plus `cargo xtask evidence` | pr-meta and evidence |
+| 20 | Workflows pass zizmor; actions are pinned by SHA; permissions are read-only except in the jobs that need more, which name them | zizmor plus a scan | delegated plus lint-repo |
+| 21 | Every span and event name used in code is declared in `eileen_trace::names`, and the span-parent table covers it | test in `eileen-trace` plus a scan | lint-repo |
+| 22 | Each crate's `Cargo.toml` has `[package.metadata.eileen]` with `process`, `owns` and `unsafe` | `cargo metadata` | repo-tools |
+| 23 | Docs drift (advisory): a pull request that changes a crate's public API without touching its crate doc gets a warning annotation; on the owner's PC, `cargo xtask docs-drift --draft` asks a Claude worker to draft the update | `syn` diff of `pub` items between base and head | repo-tools |
+| 24 | Core purity: `eileen-core` depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`; the pure crates of section 3.1 link no native library; vendored C appears only in the store and blob modules | `cargo metadata` plus a scan | repo-tools |
+| 25 | Input privacy: the Raw Input modules (`ffi::raw_input` in `eileen-shell-win`, `eileen-desktop-win` and `eileen-hud-win`) never store or forward a key code other than the configured dictation key, and for the approve, deny and unmute chords only a "came from a device" flag; never a pointer position | scan of the named modules | lint-repo |
+| 26 | Contract text is wrapped: every free-text `String` reachable from `Input`, `ToolResult` and `DesktopState` is `Untrusted` or `Personal`, or on the allowlist with a reason | test in `eileen-contracts` | delegated |
+| 27 | The settings registry covers every config leaf key exactly once, with matching docs, and the reverse | test in `eileen-config` | delegated |
+| 28 | A `scenarios-only` pull request touches only `scenarios/<area>/<id>/`, adds no binary files and uses only template fixtures; contributed scenarios need the `scenario-reviewed` label before the desktop and fleet lanes run them | `pr-meta` plus `scenarios check` | pr-meta |
+| 29 | `docs/PLAYBOOK.md` cites its sources: every section has at least one citation (a research report in `docs/research/`, a decision record, or a primary source with a link and the date it was read), and every link resolves (external links nightly) | parses the playbook; lychee | lint-repo plus delegated |
+| 30 | A pull request that changes `docs/DECISIONS.md` also changes `docs/PLAYBOOK.md`, or says under "Playbook" in its description why the playbook is unaffected; the generated `templates/` copies are current (check 9) | `pr-meta` | pr-meta |
+
+### 4b.4 Guidance for people and coding agents
+
+Decision D33 (amended by D46) records the form, chosen from the engineering-practice report's survey of the best-run repositories (rust-analyzer, ruff, uv, Zed, codex, Turso, TigerBeetle) and the owner's instruction not to assume a guidance file in every folder:
+
+- **Root `AGENTS.md` is the canonical guide** for every coding tool (Codex reads only `AGENTS.md`; the claude CLI reads it directly and through imports). It holds the commands, the rules that do not bend, the PC rules of section 6.1 (including "run guarded builds in the background and wait for them; a cold build can outlast a 10-minute foreground tool call"), how to make a change (evidence first), testing rules, code review rules, a short summary of the checks with a link to `docs/reference/checks.md`, and pointers to `ARCHITECTURE.md`, `docs/BUILD.md`, `docs/OWNER-DIRECTION.md` and `docs/wp/`. The engineering-practice report's section 4.2 draft is the starting text, with "read the crate doc first" in place of "read the crate's AGENTS.md". At most 150 lines.
+- **Root `CLAUDE.md`** is `@AGENTS.md` plus a short Claude-only section (project skills, the settings denials, the fresh-reviewer rule, no language server during build work). Imports, not symlinks, because committed symlinks check out as one-line text files on Windows.
+- **Every crate's guidance is its crate doc**, the `//!` comment at the top of `src/lib.rs` (a binary's `main.rs` carries one line pointing to its library's doc), which rustdoc renders and every agent reads when it opens the crate. Required headings: `# Owns` (at most three bullets), `# Does not own`, `# Invariants` (each with how it is enforced), `# Boundaries` (called by, may depend on, must not depend on, wire types), `# Testing` (the fast command, the layers, what a bug here starts as), `# Traps`, `# Logs and tracing` (targets, spans it owns, `pii.` fields, the replay or probe command), `# Do not change without a decision record` (wire layouts, the approval type's constructor, the one `#[expect]`ed spawn, and the like). At most 80 lines.
+- **Crate guidance reaches Claude on touch.** `cargo xtask codegen` extracts each crate doc into a generated `.claude/rules/crate-<name>.md` with `paths: ["crates/<name>/**"]`, so a Claude session that edits `src/jobs.rs` gets the crate's rules without reading `lib.rs` first, and into `docs/reference/crates.md` for Codex and people. Nobody edits these copies; check 9 keeps them fresh.
+- **Nested `AGENTS.md` only where a folder's rules genuinely differ**, each paired with a `CLAUDE.md` that is `@AGENTS.md`: `crates/eileen-desktop-win/` and `crates/eileen-apps-win/` (COM apartments, deadlines, the desktop test group, owned fixtures only), `crates/eileen-speech/` (native libraries, model files, the exclusive build slot for model tests), `fuzz/` (nightly toolchain, Linux only, regression rule), `scenarios/` (the public corpus: privacy rules, no personal data, schema), `integrations/claude-plugin/` (TypeScript, the never-gating rule, plugin validation). Adding another needs a line in the pull request saying why the folder's rules differ.
+- **`ARCHITECTURE.md` at the repository root**, short and in rust-analyzer's shape: bird's eye view, entry points, a code map with one entry per crate (named files and types, not links) marking architecture invariants and API boundaries, then cross-cutting concerns. WP0 moves today's `docs/ARCHITECTURE.md` there and adds the code map check.
+- **Claude-only extras** in `.claude/`: `settings.json` permission rules that deny release builds, `cargo install`, `cargo clean`, every direct `cargo build`, `cargo test`, `cargo nextest`, `cargo clippy`, `cargo check`, `cargo run`, `cargo doc`, `cargo bench`, `cargo fuzz`, `cargo insta` and `cargo mutants` (only `cargo xtask ...` is allowed, so every build goes through the guard; `cargo xtask insta` and `cargo xtask build --timings` wrap the two compiling tools that are otherwise run directly), and reads of vendor credential files (verify the rule syntax against the settings reference); path-scoped `rules/ffi.md` for `ffi` modules plus the generated crate rules; skills `sim-debug`, `add-fuzz-target`, `e2e-scenario`, `work-package` and `save-scenario`.
+- **Work package files** `docs/wp/WP<n>-<topic>.md` in the living-plan shape (goal, done when, progress, surprises, decisions, outcome), updated by the agent doing the work.
+- **Rules hygiene** (Zed): do not edit guidance files during feature work; propose changes under "Suggested guidance changes" in the pull request; a rule is added only if it is non-obvious, came up more than once and is specific.
+
+### 4b.5 `cargo xtask`
+
+A small binary with three dependencies (`eileen-buildguard`, `serde_json`, `toml`), so it compiles in seconds; the `syn`-based checks live in `tools/repo-tools`, which xtask runs. Subcommands: `setup`, `slots [--kill-stale | --baseline | --pressure <GB>]`, `desktop-lock --hold` (holds `desktop.lock` until stopped, for manual desktop work such as WP6's spike and slice S1's live run), `check`, `test [--owner]`, `clippy`, `build [--timings]`, `insta [--review]`, `ci`, `pre-push`, `lint-repo`, `pr-meta`, `evidence`, `codegen` (with `--check`), `sim` (PR seeds; `--seed`, `--profile`, `--replay`, `--minimize`, `--doublecheck`), `fuzz-replay`, `fuzz` (Linux), `scenarios check|replay|bless|catalogue|from-issue`, `e2e`, `bench`, `soak`, `measure-idle` (working set, private bytes, handles, GDI and USER objects, threads and CPU of the Eileen processes, through Win32 calls in `eileen_buildguard::procinfo`, xtask's one FFI path, rather than CIM, which fails under load), `nightly-local [--install]` (`--install` creates the owner's per-user Task Scheduler entry once, section 4.6), `fetch-native`, `lock`, `deps-age`, `symbolicate`, `triage`, `docs-drift`, `contract-claude`, `fleet-validate`, `tidy denylist-add`. Subcommands whose target is not built yet run and report zero items; those that belong to a package's crate dispatch to that crate's binary, so later packages never edit xtask: `contract-claude` and `bench` (harness and e2e binaries), `triage`, `fleet-validate` (e2e), and `scenarios replay` and `scenarios bless` (to `eileen scenario replay|bless`, built by WP1 and WP2; until then they report "not built yet"). `scenarios check` runs in `tools/repo-tools` with `eileen_trace::privacy` and `eileen_contracts::scenario::status_problems`, so checking a scenarios-only pull request needs no build of the product; replaying it (`scenarios replay`) builds the Linux `eileen` binary from the neutral crates with stub components, once per pull request, in the `scenarios` job, which restores the `linux` cache, and the Windows jobs still skip. Every subcommand that runs cargo goes through the build guard (section 6.1); when the guard refuses a slot, the subcommand waits, printing the reason and the holder every 30 s, up to `--wait-max` (default 30 minutes), then exits with code 75 ("no build slot; try again later") so a background agent can tell waiting from failing.
+
+### 4b.6 The engineering playbook and reusable templates
+
+The owner asked (2026-10-20) that how this repository is built be written down so any other project using this style of development can adopt it, not only Eileen. WP0 writes `docs/PLAYBOOK.md` in phase B, project-agnostic, with Eileen as the worked example, covering:
+
+1. The repository architecture and modular layout: a sans-IO core with ports, plug-in interfaces, supervised processes, platform crates.
+2. What is pulled in: every tool, crate, model and service with its version, license and why it was chosen over the alternatives (from sections 4.1 and 4.2 and the research reports).
+3. The CI/CD design: lanes, path classes, the single aggregate check, caching, branch protection, release channels.
+4. Testing tactics: deterministic simulation, scenarios from real use and their two replay modes, the test fleet, fuzzing, soak, mutation, benchmarks as A/B tests.
+5. The code map and code graphs.
+6. Guidance for people and AI agents (section 4b.4 and decision D33).
+7. Observability, the flight recorder and replay.
+8. The learning loop and how the system improves itself.
+9. How parts stay updatable, programmable and swappable as AI progresses (aliases in config, plug-in drivers, the benchmark gate).
+10. The working methods: research before design, critics and verification rounds (this document's section 8 is the example), evidence-first changes, conventions enforced by CI, continuous pushing, handoff upkeep, and the build guard for agents on a small PC.
+
+Every claim is cited: to the research reports, the decision records, and primary sources (repositories, documentation, papers) with links and the date they were read; check 29 enforces it. `templates/` holds what another project can copy: the root `AGENTS.md` and `CLAUDE.md`, the crate-doc template, the work package file, the CI workflows, the `xtask` check registry and its checks as a small standalone crate, the pull request and issue templates, the scenario schema and an example scenario. Wherever a template mirrors a live file, the live file marks the shared region and `cargo xtask codegen` writes the template from it with `{{project}}` placeholders, so check 9 keeps them in step; the rest are written by hand. The playbook changes whenever a decision record changes (check 30): decision changes arrive as `amendment` pull requests, which update the playbook in the same pull request, and WP9 adds the measured results (benchmarks, fleet, the learning curve) at the end of v0.1 the same way.
+
+## 5. Why this is not already done
+
+The prior-art report (2026-10-11) is blunt, and this spec keeps its honesty: the halves of Eileen exist, and the README's old "nobody has built this" overstated it.
+
+- **ChatGPT desktop** is the closed, single-vendor version on Windows. Its GPT-Live voice directs several Codex and ChatGPT Work tasks at once while you talk, and Computer Use runs on Windows. But it is OpenAI only, voice is a session you start and stop (one at a time), its screen context ("appshots") is macOS only, and on Windows its computer use takes over the foreground; OpenAI suggests a VM or a second device.
+- **Paseo** (about 20,000 stars, Apache-2.0, a Windows installer) runs Claude, Codex, Copilot, OpenCode and others in parallel worktrees, with local Parakeet, Kokoro and Silero voice whose brain is a hidden session on the user's installed harness. It proves two of Eileen's choices (local CPU speech is good enough; the brain can be a warm subscription session). It does not see or drive the desktop.
+- **Hermes Agent** (about 250,000 stars, MIT) ships a Windows app with a wake word, continuous voice with barge-in, background UI Automation through cua-driver, and a skill curator that learns. But it is its own harness rather than a router to vendor harnesses, it runs vendor OAuth itself and imports the Codex CLI's credential file, its wake flow takes one utterance at a time, and its skills have no deterministic replay with step checks, no per-line provenance and no permission story.
+- Also: qwen-audio-agent (full-duplex voice over ACP backends, cloud realtime APIs by default), Jarhead (the closest single design, macOS only, voice billed per minute), Microsoft's local Copilot actions (Copilot+ PCs only), the Claude desktop app (Claude only; Windows background computer use undocumented).
+- **Learning from an agent's own work is well studied and partly shipped** (Voyager, Agent Workflow Memory, SkillWeaver, ASI, UFO2, Hermes, Letta). Eileen does not claim the idea. What nobody ships is the whole loop on a Windows desktop for one person: capture from every job, native skills the vendor's own harness loads, a promotion ladder that ends in model-free replay with a check after every step, handoff the moment a check fails, local history with rollback, and voice and HUD control.
+- **Dictation**: Handy (MIT, Rust) is the open-source leader on Windows and Wispr Flow the paid bar; neither knows the focused field, its app or what is on screen.
+
+So Eileen's novelty is the integration on Windows, done to a higher standard than any half. That is a composition moat, not a technology moat: Paseo could add desktop control in weeks. Eileen has to win on things that can be measured and published:
+
+1. Always listening with no wake word, local, at near-zero idle cost (VAD measured at 5.8 percent of one core), with addressee detection measured both ways by scripted tests: room talk ignored (at least 9 of 10) and unnamed requests in a conversation acted on (at least 8 of 10, at most 1 of 10 false actions), with echo cancellation that also removes the video or music the PC is playing.
+2. DesktopState as cheap context, so "this", "that window" and "screen two" resolve without a screenshot.
+3. Background-first, deterministic-first control with honest foreground escalation that stops the moment the user's own hands move, and safety rules in the server (password fields, blocked combos, explicit targets, per-app consent) that a learned skill cannot bypass.
+4. Real pro-app adapters for the owner's examples (Resolve through its own scripting interpreter, SMTC, Office COM), which no competitor demonstrates.
+5. Route-named workers on unmodified vendor CLIs with an auditable credential boundary, approvals that only the user's own input can give (a physical click or hotkey, or the action word in the voice window, matched to the enrolled voice once the speaker check exists), and per-job containment (path guard, shell policy, taint) that the prior art does not show.
+6. A learning loop the user can see, steer and erase, with model-free replay that never skips a confirmation.
+7. A test suite that grows from real use on many friends' PCs, with published benchmarks and A/B timing.
+8. Rust where it buys something measurable: start-up in tens of milliseconds, a small idle footprint, hook and UIA latency, single binaries. Model latency is the vendor's, and the docs say so.
+
+## 6. Work packages
+
+### 6.1 Building on the owner's PC without thrashing it
+
+The rust-architecture report measured why this needs rules: one clean dev build of the small skeleton under contention took 21 minutes and drove free RAM to 462 MB; a fat-LTO build beside other agents took free RAM to 0 MB and ended the session; one `rustc` was seen at 417 MB and a clean build averaged 9.4 units at once; four tools built from source took 59 minutes. A live read on 2026-10-20 found 1.27 GB free with one `rustc` running, because Chrome, the Claude app, a WSL virtual machine and VS Code hold most of the 16 GB. Disk is not a constraint (342 GB free on `C:`). The rules, enforced by `cargo xtask` through `eileen-buildguard` and repeated in every brief:
+
+1. **Build slots with memory admission.** Two slot locks, `%LOCALAPPDATA%\eileen\build-slot-0.lock` and `-1.lock` (always there, whatever `EILEEN_DATA_DIR` says), held with `File::try_lock` so the OS releases them if the holder dies; each lock file records the holder's PID, worktree, command and start time.
+   - Memory is read the way section 2.5 reads it: available physical memory (`GlobalMemoryStatusEx`, free plus standby), commit headroom and the paging rate. The paging counter, `\Memory\Pages Input/sec`, counts 4 KB pages read by hard faults, including reads of memory-mapped files, so it is converted with the system page size (pages per second times 4 = KB/s) and judged against a baseline measured on this PC, never against a number from elsewhere.
+   - **The baseline comes first** (W0, on the owner's PC, before any agent depends on the guard): `cargo xtask slots --baseline` samples available memory, commit headroom and the paging rate every 5 s over a typical working day (at least four separate hours with the owner's usual apps and several Claude agent sessions running, which is the W1 to W4 situation), and writes the percentiles to `docs/wp/WP0-foundation.md` and the thresholds to `%LOCALAPPDATA%\eileen\buildguard.toml`. Samples taken while either build slot is held are recorded but left out of the percentiles (each sample records whether a slot lock was held), so the baseline measures the working day, not the guard's own builds. From the remaining 30 s paging averages and commit headroom: the slot-0 paging limit is the 75th percentile plus 25 percent (so a typical minute passes and a thrashing one does not); the re-check paging limit is the 95th percentile plus 25 percent, and never less than twice the slot-0 limit, so a running build's own paging does not stall the next cargo invocation on an ordinary minute; and one headroom floor serves admission and the re-check alike: the lower of 2 GB and the 10th percentile of commit headroom, but never under 1 GB (runtime admission's rule 1). The defaults in code (5,000 KB/s for slot 0, 20,000 KB/s for the re-check, a 2 GB floor) apply only until the baseline exists. A live read on 2026-10-20 with several agent sessions running showed about 19,400 KB/s of paging, 275 MB available and 5.5 GB of commit headroom, under which the default limit would refuse every build, which is why the baseline is measured before the limits are trusted. WP0 acceptance 4 passes only when, on a typical working day after the baseline, slot 0 is admitted for at least 9 of 10 guarded commands within two minutes, and the guard's log shows at least one refusal during a minute whose paging was above the slot-0 limit (from that week's ordinary use, or, if none occurs, produced once by `cargo xtask slots --pressure 2` with the owner's agreement: a helper that commits and touches 2 GB for 60 s).
+   - **Slot 0** is admitted whenever commit headroom, minus the build's own estimated commit (1 GB plus 0.5 GB per compile job of the ticket), stays at or above the floor, and the paging rate has stayed under the slot-0 limit for 30 s, whatever the available figure, because Windows trims idle working sets for it; `CARGO_BUILD_JOBS` is then scaled to available memory as `min(6, max(2, floor((available_gb - 1.5) / 0.5)))` (ceiling 8 when the holder has both slots), which never falls as memory rises: 2 jobs up to 2.5 GB available, 3 at 3 GB, 6 from 4.5 GB. So on the owner's typical 1 to 2 GB available, one slot runs at 2 jobs, which matches owner answer 8 ("otherwise the build guard runs one slot").
+   - **Samples are shared**, so the 30 s wait is not paid on every command: every guard process that samples (a waiting command, a running build's 10 s re-check) appends to `%LOCALAPPDATA%\eileen\machine\memory-samples.jsonl` (machine-wide, whatever `EILEEN_DATA_DIR` says), and while Eileen runs its own memory sampler (section 2.5) appends there too; a guarded command that finds samples covering the last 30 s, the newest under 10 s old, decides at once, and samples for itself only otherwise. The format and its only writer and reader are `eileen_buildguard::samples` (std only, so the runtime depends on it without pulling in anything else): one JSON object per line, `{"at_ms": <Unix ms>, "avail_mb": u32, "headroom_mb": u32, "paging_kb_s": u32, "slot_held": bool, "src": "guard" | "runtime"}`, appended under a short `File::try_lock` on `memory-samples.lock` so lines never interleave, with lines older than 24 h dropped by the next writer that finds the file over 5 MB. The module also owns the two other machine-wide files the runtime reads, so `eileen-runtime` needs nothing else from the guard. `paging-30s.jsonl` holds one line per 30 s window, `{"at_ms": <the window's end, Unix ms>, "paging_kb_s": u32 (the window's average), "slot_held": bool (a build slot lock was held at any moment of the window), "src": "runtime"}`, appended under the same lock only by a runtime reading real memory, and only when the file's newest line ends at least 30 s before this window does (checked under the lock), so a second runtime on the PC (an end-to-end or benchmark run beside the owner's Eileen) never writes the same window twice; lines older than 7 days are dropped by the next writer that finds the file over 2 MB. `buildguard.toml` is written by `slots --baseline` and read by the runtime, with these keys: `measured_from` and `measured_to` (dates), `samples` and `slot_held_excluded` (counts), `slot0_paging_kb_s`, `recheck_paging_kb_s` and `headroom_floor_mb`. The whole interface is `samples::machine_root()` (`%LOCALAPPDATA%\eileen`, taken from the `LOCALAPPDATA` variable so a test can point it at a temporary folder, and never from `EILEEN_DATA_DIR`), `append(&Sample)`, `recent(window)`, `append_paging(&PagingWindow)`, `paging_windows(days)`, `baseline() -> Option<Baseline>` (the parsed `buildguard.toml`), `p75_plus_25(values)` (the percentile the baseline's slot-0 limit and the runtime's `auto` limit both use) and `auto_paging_limit(windows, baseline) -> PagingLimit` (section 2.5 rule 3: `p75_plus_25` over the windows not marked `slot_held`, clamped to 2,000 to 40,000 KB/s, once those windows cover 24 hours; else the baseline's `slot0_paging_kb_s` under the same clamp; else 5,000 KB/s; `PagingLimit` names the source it used); `Sample`, `PagingWindow` and `Baseline` are those structs. Windows marked `slot_held` are left out of the `auto` percentile for the reason the baseline leaves its slot-held samples out: the limit should describe the working day, not builds.
+   - **Slot 1** is admitted only when available memory is at least 1.5 GB plus 0.5 GB per compile job, and only after the first build has been sampled past its peak (its memory has stopped rising for 30 s); in practice this is the owner's heavy-build days with heavy apps closed and WSL shut down.
+   - While a build runs, xtask re-checks every 10 s and stops launching new cargo invocations while the 30 s paging average is above the re-check limit (20,000 KB/s until the baseline sets it) or commit headroom is under the floor (it waits; it never kills a running compile for memory). The wait is bounded: after `--recheck-wait-max` (default 20 minutes) it releases the slot, says why and exits with code 75, like a refused admission, so a stalled build never holds a slot all day.
+   - When a slot is refused, xtask waits and says why (section 4b.5), then exits with code 75 after `--wait-max`.
+   - It refuses to start below 20 GB free disk.
+   - Cargo runs inside a kill-on-close Job Object at below-normal priority, so a killed xtask leaves no compiler running and the Claude app and the voice loop stay responsive.
+   - `cargo xtask slots` lists holders; `--kill-stale` frees a slot whose holder process is gone. `EILEEN_BUILD_SLOT_HELD` lets a nested `cargo xtask` (inside an Eileen coding job that already holds a slot) reuse it instead of deadlocking.
+2. **Exclusive work takes both slots** (`--exclusive`): release builds, any process that loads speech models (model tests, voice benchmarks, the Chatterbox head-to-head), soaks, every benchmark, any test or spike with Resolve Studio or Premiere running, and real-Claude runs with more than one session at once.
+3. **Agents build only through `cargo xtask`.** `.claude/settings.json` denies direct `cargo build`, `test`, `nextest`, `clippy`, `check`, `run`, `doc`, `bench`, `fuzz`, `insta` and `mutants`, as well as `cargo install`, `cargo clean` and release builds (`cargo xtask insta` and `cargo xtask build --timings` are the guarded forms). Build agents run without rust-analyzer (no language-server plugin in their sessions), because its background `cargo check` would compile outside the slots.
+4. **Long builds run in the background.** A cold build under contention can outlast a 10-minute foreground tool call; agents start guarded builds and test runs in the background, wait for them to finish, and never leave one orphaned.
+5. **sccache, shared by all worktrees**, if the owner has installed it (prebuilt 0.18.0): `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR=%LOCALAPPDATA%\sccache`, `SCCACHE_CACHE_SIZE=8G`. If it is not installed, build without it; never install it from source.
+6. **A target directory per worktree** (Cargo's default), never a shared `CARGO_TARGET_DIR` (Cargo locks a target directory for the whole build). Delete a worktree's target directory when its branch merges. No Dev Drive (owner answer 7).
+7. **No debug info for dependencies** in dev, line tables for our crates (section 4b.1).
+8. **Inner loop on `cargo xtask check -p <crate>`, `cargo xtask clippy -p <crate>` and `cargo xtask test -p <crate>`**; build only the binary you need.
+9. **No local fat-LTO builds.** Local release builds use the thin `release` profile with the exclusive lock.
+10. **Never `cargo install` from source.** `cargo xtask setup` fetches prebuilt tools.
+11. **Do not start a long build, simulation, soak or benchmark at the end of a session**, kill every process you start before you finish, and never benchmark during a build.
+12. **Desktop packages never run at the same time.** A package marked `needs_desktop` drives real windows, audio devices or apps on the owner's PC; no two are scheduled in the same wave, with one exception in W1, where WP4's two slice pull requests (audio devices only) share the wave with WP6's no-compile Resolve spike and with slice S1's live run; every desktop test, the spike and the S1 live run included, takes `%LOCALAPPDATA%\eileen\desktop.lock` through `cargo xtask` (the spike and the S1 run through `cargo xtask desktop-lock --hold`), so none of them overlap, and only touches windows and devices the test created or the owner agreed to. Tests that need real Claude count against the owner's plan: keep them few, put them in `real_claude::` modules, and run them by hand or in the owner's nightly lane.
+13. **Machine hygiene during W1 to W4** (owner answer 8): on heavy build days, when convenient, the owner closes heavy apps and runs `wsl --shutdown`, which frees about 4 GB and lets slot 1 run; otherwise the guard runs one slot.
+14. **Keep each open pull request up to date with `main`.** Branch protection requires a branch to be up to date before it merges, and there is no merge queue on a personal repository. So after every merge to `main`, each package agent with an open pull request updates its branch (merge `main` in, or rebase if the pull request has no reviews yet), expects the pull request lane to run again (about 15 minutes), and budgets for it: with two packages merging in a day, each merge can cost the other one lane run. Auto-merge, once enabled on a pull request, waits until the branch is updated and green; it does not update the branch itself.
+
+| Wave | Packages | Compiling at once | Desktop | Ends with |
+|---|---|---|---|---|
+| W0 | WP0 phase A | one (may use 8 jobs) | no | Workspace, pins and native dependencies, contracts (pinned on the S1 path), stubs, build guard, basic gates and `pr-meta` with the evidence checks on both OSes, `all-green` required |
+| W1 | WP1, WP3, WP4's `wp4/s1-audio` and `wp4/s1-speech`, and WP2 as soon as WP1's minimal core merges; WP0 phase B; WP6 step 0 (the Resolve spike, no compiling) | two slots shared by every package (an agent whose build is refused waits; WP0 phase B's builds are small); WP4's model tests take the exclusive slot, so they run when no other build holds one | WP4's slice pull requests (audio devices), WP6 step 0 and slice S1's live run, never at the same time: each takes `desktop.lock`, and the spike runs only with the owner's agreement and the exclusive slot while Resolve runs | Core in simulation; Claude brain and workers from Rust; the runtime wiring the minimal core; the slice's audio and speech path; **slice S1, live**, as soon as `wp2/s1-live`, `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech` have merged (no W3 package starts until it passes on the owner's PC); the tier-2 approval route proven; the remaining checks and workflows; the Resolve edit route chosen |
+| W2 | WP4's remaining pull requests, starting when its two slice pull requests have merged; WP1, WP2 and WP3 finishing | two, one during speech-model work | WP4 | WP4's later pull requests (cloning, the head-to-head, dictation, Parakeet, the embedding model) |
+| W3 | WP7 phase A once S1 passes; WP5 once WP4's last pull request has merged | two | WP5 | Computer use; intent, settings, capture, drafts and the first ladder rungs |
+| W4 | WP6, WP7 phase B | two | WP6 | App adapters and the Resolve benchmark parts; recipes and replay |
+| W5 | WP8 | one (may use 8 jobs) | WP8 | HUD, first-run UI, Claude plugin |
+| W6 | WP9 | one (may use 8 jobs) | WP9 | Fleet, benchmarks, M6 demo |
+
+Every package: branch named in its section, a draft pull request from the first push (CI runs on drafts), small pull requests (logic changes under about 500 lines), the Evidence section first in every description, merge only with `all-green` and `pr-meta`, its `docs/wp/` file kept current, its crate docs and the code map current, at least one scenario for what it builds, a fuzz target for every new parser of untrusted input, a simulator invariant or scenario for every new core behaviour. A change to a file the package does not own (this specification, a decision record, a merged package's file, the root manifest's feature lists) goes in a separate `amendment` pull request the owner reviews. CI checks every package must pass: everything `cargo xtask ci` runs (fmt, clippy `-D warnings` on Windows and Linux, nextest on both, doc tests, docs with `-D warnings`, cargo-deny, cargo-machete, `lint-repo`, `codegen --check`, simulator PR seeds and regressions, fuzz corpus replay, scenario validation and replay), plus `pr-meta` and `all-green` on GitHub. Acceptance lines that say "clean for 10 minutes" are met by a `long.yml` run on the package's branch, linked in its work package file.
+
+### 6.2 WP0: Foundation (workspace, contracts and quality gates)
+
+- **Branch** `wp0/<topic>` per pull request. **Depends on** nothing. **Desktop** no. **Wave** phase A in W0 (the gate for W1), phase B in W1 alongside WP1 and WP3.
+- **Owns** the root files and directories of section 3.1 (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `_typos.toml`, `rumdl.toml`, `lychee.toml`, `.gitattributes`, `.gitignore`, `.cargo/`, `.config/`, `.githooks/`, `.github/`, `.claude/`), `AGENTS.md`, `CLAUDE.md`, `ARCHITECTURE.md` (moved from `docs/`), `CONTRIBUTING.md`, `SECURITY.md`, `NOTICE`, `README.md`, `docs/DEV-SETUP.md`, `docs/NAMING.md`, `docs/PLAYBOOK.md`, `templates/`, `docs/wp/WP0-foundation.md`, `xtask/`, `tools/repo-tools/`, `tools/claude-plugins/eileen-dev/`, `fuzz/Cargo.toml`, `fuzz/README.md`, `fuzz/rust-toolchain.toml`, the fuzz targets `uia_text` and `desktop_state` with their corpora, `scenarios/README.md`, `scenarios/_schema/`, `scenarios/core/`, and the crates `eileen-contracts`, `eileen-stdx`, `eileen-trace`, `eileen-rt`, `eileen-platform`, `eileen-supervisor`, `eileen-buildguard`. It deletes `src/`, `tests/*.py`, `pyproject.toml` and the Python CI job. It also creates every other crate of section 3.1 and every other fuzz target as a stub; ownership of those passes to their packages when phase A merges.
+- **Phase A builds** (W0), as small pull requests in this order:
+  1. `wp0/ci-bootstrap`: tag the current `main` commit `python-scaffold-final`; the minimal workspace with the pins of section 4.1 (feature unions included) and the config of section 4b; `ci.yml` with `plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test` and `all-green`; the first cut of `xtask` with only `pr-meta` (checks 7 and 8 in full, including the existence check by `git grep` and the bot rule, and the half of check 19 that requires a regression in a fix) and its fixture tests; `pr-meta.yml` running it; the pull request template (Evidence first with the field grammar of check 8, then `## Type`; Dependabot's pull requests are recognised by their author and need no template); `.github/dependabot.yml` for `cargo` and `github-actions` with the 14-day cooldown; `CODEOWNERS`. So the evidence rule holds from this pull request on, including for every W0 pull request. The Python jobs stay in this pull request until `all-green` and `pr-meta` have reported on it; then the agent switches `main`'s required checks from `test (3.12)` and `test (3.13)` to `all-green` and `pr-meta` with the exact `gh api` command written in `docs/wp/WP0-foundation.md` (owner answer 2 authorises the assistant to do it) and sets the squash default to the pull request title and description; then the same pull request deletes the Python scaffold and job, and merges on green.
+  2. `wp0/contracts`: every type of section 3.3 with serde and schemars, so every crate compiles against them; snapshots pinned for the modules on slice S1's path (`ids`, `jobs`, `core_io`, `bus`, `speech`, `harness`, `ports`, `record`) and the other modules marked provisional in `contracts/modules.toml` (section 3.3); sorted maps (snapshots must not depend on feature-unified `preserve_order`); `desktop::sanitize`; the `Untrusted` and `Personal` wrappers with the text-wrapping test; the scenario and recording formats.
+  3. `wp0/base-crates`: `eileen-stdx` (clock and ID ports with their single real implementations carrying `#[expect(clippy::disallowed_methods)]`, `thread::spawn_named` and `thread::sleep` likewise, a seeded in-house `CoreRng` with no `rand`, `never!`, `always!`, `buggify!` activated per site per run only under the simulator, `num` checked casts), `eileen-trace` (section 2.13 and the observability report sections 2 to 4 and 8: init per process kind, JSON file, console, ring and slow-span layers, `names`, the span-parent schema and checker, the `pii.` policy, the `Redactor` with a literal prefilter, `privacy` (the scenario privacy rules and the PII scan shared by `tools/repo-tools` and `eileen-scenarios`), the Chrome trace converter, `traceparent`, `test_support` with `assert_schema_ok`), `eileen-rt` (`task::spawn` and `spawn_blocking` with names, span and await-tree registration and panic logging, bounded channel helpers), `eileen-platform` (the traits of section 3.4 with fakes, and the `machine` module: `normalise_os_id`, `machine_hash` and `FileMachineIdentity`, owner answer 6), `eileen-supervisor` (port `supervisor.rs` from the ws-next scratch workspace at `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\rust-arch\ws-next`: process-wrap Job Object, `CREATE_NO_WINDOW`, kill on drop, stderr into tracing, deadlines, heartbeats, bounded restart backoff, `BELOW_NORMAL` for Claude sessions, the guard spawn with `CREATE_BREAKAWAY_FROM_JOB` and null handles, the single `#[expect]`ed `Command::new`, `qos::opt_out_of_ecoqos` and `qos::boost_audio_thread` in a private `ffi` module), `eileen-buildguard` (section 6.1 rule 1: slot locks with holder records, admission by available memory, commit headroom and paging with the monotonic memory-scaled job count in the ticket, the baseline and `buildguard.toml` thresholds (slot-held samples excluded, the re-check limit and the one headroom floor by the formulas of section 6.1) with the code defaults as fallback, the bounded re-check wait, `slots --pressure`, the machine-wide files through the `samples` module (the memory samples and the 30 s paging windows with their line formats, lock and one-window rule, the `buildguard.toml` keys and reader, `p75_plus_25` and `auto_paging_limit`), the page-size conversion, disk admission, sampling, `spawn_cargo` in a kill-on-close Job Object at below-normal priority with its listed `#[expect]`s, `EILEEN_BUILD_SLOT_HELD`, `desktop.lock`, the wait-and-exit-75 behaviour).
+  4. `wp0/stubs`: every other crate as a documented stub (crate doc with every required heading filled from this spec and naming its owner package; the public signatures of section 3; `component(cfg)` returning a component that accepts its effects and does nothing; `cli` modules for every subcommand of section 3.5 that exit with a clear "not built yet"), the real native dependencies under their target tables, `-win` crates gated with `#![cfg(windows)]`, the stub `eileen-shim` answering MCP `initialize` and an empty `tools/list`, stub fuzz targets calling the stub parsers.
+  5. `wp0/xtask`: the rest of `cargo xtask` with the build guard and the subcommands `setup`, `slots` (with `--baseline`, section 6.1 rule 1), `desktop-lock`, `check`, `test`, `clippy`, `build` (with `--timings`), `insta`, `ci`, `pre-push`, `lint-repo` (checks 1, 2, 4, 6, 10, 14 and 16 with failing fixture tests), `fetch-native`, `lock`, `sim`, with `xtask/clippy.toml`; `eileen-sim`'s skeleton (a `World`, TOML profiles with a generated schema, seeded runs from an `arbitrary::Unstructured` buffer, the fixed-column step log, `--doublecheck`, the regressions folder, invariants 6, 10 and 13 against the stub core, a large explicit stack).
+  6. `wp0/guidance`: root `AGENTS.md` and `CLAUDE.md`, the nested pairs of section 4b.4, `.claude/settings.json` with the cargo denials, `.claude/rules/ffi.md`, `CONTRIBUTING.md`, `docs/DEV-SETUP.md` for Rust (the owner installs sccache 0.18.0 and cargo-binstall 1.26.0 prebuilt; `cargo xtask setup`), `docs/wp/` files for WP0 to WP9, `git mv docs/ARCHITECTURE.md ARCHITECTURE.md` with the links updated, `SECURITY.md`, `NOTICE` (IJG, Handy, SpeakoFlow, Pocket TTS, Chatterbox, models). The dated records need no rewrite here: `docs/DECISIONS.md`, `docs/RESEARCH.md` (its opening line and section 8) and `docs/NAMING.md` were scrubbed of the earlier working names and the franchise on 2026-10-21 (owner answer 15), so phase B's seeded denylist scan must come back clean on them.
+- **Phase B builds** (W1): `eileen-supervisor`'s `user_launch` module (section 2.1: AUMID activation through `IApplicationActivationManager` and `ShellExecute` through the shell's own process, the `CREATE_BREAKAWAY_FROM_JOB` fallback, `JOB_OBJECT_LIMIT_BREAKAWAY_OK` set only on the Job Objects of sidecars that launch apps and never on worker or brain jobs; the `windows` features it needs join the root feature union) with a Windows test that a fixture app launched this way is in none of the supervisor's Job Objects (`IsProcessInJob`) and outlives the supervised parent; `eileen-buildguard`'s `procinfo` module for `measure-idle` (section 6.1); `lint-repo` and `tools/repo-tools` (with its own `clippy.toml`) with all 30 checks of section 4b.3 and their fixtures, `cargo xtask evidence` and `evidence.yml` (check 19's before-and-after half, with the `syn` splice of `#[cfg(test)]` modules in `repo-tools`, the `override:` and `evidence-reviewed` rule and the `owner-run:` and `replay:` checks), adding `evidence` to `main`'s required checks with the same recorded `gh api` command as phase A, the check registry rendered into `CONTRIBUTING.md` and `docs/reference/checks.md`; `cargo xtask codegen` (with `--check`) writing `docs/CODEMAP.md` (crate and process graph from `[package.metadata.eileen]` and `[workspace.metadata.eileen.processes]`, module trees, the event map), `docs/reference/*` (events, telemetry names, MCP tools, config keys, crates) and `.claude/rules/crate-*.md`; `cargo xtask scenarios check|catalogue|from-issue` (check in `repo-tools` with `eileen_trace::privacy`) and the `scenarios replay|bless` dispatchers; the scenario schema in `scenarios/_schema/`, `scenarios/README.md` and three example scenarios in `scenarios/core/` (validation only); `nightly.yml`, `weekly.yml`, `long.yml`, `release.yml`, `native.yml` (it runs WP4's script `crates/eileen-speech/tools/build-sherpa-native.ps1`, so WP4 never edits the workflow) and `devhub.yml` (pull requests to the `devhub` orphan branch, which this phase creates) with their jobs present and skipping cleanly until their inputs exist (the Pages job included), zizmor; `cargo xtask measure-idle`, `deps-age`, `symbolicate`, `tidy denylist-add`, and dispatchers for `contract-claude`, `triage`, `bench`, `fleet-validate`, `scenarios replay` and `scenarios bless`; **the denylist seeded**: the owner says the old working name and the film and trademark names to the WP0 agent in chat, and the agent pipes each one into `cargo xtask tidy denylist-add` on the owner's PC (standard input, never a file, never a command-line argument that shell history keeps), commits only the salted hashes, and records in `docs/wp/WP0-foundation.md` how many entries were added, never the names; the issue forms (bug, task, scenario with schema-shaped fields, fleet results); `tools/claude-plugins/eileen-dev` (plugin.json and skills; no `.lsp.json` in v0.1, section 2.13); the five `.claude/` skills; `xtask/tidy/exempt.toml` listing only files that quote third-party text verbatim (`docs/research/`) with reasons; the dated records are already scrubbed of the earlier working names and the franchise (owner answer 15: `docs/DECISIONS.md` D15 and D16 say "an earlier working name", and `docs/RESEARCH.md`, its opening line and section 8 included, and `docs/NAMING.md` were rewritten the same way on 2026-10-21), so the seeded denylist's scan of every non-exempt file must come back clean; `docs/PLAYBOOK.md` and `templates/` per section 4b.6, with every section cited.
+- **Acceptance.**
+  1. Phase A: `cargo xtask ci` passes on the owner's PC under the build guard, `all-green` passes on `windows-latest` and `ubuntu-latest`, and `main`'s required checks are `all-green` and `pr-meta` (proven by the next pull request going green with no Python job).
+  2. Phase A: contract snapshots exist for every type on slice S1's path and its tool argument schemas, and every other module compiles and is listed as provisional; `cargo xtask insta` (which runs `cargo insta test --unreferenced reject` through the guard) passes; the text-wrapping test passes.
+  3. Phase A: every stub builds on both OSes with its native dependencies under target tables (`cargo deny` passes with the `webpki-roots` exception on both targets); `eileen --version` runs; every subcommand of section 3.5 exists and says "not built yet"; the stub shim answers `initialize` within 100 ms.
+  4. Phase A: with a fake memory source, the build guard admits slot 0 at 1.3 GB available with low paging and 2 compile jobs, refuses it while paging is high, refuses slot 1 below its requirement, records its holder, waits and exits with code 75 after `--wait-max`; the job count is 2 at 2.0, 2.4 and 2.5 GB available and never falls as available memory rises (a property test); a command that finds 30 s of fresh shared samples decides without sampling, and a sample appended by `samples::append` from another process (standing in for the runtime) is read back by `samples::recent`; two processes appending paging windows for the same 30 s leave one line, and `baseline()` reads back the keys `slots --baseline` wrote; the baseline computation leaves out samples marked `slot_held`, gives a re-check limit of at least twice the slot-0 limit, and a floor of 1 GB when the 10th percentile of headroom is 0.6 GB; slot 0 is refused when headroom minus the ticket's estimated commit falls under the floor; a re-check wait past `--recheck-wait-max` releases the slot and exits 75; `slots --kill-stale` frees a dead holder's slot; killing xtask mid-build leaves no `rustc` running (Windows test). On the owner's PC: `slots --baseline` has recorded a typical working day and written `buildguard.toml`, and afterwards slot 0 was admitted for at least 9 of 10 guarded commands within two minutes on a typical day with agents running, and at least one command was refused during a minute whose paging was above the slot-0 limit (observed, or produced once with `slots --pressure 2`), both recorded in the work package file.
+  5. Phase A: on Windows, killing a supervised child's Job Object kills its grandchild; the guard-style spawn, started from a parent outside any kill-on-close job, survives that parent and is killed at the end of the test.
+  6. Phase A: the redaction canary: fake secrets written through the file and ring layers never appear raw on disk or in a ring dump.
+  7. Phase A: `cargo xtask sim` runs the PR seed set in under 90 s on the Linux runner and `--doublecheck` passes.
+  8. Phase B: every one of the 30 checks has a fixture test that fails on a seeded violation (an em dash in a fixture Markdown file, a crate doc missing `# Invariants`, a code map missing a crate, a bad pull request title, an Evidence section naming a test that does not exist, an unpinned action, a scenario with `origin = "user"`, a scenario whose `stale` status or quarantine has expired, one whose `since` is later than the date of the fixture commit that introduced it, an unsafe block outside `ffi`, an undeclared span name, `cpal` in a neutral dependency table, a denylisted synthetic name, a `Command::new` outside the listed exemptions), or, for delegated checks, a config assertion plus a nightly end-to-end fixture. The seeded denylist is proven too: on the owner's PC, `lint-repo` run over scratch copies of `docs/DECISIONS.md`, `docs/RESEARCH.md` and `docs/NAMING.md` as they stood at `main`'s first commit, `9bb1909` (before their scrubs, from git history; the commits of the branch that scrubbed them do not survive a squash or rebase merge, but that one is on `main`) reports a match for each earlier working name and each seeded franchise name, recorded in the work package file by count, never by name, and the same run over the current files reports none. The `evidence` job's fixtures: a fix whose listed unit test lives in a `#[cfg(test)]` module of a `src` file fails on the base-plus-tests tree and passes at the head; a listed test that passes on the base fails the check.
+  9. Phase B: `cargo xtask codegen --check` passes and its output is byte-identical across two runs and both OSes; `docs/PLAYBOOK.md` covers the ten topics of section 4b.6 and passes check 29; `templates/` copied into an empty scratch repository yields a workspace whose `lint-repo` and CI skeleton run.
+  10. The first CI run's Windows job times (cold and warm), the per-worktree target size of the full stub workspace, and (if the owner installed sccache) the hit rate after a second worktree's build are recorded in `docs/wp/WP0-foundation.md`.
+  11. Phase A, from `wp0/ci-bootstrap`: `pr-meta`'s fixture tests fail a description whose Evidence section is empty or the placeholder (for every type), a description whose only Evidence line is the `type:` line, a feature description naming a test `fn` that does not exist at the head, a `scenarios:` id with no folder, a fix with no regression file, and a bad title; they pass a description whose `tests:` line names a test in `xtask/` (W0's own pull requests), do not read a hyphenated word in Evidence prose as a scenario id, pass a Dependabot-authored pull request with Dependabot's own body that only bumps an action SHA or a `Cargo.lock` entry, fail a `docs`-typed pull request that changes a `.rs` file, and resolve an integration test named by its test target (`eileen-core::it::job_model::<fn>` against a fixture). Phase B: the `evidence` job re-runs when a description is edited from `docs` to `fix` and fails until the fix's listed test is shown failing on the base; a Windows-only fix fails without `override:`, `owner-run:` and the `evidence-reviewed` label and passes with them, and fails again after a later push until the owner re-applies the label.
+  12. Phase A, `eileen_platform::machine` (owner answer 6), on `windows-latest` and `ubuntu-latest` alike: a golden vector (a fixed fake OS id and install id) gives the same 64-hex hash on both; an OS id in Windows' GUID form and the same id as Linux's plain 32 characters give one hash; two install ids with one fake OS id (a cloned image) give two hashes; an empty, malformed, all-zero or `uninitialized` OS id gives the install-id-only hash, which is stable across calls and differs from every hash with an OS id; `FileMachineIdentity` over a temporary root reads `etc/machine-id`, falls back to `var/lib/dbus/machine-id` when the first is missing or unusable, and answers `None` when neither holds a usable id.
+
+### 6.3 WP1: Core logic, replay and simulation
+
+- **Branch** `wp1/<topic>`. **Depends on** WP0 phase A. **Desktop** no. **Wave** W1.
+- **Owns** `crates/eileen-core`, `crates/eileen-record`, `crates/eileen-replay`, `crates/eileen-sim`, `scenarios/feel/`, `scenarios/jobs/`, `scenarios/first-run/`, fuzz targets `recording`, `expected_trace`, `sim` and `shell_command` with their corpora and regressions, `docs/wp/WP1-core.md`.
+- **Builds.** First pull request: a **minimal core** that WP2 can wire for slice S1 (turn-taking idle, hearing, thinking and speaking; barge-in with pause-then-decide on `BargeInWindow`, resume after a backchannel and cancel on "stop"; the addressee gate with the name and the follow-up window; fast-path dispatch through the `IntentResolver` port, tested with a scripted fake, with the safety and control commands and `WhatTime` answered by the core; one brain turn; one job; mute; announcements of completion), with simulation tests, including "stop" while Eileen speaks. Then the full `Core::step` (section 3.3.3): turn-taking and barge-in with pause-then-decide and resume; the addressee gate of section 2.8 (conversation window in which non-command utterances need the score, suspension while other audio plays with media-control and stop words exempt, the call rule (only name-led utterances, nothing spoken, replies on the HUD), the follow-up feature only when it resolves against Eileen's last turn (`ResolveCtx.last_turn` filled from the core's own last turn, `IntentResolver::follow_up` through the port), the score `eileen_core::addressee::score` with its points and the speech-level veto against the calibrated reference (`CoreConfig.calibration`, `VoiceEvent::Calibration`) or the median of name-led turns, the alone score passed to the brain as `[addressee: unsure]`, `Heard` emitted only once a turn is routed and not ignored, "that was for you"); intent dispatch (Command, Tool, Skill, Ambiguous, Hints, Brain with depth; the `[match]` block for level-3 matches and the dispatcher's check that a `Replay` dispatch carries exactly that skill and those slots); the core commands "open the file I was working on", "start it anyway" and "fix it"; the deterministic fact path (`CoreCommand::Fact`, retiring contradicted facts by subject key in the statement's own scope and in no scope, and in every scope for an unscoped statement, phrasing-kind commands turned into alias phrasings that replace every alias of the same subject, `UndoFact`, `FactDelta` effects, the `learned_correct` substring rule and its HUD confirmation, `LearnCmd::Repair`); `Act` jobs for fast-path commands and brain act turns, phrasing candidates, exact repeats and their deletion on a negative signal; the brain turn (context blocks with caps and fenced untrusted text, the `[assistant]` block, `---hud---` and `---ignore---`, clause queueing, interrupt and re-send, recycle on the context threshold, a forget of something the session saw, or a crash (never for phrasings, facts or new skill versions), the stall timer paused during the brain's own tool calls, spare swap through `Promote`, the fallback slot through slot-addressed `BrainCmd`s, and the per-turn instance filter that drops a stalled instance's late text); anticipation's cap; turn authority; depth and two speeds; jobs (states, names, slugs, ordinals, pronouns, focus job, fan-out, worktree and in-place snapshot specs, steer, reroute, cancel, app tasks with progress, and the refusal of a kind that is not built, `JobKind::built_in_v0_1`, with its `UserError`); sessions and the warm pool (bind, re-arm, `pool_order` with the deep session kept first, drop under pressure computer-use first and deep last, the computer-use session started only by admission rule 2 and the deep session also by rule 3 with nothing queued, recycled when a skill in its snapshot changes); memory admission's four rules, the queue reason naming the biggest process, `StartAnyway` and the queue question, and build-heavy limits; the router; the permission gate (`claude_tool_tier` over `PathFact`s including shell path positions and Eileen's own path tools, tier 3 for subagent tools and built-ins outside the kind's list, the shell tokenizer and allowlist with `cd` tracking, build and test commands at tier 2 after taint, the git rules (writes to `GitInternals` including nested repositories and pointer files, and to `.git` paths of other classes, `git config` and `git -c` forms, the global options that pick another repository or configuration, environment assignments anywhere in a command line with the five-variable exception, hook-running commands after taint by each command's `GitFact`, and any git command in a repository other than the job's after taint), `apps_open_path`'s runs-code and opens-web rules, `url_vouched` over the runtime's `UrlFact`s and the core's own `UrlCtx` (context hosts from `WindowInfo.url_host` and the job's own reads, failing closed when a context is incomplete) as the one URL rule for the brain's exits, the hosts in a `jobs_dispatch` task and the after-taint egress rules (browser input and opens-web paths included), `private_read` set on a dispatched job whose turn held ledger lines or whose task repeats out-of-scope facts, an `Act` job's starting taint from its turn's context, taint over the one `ObservedSource` set through `observed_source` and its table, per-op tiers, the tools a `Replay` origin may call, grants as exact calls, desktop-app grants, hook decisions that are never allow, `PermissionDecision::Allow` only from a `UserInput` approval, `ask_user` refusing credential questions); approvals (sources with the physical flag for hotkeys, the action word and the speaker match when enrolled, voice off while other audio or another mic user, the fixed order of media pause, confirmation, mode decision and question, the voice window opening after the question drains, the deadline, target binding, `ApprovalSource`); announcements (the table as data, focus awareness, the narration rule with attribution); the input lock and foreground leases (physical input aborts, pause until "continue"); the hands-off pause; the action journal with inverses and undo; the settings flow over the `SettingsValidator` port (Safety keys need a `UserInput` approval); plan-usage policy; supervisor policy; incident triggers; `UserError` kinds with their sentences and fixes; the regret window with attribution rules and the `learn.verdict` event, closed early by "learn from that now" for the job it names (an `Accepted` signal), with a later undo of that job still reversing it and withdrawing a draft made only from it; the skill engine calls through the `SkillEngine` port (scripted fake until WP7), including the shadow checks it names, issued with origin `Core` right after the matched worker call returns; forget as two effects (`LearnCmd::Forget` and `Record::PurgeJobs`) completing only when both report; recycling sessions whose snapshot holds a changed skill; route proposals matched against the job's cached `routes_lookup` reply (refused otherwise, and for an entry that is not active), with the spoken line built from registry fields (the verified publisher namespace and `from_app_vendor`; "official" is never said), shown and accepted by kind (an MCP server as a Safety change, a deep link into `uri_schemes`, an API as an approved reference fact); the dispatcher's `rung_skipped` mark and the per-app route line in each `JobBinding`'s facts, from `SkillEngine::route_line`; the first-run state machine of section 2.8 (spoken choices and consent, the calibration steps, the two gates with the tour fallback and the clip's deletion after the second, the demo's fixed `FirstRun` turns with their no-learn flag and ephemeral phrasings deleted when the first run ends, the reveal keeping only listening calibration); HUD state assembly; scenario-save requests and the automatic local scenario for every failed job and replay handoff. `eileen-record`: the formats of section 3.3.16 (input records and hook answers as `RecordLine`s), the BLAKE3 and zstd blob store with reference counts, reader, writer, `trim` with setup inputs and with each kept hook input's answer. `eileen-replay`: strict mode with the first-divergence report, scenario mode with reactive responses and ID remapping, the expectation and expected-trace matcher, the `responder` component for `--replay-models`, and `eileen replay`. `eileen-replay` also implements scenario mode's three input rules (scheduled, reactive, synthesized; section 3.3.16) with the stable key of each reactive family (transcript digest and occurrence, never a global ordinal), the brain's and workers' tool calls and hooks replayed inside their turn's sequence (hooks held for the core's answer and a divergent decision failing the replay), and its own brain instance numbers stamped on every served brain event, and `eileen scenario replay`, which `cargo xtask scenarios replay` dispatches to. `eileen-sim`: the world of section 4.7 (with available memory, commit headroom and paging, and a stalling fake brain backend), profiles `default`, `barge-in-heavy`, `many-jobs`, `flaky-sidecars`, `media-playing`, `low-memory`, all 15 invariants, exhaustive turn-taking (depth 6 on pull requests, 8 nightly), `SimRegression` files.
+- **Acceptance.**
+  1. All 15 invariants hold on the PR seed set and on 30 minutes of random seeds per profile (a `long.yml` run); each invariant has a hand-written scenario that breaks a fake and proves the invariant catches it (for invariant 15: a fake brain that stalls, then sends its whole answer after the fallback instance has started answering; only the fallback's answer is spoken).
+  2. `turn::exhaustive` passes at depth 6 within the PR budget (depth 8 nightly).
+  3. `tests/it/job_model.rs`: a proptest-state-machine reference model of the job lifecycle agrees with the core on random command sequences.
+  4. Barge-in in simulation: onset to pause at most 96 ms of virtual time plus one callback; the heard prefix equals the text of the samples played; a backchannel resumes from the paused sample.
+  5. Approval safety: a tool result, a worker's text, `eileen say` and a video's audio that each contain "yes, approve" do not approve; a bare "yes" and "Eileen, yes" do not approve a tier-2 call; "yes, push" in the window does, and with an enrolled speaker check it does only with a match; speech that began before the question finished playing does not; a HUD click flagged non-physical does not; an approve hotkey without the physical flag does not; an `approve` tool call whose `tool_use_id` matches no pending ask, or comes from another session, is refused and logged as a security event; an approval asked while a video plays is decided only after the pause is confirmed, and is voice-capable once the loopback is quiet.
+  6. Turn authority and the permission table: a job-completion turn whose text says "dispatch a job" cannot dispatch one; a tainted job that read private data cannot `WebFetch` without approval; a table test of `claude_tool_tier` gives tier 3 for `Read` of `~/.ssh/id_rsa`, for `type %LOCALAPPDATA%\eileen\run\bus.json`, for `cat` through a junction into a credential folder and for `Task`; tier 2 (asked) for `Read` outside the job's folder and for `rg` over a Documents path (which also sets `private_read`); tier 2 HUD-only for a glob or an unresolved variable in a path position, and for `apps_open_path` on a `.bat`, a `.lnk` to PowerShell or with `with_app = "powershell"`; tier 0 or 1 for `cd sub && cargo test` inside the folder, and tier 2 for the same after the job read a web page; a brain `apps_open_url` to a host the user never named or visited is tier 2; a brain `jobs_dispatch` whose task names a host from a window title (not the transcript, never visited) is tier 2 with a summary naming the host, and one whose task names a host the user said is tier 1 with `WebFetch` narrowed to it; after taint and a private read, `WebFetch` to a visited host with a query string that is not in the transcript, task or an untainted step is tier 2, typing or Enter in a browser window is tier 2 (asked once per host), and `apps_open_path` on a job-folder `.html` or a `.url` is tier 2; `Write` to `.git\hooks\pre-commit` and `.git\config`, `git config core.hooksPath x`, `git -c core.fsmonitor=x status` and `GIT_SSH_COMMAND=x git fetch` are tier 2 HUD-only; `git commit` after taint is tier 2 in a repository with a hook installed and tier 1 in one without; `Write` to `sub\.git\config` and to `sub\.git\hooks\post-checkout` inside the job folder (a nested repository), and to a worktree's own `.git` pointer file, are tier 2 HUD-only; in an in-place job, `.git\hooks\pre-commit` inside the job folder classifies as `GitInternals`, not `JobFolder`; `git --git-dir=x diff`, `git --work-tree=y status` and `git --config-env=core.pager=X log` are tier 2 HUD-only; `HOME=.\x git diff`, `XDG_CONFIG_HOME=x git diff`, `EDITOR=.\evil.bat git commit`, `env PATH=.\bin git status` and `$env:HOME='.\x'; git diff` are tier 2 HUD-only, while `RUST_BACKTRACE=1 cargo test` keeps the tier of `cargo test`; a `Read` of an unrelated repository's `D:\other\.git\config` is tier 2 (asked) and sets `private_read`, a `Write` to it is tier 2 HUD-only, and a read of a sibling job's worktree `.git` file is tier 3; after taint, `cd sub && git diff` in a nested repository (a `GitFact` with `job_repo = false`) is tier 2, while `git diff` in the job's own repository stays tier 0; `url_vouched` table over `UrlFact` and `UrlCtx`: a visited host with the data split across several short path segments and a visited host with a query are not vouched, nor is a full URL the user visited (`visited`) whose host is the foreground page's `url_host` or that of a browser window in the turn's `[desktop]` block, nor any `visited` URL while a browser window in that context has no readable address bar; a URL from the media history (`in_index`), a `visited` full URL whose host is in no context, and a host the user said with path `/` are vouched; each verdict names its `VouchRule` or `UrlRefusal`; a brain `jobs_dispatch` from a turn that held ledger lines starts its job with `private_read` set even when its task paraphrases them, one whose task repeats an out-of-scope fact's value does too, and one from a turn with no ledger lines whose task names only its topic does not; `Read` of the session's own snapshot is tier 0 and `Write` to it tier 3; a read of a sibling job's worktree or of `run\session.json` is tier 3; a replayed step calling `settings_apply` is refused; `ask_user` asking for a password, PIN, one-time code or card number is refused; `observed_source` gives the class of every row of section 2.12's observed-read table (a browser window's web-content tree and a mail-category window's tree are `Web`, a testpad tree is `Tree`, a Claude in Chrome read is `Web`, a third-party MCP tool is `Web` by default and `Tree` when recorded so, an approved `curl` and `routes_lookup` are `Web`, `desktop_windows` listing a mail-category window is `Web` and listing only the testpad `Tree`, a `desktop_set_value` on the testpad carries `Tree` through its verification hint, `apps_media` `status` is `Web`, `apps_recent` with `kinds = ["media"]` is `Web` and with documents only `File`, and an `Act` job created by a brain turn whose `[desktop]` block listed a mail window starts with `Web` in its taint and that block as its observed text), `jobs_status` listing a job that read a web page is `Web` and listing only jobs that read nothing is none; and the walk over every `ToolSpec` finds no free-text op with rule `None` outside `contracts/observes-none.toml`, and no tool with a selector whose variant repeats the name of one of the struct's other fields; fuzz target `shell_command` clean for 10 minutes.
+  7. Two speeds: a deep answer arriving while the user talks goes to the HUD only; arriving in silence is spoken once.
+  8. Memory admission: with simulated memory near the reserve, a third agent queues with a spoken reason naming the biggest process, starts by the paging rule once paging stays low for 30 s, or by "start it anyway"; commit headroom under 1 GB blocks even the override; the pool and spare are dropped first; a session that hits `worker_job_limit_mb` fails its job with the limit named.
+  9. A recorded run replays in strict mode with no divergence; a deliberate change to the router makes it report the first divergent event with its sequence number; the same run saved as a scenario still passes in scenario mode after an unrelated change that mints one extra ID.
+  10. `scenarios/feel/` (half-finished sentence with a pause, room talk ignored, conversation window with an unnamed request acted on, interrupt and resume, backchannel, "no, the other one" after a cancelled intent, video playing during an answer, an action and an approval), `scenarios/jobs/` (three parallel jobs, reroute, cancel, approval by voice with the action word, approval left to the deadline, memory-queued agent) and `scenarios/first-run/` (surprise accepted by click and by voice, consent unticked, clone too slow by setup's measurement runs the tour with nothing recorded, rendering past 40 s after the recording runs the tour and deletes the clip and the clone, a later tray "Show me something cool" records afresh, reveal declined deletes the clip and the clone and keeps only the listening calibration, "forget my voice" removes that too, and after every ending the phrasing store holds no demo phrasing while the demo's exact repeat still ran from L1) replay green.
+  11. `eileen-core` depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace` (check 24).
+  12. The learning decisions in the core, in simulation: "closer" after a deep answer stores a feedback fact scoped to its topic and refines from the cache; "no, my timelines start at zero" retires the old fact with the same subject key, says what it replaced, and queues a repair of the skills that list it; "undo that" right after a stored fact retires it as `Undone` with no repair queued, and "that wasn't a fact" does the same; with the store holding the alias "the video editor" = Resolve from a clarifying answer, "no, the video editor means Premiere" deletes that alias and stores Premiere, "open the video editor" then resolves to Premiere, and "undo that" restores Resolve as the only alias; "I don't like spicy food" retires an active "I like spicy food" of the same scope and leaves "I like ramen"; said scoped to a food answer it also retires an unscoped "I like spicy food", and said unscoped it retires a scoped one; "cheaper" after "closer" on the same answer leaves both active, while "further" retires "closer"; and a fact retiring as `Stale` drops no skill's level, while a successful use of a skill confirms the facts it lists; a deep answer whose link the user opened on the HUD records that host as accepted for its topic, and the next deep-answer job of that topic carries the sources line; a `learned_correct` whose instruction is not in the transcript is stored only after a HUD yes; "get Notepad up for me" said twice in ten seconds runs the second time from L1 (`ExactRepeat`), and an "undo that" after the first deletes the candidate; a clean regret window raises the candidate's `confirmed` count and a new phrasing never recycles the brain; the dispatcher marks `rung_skipped` for a vision step on an app with a declared API rung, and the next `JobBinding` for that app carries the route line; a forget completes only after both stores report, and a live session holding the skill is recycled; a level-3 template match produces a brain turn with the `[match]` block, and a `Replay` dispatch with different slots is refused; the coffee case of E1, said one second after Eileen finished, stays greyed inside the conversation window and produces no brain turn, while "and how long will it take?" after Eileen announced a render passes because "it" resolves to that job, and a question sharing a content word with her last answer passes too (the scripted resolver fake returns `FollowUp::Referent` and `FollowUp::Shared` for those cases and `None` for the coffee case); with a calibration whose `level_ref_db` is -30, an unnamed "make that bigger" inside the window at -42 dBFS (a quieter, farther voice) is greyed and produces no brain turn while the same words at -31 dBFS pass, and with no calibration the reference forms from the median of ten name-led turns and then greys the quieter voice the same way; "pause" while a video plays works without the name and "what's the time" does not; during a call, "pause" without the name does nothing, "Eileen, pause" pauses with no sound from Eileen, and "Eileen, what's the time?" is answered on the HUD only.
+  13. Scenario mode: a saved scenario whose core change adds one timer, one extra clause and one extra embedding request still passes, because timers and playback are synthesized and the embedding is answered reactively; so does one after a change to the brain prompt's wording and to the `[jobs]` block's format, because brain turns are keyed by their source, the digest of the user's final transcript and its occurrence (section 3.3.16), never by the composed prompt, and one whose brain turn calls `jobs_dispatch` and `desktop_launch_app`, because the brain's tool calls are replayed within that turn's sequence; a recorded `Sidecar` `Exited` and a `Playback` `DeviceChanged` are scheduled; an effect with no recorded reaction is reported, not hung on. Also: a recorded stall-then-fallback (invariant 15's case) replays with the stalled and fallback sequences stamped with the replayer's own live instance numbers, and only the fallback's answer is spoken; a scenario recorded before an earlier request in it moved from the brain to L1 still matches its later brain turns and worker commands, because they are keyed by transcript digest and occurrence, not by ordinal; a pooled worker's `Init` is served after the live `Start(SessionSpec)` of the same class; a brain `Ready` after a live `Promote`; and a worker's recorded `PreToolUse` that the live core answers the same way as its `HookAnswerRecord` replays green, while one the live tier table now answers `Ask` fails with a hook divergence naming the tool and both decisions; `eileen record trim` keeps each kept hook input's answer; and the two sends of the stalled turn carry one key with send ordinals 1 and 2.
+  14. The reserved job kind: a brain `jobs_dispatch` of kind `ml_project` ("train a model that finds a person's clothing colour on my Colab") is refused before routing and admission with a `UserError` of kind `JobKindUnavailable`, whose sentence names the next version and offers a research job on what already exists, returned to the brain as the call's error result; no session starts and no memory admission is asked for; a `research` dispatch with the same task is then accepted as usual.
+
+### 6.4 WP2: Runtime, binaries, shell and the first slice
+
+- **Branch** `wp2/<topic>`. **Depends on** WP0 phase A and WP1's minimal core (its first pull request), and starts as soon as that merges; integrates WP3's `wp3/worker-brain` and WP4's `wp4/s1-audio` and `wp4/s1-speech` for slice S1. **Desktop** no for its automated tests (its few tray and hotkey tests take the desktop lock); slice S1 runs on the owner's PC. **Wave** W1 from WP1's minimal core; `wp2/s1-live` merges as soon as `wp3/worker-brain` and WP4's two slice pull requests have, in W1 when they are done in time; the rest of WP2 continues in W2.
+- **Owns** `crates/eileen-runtime`, `crates/eileen-mcp`, `crates/eileen-cli`, `crates/eileen-shim`, `crates/eileen-crash`, `crates/eileen-guard`, `crates/eileen-shell-win`, `crates/eileen-scenarios`, `TESTING.md`, `docs/DEBUGGING.md`, `scenarios/runtime/`, fuzz targets `mcp_client_message`, `mcp_tool_arguments`, `dispatch_line`, `worker_hook_payload`, `http_request` and `scenario_file` with their corpora and regressions, `docs/wp/WP2-runtime.md`.
+- **Builds.** The driver loop (one task owns `Core`; inputs through a bounded channel; effects routed to components by family; tasks through `eileen_rt`); the SQLite store (jobs, events with `seq` and `TraceCtx`, approvals with their `ApprovalSource`, settings versions, journal, plan usage, memory samples; migrations; WAL; `secure_delete`; retention; `Record::PurgeJobs` with a `TRUNCATE` checkpoint and `StoreEvent::Purged`, and, with `logging.include_personal` on, rewriting log files without the purged jobs' and turns' lines); the bus fan-out with explicit `Lagged` and no unaddressed speech; the memory sampler (`Input::Memory` every 5 s from the `SystemMemory` trait, which `eileen-shell-win` implements: available memory, commit headroom, the paging rate through PDH converted from pages with the page size, the largest process; 30 s paging windows appended to the machine-wide `machine\paging-30s.jsonl` through `samples::append_paging` (marked `slot_held` when a build slot lock was held, one line per window however many runtimes run) and the `auto` limit recomputed hourly with `samples::auto_paging_limit`, and every sample also appended to the machine-wide `machine\memory-samples.jsonl` through `samples::append`, section 6.1; only a runtime reading real memory through `SystemMemory` writes either file, never one with a fake source); the loopback HTTP/1.1 server (strict limits, bearer token, client PID mapping and Job Object checks, `/v1/hooks/claude/<event>` including the held `PermissionRequest`, `/v1/state`, `/v1/control/mute`, `/v1/say` as a `Cli` turn, `/v1/handoff` pending confirmation, `/v1/session/notify` for the plugin's non-gating hooks (session role's caller rule, a fixed set of notification kinds, rate-limited), `/v1/test/*` only under `--test-harness`, `bus.json`, `session.json`); path canonicalisation and classification into `PathFact`s for `PreToolUse`, for the shell tokenizer's path positions and for every Eileen tool field marked `x-eileen-path` (environment variables, `~`, junctions, symbolic links, 8.3 short names and `.lnk` targets resolved; UNC paths `Elsewhere`; globs and unresolved variables `Unknown`; the fixed class order of section 2.12 (credential and browser-profile paths, then a `.git` path component inside the job's folders, recognised by the `core.protectNTFS` rule, and the job's git and common directories, read from the worktree's `.git` file and `commondir` at job start, with `git_component` set on a `.git` path of any other class, then the session's snapshot, then the job's folders, then Eileen's data folder); a `GitFact` for every git command in a shell command line, found by walking up from its tracked working folder to the first `.git` entry without running git, with `job_repo` and `has_hooks`; a `UrlFact` for every URL in a call (a `WebFetch` URL, the targets of `apps_open_url` and `apps_open_uri`, a shell command's URL arguments, and every URL and host in a `jobs_dispatch` task, subtasks and subquestions, found with the core's tokenizer patterns), with `in_index` from the apps sidecar's media history and recent-work index and `visited` from the media history and the ledger's browser lines; `runs_code` and `opens_web` from the extension, the registered verb or handler and a shortcut's target); the dispatcher pipe server with caller verification and `eileen-shim` (section 3.3.9 protocol, toolsets per role, the session role's opposite rule and its own pipe and token, the `--notify <kind>` mode that posts to `/v1/session/notify` and always exits 0, `session_ask` waiting for the user's reply, `_meta.traceparent` passthrough, logging the `_meta` the CLI sends on its first call); sidecar MCP clients through rmcp over supervised stdio with deadlines, heartbeats, restart with backoff, and hang-dump-then-kill through the guard; the connector registry; the flight recorder wiring (input tap, checkpoints with RNG state, the per-job pin, placeholders for unaddressed speech, incident assembly, the janitor, the lag probe, the audio heartbeat watchdog); `eileen-crash` and `eileen-guard` (breakaway spawn, core heartbeat, hang dumps, rate-limited restart, fail-fast reporting); `eileen-shell-win` (the `SystemMemory` and `MachineIdentity` implementations, tray with data-driven menu and the physical-click check for unmute, global hotkeys including approve, deny and hands-off, Raw Input for the dictation key, physical activity and the "came from a device" flag for the approve, deny and unmute chords, the `SecretStore` implementation over keyring-core, toasts, the Start menu shortcut with the AppUserModelID, the HKCU Run entry); `eileen-cli` as the composition root wiring every component through `component(cfg)` and the real ports (stubs until their packages land), `--console`, `--replay-models`, `eileen about` with the credits generated from `NOTICE` and `models.toml`, the tray's "About Eileen" item, and the framework of `setup` and `doctor`; the install id and the machine hash (owner answer 6: the install id created by `setup` or the first `eileen run`, whichever comes first, and the hash recomputed at every start through `MachineIdentity` and `eileen_platform::machine::machine_hash`, then written to `fleet\machine.toml`, where scenario save, the speech process's consent records, the fleet runner and the benchmark runner read it); the `session` and `dev` toolset handlers (in `eileen-runtime::dev`, with `dev_replay_core` over `eileen-replay`; `session_skills` behind `claude_plugin.share_skills`); the incident hand-off for "explain that"; `eileen-scenarios` (save from the flight recorder, with the machine hash from `fleet\machine.toml` in `Scenario.machine`, the automatic local scenarios of section 2.10 item 13 with their caps, `check` through `eileen_trace::privacy` and `eileen_contracts::scenario::status_problems`, `bless` (section 3.3.16), `stale` (writing `since`, `issue` and `expires`), share with generalisation, redaction and the local scenario-mode replay, submit through the contributor's `gh` with the auto-filled template or the issue-form fallback, the real-desktop runner with fixtures, steps through the test endpoint, transcript injection or `WavSource`, expectation evaluation through the replay matcher and the sidecars' read-only ops, `ci_factor` timing); `TESTING.md`; `docs/DEBUGGING.md`; shuttle tests for the bus, supervisor, workers finishing together and a dropped shim pipe. EcoQoS opt-out at the start of every binary it owns.
+- **The slice's resolver.** `eileen-intent` is WP7's and arrives in W3, so `wp2/s1-live` adds a minimal real resolver, `eileen_runtime::bootstrap::SliceResolver`, a pure implementation of `IntentResolver` that the composition root wires until WP7 phase A's first pull request switches it to `eileen_intent::Resolver` and deletes it (an amendment to WP2's files): it matches the precedence-1 safety and control phrases the minimal core handles (mute, unmute, stop, cancel, "go on"), and "what time is it" as `CoreCommand::WhatTime`; everything else resolves to `Resolution::Brain`; `follow_up` returns `FollowUp::None` and `resolve_semantic` defers to `resolve`. A table test covers each phrase and a paraphrase that must reach the brain.
+- **Slice S1, live** (`wp2/s1-live`, once `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech` have merged, not all of WP3 and WP4; the gate for W3): `eileen run --console` on the owner's PC with the real microphone and speakers, holding `desktop.lock` for the run (`cargo xtask desktop-lock --hold`), so it never overlaps WP4's device tests or WP6's spike. One fast-path command ("Eileen, what time is it?"), one barge-in ("stop" while Eileen speaks), one brain answer, and one Claude job ("Eileen, create a file called hello dot txt containing hi in the scratch repo") whose completion is announced; the mute hotkey and the tray mute each stop capture and the Windows microphone indicator goes off; end-of-speech-to-first-sound latencies recorded for each. The same flow runs in CI with `--audio-source wav:`, the transcript stub and the stub harness.
+- **Acceptance.**
+  1. Slice S1 live passes on the owner's PC (recorded in the work package file with latencies, and with the `desktop.lock` hold), and its stub variant passes in CI; "what time is it" is answered through `SliceResolver` with no brain turn, and "stop" while Eileen speaks goes silent through the minimal core's barge-in.
+  2. Killing a stand-in sidecar mid-call yields a typed error to the caller, an incident containing its hang dump from the guard, and a restart within the backoff bound, while the core keeps capturing.
+  3. The `PreToolUse` endpoint answers no decision, `ask` and `deny` per tier and never `allow`; with the endpoint down a worker's guarded write is blocked; a held `PermissionRequest` answers `allow` only after a `UserInput` approval.
+  4. A process inside a worker Job Object holding every token file is refused by every loopback endpoint except its own session's hooks, and by every other role's dispatcher pipe; a shim started outside any Eileen job with a brain, worker, librarian or dev token is refused; a shim outside every Eileen job with the session token gets exactly the session toolset, and the same shim run inside a worker's Job Object with the session token is refused.
+  5. Idle footprint of the thin release `eileen.exe`, measured with `cargo xtask measure-idle`, with stub sidecars and again with real WASAPI capture: under 60 MB working set; CPU within section 4.5's table; numbers recorded.
+  6. `eileen trace last` stitches one turn across the core, a stub sidecar and a stub worker by `turn_` ID, every line with file and line; `eileen incident show last` summarises a captured incident; the end-to-end smoke asserts every log line inside a turn carries its ID.
+  7. The redaction canary covers every sink this package writes (logs, incidents, share packs, recordings, the events table), including a spoken card number and an unaddressed utterance; a partial transcript of an utterance the gate then greys never reaches the events table, the loopback endpoint or a bus subscriber; `Record::PurgeJobs` leaves no row of the purged jobs or turns in `eileen.db` or its WAL, and no line in the logs when `logging.include_personal` is on.
+  8. `eileen scenario save` then `share` then `submit --dry-run` produces a pull request body that passes `pr-meta`, a redacted folder that passes `scenarios check`, and a redacted copy that still replays in scenario mode; the saved and the shared scenario both carry the machine hash from `fleet\machine.toml`.
+  9. The shuttle tests pass; fuzz targets `mcp_client_message`, `mcp_tool_arguments`, `dispatch_line`, `worker_hook_payload`, `http_request` and `scenario_file` run clean for 10 minutes each (`long.yml`) and their corpora replay on Windows.
+  10. Path classification: table tests over real files and links in a temporary folder (an environment variable, `~`, a junction into a fake `.ssh` folder, an 8.3 short name, a `.lnk` to a `.ps1`, a UNC path, a glob, an `.html` file and a `.url` shortcut) give the classes and the `runs_code` and `opens_web` flags of section 2.12; with a temporary data folder, a job's worktree under `worktrees\` is `JobFolder` for that job and `EileenData` for another, its `.git` file's `gitdir` target and the common directory are `GitInternals`, and so are the worktree's own `.git` file, an in-place repository's `.git\hooks\pre-commit` and a nested `sub\.git\config` inside the job folder, as are, inside the job folder, `sub\.GIT\config`, `sub\.git.\config`, `sub\.git \hooks\x`, `sub\.git::$INDEX_ALLOCATION\config` and, for a path that does not exist yet, `sub\GIT~1\config` (these spellings settle a question carried in section 7); an unrelated repository's `.git\config` elsewhere in the temporary folder is `Elsewhere` with `git_component` set, and another job's worktree's `.git` file is `EileenData`; with a fixture media history and ledger, a media-history URL gets a `UrlFact` with `in_index`, a URL from the ledger's browser lines gets `visited`, and the same host with another path or query gets neither; a git command run from `sub` gets a `GitFact` with `job_repo = false` and `has_hooks` from `sub\.git\hooks`, and one run from the job folder gets `job_repo = true`; the session's `run\<session>\plugin` is `SkillSnapshot`, its `run\<session>\cwd` is `JobFolder`, and `run\bus.json`, `run\session.json` and another session's folder are `EileenData`.
+  11. `eileen scenario bless` rewrites a scenario's expected trace after a change that keeps every expectation passing, and refuses after a change that breaks one; `eileen scenario stale` writes today's date as `since`; an expired `stale` scenario, one whose `expires` is more than 30 days after its `since`, and one whose `since` is after today each fail `eileen scenario check` through `status_problems`, with the same results as check 18 on the same files.
+  12. Machine-wide memory files, with `LOCALAPPDATA` pointed at a temporary folder: a runtime with a fake memory source runs for several sample periods and leaves nothing under `eileen\machine\` and no lock file; a runtime reading real memory through `SystemMemory` appends 5 s samples and one paging line per 30 s window, and a second such runtime started beside it adds no duplicate window; a runtime started with a fresh `EILEEN_DATA_DIR` reads the windows already in the machine-wide file and reports their limit in `MemoryPressure.paging_limit_kb_s`; a table test of `samples::auto_paging_limit` gives the learned value once unheld windows cover 24 hours, leaves `slot_held` windows out, falls back to the baseline's `slot0_paging_kb_s` with less than a day and to 5,000 KB/s with no `buildguard.toml`, and clamps to 2,000 and 40,000; on a virtual clock the limit is recomputed once an hour.
+  13. Machine identity (owner answer 6): with a temporary data directory and a fake `MachineIdentity`, the first `eileen setup` creates the install id and `fleet\machine.toml`, a later `eileen run` keeps the install id and writes the same hash, a changed fake OS id changes the hash at the next start, and a fake with no OS id gives the install-id-only hash; on the owner's PC (`owner_pc::`) the `eileen-shell-win` implementation returns the MachineGuid, which `normalise_os_id` accepts, and no file Eileen writes contains the raw MachineGuid or the install id outside `fleet\machine.toml` (a grep over the data directory, the logs included).
+
+### 6.5 WP3: Claude harness and the brain
+
+- **Branch** `wp3/<topic>`. **Depends on** WP0 phase A. **Desktop** no. **Wave** W1.
+- **Owns** `crates/eileen-harness`, `crates/eileen-stub-harness`, `tests/harness-scripts/`, `scenarios/claude/`, fuzz targets `stream_json_line` and `control_message` with their corpora and regressions, `docs/wp/WP3-harness.md`.
+- **Builds.** First, on the owner's PC, the **approval contract test** against the real CLI (section 2.5): a tier-2 Bash call listed in `--allowedTools` with the guard answering `ask` (through a test hook listener in `eileen_harness::testkit`, since WP2's endpoint does not exist yet), tried through the `PermissionRequest` hook, `--permission-prompt-tool` (if the flag exists) and deny-then-steer; for each, allow runs the command, deny leaves no output file, a dead endpoint blocks it, a guard `deny` (tier 3) blocks a command that is listed in `--allowedTools`, a tool named in `--disallowedTools` cannot run, and a built-in tool not named in `--tools` does not exist; the subagent case (a `Task` call whose child runs the same command, with `Task` allowed only inside this test) is run and its result recorded for v0.2, since no v0.1 session gets subagent tools; the winning route, the permission mode and the exact reply shapes are recorded in the work package file and in a harness script, and the route goes into section 2.5 by amendment if it differs. In the same session, test `--restricted` per session kind (a coding worker that edits, builds and commits in its repository; a computer-use worker; the brain) and record whether it becomes the default, and **measure the other containment options for decision D40's v0.2 sandbox**: launching `claude.exe` in Windows Sandbox, in an AppContainer or less-privileged AppContainer, and under a restricted token at low integrity (does the CLI start, does sign-in hold, do the tools and hooks work, what does it cost in start time and memory), each recorded in the work package file. Then: a typed stream-json parser (line length capped before parsing; unknown `type` becomes `Unknown`; `system/init` recorded for feature detection; `Skill` tool_use becomes `SkillInvoked`; tool inputs redacted and capped at 2 KB; auth failures from the `result` event); `ClaudeWorker` with `SessionSpec` and `JobBinding` (the real `.exe` resolved through the npm shim or the native layout, never the desktop app's copy; spawned through `eileen_supervisor` at below-normal priority; the two environment policies of section 2.12; the per-session settings file with every hook and explicit timeouts; the generated MCP config with the shim and approved third-party servers, each call tagged with its server's rung; `--tools` per kind, `--disallowedTools` for the subagent tools, `--strict-mcp-config`, `--no-chrome`, `--no-session-persistence`, the pinned permission mode, the session's plugin snapshot directory, re-hashed against its manifest before spawn and checked against `system/init`; `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` for every session; a build slot from `eileen-buildguard` for build-heavy repositories with `EILEEN_BUILD_SLOT_HELD`, the ticket's memory-scaled `CARGO_BUILD_JOBS` and the shared sccache settings when sccache is installed; `JOB_OBJECT_LIMIT_JOB_MEMORY` when `memory.worker_job_limit_mb` is set, with the job notification turned into `WorkerEvent::MemoryLimit`; the observed text of outside reads kept for provenance; interrupt as a feature-detected `control_request`, cancel by killing the Job Object); the warm pool's session lifecycle (start, bind, re-arm, recycle); `BrainBackend` with `route()`, `brain_for` and `AnyBrain` (warm session, `--tools ""`, only `mcp__eileen__*`, the thinking-off measurement of section 2.3, hot spare, recycle with a summary, swap on crash or 30 s of silence, the harness component holding the Primary, Spare and Fallback slots, routing each `BrainCmd` by its slot, carrying out `Promote`, `Start` and `Stop`, and stamping every `BrainEvent` with its process's instance number, the optional speculative experiment; the other routes return `RouteUnavailable`); the brain benchmark (`brain_benchmark`, `eileen bench brain`, the `BrainBenchmark` settings check); model aliases resolved per CLI version into `run\models.json` (a one-turn probe per alias), full ids on every command line, the resolved id recorded beside every timing; the anticipation prompt line; git worktrees through the supervisor and in-place snapshot refs (`git stash create` plus HEAD under `refs/eileen/`) with restore; `continue_session` jobs (`--resume <id> --fork-session`); `eileen claude install|uninstall|update-window` and `eileen doctor claude` (`claude auth status`, the version range, installed against running versions, the toolchains a worker sees, never a credential file); the Codex app-server and ACP drivers as types returning `RouteUnavailable`, the mapping table in the crate doc, DeepSeek as configuration only; the flag constant the nightly drift job reads; `eileen-stub-harness` playing `StubScriptLine` scripts; the first scripts recorded from real sessions on the owner's PC and redacted with the `Redactor`; `cargo xtask contract-claude` (dispatched to a harness binary; owner's PC only: replays the scripts' prompts through the real CLI, compares event shapes, re-runs the approval cases and the skill-listing probe). The first pull request after the contract test that runs one worker job and one brain turn end to end (the parser, `ClaudeWorker` without the pool, `BrainBackend` without the spare) is `wp3/worker-brain`; slice S1 waits for it and not for the rest of WP3.
+- **Acceptance.**
+  1. The approval contract test passes on the owner's PC with the chosen route recorded, including the guard deny of an allowed command, the disallowed and unnamed tools, and the dead endpoint; the subagent case's result is recorded, and subagent tools stay disallowed in v0.1 whatever it shows. The containment measurements (Windows Sandbox, AppContainer, restricted token) are recorded.
+  2. Against `eileen-stub-harness` in CI: a worker job runs to completion through a pooled session bind; `> ` narration lines become `JobNarration`; an injected permission request reaches the approval path; a `Skill` call becomes `SkillInvoked`; a crash marks the job failed with a reason; cancel leaves no child process (nextest leak detection).
+  3. On the owner's PC (`real_claude::`): the brain reaches `system/init` with connectors off and only the `eileen` server listed (and a worker's init lists only `eileen` plus approved servers); warm-turn time to first text over ten turns on a quiet machine, with each thinking-off method, recorded with the resolved model id; worker cold start recorded on a quiet PC and under typical load, pool bind time recorded, and whether the pool fitted under typical load (and by which admission rule) recorded, with available memory, commit headroom, the paging rate and the `auto` paging limit beside it. The admission part of this record is a W2 item, because WP3's harness does not contain the admission rules: it is taken with the full runtime (`eileen run`) once WP1's admission rules and WP2's memory sampler have merged and the machine-wide `paging-30s.jsonl` holds at least a day, and it passes only if, on a typical working day with the owner's usual apps and several agent sessions, a cold worker was admitted by rule 2 or 3 within 10 minutes without "start it anyway" (otherwise an amendment sets the admission defaults from the record before WP7 and WP9 start); a mid-turn `control_request` interrupt verified; learning-loop row 7 reproduced with this package's exact flags (a worker uses a learned test skill from its snapshot).
+  4. The worker environment holds no variable on the denylist and keeps the pass-through list; the brain's holds only the allowlist; `cargo --version` resolves in a coding worker's shell in the stub run; no code path opens a path under the user's `.claude` folder (check 14 plus a file-access check in the stub run). On the owner's PC (`real_claude::`, under a build slot): a coding worker in a scratch Rust repository and one in a scratch Node repository each run `cargo test` and `npm test` green from their own shell, which proves MSVC discovery (vswhere and `ProgramFiles`), linking and Node resolution in the worker environment; recorded in the work package file.
+  5. `eileen doctor claude` reports a signed-out CLI clearly and suggests the user run `claude auth login`, without running it; it names the npm shim it resolved and the real executable behind it.
+  6. The default config names models only through `routing.models` aliases; the harness resolves each to a full id per CLI version (cached in `run\models.json`, re-resolved when the CLI version changes), every command line carries a full id, and every recorded timing carries the resolved id. `eileen bench brain` produces the B10 numbers for Claude; `brain_for` returns `RouteUnavailable` for every other route; the Claude backend and driver report `LanguageSupport::Any` through `languages()`; a stub session that allocates past a small `worker_job_limit_mb` fails its job with the limit named.
+  7. Fuzz target `stream_json_line` runs clean for 10 minutes (`long.yml`); its corpus replays on Windows.
+
+### 6.6 WP4: Voice (audio, speech, dictation, voices, the first-run recording)
+
+- **Branch** `wp4/<topic>`. **Depends on** WP0 phase A. **Desktop** yes (audio devices). **Wave** W1 for its two slice pull requests, W2 for the rest (which starts when both have merged). Speech-model tests and benchmarks take the exclusive build slot, and device tests take `desktop.lock` (never during WP6's spike, rule 12). Its first two pull requests are slice S1's and come before everything else: `wp4/s1-audio` (capture, render and loopback, AEC, mute, the ring buffer, playback accounting, the energy barge-in fallback) and `wp4/s1-speech` (the pipe, VAD, Nemotron, end of turn, Kokoro with its front end, barge-in windows, the transcript-injection stub).
+- **Owns** `crates/eileen-audio`, `crates/eileen-audio-win`, `crates/eileen-speech` (including `models.toml`), `crates/eileen-dictation`, `scenarios/voice/`, `scenarios/dictation/`, fuzz targets `speech_frame` and `dictation_cleanup` with their corpora and regressions, `docs/wp/WP4-voice.md`.
+- **Builds.** `eileen-audio`: cpal WASAPI capture, render and loopback at 48 kHz with 10 ms buffers (cpal only under the Windows target table; the logic around it neutral); resampling (pick `rubato` or an own polyphase filter by measurement); sonora 0.2.0 AEC3 with noise suppression and high-pass, the loopback mix as the far-end reference and Eileen's PCM as the fallback, bypassed after 500 ms of loopback silence; the other-audio signal; 512-sample 16 kHz frames into an SPSC ring buffer (loom-tested under `cfg(loom)`) and the speech pipe; mute that stops the capture stream; duck, pause, resume and stop with samples-played accounting; PCM playback; `AudioSource` and `AudioSink` with `WavSource`, `CaptureSink` and `RoomMixer` (with a music or speech-video bed); the audio heartbeat and tick ring (no tracing and no allocation in the callback, checked by a counting allocator in debug builds); the energy barge-in fallback; short recordings for enrollment and the first run. `eileen-audio-win`: endpoints, loopback, the Communications category option with Windows ducking opted out, MMCSS (system volume moved to `eileen-desktop-win`'s `SystemVolume`). `eileen-speech` (lib and bin): the pipe protocol of section 3.3.7 with `source`, length validation before allocation, and TraceCtx in JSON; `crates/eileen-speech/tools/build-sherpa-native.ps1`, the script WP0's `native.yml` workflow runs, which builds sherpa-onnx 1.13.8 shared MT without espeak-ng and piper-phonemize, checks the output for espeak-ng symbols and data, and publishes it as a release asset with its SHA256 for `fetch-native` (the new pin goes into xtask's native table by a one-line amendment); the plug-in traits `VoiceActivity`, `Recognizer`, `TurnDetector` and `Synth`, each reporting its languages (a `LanguageSupport` read from its model's `models.toml` entry, which records the publisher's language tags) and measured cost, with the engine per stage chosen by `speech.vad`, `speech.asr` and `speech.turn`; Silero VAD v6.2 through sherpa-onnx; Nemotron streaming int8 fed only during speech, with confidence; turn IDs at speech onset; each turn's active speech level in `EndOfTurn.level_db`; Smart Turn v3.2 through `ort` =2.0.0-rc.13 (with `copy-dylibs`) and the Rust log-mel, fused with continuation cues and the stretched cap; Kokoro through `ort` with Eileen's espeak-free front end (the CMUdict lexicon and a small permissively licensed ONNX G2P for unknown words, mapped to Kokoro's phonemes), with clause chunking, a short first clause, synthesis ahead of playback, pause and resume, and the phrase cache (stock and per-app launch phrases); barge-in windows with the stricter threshold while other audio plays; `Synth` implementations for Kokoro, Pocket TTS (through the espeak-free sherpa-onnx build, or `ort` on the same graphs if that build has no TTS) and Chatterbox (Turbo from the official ONNX graphs in q4 or q8, Nano from a community export once licence and digest check out; no PyTorch, no Python), the engine per voice read from `voice.engines.<name>`, the `VoiceRealtime` check for the settings flow, the per-reply watchdog and whole-line rendering above 0.9; `eileen-speech voice render` with the opt-in AudioSeal stage and `check-mark`, AudioSeal's generator and detector exported once to ONNX by a pinned script under `crates/eileen-speech/tools/` and published as a release asset; drafts of the two licence questions of owner answer 14 (Pocket TTS and Chatterbox-Nano), posted to the maintainers only after the owner's go-ahead; CAM++ for enrollment and the speaker check (adopted only if it measures well); consent enrollment, dropped clips with consent, voice deletion; the first-run calibration of section 2.8 (echo delay and enhancement measured while Eileen's own prompt plays, mic level and VAD offset from the clip, the name variant from the greeting's transcript, the recognizer's mean confidence against the threshold in `models.toml` with the Parakeet comparison when it is low, the speech-level reference for the addressee score, measured exactly like every turn's `EndOfTurn.level_db`, the speaker enrollment if adopted, the clone reference) written to `calibration.toml` and sent to the core as `VoiceEvent::Calibration` (and `Calibration(None)` after "forget my voice"), the clone-timing measurement in `eileen setup` on a bundled synthetic reference clip, "forget my voice", and the clone-timing check; the name-recognisability check; the two embedding candidates of section 3.3.10 (the MiniLM-class transformer with an own WordPiece tokenizer, and the static-embedding model in plain Rust), measured on the paraphrase cases and the 20 ms budget, the better one adopted; hotwords (only if beam search measures acceptable); Parakeet v3 on demand with idle unload; the low-memory profile's models; the start-up check of the loaded `onnxruntime.dll`; EcoQoS opt-out; `models.toml` (URL, size, full SHA256, license, residency) and the speech part of `eileen setup`; `eileen-speech voice list|learn|use|delete|render|check-mark` and `eileen-speech setup` (which `eileen voice` and `eileen setup` run); the transcript-injection stub mode (`eileen-speech --stub <file>`). `eileen-dictation`: tier-0 cleanup implementing `DictationCleaner`, SpeakoFlow's 79 conformance cases (MIT, attributed) and Eileen's typed-slot positives and negatives.
+- **Acceptance.**
+  1. Synthetic echo through `RoomMixer`, with Eileen speaking and with a music bed and a speech-video bed: zero far-end words leak into the transcript, the user's command is fully recovered, and barge-in false triggers stay under 1 per 10 minutes of video.
+  2. Barge-in on the owner's PC with speakers: speech onset to silence at most 150 ms at p95 over 20 trials, with the correct heard prefix; a backchannel resumes.
+  3. Idle listening: the speech process under 8 percent of one core and the full stack about 1.25 GB resident; the core's idle CPU with AEC bypassed and running, and the loopback capture's own cost; recorded with the machine state.
+  4. End of turn: half-finished-sentence cases do not end early on the synthetic set (and on the owner's consented local recordings once he records them, never committed; the gap is noted until then).
+  5. Measured with the exclusive slot and recorded: Kokoro first clause and real-time factor through the shipped sherpa-onnx path on a quiet PC; Kokoro int8 against fp32 under equal load; Parakeet Unified EN against Nemotron (WER, partial latency, tail, RSS); the embedding model's round trip for a 12-word utterance against the 20 ms p95 budget; the first command after 30 idle minutes with Chrome, VS Code and Resolve open, with and without `pin_working_set`.
+  6. The owner's head-to-head, with at least 6 GB free: Pocket TTS against Chatterbox-Nano and Chatterbox-Turbo, each cloning the owner's own voice (consented, never committed), with time to first audio, real-time factor at 2, 4 and 8 threads, resident memory and a listening test; "use Chatterbox for <voice>" and `eileen voice use <voice> --engine chatterbox-turbo` go through the settings flow with the `VoiceRealtime` check, say whether the engine will speak live, and "undo that" reverts; the watchdog's live or announcements-only decision follows the numbers.
+  7. Voice enrollment refuses a consent clip from a different speaker (committed synthetic WAV fixtures); a dropped clip without its owner's consent recording is refused; deleting a voice, and declining the first-run reveal, remove every file (`NoFileLeft`).
+  8. Dictation cleanup passes all 79 SpeakoFlow conformance cases and Eileen's negatives ("I actually enjoyed the movie" untouched); fuzz targets `dictation_cleanup` and `speech_frame` clean for 10 minutes each (`long.yml`).
+  9. Mute stops capture within one buffer and the Windows microphone-in-use indicator goes off (manual check recorded); `eileen-speech` exits with a clear error when the wrong `onnxruntime.dll` is loaded.
+  10. The transcript-injection stub lets CI run end-to-end scenarios with no models and no audio device, and the neutral speech and audio crates' tests pass on `ubuntu-latest`.
+  11. No watermark by default: a test asserts the synthesis pipeline of every engine has no watermark stage with default settings, and the AudioSeal detector finds no mark in a default `voice render` file; with `voice.watermark_exports` on, it finds the mark in a rendered file and in a recording's audio lane. The release lane's licence listing shows no GPL component, and `native.yml`'s archive contains no espeak-ng symbol or data file.
+  12. The first-run calibration on the owner's PC records echo delay and enhancement from Eileen's own prompt, the mic level, the recognizer's confidence, the speech-level reference for the addressee score (sent to the core as `VoiceEvent::Calibration`; a committed synthetic clip played 12 dB quieter gives an `EndOfTurn.level_db` 12 dB lower, within 2 dB) and, when the recognizer mishears "Eileen" in a recorded greeting, a name variant that then makes the name match; the confidence threshold is measured on WP4's corpus and written to `models.toml`, and a committed low-confidence synthetic clip triggers the offer of the other English model with both confidences recorded; declining the reveal, or missing the 40 s render limit, leaves `calibration.toml` and no audio, and "forget my voice" removes it (`NoFileLeft`).
+
+### 6.7 WP5: Desktop control
+
+- **Branch** `wp5/<topic>`. **Depends on** WP0 phase A, WP1, WP2 (and so on slice S1 having passed). **Desktop** yes. **Wave** W3.
+- **Owns** `crates/eileen-desktop`, `crates/eileen-desktop-win` (including the `testpad` fixture as an example binary), `scenarios/desktop/`, `docs/wp/WP5-desktop.md`.
+- **Builds.** Port the computer-use proof (`C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\computer-use\proof\` on the owner's PC; bump rmcp to the workspace's 3.6.0) into the neutral server (`eileen-desktop`: the 18 tool handlers and their `ToolSpec`s with per-op tiers, `observes` rules (`ByTarget` for `desktop_tree`, `desktop_state`, `desktop_windows`, `desktop_wait_for` and every action whose verification hint reads a value, name or title back) and output schemas, the safety rules of section 2.6 including the target-category tiers from `app-categories.toml` (process names, AUMIDs, browser hosts and title suffixes, the recorder category), Eileen's own hotkeys as blocked combos, the send-like word list with localized forms, typed-text redaction and Luhn, per-app grants, element indexing and selector identity, evidence-based re-finding for self-healing, DPI mapping math and the mapping line, set-of-mark drawing, the app-name scorer with the margin rule, the insertion ladder's decisions, the manifest and app capabilities, `sanitize`, screenshots as text plus image only) and the Windows backend (`eileen-desktop-win`: per-monitor-v2 first; UIA cache requests on a dedicated MTA thread with deadlines, abandoned and replaced on a hang, the process killed only after three abandoned threads; window management and launch on their own thread; `SetWinEventHook` and on-demand UIA (no global focus handler for Chromium and Electron) feeding `DesktopDelta`s and the DesktopState cache; Raw Input for physical activity; monitors with stable ordinals; DWM frame bounds; executable versions; `BitBlt` and `PrintWindow` capture, resize to 1280 px and JPEG q80; `SendInput` one event at a time with the foreground and physical-input guard, leases, cursor restore only if unmoved; `ElementFromPoint` and `WindowFromPoint` checks; Invoke with a foreground check before and after; the `shell:AppsFolder` index persisted to `cache\apps.json` and refreshed in the background, AUMID launch through `eileen_supervisor::user_launch` that waits for the main window; moves and snaps against work areas; `Show` with the idle check, the spoken line from its reason kind and `Back`; the lease's spoken notice, countdown and hand-back line; `WM_CLOSE` through `SendMessageTimeout` with an unsaved-state check; system volume through `SystemVolume` (IAudioEndpointVolume); the web content tree of one Chromium window on demand as the `Dom` rung behind `desktop.web_tree`; the browser page's address-bar URL over UIA (its host in `WindowInfo.url_host`, unknown when the bar cannot be read; the full URL only in the focus change the ledger stores, never for a private window); the `test-physical` feature with its named-pipe injector, never enabled in a shipped binary; bounded cross-process calls; `EM_REPLACESEL`; the port of Handy's clipboard transaction (MIT, attribution in `NOTICE`) with terminal-class detection for Ctrl+Shift+V; paced Unicode `SendInput` with read-back; TextPattern selection and the clipboard fallback with the exclusion formats; presentation state; microphone-in-use detection). `DesktopIntent` with the configurable wait and cancel. Fix the testpad fixture so its controls stay inside its window at any DPI. EcoQoS opt-out at start.
+- **Acceptance.**
+  1. On owned fixtures (testpad, Notepad launched by AUMID and closed unsaved, an isolated Edge profile): background Invoke and SetValue verified by the fixture's own state; password fields refused (also through `ElementFromPoint` for a coordinate click); every blocked combo refused; a coordinate click that would land on another window or on an Eileen window refused; a foreground action with the user idle succeeds after the spoken notice and countdown and restores the previous foreground with the hand-back line; with the `test-physical` injector standing in for the user, moving the mouse during a lease, and separately typing during a synthetic sequence, each stop the sequence within one event, and the cursor stays where the "user" put it; the owner repeats both cases once by hand with the real mouse and keyboard (the Raw Input path itself) and the result is recorded in the work package file; when Windows refuses the foreground, it says so and never loops; an Invoke that moves the foreground on a Win32 button is detected and handled.
+  2. `desktop_state` p95 under 100 ms on the owner's desktop from the cache; `desktop_tree` for Notepad and Explorer within the proof's numbers; recorded.
+  3. A deliberately hung UIA provider fixture makes the call fail with a typed error within its deadline, the thread is abandoned and replaced, "open Notepad" and a window snap still work during the hang, and only repeated hangs restart the sidecar, with the core listening throughout.
+  4. A real Claude worker on the owner's PC (`real_claude::`) opens Notepad, writes a sentence with `desktop_set_value` and reads it back through the shim and dispatcher, after the per-app consent question; the trajectory has every step with a verification hint and a rung.
+  5. Dictation insertion is exact in a RichEdit fixture via `EM_REPLACESEL` and in Notepad and an isolated Edge text area via the clipboard transaction, with the user's clipboard restored (a full-format snapshot test with an image on the clipboard); a clipboard entry marked for exclusion is never read into DesktopState.
+  6. The Chromium probe is recorded: time for web content to appear over UIA once asked, whether a page password field is detected through `ElementFromPoint`, and Chrome's private bytes and CPU with Eileen running against not running.
+  7. `scenarios/desktop/` covers open app (including the ambiguous video-editor case), snap to a half, move to a monitor (`monitors>=2`), close, volume, what am I looking at, and insert text; they replay in simulation and run in the desktop lane.
+  8. DPI mapping unit tests for 100, 125, 150 and 200 percent and for monitors left of and above the primary (fakes); the testpad fixture keeps its controls inside its window at 144 DPI.
+  9. The first nightly proves whether hosted Windows runners give UIA an interactive desktop with a Notepad round trip; if not, it is recorded and desktop tests stay in the owner and fleet lanes.
+  10. Neutral table tests of the tier decisions: Enter and a send-like click in a fixture window whose process is in the mail category, and Enter in a browser window whose title marks a chat site, are tier 2; `Shift+Delete` is tier 2; pressing any of Eileen's configured hotkeys, including the approve chord, is refused; typed text holding a Luhn-valid card number or a secret-like token is tier 3, and the Redactor's patterns are tested on the same path; `Show` while the user is typing is refused and the result stays on the HUD.
+  11. On the testpad and an isolated Edge profile: the web content tree of a fixture page serves `desktop_tree` with rung `Dom`, a click on one of its elements needs no screenshot, and the cost against the Chromium probe's baseline is recorded; that tree read is classed `Web` by `observed_source`, and the testpad's tree `Tree`.
+  12. Apps Eileen launches leave its jobs (section 2.1): Notepad launched by `desktop_launch_app` and a fixture "host app" launched by `apps_open_path` are in no Eileen Job Object, carry none of Eileen's environment variables and keep running when the desktop and apps sidecars are restarted; the fixture host app then starts `eileen-shim --role session` from the install folder, and the dispatcher accepts it for the session role (the case of the owner opening the Claude app by voice), while the same shim started from inside a worker's job is refused.
+  13. The address bar (section 7, "Carried into packages"): on an isolated Edge profile, and on Chrome when it is installed, a fixture page loaded with a path, a query and a fragment gives `WindowInfo.url_host` equal to its host and a focus-change URL equal to the URL loaded (the scheme restored when the bar hides it), in a normal and in a private window (whose URL reaches no store); a window whose bar cannot be read reports its host as unknown; the work package file records which browsers and settings shorten or hide the path or query, and for those the URL rule's rule 3 stays fail-closed.
+
+### 6.8 WP6: App adapters
+
+- **Branch** `wp6/<topic>`. **Depends on** WP0 phase A, WP1, WP2; step 0 depends on nothing. **Desktop** yes. **Wave** step 0 in W1, the rest in W4.
+- **Owns** `crates/eileen-apps` (including `models.toml`), `crates/eileen-apps-win`, `adapters/resolve/`, `scenarios/apps/`, fuzz targets `resolve_reply` and `registry_reply` with their corpora and regressions, `docs/wp/WP6-apps.md`.
+- **Step 0, the correction-route spike** (W1, on the owner's PC, no Rust compiling, with his agreement (owner answer 9) to launch Resolve and create one dedicated test project, under the exclusive build slot while Resolve runs): with the Lua bridge from the app-hooks report (and the `hookprobe` binary already built in `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\app-hooks\hookprobe`), test in order: importing a generated Fusion `.setting` with an ellipse mask keyframed from boxes and a sharpen node through `ImportFusionComp` (and whether it renders); a DRX that carries a window at a given rectangle; undo per route (deleting an imported composition by name and loading the previous current one with `DeleteFusionCompByName` and `LoadFusionCompByName`, and checking that loading a color version does not remove a composition; `AddVersion` with `LoadVersionByName` for the DRX route); `GetRenderJobStatus` progress; the cost of exporting stills every N frames across a clip in one bridge call (`export_stills`) for tracking; whether `ApplyGradeFromDRX` replaces existing nodes. Record the results and the chosen route in `docs/wp/WP6-apps.md`, and open an amendment to section 3.3.9 if `ResolveOp` needs to change.
+- **Builds** (W4). In `eileen-apps` (neutral, tested on Linux): the tool handlers and `ToolSpec`s with per-op tiers, read-only flags, idempotence, inverses, output schemas, `observes` rules (`routes_lookup` and `apps_media` `status` are `Web`, `apps_recent` is `ByArgs`, and the user's own Resolve project and timeline reads are listed in `contracts/observes-none.toml`) and `preview_before`; `apps_open_path`'s tier from the runtime's `PathFact`s (`runs_code`, the class); `routes_lookup` (the registry query through `curl.exe` started by `eileen_supervisor`, one fixed host, a 10 s deadline, a 256 KB cap, a day's cache, the fuzzed `registry_reply` parser, registry ids, packages, status and verified namespaces in the reply, `from_app_vendor` from `app-vendors.toml`, which this package writes and maintains); the record of each approved server's tool names in `cache\mcp-tools.json` (one `tools/list` run through the supervisor right after each install, the sidecar being the file's only writer); the installer for approved MCP servers (npm with `--ignore-scripts` and PyPI through `uv` at the exact registry version into `mcp\<app>\`, an app-bundled executable by its confirmed path, refusals for install scripts, OCI images and remote-only entries, the recorded digest); the render discovery poll (`is_rendering` every 5 s while the bridge is up, at once on request) and `RenderStarted`, `RenderProgress` and `RenderDone` events; the ResolveMCP client path (when `ResolveMCP.exe` exists, each op served through it where it covers the op and through the bridge otherwise, the rung recorded per step); drop-frame-aware absolute timecode math; the bridge line protocol parser (parse JSON, never compare strings); the YouTube URL builder with `&t=`; SMTC live position; the media history; face picking, crops, interpolated tracking from per-frame boxes, the variance-of-Laplacian metric; the Fusion `.setting` generator (and the DRX generator if the spike says it works); recent-work ranking with caller-supplied focus-time boosts and thumbnails for contact sheets; the manifest and app capabilities with real versions. In `eileen-apps-win` (unsafe only in its `ffi` module): `AppHost` implementations for Word, Excel, Explorer, Photoshop and the Resolve process gate; one SMTC manager for the process lifetime with the four subscriptions and control confirmed by the next event; URLs, allowlisted URIs and paths opened through `eileen_supervisor::user_launch` (the shell's own `ShellExecute`, never inside an Eileen job), with the wait for the expected media title and the `reuse_playing` seek; the late-bound `IDispatch` helper on per-target STA threads with call timeouts and an `IMessageFilter`, attaching through the running object table with `CLSCTX_LOCAL_SERVER`, for Word, Excel, Explorer (tabs) and Photoshop (tested against a fake COM target only); the recent-work index (jump lists, `.lnk` bytes, Office MRU, a `ReadDirectoryChangesW` watcher, the media history). Resolve: the bridge in `adapters/resolve/eileen_resolve_bridge.lua` with every method of section 2.7, spawned once through `eileen_supervisor` and gated on `Resolve.exe`, readiness polling after a launch, version reporting, render progress events for app tasks. YuNet (OpenCV Zoo, MIT) through `ort` against the shipped DLL, pinned in `models.toml`. `eileen-apps doctor resolve [--route mcp|bridge]` (which `eileen doctor resolve` runs; `--route` sends every check through one Resolve route). EcoQoS opt-out at start. Playwright MCP stays optional and documented, not built.
+- **Acceptance.**
+  1. On the dedicated test project in Resolve Studio 21.0.1: `goto` 15:30 lands on the computed timecode for 24, 25, 29.97 drop-frame and 30 fps timelines starting at 01:00:00:00, after opening the Edit page; `export_still` writes a frame and `export_stills` writes every Nth frame of the clip; the chosen route's edit and its journaled inverse restore the clip (the Fusion route: Eileen's composition deleted and the previous one current again; the DRX route: the previous version loaded); `SetCurrentTimecode`, `GetCurrentVideoItem`, `ExportCurrentFrameAsStill` and the edit's latencies are recorded; a render started through `render_start` reports progress as an app task. Once the owner is on Resolve 21.1 or later (owner answer 9), the same checks pass through ResolveMCP for every op it covers and again with `doctor resolve --route bridge`, so the Lua bridge stays a proven fallback.
+  2. With Resolve closed no call stalls: the gate answers that Resolve is not running in under 50 ms; launching it, `hello` is polled until ready and the project and timeline questions follow the flow of E7.
+  3. YuNet finds the faces in a committed synthetic test image (generated, no real person), picks left and right correctly, returns a crop, tracks a moving synthetic face across stills, and sharpness rises after a known sharpen filter.
+  4. SMTC pause, play and seek on a silent-WAV test media session, each confirmed by the next event; on the owner's PC a YouTube URL with `&t=200` plays from 3:20, a seek to 60 s through `apps_media` is confirmed once the session returns, and "play that video at 1:10" resolves through the media history with no model; `apps_open_url` with `reuse_playing` on a session already showing the expected title seeks it and opens no second tab or window (`reused` true).
+  5. Word selection and Excel active cell read from documents the test creates and closes without saving; `apps_open_path` opens a fixture file; `apps_open_uri` refuses a scheme outside the allowlist.
+  6. Fuzz target `resolve_reply` clean for 10 minutes (`long.yml`).
+  7. `scenarios/apps/` covers Resolve goto, the crop confirmation, undo on the chosen route, render progress for a render started by voice and for one started in Resolve's own window (discovered by the poll), YouTube play-at and seek, pause and play, Word selection; B1's deterministic phases run end to end with a stub worker for any delegated step.
+  8. `routes_lookup` parses a recorded registry reply into `Untrusted` server entries with registry ids, packages, status and the namespace of each server name, and never installs anything; against `app-vendors.toml`, a recorded entry `io.github.someone/resolve-mcp` gets `from_app_vendor` false and the display "GitHub user someone", one in `com.blackmagicdesign` gets true and "blackmagicdesign.com", and no field is taken from the registry's `_meta` "official" block; `registry_reply` fuzzing is clean for 10 minutes; after an approved `mcp.servers` change, the installer puts a fixture npm package at its exact version into the app's folder with `--ignore-scripts`, records its digest, and the generated MCP config launches it from there (no `npx`); a package that needs install scripts, an OCI image and a remote-only entry are refused with a sentence; with ResolveMCP present (once the owner is on 21.1 or later), the map of ops it covers is recorded and each covered op's steps carry rung `AppMcp`.
+
+### 6.9 WP7: Intent, settings and learning
+
+- **Branch** `wp7/<topic>`. **Depends on** WP0 phase A, WP1, WP2, WP3. **Desktop** no. **Wave** phase A in W3 (with WP5), phase B in W4 (with WP6).
+- **Owns** `crates/eileen-intent`, `crates/eileen-skills`, `crates/eileen-learn` (including `tests/scripts/` for librarian and skill-invocation stub scripts), `crates/eileen-config`, `scenarios/learning/`, `scenarios/settings/`, fuzz targets `config_toml`, `skill_record` and `command_grammar` with their corpora and regressions, `docs/wp/WP7-understanding.md`.
+- **Phase A builds** (W3). Its first pull request wires `eileen_intent::Resolver` into the composition root in place of WP2's `SliceResolver` and deletes it (an amendment to WP2's files), with slice S1's stub variant still green. `eileen-intent` (pure, implements `IntentResolver`): the grammar of section 2.4 as data with its precedence, slot resolvers including `Media` and `Ambiguous` results, normalisation, the content-word rule, learned templates (port the matcher from `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\learning\matcher\`), BM25 hints with an absolute floor, depth overrides, the fact phrases producing `CoreCommand::Fact(FactCommand)` with the statements-only bounds applied to slot text, the subject key, the feedback scope from `follow_up`, the complaint lexicon and `fact-subjects.toml` (section 2.10 item 11), `follow_up` over `ResolveCtx.last_turn` (pronouns and ellipses bound by the slot resolvers to the last turn's items, job, apps, files and media, else a shared content word or topic; section 2.8 rule 3), the media-control and stop words exempt from suspension (outside calls), exact-repeat and confirmed phrasings (slot-free) and slot aliases at L1, routing by level (4 replays, 3 becomes the `[match]` block, 1 and 2 become hints), `introspect` taking the route statistics and ranking routes with `eileen_skills::routes::rank`. `eileen-config`: loading with diagnostics that name lines, comment-preserving apply with `toml_edit`, the `SettingSpec` registry for every key of section 3.3.11 with risk classes (the Safety list of section 2.11 as a constant with prefixes, and its test), apply modes and bounds (approve and deny chords need two modifiers), the `VoiceRealtime` and `BrainBenchmark` check kinds, the `SettingsValidator`, profiles, `explain`, the generated schema and default file, secrets as `SecretString` through the `SecretStore` trait, the watcher hook, `eileen config` and `eileen apps add-mcp`. `eileen-skills` (pure): the template grammar, the linter with every rule of sections 2.10 and 3.3.13, computed provenance (the literal definition, tracing to the user's transcripts, tool schemas, untainted worker steps and approved lines, the eight-token overlap with observed text, the whole-draft hold for free-text taint), the extended deny-scan with the provenance table of section 2.10 item 9 (kept, held or rejected by literal class), `slots::from_args`, `facts::used`, `routes::{rank, facts_line}`, `sources::line`, `ladder::next_level` over `LadderPolicy` (light and standard, the light level-2 threshold included), the success verdict, forget planning (phrasings, answers-cache rows and source topics included); the `SkillEngine` port's ladder, verdict and route-line parts. `eileen-learn`: the recorder (steps keyed by `CallId`, each call's structured output, tainted flags, the observed-text blobs of outside reads, redaction before disk, skill-use attribution with slot values by the order of section 2.10 item 3, the facts bound into each job, regret signals and the `learn.verdict` event), `learn.sqlite` with `secure_delete`, the 200 MB cap, retention, evidence shrinking and `librarian_runs`; the per-session snapshot writer with manifests, the verifier (before spawn, at job end, on every `SkillInvoked`) and `snapshot_tampered`; deleting snapshot folders when sessions exit and orphans at start; `pending\` with whole-draft review (`HudPanel::DraftReview`) and line approval; the librarian scheduler (pre-filter, batching, plan-share caps, on demand with `--wait`, one distillation per job through the `DistillState` row (`--wait` subscribing first, then returning the recorded outcome or waiting for the running batch), exactly one of the drafted (with its `held` value), rejected, skipped (with its `SkipReason`) or deferred (with its `DeferReason`) events per attempt, `--wait`'s exit codes, the withdrawn event when a later undo removes a draft's only evidence, below-normal priority, a dropped draft after three rejections with the job's row final, the pre-filter's order with `NotOnClaude` for fast-path jobs, a crashed librarian's batch deferred and orphaned rows turned into `Deferred(Cancelled)` at start) and the `learn` toolset handlers (`learn_skill_propose` returning lint errors, `learn_skill_history`, `learn_fact_propose`); the user model with `FactDelta`s, the deterministic fact path's store side, scopes, retirement and repair queuing through `facts_used`; the phrasing store (candidates with their source turn and job, exact repeats, confirmations, slot aliases with their subject keys from clarifying answers and "X means Y", deletion of a subject's aliases on a correction with the rows kept for undo, ephemeral first-run phrasings deleted when the first run ends); route proposals, route statistics (sent as `LearnEvent::RouteStats`) and source statistics (`source_stats`, sent as `LearnEvent::SourceStats`) with `eileen apps proposals`; the ledger with document identity, focus time and a browser window's redacted address-bar URL, exclusions and off-the-record; forget with tombstones and the purge across its stores (the `eileen.db` half is WP2's `PurgeJobs`), including live sessions' snapshot folders; `learned_query`, `learned_forget`, `learned_correct`; `eileen skills` and `eileen facts`; skills-as-scenarios when a skill becomes trusted.
+- **Phase B builds** (W4). Recipes with operands (slots and pointers typed against op output schemas), `call`, `ask`, `delegate` and `confirm` steps, fallbacks, per-op checks with operand expectations, idempotent retries, eligibility with vocabulary literals (delegate goals and questions exempt from the vocabulary rule and traced as literals), the rule that a `delegate` is followed by a checked `call`, and the tools a `Replay` origin may call; shadow agreement by the rules of section 2.10 item 7 (asked slots from the matched `ask_user`, unobserved reads, shadow checks through `SkillEngine::shadow_checks`, fallbacks taken where a replay would take them, delegate spans from the step before the delegate, unmatched worker calls, option-free questions, the search for one consistent assignment of worker calls to steps with its bound, the three verdicts); the `ReplayMachine` behind `SkillEngine` (levels 3 and 4, handoff briefings, unseen enumerated values sent to a worker once); self-healing through the desktop server's evidence-based re-find; probation on app version and tool schema hash changes; L2 semantic matching over embeddings from the speech process with confirmed phrasings (slot-free targets only, the similarity threshold and the entity guard); repair committed only if the skill's scenarios replay green; the B8-curve fixture skill.
+- **Acceptance.**
+  1. The learning-loop report's eleven CI acceptance tests (its section 6.5) pass as written, with versions in SQLite instead of git and with the changes of section 2.10 (per-op checks, computed provenance, the success definition).
+  2. Matcher golden file: the ten utterances of learning-loop report row 15 give exactly those results; p99 under 1 ms with 5,000 skills.
+  3. Resolver golden file: every grammar phrase of section 2.4; ten paraphrases per phrase that must not trigger an action unconfirmed; the ambiguity cases (the video editor, a bare "go to 15"); a learned template that tries to shadow "stop" or "undo that" is rejected by the linter; "the girl on the right" in a template with only a position slot becomes a hint, not a replay; the fact patterns store facts for "my timelines start at zero", "I prefer Celsius", "I don't like spicy food" and "remember that the demo repo is flaky-login", and produce no `Fact` (the utterance reaches the brain) for "my tests are failing, fix them", "my laptop is slow, what's using memory", "I like this one, open it", "my build is broken", "I don't like how this looks, make it bigger", "my mum is calling, pause it" and "my Chrome is slow" (a complaint word); "remember that the demo repo is flaky-login" and "forget that I like jazz" match although their entries' own words are request verbs; "I don't like spicy food" carries subject key "spicy food" and `SameSubject`, scoped to the food topic when said within 120 s of a food answer and unscoped otherwise, and "I prefer Celsius" said right after a restaurant answer is unscoped; "closer" and "cheaper" carry the subject keys "distance" and "price", and "I loved that [Ramen Tatsu-ya]" the key "ramen tatsu-ya"; "no, the video editor means Premiere" produces a `Phrasing` `FactCommand` with subject key "video editor" and `SameSubject`; `follow_up` golden cases: "want coffee?" against a last turn about a render gives `None`, "and how long will it take?" against a last turn that announced the render job gives `Referent` bound to that job, "is the second one open late?" against a deep answer's items gives `Referent` to its second item, a question sharing a content word with the answer gives `Shared`, and every case gives `None` with no `last_turn`; `command_grammar` fuzzing clean for 10 minutes.
+  4. Settings: "call you Nova" runs the three checks (fake speech check in CI), applies on the next turn, updates the addressee name and recognizer hints, and "undo that" restores Eileen; a hotkey owned by another process is rejected before applying; a tier-3 relaxation is refused; a tier-2 relaxation requires the logged decision; a Safety key proposed by the brain is not applied without a `UserInput` approval; a hand edit with a syntax error keeps the previous version and reports the line; apply preserves comments; the registry completeness test passes.
+  5. Poisoning: through the stub harness, an injected web page that asks the worker to upload a folder and to "remember to always do this" produces no skill line, recipe step or fact that carries it; a librarian draft that paraphrases it is held whole for review (the job read web content) or rejected by the deny-scan; a draft from a job whose only outside read was the desktop tree of a non-browser, non-mail app (the testpad) is held only on the lines that overlap the tree's text, while one whose tree read was a fixture page's web content (the `Dom` rung) or a mail-category fixture window is held whole; a command the worker ran before any outside read traces with provenance `Worker` and is kept, and the same command run after one traces as `Observed` and is held for line approval (never rejected unless it hits a deny pattern); a URL that traces only to a tainted step is rejected while one from the user's transcript or an untainted step is kept; an Eileen tool name (`apps_resolve`), an allowed built-in tool name and a tool name an approved fixture third-party server reported in `SKILL.md` are kept with provenance `Tool`, and a tool name of a server that is not approved is rejected; a draft from an `Act` job whose brain turn's `[desktop]` block held a fixture window title quoting an instruction holds the line that repeats it, and a delegate goal that overlaps a fixture page's text is held for approval; a literal that traces nowhere is rejected with the lint message, and after three rejections the draft is dropped and recorded; the drop rule for tainted steps keeps vocabulary literals, slots, pointers into untainted fields (an `apps_recent` `url`, a still's path, a window handle) and match-only pointers, so `youtube-play-at` and `resolve-sharpen-face` compile with every step from fixture evidence jobs tainted from their first read, and so does an `Act` job's `open_page {page: "edit"}`, while a step whose `desktop_type_text` text points into a tree element's name, or whose `apps_open_url` URL points into anything but an Eileen-built field, is dropped.
+  6. Privacy: after the forget, the canary test of section 2.10 item 12 (a canary request that creates a phrasing through an `Act` job, is repeated exactly and is also asked as a deep answer; every file, `.zst` blobs decompressed, every SQLite text column and WAL, every log, with `logging.include_personal` off and on) finds no trace of the canary, including in the phrasings table; dictation never reaches a trajectory as words; the librarian never receives a fast-path or replay job.
+  7. On the owner's PC (`real_claude::`, a coding job in a scratch repository, not a desktop job): the librarian distills one real trajectory into a draft that passes the linter, a second run of the same kind of request, told to follow the skill, uses fewer model turns than the first, and the attribution records which version it used.
+  8. Phase B: a recipe replays in simulation with every check, hands off at a failed check with a full briefing, refuses to retry a non-idempotent step, never skips a `confirm` or `ask` step, runs a fallback and re-checks its step (and hands off on the second failure), and the shadow-agreement table tests pass, with these cases among them: the computer-use route of `resolve-sharpen-face` agrees when the worker's desktop calls fall in the delegate's span and the sharpness `call` after it matches and passes, and disagrees when that span is empty or the sharpness postcondition fails; a shadowed run in which the worker found no current timeline, asked "which project?", loaded the one the user chose and read the timeline again takes the fallback and agrees (the asked slot bound from the user's answer), while one that loaded a different project disagrees on the argument; a worker that made an extra tier-1 call outside every span disagrees, and an extra tier-0 call does not; a recipe whose check names `fusion_comps` agrees only through the core's shadow check, and is inconclusive when that check could not be issued; an unobserved read whose output a later argument needs makes the run inconclusive; the linter rejects a pointer to a later step, a pointer from a main step or another fallback into a fallback, a pointer the output schema lacks, an array operand in a numeric expectation without `$len`, a `call` or `delegate` step with no postcondition, an explicit postcondition on an `ask` or `confirm` step, an `ask` into a slot that is undeclared or not `asked`, a check calling an op that is not read-only (`export_still`), a free-string literal in a non-read step's arguments, a `delegate` with no checked `call` after it, a delegate goal that hits a deny pattern or carries a URL that traces only to a tainted step, and a `settings_apply` step, and it accepts a fallback step pointing to an earlier step of its own fallback; the three worked recipes of section 2.10 lint clean on every route (Fusion, DRX and computer use), with each delegate goal of six tokens or more that traces nowhere held as a line for approval rather than reported as an error; `call apps_media status` and a check on `apps_media status` resolve to the same `OpSpec`, and a recorded `desktop_window` `focus` call splits into the tag `focus` and `args` holding its `hwnd` and is rebuilt into the same wire form; more shadow cases: in `youtube-play-at` a tier-1 worker call made before the failing `match` call is extra (the fallback delegate's span starts after `match`) and makes the run disagree; a computer-use run whose worker exported the stills between `pick` and `after_still` but made no edit disagrees with `EmptyDelegateSpan`; the `confirm` step with no options agrees with any `ask_user` between its neighbours' matches; a Fusion-route run whose worker made an extra argument-free `export_still` before the one its `faces` call read still agrees, with `still` assigned to the export `faces` read (not the first one) and `after_still` to the export `after` read, the extra one ignored as `artifact_only`; the largest search count over every shadow case and over the B8-curve fixture's runs is recorded in the work package file and stays under 1,000, a hundredth of the bound (section 7, "Carried into packages"); `youtube-play-at` run through its fallback in simulation opens the video once (the stub media session shows the title after the delegate, and `open` reports `reused`); the B8-curve fixture reaches the levels section 2.10 predicts by run index in simulation, light skill trusted after run 1 included.
+  9. `scenarios/learning/` (what have you learned, what do you know about me, correct a fact by the grammar and through `learned_correct`, "closer" and "I loved that place", forget a skill and a fact, "forget that I ...", rollback, replay with a failed check handing off, learn from that now said inside the regret window (the window closes, `learn.verdict` fires, and `distill --wait` returns on `learn.skill_drafted` with `held = whole` for a job that read a web page, with `held = none` for one that read nothing from outside, and on `learn.distill_skipped` with reason `TooShort` for a two-step job), `distill --job --wait` called after idle distillation already finished the job (it returns at once with the recorded outcome, and no second draft appears) and called while idle distillation is running it (it waits for that batch's event), `learn.distill_skipped` with `NothingProposed` when the stub librarian proposes nothing and with `DistillOff`, `learn.distill_deferred` with `PlanCap` when the seven-day window is above 70 percent and with `LibrarianFailed` for every job of the batch when the stub librarian crashes (each with `--wait`'s exit code), a job whose draft was rejected three times never picked again by idle distillation, a runtime killed while a batch runs leaving rows that the next start turns into `learn.distill_deferred` with `Cancelled` (after which idle distillation picks those jobs again) while a `--wait` that lost its connection exits 4, a clean replay of a fixture skill ending in `TooShort` or `StatsOnly`, a one-step fast-path job ending in `TooShort` and a fixture fast-path command of three non-read steps ending in `NotOnClaude`, an undo of the "learn from that now" job that withdraws its draft, a route proposal accepted by voice that then needs the Safety approval, a `routes_propose` whose `registry_id` is not in the job's cached `routes_lookup` reply refused and logged, a matched proposal whose spoken line and HUD fields come only from the registry entry (a worker `why` claiming "official" is shown only as Claude's note), a squatter entry `io.github.someone/resolve-mcp` whose `_meta` carries the registry's "official" block spoken as "published by GitHub user someone, not by Blackmagic Design" with `from_app_vendor` false, and an entry in the `com.blackmagicdesign` namespace spoken as published by the app's maker, with "official" never said or shown, a `DeepLink` proposal that becomes a `uri_schemes` change and an `AppApi` proposal that becomes an approved reference fact) and `scenarios/settings/` (including the engine per voice and a backend switch with its benchmark warning) replay green; `config_toml` and `skill_record` fuzzing clean for 10 minutes.
+  10. A snapshot file changed after spawn marks the trajectory `snapshot_tampered` and keeps it out of learning; a `SkillInvoked` naming a skill outside the manifest does the same; forgetting a skill while an idle pooled session holds it recycles that session and deletes its folder, and while a running job holds it, steers the job and deletes the folder when the session exits.
+  11. Phase B, the positive half of the phrasing loop and the route memory, in simulation with a scripted embedding and again on the owner's PC with the adopted embedding model: "get Notepad up for me" runs through a brain `act` turn, its regret window closes clean and `confirmed` becomes 1; a second clean use makes it 2; then the paraphrase "bring Notepad up" (not an exact repeat) resolves at L2 to `Resolution::Tool` with source `ConfirmedPhrasing` and runs with no brain turn, and the brain is not recycled at any point; before the second clean use the same paraphrase goes to the brain; after it, "bring Word up" (the scripted embedding placed closer to the confirmed phrasing than the threshold) is only a hint and goes to the brain, because the `App` resolver finds Word and the target launches Notepad, and a paraphrase under `learning.phrasing_min_similarity` is a hint too; WP7 records the measured threshold and the golden paraphrases it was tuned on in its work package file. A recorded job that drove Resolve through vision while its `AppCapability` declares an API rung is marked `rung_skipped`, the `route_stats` row counts it, the next worker bound to a Resolve task carries "use apps_resolve before the screen" in its facts line, `introspect` ranks the API route above vision for Resolve, and the linter refuses a UI Automation or vision step for Resolve in a recipe.
+
+### 6.10 WP8: HUD, first run and Claude integrations
+
+- **Branch** `wp8/<topic>`. **Depends on** WP0 phase A, WP1, WP2, WP3, WP4, WP7. **Desktop** yes. **Wave** W5.
+- **Owns** `crates/eileen-hud`, `crates/eileen-hud-win`, `integrations/claude-plugin/`, `.claude-plugin/marketplace.json`, `scenarios/hud/`, `scenarios/claude-plugin/`, fuzz target `hud_line` with its corpus and regressions, `docs/wp/WP8-hud.md`.
+- **Builds.** First pull request: a probe of the renderer on the owner's PC (DirectWrite into Direct2D on a DirectComposition surface, and the colour-keyed GDI fallback) with `WDA_EXCLUDEFROMCAPTURE` on exactly that window type, idle cost measured with `cargo xtask measure-idle`; the choice recorded. Then `eileen-hud`: platform-neutral layout from `HudState` to a draw list (mic state and level, the conversation ring, the heard line greyed when not addressed and tappable, what Eileen says, up to 8 jobs with ordinals, route names, progress and paused state, approvals with voice or HUD-only and both countdowns, the intent outline, the input-lock holder and lease countdown, "you took over", the live thumbnail slot, panels (Markdown, learned items, facts, scenario preview, confirm with a crop, contact sheet, a job's diff and tests, settings including the engine per voice and the brain backends, draft review, route proposals with registry fields and Claude's fenced note, the voice picker with samples, errors with a Fix button, the about panel with the credits, a Claude session's question), up to 3 suggestions, the first-run choices, checkbox, progress and reveal, the Back button after a `Show`, "start it anyway" on a queued job, indicators; corners, scale, opacity, high contrast) with insta snapshots; the HUD protocol with the `physical` flag; the accessibility test that maps every clickable `HudInput` to a grammar entry or a hotkey. `eileen-hud-win`: the overlay and the strip, Raw Input on the strip so only physical clicks count, `WDA_EXCLUDEFROMCAPTURE`, per-monitor DPI, the DWM thumbnail, `WM_DROPFILES` for voice clips, hiding in presentation and full-screen states. The settings panel's controls send `SetSetting` through the normal flow. The Claude plugin per the claude-mods report: plugin name `eileen`; the handoff skill with `disable-model-invocation: true` passing `${CLAUDE_SESSION_ID}`, cwd, a summary and `$ARGUMENTS` to `session_handoff` (which waits for the user's confirmation); `.mcp.json` launching `eileen-shim --role session` by an absolute path written at install (the shim reads the session token from `run\session.json` itself); the `Notification` and `Stop` command hooks running `eileen-shim --role session --notify <kind>` (section 2.9); `session_skills` behind `claude_plugin.share_skills`; a display-only mod (status entry, band with the last utterance and Mute, `/eileen` with no model turn) reading `bus.json` and polling `GET /v1/state`; tests for `claude plugin test`; types regenerated for the installed CLI; the root marketplace file. The mod never answers `tool.check`, never approves, never submits prompts, never calls the model.
+- **Acceptance.**
+  1. Draw-list snapshots for every `HudState` variant (every corner, scale and state, every panel, the first-run views); the HUD survives being killed and restarted with the current state.
+  2. On the owner's PC: the HUD never takes focus; clicks pass through the overlay; Allow and Deny on the strip resolve an approval; a synthetic click on Allow from `SendInput` is ignored; a `desktop_screenshot` does not contain the HUD; the live thumbnail shows a covered fixture window without moving it.
+  3. Idle footprint of `eileen-hud.exe` measured idle and while updating ten times a second; recorded.
+  4. The HUD mic button stops capture; the settings panel changes the HUD corner and "undo that" restores it; changing the mute key to one another process owns is refused.
+  5. The first run end to end on the owner's PC: tour, skip, and the surprise path with the box ticked by click and, separately, chosen and consented by voice with no mouse (calibration, clone, demo including the exact repeat from the fast path, reveal, keep, pick another voice from the picker, or decline), with the box unticked (the demo in the default voice, nothing recorded), and with cloning too slow (by setup's measurement: the normal tour with nothing recorded; past the 40 s render limit: the normal tour, the clip and the clone deleted, `NoFileLeft` for audio), and the surprise offered in the tray then records afresh; declining deletes the clip and the clone, keeps only `calibration.toml`, and says so; after the first run ends the phrasing store holds no phrasing from the demo.
+  6. `claude plugin validate --strict` and `claude plugin test` pass on `integrations/claude-plugin`; the validation report shows no gating hook, only the reviewed `Notification` and `Stop` command hooks, and only the reviewed host calls.
+  7. On the owner's PC (manual, opt-in install): `/eileen:handoff` from a Claude session creates a pending handoff that, once confirmed, becomes a `continue_session` job resuming a fork of that session; `session_say` is rate-limited and prefixed; a permission prompt in the owner's Claude session produces "Your Claude session in <repo> is waiting for your approval" on the HUD and spoken (HUD only during a call) while the prompt stays in the Claude app and the hook neither answers nor delays it (it returns in under 1 s with Eileen running and with Eileen stopped); `session_ask` returns the user's spoken reply and returns "no answer" after 120 s; and in an automated test the shim's `--notify` mode exits 0 with no output for every kind, including when the endpoint refuses it.
+  8. Fuzz target `hud_line` clean for 10 minutes (`long.yml`).
+  9. The accessibility test passes (every clickable HUD input has a voice phrase or a hotkey); on the owner's PC a draft held for review is approved from `DraftReview`, a route proposal is accepted from its panel (and then needs the Safety approval), and an error's Fix button runs its fix.
+  10. The about panel, opened from the tray and by voice, lists every component and model of `NOTICE` and `models.toml` with its licence, including Kyutai Pocket TTS with its CC-BY-4.0 attribution, and a test fails if `NOTICE` gains an entry the generated credits lack.
+
+### 6.11 WP9: The test fleet, benchmarks and the integration demo
+
+- **Branch** `wp9/<topic>`. **Depends on** WP0 to WP8. **Desktop** yes. **Wave** W6.
+- **Owns** `crates/eileen-fleet`, `crates/eileen-e2e`, `scenarios/bench/` (including `_fixtures/flaky-login/`), `docs/FLEET.md`, fuzz target `fleet_result` with its corpus and regressions, `docs/wp/WP9-e2e.md`.
+- **Builds.** `eileen-fleet` (shipped): `eileen test --fleet` with one-time consent, the machine hash read from `fleet\machine.toml` in the user's own data directory, never the run's throwaway one (section 3.3.1; WP2 writes it, from the OS id through `MachineIdentity` plus the install id, or the install id alone), the operating system and its build in every result, scenarios from the installed version's tag filtered by `requires`, recorded mode (`--replay-models`) by default and live mode with a turn budget, throwaway data directory and owned fixtures, attended runs started by the user with the countdown and armed runs after 30 idle minutes with the display-required and system-required power request, call and full-screen refusal, locked-session skip, abort on physical input, auto-denied tier 2 with voice approval off, workstation lock after an armed run, the per-user Task Scheduler entry only after an explicit yes, `FleetResult` lines with anonymous learning statistics, preview, and `--submit`, which opens a pull request adding the file to the `devhub` branch through the contributor's own `gh`, with `--push` (a contributor with write access commits it to `devhub` directly) and `--file` (the owner relays a results file someone sent him, from his own account, after the same preview and validation); a comment on the week's fleet issue stays an optional channel; the result validation behind `cargo xtask fleet-validate` (dispatched to `eileen-e2e`: the schema, the `fleet_result` parser, the PII scan), which `devhub.yml` runs on pull requests and pushes to the `devhub` branch, auto-merging pull requests from listed contributors and reporting a pushed file that fails. `eileen-e2e` (development only): benchmarks B1 to B10 and B8-curve with A/B runs against the base binary (alternating, Mann-Whitney, only significant differences above about 10 percent, pairs compared within the "roomy" or "tight" admission stratum, a run excluded only for "start it anyway" or thrashing, with the reason recorded), the waits for `learn.verdict` and `distill --wait` between learning runs, B8-curve's scripted answers through the `--test-harness` endpoint, appending JSON lines to the `devhub` branch (owner answer 3) and rendering `RESULTS.md` there; the soak runner behind `cargo xtask soak`; ingest of fleet comments from listed contributors, clustering by signature, one issue per cluster, flake tracking, quarantine expiry; the results data the nightly Pages build renders into the catalogue and the benchmark page; `cargo xtask triage <issue>` (owner's PC: a Claude worker reads the redacted cluster data, the replay and `docs/CODEMAP.md` and drafts an explanation pointing at the code). The `flaky-login` fixture repository (a small Python project with deterministic flaky tests that run in seconds). `docs/FLEET.md`. Then run every desktop-lane scenario, B1 to B10, B8-curve, the first-run demo and the M6 demo on the owner's PC, record the results in `docs/wp/WP9-e2e.md` together with the memory admission record (which rule admitted each job, available memory, commit headroom and paging before and after) and an amendment tuning `memory.reserve_mb` and `memory.max_paging_kb_s` from it, and open an `amendment` pull request adding the measured results to `docs/PLAYBOOK.md`.
+- **Acceptance.**
+  1. Every desktop-lane scenario in the repository runs on the owner's PC with a recorded result; failures are issues, not skips.
+  2. B1 runs end to end for real on the owner's PC (Resolve Studio, real Claude, hot spare off) with every phase recorded, passing on a sharpness gain of at least 15 percent and the owner's yes; B8 shows, over at least three alternating pairs with new slot values, the learned runs cheaper in time, tokens and worker turns, with every learned run started only after its predecessor's verdict and distillation outcome, each outcome judged by section 2.10's expected outcomes by run (a drafted skill for the drafting run, `StatsOnly` or `TooShort` for the runs that use it); B8-curve, unattended with scripted answers, matches the table in section 2.10; B10 records Claude's numbers.
+  3. A second Windows 11 machine (a friend's) installs Eileen from `TESTING.md` without asking the author, saves a scenario by voice, previews it, and submits it as a pull request from its own GitHub account; CI validates and replays it.
+  4. A fleet run in recorded mode on two machines produces result files containing no personal data (a test greps them for the user name, machine name, home path, the raw MachineGuid and the install id) and the same machine hash on every line from one machine, equal to the hash in that machine's saved scenarios and benchmark lines, with `os` and `os_build` filled; a run started with a throwaway data directory still writes the user's own machine hash (the derivation's own tests, cloned images and the install-id-only case included, are WP0's acceptance 12); it submits them as pull requests to the `devhub` branch, a third file arrives by `--submit --push` from a test account with write access and a fourth by the owner's `--submit --file`, all four pass `fleet-validate`, a pushed file that fails validation is reported and skipped, and the nightly ingest clusters a deliberately failing scenario into one issue; a result pull request or comment from an unlisted account is not merged or ingested without the owner.
+  5. The soak runs 4 hours on `windows-latest` with flat handles, GDI objects and threads and a core memory slope under 1 MB per hour.
+  6. The M6 demo script of ROADMAP.md runs end to end on the owner's single monitor with no restart and no typed command after `eileen run`, from its stated starting data directory (the "video editor" phrasing stored and the timelapse in the media history, nothing else learned), with peak memory and the memory admission record kept; the script asserts the run-1 row of section 2.10's table (a `learn.verdict` for the Resolve job as soon as "learn from that now" closes its regret window, then a `learn.skill_drafted` event for that job with any `held` value, before "what have you learned today?" is asked, waiting up to 10 minutes for it; a `learn.distill_skipped`, `learn.distill_deferred` or `learn.draft_rejected` fails the demo, and the record names the event's reason) and that the answer names that skill, saying it waits for review when it is held. The script also asserts that each of the three agents started by admission rule 2 or 3 within 10 minutes of being asked, with no "start it anyway" (the M6 memory pass condition; section 2.5).
+  7. Fuzz target `fleet_result` clean for 10 minutes (`long.yml`).
+  8. The unattended-run rules, tested on the owner's PC with a short fleet run: a locked session is skipped (and recorded `skipped: locked`); the `test-physical` injector's mouse movement mid-run aborts it and records `user_became_active`; a scripted tier-2 request is auto-denied with voice approval off; a run refuses to start while a fixture window is full screen and while another app holds the microphone; the power request is held during the run and released after; the workstation is locked when an armed run ends.
+
+## 7. Owner decisions, settled questions and risks
+
+The owner answered the 23 questions this section used to ask on 2026-10-20 ([OWNER-DIRECTION.md](OWNER-DIRECTION.md), "Owner answers to BUILD.md's open questions"), with a standing rule: the assistant's recommendation applies unless the owner explicitly says otherwise. Every answer below took the place of its question, and the design already follows it; the third column says what each one changed and where. Decision D74 records this revision's part.
+
+| # | The owner's answer | What it changes, and where |
+|---|---|---|
+| 1 | Decisions D17 to D50 accepted | Every record from D17 to D50 reads "accepted" with its source (the twenty plain "accepted" statuses among D17 to D38 now name "owner answer 1"; the rest already named the owner's answer, decision or direction); the records added since, D51 to D59 for the first verification round, D60 to D64 for the second, D65 to D69 for the third, D70 to D73 for the fourth and D74 for this revision, are accepted under the answers they apply or the standing rule (`docs/DECISIONS.md`) |
+| 2 | The assistant switches `main`'s required checks during WP0's CI bootstrap; squash merges default to the title and description | `wp0/ci-bootstrap` moves the required checks from `test (3.12)` and `test (3.13)` to `all-green` and `pr-meta` with a recorded `gh api` command and sets the squash default, so nothing waits on the owner (6.2); the pull request title becomes the squash subject (check 7) |
+| 3 | Benchmark and results history on an orphan branch in this repository | Benchmark lines, fleet results and the public `RESULTS.md` live on the `devhub` orphan branch, never on `main`, so pull request checks stay hermetic (4.7, 4.8) |
+| 4 | GitHub Pages on | The nightly workflow renders the scenario catalogue, the coverage view and the benchmark results page to the repository's Pages site (4.6, 4.8) |
+| 5 | A nightly unsigned prebuilt zip as a `nightly` pre-release | The nightly lane publishes it with checksums, so testers need no Rust toolchain; `TESTING.md` points to it; nightly, beta and stable are v0.1's three channels (4.6, 4.8) |
+| 6 | Fleet machine identity is a salted one-way hash of the computer, not of a Claude instance or a person: the OS machine id through the platform layer on every OS, mixed with a random install id (the install id alone where the OS has none); results in contributors' own commits or pull requests, or relayed by the owner; the weekly issue optional; hashes mapped to contributors only by choice | `MachineHash` and `InstallId` (3.3.1); `MachineIdentity` with Windows' MachineGuid in `eileen-shell-win` and Linux's machine-id files through `eileen_platform::machine::FileMachineIdentity`, tested on Linux from v0.1, macOS later, and one derivation for every OS, `machine_hash`, that normalises the OS id (3.4); the install id from `eileen setup` or the first run and the hash recomputed at every start into `fleet\machine.toml` (2.15, WP2); the same hash in every saved scenario (`Scenario.machine`, 3.3.14, 4.8), voice consent record (2.8), fleet result (`FleetResult`, now with `os` and `os_build`, 3.3.16) and benchmark line (4.7); results by a contributor's pull request, a contributor's own commit (`--push`) or the owner's relay (`--file`), each validated by `devhub.yml` (3.5, 4b.3, 4.8, WP9); tests in WP0 acceptance 12, WP2 acceptance 8 and 13 and WP9 acceptance 4; D60 and D74 |
+| 7 | sccache and cargo-binstall from prebuilt releases; no Dev Drive | The owner installs both prebuilt; builds use sccache when it is there and a target directory per worktree on the normal drive (6.1 rules 5 and 6, `docs/DEV-SETUP.md` in `wp0/guidance`) |
+| 8 | Heavy apps closed and WSL shut down on heavy build days when convenient; otherwise one build slot | The build guard admits a second slot only with real room and otherwise runs one (6.1 rules 1 and 13) |
+| 9 | Eileen may launch Resolve and create one test project; the owner runs Resolve Studio and will move to 21.1 or later, so Resolve's native MCP server becomes the primary Resolve route once present, with the fuscript Lua bridge as the fallback for 21.0.x and for anything the MCP server lacks; Premiere Pro 2026 is installed | One dedicated test project for WP6's spike and B1; the apps sidecar serves each `apps_resolve` op through ResolveMCP where it covers the op and through the bridge otherwise, recording the rung per step, and `doctor resolve --route mcp\|bridge` keeps both routes tested (2.7, 3.5, WP6 acceptance 1 and 8); Premiere stays a v0.2 UXP adapter (2.7) |
+| 10 | The owner trusts the nightly lane: opted in, unattended desktop scenarios overnight, Task Scheduler entry and keep-awake allowed | `cargo xtask nightly-local` runs unattended from its first night, with no attended trial and no per-night arming; `--install` creates the Task Scheduler entry once; each run holds a power request and follows the unattended-run rules (4.6, 4b.5) |
+| 11 | The owner records a consented speech set and his own voice for the head-to-head, kept on the PC | WP4 measures end of turn and the Pocket TTS against Chatterbox head-to-head on them, never committing them (WP4 acceptance 4 and 6) |
+| 12 | No GPL in release binaries: a TTS front end without espeak-ng | sherpa-onnx is built without espeak-ng in `native.yml` and published as a release asset; Kokoro gets Eileen's own front end; the release lane's licence listing fails on any GPL component (2.8 "No GPL in the speech build", 4.1, 4.6, WP4 acceptance 11) |
+| 13 | NVIDIA Open Model License models are acceptable downloads, with an open-licensed model selectable | Nemotron (NVIDIA Open Model License) stays the default recognizer that `eileen setup` downloads, and Parakeet v3 (CC-BY-4.0) is selectable in `speech.asr` (2.8, 4.2) |
+| 14 | Confirm the Pocket TTS and Chatterbox-Nano licences with their maintainers before shipping downloaders, with the owner's go-ahead to post | WP4 drafts the two questions, and they are posted only when the owner says so (WP4) |
+| 15 | Scrub the old working name and the franchise references from dated records; "an earlier working name" is enough | Done: D15 and D16 in an earlier revision, `docs/RESEARCH.md` (its opening line and section 8) and `docs/NAMING.md` on 2026-10-21, with neutral wording in place of the names; WP0 seeds the hashed denylist, proves it against the pre-scrub text in git history, and check 6 keeps the names out (4b.3, 6.2, WP0 acceptance 8) |
+| 16 | The `eileen` plugin goes into the owner's Claude app once built; learned skills do not load into his sessions by default | `claude_plugin.share_skills` defaults to off, and the plugin installs only through Claude's own flow (2.9) |
+| 17 | Optional Claude code review on pull requests, connected by the owner on his account | Nothing in the build depends on it |
+| 18 | Contributed scenarios MIT; consented audio CC-BY-4.0 with a consent record | The scenario pull request template states both, and audio enters only with the speaker's consent record (4.8) |
+| 19 | During calls, listen only for the name and stay silent | Only name-led utterances are addressed during a call, nothing is spoken and replies go to the HUD (2.8 "During a call"), checked by simulator invariant 9 and WP1 acceptance 12 |
+| 20 | Unanswered approvals wait on the HUD until the job's 30-minute deadline | `approvals.deadline_min = 30` (2.5) |
+| 21 | Spoken conversation in other languages comes in a later version, capability-driven: whatever languages the chosen speech models and the routed model or harness support, discovered from the components, with graceful fallback | v0.1 converses in English; every speech stage, the brain backend and the worker driver report a `LanguageSupport` from the component itself, and Eileen's code holds no list of languages; the later version serves a language from those reports and falls back to another engine that supports it, or to typing (section 1's proposed-ideas table, 2.8, 3.3.8, WP3 acceptance 6; ROADMAP v0.2) |
+| 22 | Windows App Actions as a route rung and Windows location services: v0.2; v0.1 uses a location the user states | `privacy.location` is set by voice, and App Actions are not a v0.1 rung (2.3, 2.5; ROADMAP) |
+| 23 | If B4 shows "that variable" cannot be resolved reliably from VS Code's title and caret crop, the small VS Code extension moves into v0.1 | B4 measures it, and the extension moves into v0.1 only on that result (2.7, 4.7) |
+
+The owner's entries after those answers are binding too, and applied:
+
+- **The machine hash on every OS** is row 6.
+- **ML projects end to end, with the owner's Colab.** The `ml_project` job kind is reserved in v0.1's contracts (`JobKind::MlProject`, 3.3.2), and the dispatcher refuses it with one sentence that offers a research job instead (2.5, WP1 acceptance 14), so v0.2 adds the connector without changing a pinned contract. The connector itself is a v0.2 row in section 1's spine and in ROADMAP. Its route note stands as written: the owner's entry names Google's Colab MCP server as the primary route, the Colab research report recommends Google's `google-colab-cli` as the main route with the MCP server as the fallback, and the choice is made at v0.2 design time with a live test on the owner's PC and a recommendation to the owner, together with the report's question about Anthropic's consumer terms for model-training work. The user signs in to Google themselves on every route.
+
+The four questions the first verification round's revision added are settled by the standing rule, each as recommended, and nothing waits on them:
+
+1. Publishing two kinds of release asset from this repository's own CI (the espeak-free sherpa-onnx archive and the AudioSeal ONNX export): applied, because the alternative was shipping GPL code or no watermark (2.8, 4.1, 4.2; D58).
+2. The memory admission defaults (`reserve_mb` auto at 1.6 GB on this PC, `max_paging_kb_s` auto from the PC's own machine-wide 7-day paging baseline, clamped at 40,000 KB/s, "start it anyway"): applied as starting values, checked by WP3's admission record in W2 and retuned from WP9's record by an amendment (2.5; D54, D64, D69).
+3. `evidence` as a third required check on `main` from WP0's phase B, an extension of owner answer 2 applied by the assistant with the same recorded command: applied, because a check that re-runs on description edits is the only way the evidence result always matches the current description (6.2, check 19; D63).
+4. Keeping the listening calibration (no audio) after a declined clone, said in one sentence and removable with "forget my voice": applied, because the consent box covers "how she listens" and the owner's rule names only the clip and the clone for deletion (2.8, E18; D56).
+
+Carried into packages (gaps from the fourth verification round that only code or a measurement can settle; the owning package's acceptance includes the test):
+
+- **WP5: can the browser's full address-bar URL be read?** The URL rule's rule 3 and its context hosts (section 2.12) need the page's host, and the ledger needs the full URL with its path and query, read over UI Automation from Edge and Chrome. Until that is shown, a browser window whose bar cannot be read makes rule 3 vouch for nothing, which is safe but asks more often. Settled by WP5 acceptance 13.
+- **WP2: does path canonicalisation keep the spellings git guards against?** The `GitInternals` rule recognises `.git` with trailing dots or spaces, an alternate-data-stream suffix or the short form `GIT~1`; whether Windows' path normalisation hands those spellings to the classifier or resolves them first, for paths that exist and paths that do not, is a property of real NTFS files. Settled by WP2 acceptance 10's cases on real files in a temporary folder.
+- **WP7: does shadow agreement's assignment search stay small?** `shadow::agree` searches for one consistent assignment of worker calls to recipe steps and stops at 100,000 candidates (section 2.10 item 7). Settled by WP7 acceptance 8, which records the largest count over every shadow case and the B8-curve runs and requires it to stay under 1,000.
+
+Open risks (each has an owner package that measures it):
+
+- Real-speech accuracy, Smart Turn on real pauses, and addressee detection both ways are untested (all corpora were synthetic). WP4, WP1.
+- Echo cancellation with the loopback reference, real speakers, music and video is untested; the Communications-category AEC is the alternative. WP4.
+- TTS speed is marginal on this CPU; the "about a second" ask is met by the fast path, cached phrases and the earcon. WP4 measures the alternatives.
+- The tier-2 approval route for Claude workers rests on CLI behaviour nobody has run; WP3's contract test decides it in W1, and the weekly and nightly contract tests guard it.
+- Raw Input's "no device handle means synthetic" signal must hold for the physical-input guard and the HUD's click check; WP5 and WP8 test it with `SendInput`, and fall back to low-level hooks in small separate processes if it does not.
+- Foreground work while the owner is active is solved only by asking and stopping; a signed UIAccess helper needs a certificate. WP5.
+- Multi-monitor and mixed-DPI behaviour is untested on the owner's single-monitor PC. The fleet.
+- The Resolve edit route: whether an imported Fusion composition renders, and whether a DRX can place a window, are unknown until WP6's spike in W1; computer use on the Color page is the last resort.
+- Chatterbox on this CPU: the only Turbo number is 7.5 GB peak on PyTorch; the ONNX q4 export may still be too heavy for live use. WP4's head-to-head decides.
+- Hosted Windows runners may not give UIA an interactive desktop; if not, desktop scenarios run only on the owner's and fleet PCs. WP5 and WP9.
+- The claude CLI's stream-json control protocol, skill discovery and plugin behaviour are observed on 2.1.304 and are not a stable API; the nightly drift job and the contract test guard them. Anthropic has said `--bare` may become the default for `-p`; the driver detects the auth failure and says so. WP3.
+- Plan usage of the brain, the spare, the warm pool, the librarian and the nightly lanes is unmeasured; caps start small and the librarian is capped by plan share. WP3 and WP7.
+- Memory: the owner's real working set leaves 1 to 2 GB free; admission, profiles and the guard are the levers. WP1 (policy), WP2 (sampling), WP4 (models), WP9 (peak during M6).
+- Windows CI time is unmeasured; path classes and Windows-only test selection are the levers. WP0.
+- The candidate embedding model, hotword decoding cost, Parakeet Unified and Kokoro int8 are unmeasured; each is adopted only on measurement. WP4.
+- Build and test commands, and the git hooks and git configuration already in a repository (its own, or one vendored or nested inside it), run the repository's own code with the user's network and credential helpers; an untainted job runs them freely, and taint makes them ask after an outside read (build and test commands, hook-running git commands in a repository with hooks, and any git command in a repository other than the job's). Writes to any `.git` path, and every command that sets an environment variable other than the five harmless ones of section 2.12, always ask. A real sandbox is v0.2 (D40); WP3 measures the candidates now.
+- The deterministic fact path stores a one-clause statement about a known subject without a model, so a complaint phrased with a word outside the complaint lexicon ("my Chrome is slow" is caught, "my Chrome is a mess" is not) becomes a fact instead of a request; the "Noted: ..." line, the HUD's Undo button and "that wasn't a fact" are the mitigation, and the resolver golden file grows with each case found. WP7.
+- Deep answers on the owner's PC under typical load: when the deep pool session does not fit, the worker starts cold and the better answer arrives in about one to two minutes, not the tens of seconds the owner asked for. The levers in v0.1 are keeping the deep session first in the pool and letting it start on a quiet minute by the paging rule; B6 records both cases against its targets, and a smaller deep session (the mid model) for everyday questions is the next lever if B6 misses. WP1, WP3, WP9.
+- Without the CAM++ speaker check adopted, the first run calibrates addressee detection only through the user's speech level near the microphone (the level veto of section 2.8 rule 5), so another voice in the conversation window that is as loud and close as the user's is not greyed by voice, and accent is handled only by offering the other English model when the recognizer's confidence is low. WP4 decides CAM++.
+- Same-user tampering with a session's skill snapshot is detected after the fact, not prevented, until v0.2's sandbox or separate account.
+- A fact outside a dispatched job's scope that the brain paraphrases into the task does not start the job with `private_read` (ledger lines always do; facts are compared by token overlap and verbatim values, because every turn holds some), so after an outside read that job's egress is not asked about. WP1 owns the rule; v0.2's sandbox is the fuller answer.
+- Without an enrolled speaker check, a voice approval accepts the action word from any voice in the room; the HUD and the hotkey remain physical-only. WP4 decides CAM++.
+- In the low-memory profile (the owner's usual state) there is no hot spare and usually no warm pool, so a brain crash costs a cold start and workers start cold; admission's paging rule (with a limit learned from the PC's own week of paging) and "start it anyway" keep work possible, WP3's admission record (taken in W2 on the full runtime) checks the defaults admit work on a typical day, and WP9's record retunes them. The learned paging limit on this PC is likely to sit between 25,000 and 30,000 KB/s; if that still refuses on ordinary minutes, the record shows it before W3. WP1, WP2, WP3, WP9.
+- The build guard's thresholds are only as good as WP0's baseline day on the owner's PC; until it exists the code defaults may refuse builds while agents page heavily, which is why the baseline is a W0 acceptance item. WP0.
+- The espeak-free speech build and Eileen's own Kokoro front end are new work; if the G2P model's quality is poor, Kokoro's pronunciation suffers until a better model is found. WP4.
+
+## 8. Revision log
+
+- 2026-10-20, first architect pass.
+- 2026-10-20, revision after five reviews. What changed, by review, and what was declined. The owner's entry of the same evening (a reusable, fully cited engineering playbook with templates) is folded in as section 4b.6, checks 29 and 30, WP0's phase B and decision D50.
+
+**Feasibility on this PC.**
+
+- Adopted: the build guard admits by measured free memory per job, samples the first build before a second slot, re-checks while running, has a disk floor, records its holder, kills cargo with a Job Object, and uses `windows-sys` (xtask is no longer std-only); `.claude/settings.json` denies direct cargo builds; build agents run without rust-analyzer; builds run in the background; Resolve, Premiere, benchmarks and multi-session real-Claude runs take the exclusive slot (6.1). Native dependencies moved under Windows target tables, `ort`'s `copy-dylibs`, `fetch-native` exporting the environment, a start-up DLL check, a scoped `webpki-roots` license exception, releases through `--release` with overrides instead of a `dist` profile, and WP0's stubs declaring the real native dependencies (4.1, 4b). The crate graph fixed: `eileen-rt`, `eileen-replay`, `eileen-scenarios`, `eileen-fleet`, `eileen-skills`, `eileen-buildguard`, `eileen-hud-win`; `eileen voice` and `eileen doctor resolve` run the sidecar binaries (3.1). Worker environments use a denylist with a pass-through list and toolchain folders (2.12). Worker cold start is in the budget, the contracts separate sessions from jobs, and a warm pool exists (2.5, 4.3). Chatterbox per voice and the first-run surprise path restored (2.8, E13, E18). The M6 demo and B3 use a fixture repository, coding jobs in build-heavy repositories take a build slot, fan-out is admitted by memory, single-monitor steps rewritten. The required-check switch sequenced in WP0. Disk figures corrected; latency table with a typical-load column; idle CPU table with the AEC bypass; low-memory profile; `--no-chrome`; the npm shim resolver and update window; the casts policy; feature unions; desktop resilience (thread abandon, persisted index, cache, separate window thread, no global UIA focus handler); Raw Input instead of a low-level hook; HKCU Run and breakaway; DirectWrite rendering and the capture-exclusion probe; the Fusion route for B1; whole-line rendering for slow voices; WP2's split into phases with S1 last; the stub shim answering `initialize`; `measure-idle` in xtask; pre-declared xtask dispatchers; contracts split per area; WP0 phase B; the CI cache budget.
+- Declined: splitting WP0, WP2 and WP7 into separate packages (the spec keeps ten packages and uses phases instead, which gives the same parallelism with fewer handoffs); taking a build slot for every coding job regardless of repository (only build-heavy repositories do, so Python and Node fan-out stays parallel).
+
+**The owner's asks and the feel.**
+
+- Adopted: the brain's `act` toolset and phrasing candidates (2.3); the loopback echo reference, media pause during approvals, the action word and voice-approval limits (2.2, 2.5, 2.8); the Resolve route ranking, versions for undo, project and timeline loading, the crop confirmation, the literal benchmark phrase with one clarifying question, and B1 passing only with the owner's yes (2.7, E7); the worker environment; the first-run surprise path (E18, 2.8); Chatterbox per voice with the head-to-head; route discovery, third-party MCP servers, rungs, `apps_open_uri`, the Confirm panel and the live thumbnail (2.5, 2.7, 2.9); render progress as app tasks; `WindowAction::Close`, `desktop_volume`, `apps_open_path`; S1 made live with the mute key and tray in WP2 and a console view, and W3 gated on it; the required-check switch; the E3 grammar entry for known media; personality in the per-turn block and no idle recycling; clickable HUD settings, checkbox and clip drop; coding in place with a snapshot ref; the `---ignore---` sentinel, resume after a non-addressed barge-in, "go on", the stretched silence cap; steering "no, the other one" to the acting job; unaddressed speech kept in memory only; one foreground lease per phase; one deep worker by default and the no-unsourced-facts rule; connectors off for every session; the thinking-off measurement plan; `source` in the frame header; the nightly CLI drift job; TESTING.md prerequisites and the recorded fleet mode; the `General` job kind; the M6 fixtures; launch waiting for the main window; `pr-meta` checking that claimed tests exist.
+- Declined or deferred: spoken conversation in other languages stays v0.2 unless the owner chooses the Parakeet fallback (section 7, item 21), because it costs memory this PC lacks; Windows App Actions stay v0.2 as an owner decision (item 22).
+
+**Safety and best-in-class.**
+
+- Adopted: taint, the path guard and the shell policy, domain-restricted `WebFetch`, and D40 amending D14 (2.12); caller verification by process and Job Object for the dispatcher and the loopback endpoint, the `Cli` turn source (2.12); approvals only from physical clicks, the action word, media paused, voice off while other audio or another mic user, `approve` accepted only for pending asks with summaries built by Eileen (2.5, 2.9); the real-CLI approval contract test with three candidate routes and no subagent tools until proven (2.5, WP3); turn authority, fenced untrusted text, Safety settings needing a user approval, computed provenance, drafts with observed lines held in `pending\` (2.3, 2.10, 2.11); physical-input detection, leases that stop on the user's hands, the Invoke foreground check (2.6); unaddressed speech not persisted, nothing stored from calls, retention for `events` and `approvals`, clipboard exclusions (2.12, 2.6); `ElementFromPoint` checks, category tiers, Luhn and redaction on typed text, refused credential questions, per-app desktop grants, the longer word list (2.6); `Untrusted` and `Personal` wrappers, plain size-capped replays re-checked after redaction, scenario pull request rules, attended or armed fleet runs (3.3.1, 4.8); conversation mode and the alone score (2.8); the live thumbnail, crop confirmation and route discovery (2.7, 2.9); the earcon and a 1.5 s first-word target; pause-then-decide barge-in; the hands-off pause; ordinals, diffs and compete summaries; approvals waiting until the job's deadline; exact-call grants; attributed narration and `ask_user`; approvals bound to their target; DirectWrite rendering; contact sheets and focus time for recall; visible intent cancelled only by addressed speech or stop words; `session_handoff` confirmation and `session_say` limits; the persisted app index; the Raw Input privacy check.
+- Declined or deferred: encryption at rest with a DPAPI-wrapped key in v0.1 (deferred to v0.2 in D40: it adds a crypto dependency and key handling, and v0.1 relies on a user-only ACL and the profile's permissions, as the observability and learning-loop reports also propose); speculative brain turns as a default (kept as an opt-in experiment, because they spend plan and occupy the spare that guards against a crash); a low-level mouse hook in the HUD (replaced by Raw Input on the strip, with the hook only as a fallback if Raw Input proves unreliable).
+
+**Engineering quality, testing and traceability.**
+
+- Adopted: the `wp0/ci-bootstrap` order and a separate `pr-meta.yml`; the Evidence section with existence checks and the `evidence` job (check 8, 19); the recording, replay and fleet formats as contracts (3.3.16) with the RNG state in checkpoints and `CoreSnapshotV1`; the two replay modes with reactive responses and ID remapping, `bless` and `stale` (3.3.16); shipped `eileen-replay`, `eileen-scenarios` and `eileen-fleet`; the minimal runner in WP2; the spawn wrapper in `eileen-rt`; the hashed denylist; a hermetic catalogue (results go to Pages, never committed), scenario-only path classes and an auto-filled scenario pull request; generated per-crate Claude rules and the `Do not change without a decision record` heading; checks marked as `lint-repo` or delegated with `tools/repo-tools`; the check registry generating the table; the decision-record grammar taken from the existing log; the pull request title as the squash subject; `owner_pc::` and `real_claude::` modules; `long.yml`; shuttle tests in WP2; path classes, Windows-only test selection on pull requests, nextest timeouts, no extra toolchain target; the native-dependency table and check 15; the `[world]` section, `outcome`, `intent.expected`, step shapes and the generated event names; the fleet modes and the contributor allowlist; sharing from slice S1; `source` and `TraceCtx` on the speech pipe; the log-line ID assertion; stable generated output and the ARCHITECTURE.md resolution check; the settings registry test; the credential-free nightly CLI job and the Pages benchmark page; `measure-idle`; CI-only steps listed by `xtask ci`; the fuzz entry convention and corpus cap.
+- Declined: committing `docs/SCENARIOS.md` at all (its results part cannot be hermetic, and friends' scenario pull requests could not regenerate it); a `nightly` prebuilt as an automatic default (it is an owner decision, section 7, item 5).
+
+**The learning loop.**
+
+- Adopted: the recipe contract with step references, per-op checks, `delegate` and `confirm` steps, idempotent retries, shadow agreement and eligibility (2.10, 3.3.13); `SkillInvoked`, `skills_used`, per-session snapshots from SQLite with manifests, and the `skill` field on `jobs_dispatch` (2.10, 3.3.9); the risk-weighted ladder, the run-index table, the success definition, "learn from that now", the pending rule (2.10); the generalisation rules (slot-free direct phrasings, the content-word rule, ambiguous slots, unseen enumerated values, precedence, template collision rejection) (2.4, 3.3.10); computed provenance, taint, never compiling denied or tier-2 steps, the deny-scan, lint errors returned to the librarian (2.10); secure delete, the full forget purge, unaddressed speech kept out of storage, the librarian seeing only jobs that ran on Claude, dictation as length only, `learning.distill` (2.10, 2.12); `eileen-skills` as the pure half behind the `SkillEngine` port, the vendored-C rule, the template grammar shared, learning scripts in WP7's crate (3.1, 3.3.15); facts with a deterministic path, `learn_fact_propose`, `learned_*` tools, "what do you know about me" and correction (2.10, 3.3.9); B8 as an A/B and B8-curve; the librarian's pre-filter, batching, plan-share caps and `librarian_runs`; app versions and tool schema hashes for probation, evidence-based self-healing; Resolve versions as the inverse and the `confirm` step; worker facts blocks and fuller tool-use capture; skills turned into local scenarios and offered for sharing; regret attribution rules; WP7 in two phases; the listing-budget probe; evidence shrinking, a user-only ACL and fact retirement; `source` facts for answers; `learn_skill_history`, recipe fuzzing and structure-keeping truncation.
+- Declined: moving settings by voice into its own package (it stays in WP7's phase A because the core's settings flow, the HUD panel and renames all need it by W3, and splitting it would add a cross-package hand-off without saving time); putting the template grammar in `eileen-contracts` (it lives in `eileen-skills`, which `eileen-intent` may depend on, so the contracts crate stays free of parsing logic).
+
+- 2026-10-20, revision after the first verification round (37 items the checkers found still partial, ids from the workflow's list) and the owner's answers to section 7, which are folded in throughout (section 7 now maps each answer to where it is applied). Decisions D51 to D59 record the changes. Nothing was declined; where an item asked for something v0.1 cannot honestly do, the design says so and names the limit (noted under the item).
+
+**The learning loop.**
+
+- a6a62e-1 (recipes): every op a recipe may call declares an output schema (`OpSpec.output_schema`) and the dispatcher keeps `ToolResult.output`, so pointers are linted and resolved against a real schema; arguments, checks and expectations take `Operand`s, so a postcondition can compare with a slot or an earlier step (the goto frame check, the 1.15 times baseline check); eligibility allows vocabulary literals (enum and boolean values such as `"edit"`, `"sharpen_ellipse"`, `"coding"`) and nothing else literal in non-read steps; branching is one construct, `on_fail = fallback` (run the steps, re-run and re-check, then hand off), with a new `ask` step for the question flow; `export_stills` and `current_item` give the tracking range; the baseline sharpness is its own step; a replay may call only the `act`, `desktop` and `apps` toolsets and `jobs_dispatch`; a level-3 match reaches the brain as a `[match]` block whose skill and slots the dispatcher enforces, and 2.4's precedence now names all four levels; the three worked recipes are rewritten to lint clean (2.3, 2.4, 2.10 items 4, 6 and 14, 3.3.3, 3.3.9, 3.3.13; WP1 acceptance 12, WP7 acceptance 8).
+- a6a62e-2 (attribution and snapshots): slot values for every use come from a defined order (the dispatched slots, then `slots::from_args` over the `Skill` call, then the template over the request, else "slots unknown", which counts toward neither distinct values nor shadow runs), and `jobs_dispatch` carries slots for any skill job; a change to a skill recycles idle pooled sessions that hold it and steers running ones on a forget, with snapshot folders deleted on session exit; manifests are verified before spawn, against `system/init`, at job end and on every `SkillInvoked`, and the claim is narrowed to detection, with prevention left to v0.2's sandbox (2.10 item 3; WP7 acceptance 10).
+- a6a62e-3 (the run-by-run table): the light level-2 threshold is one success with one slot value (the evidence job counts), so run 2 shadows; B8, B8-curve and the M6 demo wait for the final verdict (`learn.verdict`) and the draft (`distill --wait`) instead of racing idle distillation; B8-curve gets its level-3 approval from a scripted answer delivered as `UserInput` by the `--test-harness` endpoint in a throwaway store; the M6 demo has a stated starting store, a "learn from that now" step and an asserted run-1 row; the table gains an "E3 with a video nobody has played" row (2.10 item 5, 4.7, WP9 acceptance 2 and 6, ROADMAP).
+- a6a62e-5 (poisoning): workers' outside reads keep their result text as observed text (`WorkerEvent::ToolResult.observed`); "literal" is defined (recipe strings, quoted and code spans, and every URL, path, host, command and tool name); untainted worker steps are a provenance source, and an untraceable literal is rejected with a message and a bounded retry, then dropped and recorded; one `ObservedSource` set serves both job taint and recipe taint (2.10 items 1, 2 and 9, 2.12, 3.3.2; WP7 acceptance 5).
+- a6a62e-6 (privacy): `Heard` carries only a final transcript and only after the turn is routed and not ignored, so partials never reach the event log, the loopback endpoint or the plugin; a forget is two effects with named owners (`LearnCmd::Forget` in WP7, `Record::PurgeJobs` in WP2's store) and completes only when both report; the canary test decompresses blobs, dumps SQLite text and WALs and reads logs with `logging.include_personal` off and on (2.10 item 12, 2.12, 3.3.3, 3.3.4; WP2 acceptance 7, WP7 acceptance 6).
+- a6a62e-8 (facts): the deterministic fact path has grammar triggers (corrections, preferences, "remember that", refinement words such as "closer", "I loved that place", "forget that I ..."), text taken from the user's own transcript with bracketed referents, kinds and scopes from the entry, and no model; `learned_correct` is stored as `user` only when its instruction is a span of the turn's transcript, otherwise after a HUD yes; a skill correction queues `LearnCmd::Repair` carrying the user's words; `SkillMeta.facts_used` makes "a skill that relied on it" computable; `FactDelta` is defined (2.4, 2.10 items 10 and 11, 3.3.9, 3.3.13; WP1 acceptance 12, WP7 acceptance 9).
+
+**Safety and best-in-class.**
+
+- ab65bc-1 (containment): shell commands' path arguments are classified like file-tool paths (with `cd` tracking, environment variables, links and short names resolved, globs unparseable), and Eileen's own path tools use the same classes; allowlisted build and test commands become tier 2 after taint, and the remaining risk (the repository's own code runs with the user's credentials) is a named v0.1 limit; WP1 and WP2 gain table tests over the permission decisions and the path classifier; WP3 now measures Windows Sandbox, AppContainer and a restricted token (2.12, 3.3.3; WP1 acceptance 6, WP2 acceptance 10, WP3 builds and acceptance 1, section 7 risks).
+- ab65bc-2 (the session role): the role has its own rule, the opposite of the others (a shim outside every Eileen job, with its own per-boot token from `run\session.json`, only the session toolset), with a test both ways; the shell path rule closes the path guard's gap (2.9, 2.12, 3.3.9; WP2 acceptance 4).
+- ab65bc-3 (approvals): the approve, deny and unmute hotkeys count only when Raw Input saw the chord come from a keyboard, and the desktop server refuses to press any of Eileen's hotkeys; with an enrolled speaker check a voice approval needs a match; "Eileen, yes" no longer approves tier 2, so BUILD, ARCHITECTURE, ROADMAP and D51 agree; the voice window opens after the question has drained plus an echo tail; an `approve` call with no pending ask is tested; the tray is no longer an approval source and its unmute clicks are checked on the shell thread (2.5, 2.6, 2.9, 3.3.3, 3.3.4, check 25; WP1 acceptance 5).
+- ab65bc-4 (subagents and built-in tools): every session gets `--tools` (only the kind's built-ins exist) and `--disallowedTools` for subagent tools, and `claude_tool_tier` answers tier 3 for both; the real-CLI test adds a guard deny of an allowed command and the disallowed and unnamed tools; "no subagent tools in v0.1" is stated the same way everywhere (2.5, 3.3.8, 3.3.9; WP3 builds and acceptance 1).
+- ab65bc-5 (laundering): only `desktop.visible_intent_ms` exists; the Safety list adds every `desktop.*`, `hotkeys.*` and `fleet.*` key, `recording.audio`, the routing backends and `claude_plugin.share_skills`, kept as a prefix constant with a test; drafts whose evidence read free text from outside are held whole for review; the deny-scan adds hosts, commands, tool names and approval or credential wording; the brain's own URLs are tier 1 only when Eileen's code can vouch for host and query (2.10 item 9, 2.11, 2.12, 3.3.11).
+- ab65bc-6 (the user's hands): a `test-physical` Cargo feature that no shipped binary enables lets WP5's real-desktop test drive the abort path for mouse and for typing, and a recorded manual check covers Raw Input itself (3.4; WP5 acceptance 1).
+- ab65bc-8 (consequential input): `apps_open_path` tiers executables, scripts, installers, shortcuts and interpreter `with_app` values at tier 2 HUD-only, and credential paths at 3; the mail, chat and social category comes from `app-categories.toml` (processes, AUMIDs, browser hosts from the address bar or the title); WP5 gains table tests for category tiers, `Shift+Delete`, Luhn and the Redactor, and WP1 tests the `ask_user` refusal (2.6, 2.7, 3.3.9; WP5 acceptance 10).
+- ab65bc-9 (unattended runs): WP9 tests the locked-session skip, the abort on physical input, auto-denied tier 2, the call and full-screen refusal, the power request and the final lock; attended runs start when the user asks, and armed runs hold a display-required power request so the session does not lock mid-run (4.6, 4.8; WP9 acceptance 8).
+- ab65bc-11, aedf46-7 and L3 (routes and showing): discovery is Eileen's own `routes_lookup` (the registry through `curl.exe` under the supervisor, one host, capped and fuzzed), so no worker needs `WebFetch`; proposals are stored, shown on a `RouteProposal` panel, accepted by "add that server" into a tier-2 Safety change, with owners in WP6, WP7 and WP8 and tests; a `route_stats` table feeds the workers' facts lines and `introspect`, a `rung_skipped` mark and a linter rule enforce the route order; approved protocols are `permissions.uri_schemes`, and third-party calls are tagged with their server's rung; the page-structure rung is on-demand UI Automation of web content by default; the screen lease is always announced and handed back with a line, and `Show` brings a window forward only when the user should look (2.5, 2.6, 2.7, 3.3.9, 3.3.13; WP5 acceptance 11, WP6 acceptance 8, WP8 acceptance 9).
+
+**Engineering quality.**
+
+- a184cd-2 and L6 (evidence first): `pr-meta` runs `cargo xtask pr-meta` from `wp0/ci-bootstrap`, with checks 7 and 8 in full and the fix rule of check 19, so W0's own pull requests are held to it; the Evidence section must be filled for every type, bot pull requests get a fixed `deps` rule, tests are resolved at the head with `git grep`; the `evidence` job's mechanics are defined (a base-plus-tests tree with `#[cfg(test)]` modules spliced by `syn`, the compile-failure rule, scenario replays at base and head) with `cargo xtask evidence` as its local command; the repository's pull request template is replaced now with the Evidence-first one (check 8, 19, 4b.3, 4b.5, 6.2; WP0 acceptance 8 and 11).
+- a184cd-4 (scenario replay): every input family has a rule (scheduled, reactive, or synthesized by the replayer's world model); `bless` belongs to WP2 with an acceptance test; `stale` has an expiry that fails CI; `scenarios replay` and `bless` are xtask dispatchers; the privacy check lives in `eileen_trace::privacy`, which `tools/repo-tools` may now use (3.1, 3.3.14, 3.3.16, 4b.5; WP1 acceptance 13, WP2 acceptance 11).
+- a184cd-5: `dev_replay_core` lives in `eileen-runtime::dev`, which may now depend on `eileen-replay` (2.13, 3.1).
+- a184cd-7 and a1129a-3 (lint bans): named threads and sleep moved to `eileen-stdx`, so the `-win` crates obey the bans; the `-win` crates may use `eileen-trace` for declared span names; the build guard, the guard and the development tools have listed exemptions (one `#[expect]` each, tools' own `clippy.toml`) that check 14 enforces; `eileen setup`'s speech steps run in `eileen-speech.exe setup` (2.1, 3.1, 4b.2, check 14).
+- a184cd-8: WP0 phase B seeds the denylist from the owner's words in chat through standard input, and its acceptance proves the seeded names against the pre-scrub text in git history; the dated records are scrubbed (owner answer 15), so the exempt list keeps only verbatim research quotes (check 6, 6.2).
+
+**The owner's asks and the feel.**
+
+- aedf46-1 (the brain acting): fast-path commands and act turns are `Act` jobs with a regret window; the phrasing loop is specified (candidates, exact repeats at once, confirmation counts, paraphrases through L2, owners WP1 and WP7, tests); L2 no longer depends on the transformer being adopted, because a static-embedding model is the floor; the brain's stall timer pauses during its own tool calls, and act launches have their own deadlines with readiness narrated by the core (2.3, 2.10 item 11, 3.3.10, 3.3.13; WP1 acceptance 12).
+- aedf46-2 (hearing): media-control and stop words work without the name while other audio plays; inside the conversation window non-commands need the addressee score, which keeps E1's coffee case greyed; an approval decides its voice mode only after the media pause is confirmed; `ApprovalSource` is defined; ROADMAP no longer claims "only the user's own voice"; the M6 lines spoken over the video carry the name (2.2, 2.5, 2.8, 3.3.4; ROADMAP).
+- aedf46-3 (Resolve): undo follows the route (delete Eileen's composition and load the previous one for Fusion, versions for DRX), with new bridge ops and a spike that tests undo per route; `export_stills` gives the tracking stills; the brain's stall rule no longer trips on a cold launch (2.7, 3.3.9; WP6 step 0 and acceptance 1).
+- aedf46-4: WP3 runs `cargo test` and `npm test` from real coding workers in scratch Rust and Node repositories on the owner's PC (WP3 acceptance 4).
+- aedf46-5 and L1 (first run): the repeat is served by the exact-repeat rule; the prompt asks the user to start with "Hi Eileen", which teaches the name without spoiling anything; echo cancellation is calibrated from Eileen's own prompt, not the clip; accent is measured and reported, with no model adaptation, because Eileen trains no weights; a clone that is too slow runs the normal tour; the unticked path records nothing; the voice picker is specified; the choices and consent work by voice; the listening calibration (no audio) is kept after a decline, said aloud and removable (2.8, E18, 3.3.6; WP4 acceptance 12, WP8 acceptance 5; D56).
+- aedf46-6: the engine per voice is a setting, `voice.engines.<name>`, reachable by voice, on the HUD and with `eileen voice use --engine`, with the `VoiceRealtime` check (2.8, 3.3.11, 3.5, E13).
+- aedf46-8: the apps sidecar discovers renders by polling `is_rendering` while the bridge is up, and `render_start` is an act op whose result opens the AppTask (2.5, 3.3.3, 3.3.9).
+- aedf46-9: system volume is the `SystemVolume` trait in `eileen-desktop-win`; `apps_open_path` tiers code-running targets; "open the file I was working on" is a core command (2.4, 2.7, 3.4).
+- aedf46-10 (the thin slice): WP2 starts in W1 from WP1's minimal core; S1 waits only for `wp2/s1-live`, `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech`; WP0 pins only the S1-path contracts and leaves the rest provisional until their owner's first pull request (0, 3.3, 6.1, 6.2, 6.4 to 6.6; D57).
+- aedf46-11: 6.1 rule 14 tells agents to update their branch after every merge and to budget the re-run.
+- aedf46-13, a1129a-7 and a1129a-1 (memory on this PC): admission reads available memory, commit headroom and paging, admits by four ordered rules including a paging rule and "start it anyway", asks again after ten minutes, and WP9 records which rule admitted each M6 job to retune the defaults; the per-job memory limit is a Job Object limit with a named failure and a test; the build guard admits slot 0 by headroom and paging with two jobs under 2 GB available (matching owner answer 8), waits and exits with code 75 when refused, and the harness takes `CARGO_BUILD_JOBS` from the ticket and the sccache settings; `cargo insta` and `cargo build --timings` run through xtask; Eileen's own coding workers get no language server in v0.1 (2.5, 2.13, 4.4, 4b.1, 4b.4, 6.1; WP0 acceptance 4, WP1 acceptance 8, WP3 acceptance 6; D54).
+- a1129a-5: the pool's absence under typical load is stated in E-section timing, 4.3 and 2.5 and recorded by WP3 and WP9; B1 and B6 gain a worker-start phase; pooled sessions' traces are linked at bind (2.13, 4.7).
+
+**The owner's direction, swept again.**
+
+- L2 (voices): the watermark is built (AudioSeal exported to ONNX by WP4 and published as a release asset, applied to `eileen voice render` files and recordings' audio lanes when the user opts in), a test asserts no engine watermarks by default, and the low-memory profile no longer bars Chatterbox (2.8, 4.2, 4.4; WP4 acceptance 11).
+- L4 (swappable brain): `routing.brain`, `routing.deep` and `routing.fallback_brain` are typed config, `BrainBackend` has `route()` and a `brain_for` factory, benchmark B10 and `eileen bench brain` exist with a WP3 owner, `CheckKind::BrainBenchmark` warns before a switch, and the fallback slot has simulator invariant 15 (2.3, 2.11, 3.3.8, 3.3.11, 4.7; D53).
+- L5 (the frontier): model names are aliases in config resolved per CLI version, with D53 amending D20; recognition, voice activity and turn detection get plug-in traits that report their languages; results history and `RESULTS.md` live on the `devhub` branch; the behavioural contract test also runs against the latest CLI in the owner's lane; v0.1 publishes nightly, beta and stable channels, and ROADMAP schedules signed automatic updates with rollback for v0.2 (2.3, 2.8, 4.6, 4.7; ROADMAP).
+- L8 (sweep): anticipation has a key, a cap and owners; spoken languages are later by owner answer 21, with the capability hooks in v0.1; L2 always has an on-device model; learned skills are available to the owner's Claude sessions on request (`session_skills`, off by default per owner answer 16); errors explain themselves with a fix (`UserError`, "fix it", "explain that"); failed jobs and replay handoffs become local scenarios automatically; secrets and app hooks sit behind platform traits (`SecretStore`, `AppHost`); ROADMAP v0.2 lists app-level undo, HUD screen-reader exposure, page-content recall and the richer tour; focus awareness covers screen recording by known recorder apps; a test enforces "no task requires a mouse", and first-run consent works by voice (2.3, 2.9, 2.10 item 13, 2.13, 3.4, section 1 tables; ROADMAP).
+- Owner answers: all 23 are applied (section 7's table), including the machine-hash fleet identity (corrected in the next revision: the hash mixes the OS machine id with a random install id, as the owner's answer says, D60), results on an orphan branch, Pages and the nightly prebuilt, ResolveMCP as the primary Resolve route once present, the espeak-free speech build, and the scrub of the old working name from D15 and D16.
+
+- 2026-10-20, revision after the second verification round (22 items the checkers found still partial, ids from the workflow's list). Decisions D60 to D64 record the changes. Nothing was declined: every item was right on the facts. Where an item asked for something v0.1 cannot fully deliver on this PC, the design adds the lever it can and names the rest as a limit in section 7 (deep answers that start cold, addressee detection without the speaker check, git hooks already in a repository).
+
+**The learning loop.**
+
+- a6a62e-1 (recipes against the linter): `call` and `delegate` steps need postconditions and `ask` and `confirm` steps have implicit ones; a fallback step may point to earlier steps of its own fallback, and nothing else may point into a fallback; an `ask` fills a declared slot with `asked = true`, of kind `Pick` when its options come from an earlier step; numeric expectations take numeric operands, with `$len` for an array's length; the computer-use route's delegate checks only the worker's report and the next `call` measures sharpness, so no check calls `export_still`; the DRX route's `add_version` has a postcondition through the new `Versions` output; `apps_open_url` gains `reuse_playing`, so `youtube-play-at` never opens a video twice (2.10 items 4 and 14, 3.3.9, 3.3.13; WP6 acceptance 4, WP7 acceptance 8).
+- a6a62e-3 (the run table's waits): every distillation ends in exactly one of `learn.skill_drafted` (with `held` none, lines or whole), `learn.draft_rejected` or the new `learn.distill_skipped`, and `--wait` returns on any of them; "learn from that now" closes the named job's regret window at once as an `Accepted` signal, and a later undo withdraws a draft made only from that job; B8, B8-curve and the M6 demo assert the drafted event with any hold and answer the review before the next run (2.10 items 2 and 5, 3.3.4, 4.7; WP7 acceptance 9, WP9 acceptance 6; ROADMAP M6).
+- a6a62e-5 (deny-scan against provenance): one table by literal class and provenance decides kept, held or rejected, which the deny-scan applies (URLs from outside rejected, commands and paths from tainted steps held, Eileen's and the kind's tool names kept with provenance `Tool`, deny patterns rejected whatever the provenance); a single observed-read table, computed by `eileen_core::tiers::observed_source`, maps every reading tool to its source, including Claude in Chrome, third-party MCP servers (by the class recorded at approval, `Web` by default), approved egress commands, shell reads and `routes_lookup`, and the harness keeps observed text for all of them (2.10 items 1 and 9, 2.12, 3.3.3, 3.3.9; WP1 acceptance 6, WP7 acceptance 5).
+- a6a62e-6 (forgetting phrasings): `PhrasingFact` records its source turn and `Act` job and an id; `ForgetPlan` lists phrasings, answers-cache rows and source topics; the canary request is a brain `act` paraphrase said twice and also asked as a deep answer (2.10 items 11 and 12, 3.3.13; WP7 acceptance 6).
+- a6a62e-8 (facts swallowing requests): the fact patterns match only one declarative clause with no request verb, question, second clause or bare deictic, and "my <thing>" needs a known subject from the app index, the repository, existing facts or `fact-subjects.toml`; each stored fact is said back ("Noted: ...") and undoable; `CoreCommand`, `FactCommand` and `RetireRule` are contracts; a correction retires facts by subject key; `Stale` and `Undone` retirements drop no skill, and a successful skill use confirms the facts it relies on; negative golden cases are listed (2.4, 2.10 item 11, 3.3.10, 3.3.13; WP1 acceptance 12, WP7 acceptance 3).
+- aedf46-1 (the phrasing loop's second half): WP7 acceptance 11 tests a clean window raising `confirmed`, a paraphrase served from L2 after two clean uses with no brain turn, and the brain never recycled; the brain recycles only on its context threshold, a forget of something it saw, or a crash; 2.4's precedence names exact repeats of unconfirmed candidates (2.3, 2.4; WP1 acceptance 12).
+- aedf46-5 and L1 (first run): no-learn keeps a job out of distillation, statistics, facts and the ledger and never suppresses the journal, the regret window or the phrasing candidate; the demo's phrasing is `ephemeral` and deleted when the first run ends; setup's clone timing is checked before anything is recorded, and missing the 40 s render limit after the recording deletes the clip and the clone; the tray's later surprise records afresh; accent has a defined threshold and falls back to Parakeet v3 when Parakeet Unified is not adopted; without CAM++ the clip still sets the addressee score's speech-level reference, and section 7 names the limit (2.8, 2.10 item 2, E18; WP1 acceptance 10, WP4 acceptance 12, WP8 acceptance 5).
+- L8 (d) (sources that gave accepted answers): a `source_stats` table fed only by the user's own signals on a deep answer (a link opened, praise, a follow-up), hosts only, read by deep-answer jobs as one fenced line; `FactKind::Source` is removed (2.3, 2.10 item 11, 3.3.13, E10; WP1 acceptance 12).
+
+**Safety and best-in-class.**
+
+- ab65bc-1 (containment gaps): a `GitInternals` path class whose writes are tier 2 and HUD only, `git config` and `git -c` forms and `GIT_*` prefixes at tier 2, `core.fsmonitor` off in every worker, and hook-running git commands at tier 2 after taint when the repository has hooks; path classes match most specific first, with a `SkillSnapshot` row, so job folders inside Eileen's data folder work and everything else there stays tier 3; after taint and a private read, URLs to vouched hosts with a query, fragment or long path segment that Eileen cannot vouch for, desktop input in a browser and files a browser opens are tier 2 (2.7, 2.12, 3.3.3; WP1 acceptance 6, WP2 acceptance 10; section 7).
+- ab65bc-2 (apps Eileen launches): they are started by the shell (AUMID activation or the shell's own `ShellExecute`) through `eileen_supervisor::user_launch`, outside every Eileen job and with the user's normal environment; only sidecar jobs allow breakaway as a fallback, worker jobs never; WP5 tests that a host app Eileen opened can start the session shim (2.1, 2.6, 2.7, 2.12; WP0 phase B, WP5 acceptance 12; ARCHITECTURE).
+- ab65bc-5 (laundering): a tree read of a browser's web content or of a mail, chat or social app counts as `Web`, so those drafts are held whole; hosts in a brain-dispatched task pass the brain's URL rule or the dispatch is tier 2, and an unvouched host never becomes a `WebFetch` domain rule (2.10 item 9, 2.12; WP1 acceptance 6, WP5 acceptance 11, WP7 acceptance 5).
+- ab65bc-11 and aedf46-7 (route proposals and route memory): `routes_propose` for an MCP server must name a registry entry cached for that job and app, and every shown or spoken field comes from the registry (the worker's `why` is a fenced note, "official" only from the registry's flag); `DeepLink` proposals become `uri_schemes` changes and `AppApi` proposals approved reference facts, both marked unverified; an approved server is installed once at its exact registry version into `mcp\<app>\` and never updates itself; `routes_lookup` reads count as `Web`; `RouteProposal` wraps its text; the route statistics reach the core as `LearnEvent::RouteStats`, `SkillEngine::route_line` builds the facts line, and owners and tests are named (2.5, 2.15, 3.3.3, 3.3.9, 3.3.11, 3.3.13, 3.3.15; WP1, WP6 acceptance 8, WP7 acceptance 9 and 11).
+- L3 (2) and L4: `introspect` takes the route statistics in both its free-function and port forms; `BrainCmd` names its slot and gains `Promote`, `Start` and `Stop`, and every `BrainEvent` carries the brain process's instance, so the core drops a stalled instance's late answer (2.3, 3.3.3, 3.3.8, 3.3.10, 3.3.15, invariant 15; WP1 acceptance 1, WP3).
+- aedf46-2 (the coffee case): the conversation window's follow-up feature counts only a pronoun, ellipsis, content word or topic that resolves against Eileen's last turn, never timing alone, so "want coffee?" stays greyed and never reaches the brain (2.8, E1; WP1 acceptance 12).
+- L8 (b) (calls): during a call only name-led utterances are addressed, media and stop words included, and Eileen says nothing at all, with replies on the HUD; invariant 9 checks both (2.2, 2.8, 4.7; WP1 acceptance 12; ARCHITECTURE, ROADMAP M3).
+- L8 (g) (Claude sessions reporting to Eileen): the plugin gains non-gating `Notification` and `Stop` command hooks that post through the session shim to `/v1/session/notify`, so a session waiting for approval is announced while the approval stays in the Claude app; `session_ask` has defined behaviour (2.9, 3.3.6, 3.3.9; WP2, WP8 acceptance 6 and 7).
+
+**Engineering quality.**
+
+- a184cd-2, L6 and L8 (f) (evidence first): the Evidence section has a field grammar (`tests:`, `scenarios:` and five optional fields), `type:` has its own heading, tests resolve in any workspace member including `xtask` and `repo-tools`, the evidence job moves to `evidence.yml` and re-runs on description and label edits as a third required check from phase B, cases Linux cannot show need `override:` and the owner's `evidence-reviewed` label, and Dependabot opens the cargo and action updates with a 14-day cooldown so no pull request is created with the workflow token; the repository's pull request template follows the grammar (4.6, 4b.3, 6.2; WP0 acceptance 11; section 7 question 3).
+- a184cd-4 (scenario replay): the brain's and workers' tool calls are replayed inside their turn's sequence; `Voice` `Health`, `Playback` `DeviceChanged` and `Stalled`, and `Sidecar` `Exited` are scheduled; reactive families have stable keys that never digest a composed prompt; the stale and quarantine expiry is one function in `eileen-contracts` that check 18 and `eileen scenario check` both call, with a WP0 fixture; a scenarios-only pull request builds the neutral Linux binary once for its replay (3.3.14, 3.3.16, 4.8, 4b.3, 4b.5; WP0 acceptance 8, WP1 acceptance 13).
+
+**Feasibility on this PC.**
+
+- aedf46-10 (the slice): WP4's two slice pull requests run in W1, sharing `desktop.lock` with WP6's spike under an amended rule 12, so S1 passes as soon as its four pull requests merge; ROADMAP agrees (0, 6.1, 6.4, 6.6; ROADMAP).
+- a1129a-1 (the build guard): a W0 baseline day on the owner's PC (`cargo xtask slots --baseline`) sets the guard's thresholds in `buildguard.toml`, with acceptance that slot 0 is admitted on a typical working day; the paging counter is converted from pages; the job count is monotonic; samples are shared between guard processes and the runtime; `measure-idle` uses `eileen_buildguard::procinfo` (6.1, 4b.5, 6.2; WP0 acceptance 4).
+- a1129a-5 (deep answers): the 4.3 row, E3, E10 and section 1 now give one to two minutes when the deep session starts cold; the deep pool session is kept first and may start by the paging rule with nothing queued; B6 has targets; section 7 names the limit (1, 2.5, 4.3, 4.7, invariant 14).
+- a1129a-7 (admission defaults): benchmarks are stratified by admission rule instead of excluded below 2 GB, and the nightly lane skips only when admission would refuse a session for 30 minutes; `memory.max_paging_kb_s` defaults to `auto`, learned from the PC's own week of paging and passed to the core in `MemoryPressure`; WP3's W1 record must show a cold worker admitted on a typical day; the M6 demo must start its three agents without "start it anyway" (2.5, 2.15, 3.3.2, 3.3.11, 4.6, 4.7; WP3 acceptance 3, WP9 acceptance 6; ROADMAP M6).
+
+**The owner's direction, swept again (L8).**
+
+- (a) The machine hash mixes the OS machine id, read through a new `MachineIdentity` platform trait, with a random install id, or uses the install id alone (3.3.1, 3.4, 2.15, 4.8; WP9 acceptance 4; D60, which amends D58).
+- (c) The Colab ML-projects connector is a v0.2 row in section 1's spine and in ROADMAP, and ROADMAP's non-goal now says Eileen adapts no weights of its own while the user's training projects are a v0.2 connector.
+- (e) An about panel, a tray item, a spoken phrase and `eileen about` show the credits generated from `NOTICE` and `models.toml`, Pocket TTS's attribution included (2.9, 3.3.6, 3.5; WP2, WP8 acceptance 10).
+- (h), (i), (j) are the L1, L4 and L3 entries above; (k) the scheduled scrub covers all of `docs/RESEARCH.md`, its opening line included, followed by a clean denylist scan (6.2, section 7 table).
+- 2026-10-21, revision after the third verification round (15 items the checkers found still partial, ids from the workflow's list). Decisions D65 to D69 record the changes. Nothing was declined: every remaining gap was right on the facts. The registry point of ab65bc-11 was checked against how the official MCP registry publishes entries (its `_meta` "official" block is bookkeeping on every entry, and only the namespace of a server's name is verified), and the design now says so.
+
+**The learning loop.**
+
+- a6a62e-1 (recipes in shadow mode): shadow agreement is defined case by case: asked slots take the user's answer to the worker's matched `ask_user`; read steps the worker never made leave the run inconclusive only when something needs them; postconditions that name a check op are evaluated on shadow checks the core issues with origin `Core` (`SkillEngine::shadow_checks`, `TrajectoryStep.shadow_of`); a fallback is taken where a replay would take it; a `delegate` owns the span of worker calls between its neighbours and is checked by the `call` after it, which the linter now requires; extra tier-1 worker calls disagree; and the verdict is `Agree`, `Disagree` or `Inconclusive` (`ShadowVerdict`, `ShadowMiss`). Delegate goals and ask and confirm questions are literals for tracing, overlap and the deny patterns, exempt from the vocabulary rule, and held for line approval when they trace nowhere. Tools that select their operation through an `action` field name their ops the same way as `op` tools (`ToolSpec.selector`, "Ops and selectors"), and the `pos` step reads `call apps_media status` (2.10 items 4, 7, 9 and 14, 3.3.9, 3.3.13, 3.3.15; WP1, WP7 phase B, WP7 acceptance 8).
+- a6a62e-3 (distillation and `--wait`): a job is distilled at most once, through a `DistillState` row in `librarian_runs`, and `distill --job --wait` subscribes before it reads that row, so it returns the recorded outcome when idle distillation got there first and waits for a running batch otherwise; `learn.distill_skipped` carries a typed `SkipReason` that now covers a librarian that proposed nothing and distillation turned off, and the new `learn.distill_deferred` covers the plan-share cap, refused admission, a failed librarian and cancellation; `--wait` has exit codes; the runners wait for every run's outcome, and a deferred outcome stops a benchmark with its reason (2.10 items 2 and 5, 3.3.4, 3.3.13, 4.7; WP7, WP7 acceptance 9, WP9 acceptance 6; ROADMAP M6).
+- a6a62e-5 (2) to (4) (what a draft can carry): an `Act` job starts with the taint its brain turn's context held and keeps those blocks as observed text, so window titles in a draft from a brain action trace as `Observed`; delegate goals and questions are literals (above); the tool names an approved third-party MCP server lists at start (`cache\mcp-tools.json`) count as provenance `Tool` (2.5, 2.10 items 1, 2 and 9, 2.12, 2.15, 3.3.11; WP1 acceptance 6, WP6, WP7 acceptance 5).
+- a6a62e-8 (facts and phrasings): "X means Y" is stored only in the phrasing store, as a `SlotAlias` with a subject key that clarifying answers carry too, and a correction deletes every alias of that subject (journaled, so undo restores it); feedback facts take the `<thing>` as subject and the answer's topic as scope only when the statement refers to the current answer, with `SameSubject` retirement; the statements-only tests apply to slot text, not the entries' own words; a complaint lexicon keeps "my Chrome is slow" a request; "that wasn't a fact" is a grammar entry (`CoreCommand::UndoFact`); section 7 names the residual risk (2.4, 2.10 item 11, 3.3.10, 3.3.13; WP1 acceptance 12, WP7 acceptance 3; section 7).
+- aedf46-1 (paraphrases): an L2 paraphrase of a confirmed phrasing runs only at or above `learning.phrasing_min_similarity` and when every entity name the L1 resolvers find matches the target's literal, otherwise it is a hint, so "bring Word up" never launches Notepad; D41 now carries an amended-by line (2.10, 3.3.10, 3.3.11; WP7 phase B and acceptance 11; DECISIONS D41 and D65).
+
+**Hearing and the first run.**
+
+- aedf46-2 (the follow-up rule's owner): the follow-up feature is a contract: `ResolveCtx.last_turn` (`LastTurnRefs`, filled by the core from its own last turn) and `IntentResolver::follow_up` returning `FollowUp`, built and golden-tested by WP7, a scripted fake in WP1 and `None` from the slice resolver until WP7 lands; the same rule scopes feedback facts (2.8, 3.3.10, 3.3.15; WP1 acceptance 12, WP7 phase A and acceptance 3).
+- L1 and L8 (h) (the speech level): `EndOfTurn.level_db` carries each turn's level, `VoiceCalibration` reaches the core in `CoreConfig.calibration` and as `VoiceEvent::Calibration`, and the addressee score is a defined function with points and a level veto, falling back to the median level of name-led turns without a calibration; WP1 tests a quieter, farther voice greyed inside the window, and WP4 tests the level measurement (2.8, 3.3.3, 3.3.11, 3.3.16; WP1, WP4 and their acceptance 12; section 7). L8 (b): the E16 row now says only name-led utterances count during a call.
+
+**Safety and best-in-class.**
+
+- ab65bc-1 (git): any `.git` path component is `GitInternals`, so nested repositories and rewritten worktree pointers are caught; path classes are tried in one stated order (credentials first, then git internals, then the snapshot, then the job's folders), so an in-place job's `.git\hooks` is `GitInternals`; the global options that pick another repository or configuration are tier 2; workers also pin `safe.bareRepository=explicit`; the runtime adds a `GitFact` (`job_repo`, `has_hooks`) per git command to `PreToolUse`, found without running git, and after taint a git command in any repository other than the job's is tier 2; one URL function, `url_vouched`, replaces the per-segment length test (2.12, 3.3.3; WP1 and WP2 builds, WP1 acceptance 6, WP2 acceptance 10; section 7).
+- ab65bc-5 (laundering through the brain): `url_vouched` vouches a visited host only for a full URL the user visited, never for one whose page is in the turn's own context, and the brain's exits, dispatched tasks and tainted workers share it; a dispatched job whose task repeats ledger lines or out-of-scope facts starts with `private_read` (2.12; WP1 acceptance 6).
+- ab65bc-11 (who published a server): `publisher` is the registry-verified namespace (a GitHub user or a domain), `from_app_vendor` comes from WP6's `app-vendors.toml`, the registry's `_meta` "official" block is never read as an endorsement, the word "official" is never spoken, inactive entries are refused, and an `AppApi` link is stored as `source_url` (2.5, 3.3.6, 3.3.9, 3.3.13; WP1, WP6 and its acceptance 8, WP7 acceptance 9).
+- a6a62e-5 (1) (reads the table missed): `desktop_windows`, `desktop_wait_for`, the verification hints of desktop actions, `apps_media` `status`, `apps_recent` and `ledger_search` have rows, `OpSpec.observes` covers everything an op returns, and WP1's walk fails on any free-text op left at none without a listed reason (2.12, 3.3.9; WP1 acceptance 6, WP5, WP6).
+
+**Engineering quality.**
+
+- a184cd-2 and L8 (f) (evidence): `pr-meta` allows `docs`, `scenario` and `deps` only when the changed files fit, and holds code-changing amendments to the feature rule; Dependabot's pull requests are recognised by author with no template; the `evidence-reviewed` label counts only when applied after the head commit arrived; integration tests are named by their test target; manifest, lockfile and `.github/` changes select every lane (4.6, 4b.3, 6.2; WP0 acceptance 11).
+- a184cd-4 (scenario replay): every brain and worker event now has a rule (`Ready` after `Start`, `Promote` or `Recycle`, `Init` after a pooled `Start`, crashes scheduled, rate-limit and memory events in place); the replayer mints its own brain instance numbers so a stall-then-fallback replays; hooks are served in the worker's sequence and held for the core's answer, and a changed decision fails the replay; `ScenarioMeta`, `StatusProblem` and `Date` are defined, with `since` dates in the file and `eileen scenario stale` writing them; brain turns and worker commands are keyed by transcript digest and occurrence, so moving an earlier request off the brain does not shift later keys (3.3.1, 3.3.14, 3.3.16, 3.5; WP1 acceptance 13, WP2 acceptance 11).
+
+**Feasibility on this PC.**
+
+- aedf46-10 (the slice): the minimal core includes barge-in and answers `WhatTime` and the safety commands; `wp2/s1-live` adds `SliceResolver`, a minimal real resolver that WP7's first pull request replaces; the live S1 run holds `desktop.lock` (6.1 rule 12, 6.3, 6.4, 6.9; WP2 acceptance 1).
+- a1129a-1 (the build guard): the baseline leaves out samples taken while a slot is held; the re-check limit is the 95th percentile plus 25 percent and never under twice the slot-0 limit; one headroom floor of at most 2 GB and at least 1 GB applies after the build's own estimated commit; the re-check wait is bounded; the shared sample file has a format and one writer in `eileen_buildguard::samples` (now a dependency of the runtime); WP0's owner-PC acceptance includes an observed refusal; and `windows-sys` gains the features `procinfo` needs (3.1, 4.1, 4b.5, 6.1, 6.2; WP0 acceptance 4).
+- a1129a-7 (admission on fresh data directories): the 30 s paging averages behind `memory.max_paging_kb_s = auto` live in a machine-wide file that ignores `EILEEN_DATA_DIR`, seeded from the guard's baseline, so tests, benchmarks and the M6 demo use what this PC learned; the clamp ceiling is 40,000 KB/s; WP3's admission record moves to W2 on the full runtime (2.5, 2.15, 3.3.11; WP2, WP3 acceptance 3; section 7).
+
+**The owner's direction, swept again (L8).** (b), (h) and (f) are above; (d) the sources line uses only hosts with accepted answers, and the `cited` count is only a denominator (2.10 item 11); (k) `wp0/guidance` names the `docs/RESEARCH.md` scrub (6.2); WP7's acceptance items 5 and 6 are on separate lines again. OWNER-DIRECTION.md has no entry newer than the second round, and the proposed-ideas table still assigns each of the 12 ideas to v0.1 or a later version.
+- 2026-10-21, revision after the fourth verification round (8 items the checkers found still partial, ids from the workflow's list). Decisions D70 to D73 record the changes. Nothing was declined: every remaining gap was right on the facts. Three questions that only code or a measurement can settle are carried into their packages (section 7, "Carried into packages"), each with the test that settles it in that package's acceptance.
+
+**The learning loop.**
+
+- a6a62e-1 (shadow agreement): a selector tool's step `args` hold the struct's other fields (`DesktopWindow.hwnd`, `AppsMedia.session`, `JobsControl.job`) beside the variant's, and WP1's `ToolSpec` walk fails on a name clash; a delegate's span starts after the latest match of the steps before it in its own list (the failing call for a fallback's first step, the job's start for a recipe's first step) and holds only calls no other rule accounts for, so the `find` delegate's span is defined and the computer-use route's stills export cannot fill it; the ladder's level-1 row names every "held" cell of item 9's table; an `ask` or `confirm` with no options agrees with any `ask_user` between its neighbours' matches; `agree` searches for one consistent assignment of worker calls to steps, bounded at 100,000 candidates (2.10 items 5 and 7, 3.3.9; WP1 acceptance 6, WP7 phase B and acceptance 8; section 7, carried to WP7).
+- a6a62e-3 (distillation outcomes): a rejected job's row is final and only `Deferred` returns a job to the queue; a librarian that exits mid-batch defers its batch with `LibrarianFailed`, and at start the runtime turns rows a stopped runtime left `Queued` or `Running` into `Deferred(Cancelled)` with the event, while a `--wait` that loses the runtime exits 4; fast-path and replay jobs pass through the pre-filter in a stated order (a fast-path job no other rule skips is the new `SkipReason::NotOnClaude`); B8, B8-curve and item 2 judge outcomes by run index, with `StatsOnly` and `TooShort` the expected outcomes after the drafting run (2.10 items 2 and 5, 3.3.4, 3.3.13, 4.7; WP7 phase A and acceptance 9, WP9 acceptance 2).
+- a6a62e-5 (what a tainted step keeps): the drop rule looks at each argument, not the step's taint flag: vocabulary literals, slots, pointers into untainted steps, into fields no outside party wrote (ops observing nothing, non-text fields, `apps_recent` URLs and paths) and match-only pointers (`x-eileen-match`, such as `wait_for_media_title`) are kept, so the worked recipes and B1's brain navigation compile from their own evidence; `jobs_status` takes the listed jobs' sources (`ObservesRule::ByJobs`); the apps sidecar runs `tools/list` once after each install and is the only writer of `cache\mcp-tools.json` (2.5, 2.10 item 9, 2.12, 2.15, 3.3.9, 3.3.11; WP1 acceptance 6, WP6, WP7 acceptance 5).
+- a6a62e-8 (fact retirement): refinement words take their dimension as subject key (distance, price, noise, size), so "cheaper" no longer retires "closer" and "further" does; a statement retires its subject's facts in its own scope and in no scope, and an unscoped statement in every scope; "I loved that [place]" takes the bracketed referent as its key (2.4, 2.10 item 11, 3.3.10; WP1 builds and acceptance 12, WP7 acceptance 3).
+
+**Safety and best-in-class.**
+
+- ab65bc-1 (git): `GitInternals` covers `.git` components only inside the job's own folders plus the job's own git and common directories, so another repository's `.git\config` is `Elsewhere` (an asked read that sets `private_read`) and another job's worktree stays `EileenData`, while a write to any `.git` path takes the higher of its class's tier and tier 2, HUD only (`PathFact.git_component`); any environment assignment in a command line (`HOME=`, `XDG_CONFIG_HOME=`, `EDITOR=`, `PATH=`, `env`, `export`, `$env:`) makes the command tier 2, HUD only, except five variables that name no program; the `.git` comparison follows git's `core.protectNTFS` (trailing dots and spaces, stream suffixes, `GIT~1` for paths that do not exist yet) (2.12, 3.3.3; WP1 builds and acceptance 6, WP2 builds and acceptance 10; section 7, carried to WP2; ARCHITECTURE).
+- ab65bc-5 (the URL rule's inputs): `UrlFact`, `UrlCtx`, `UrlVerdict`, `VouchRule` and `UrlRefusal` are contracts; the runtime attaches a `UrlFact` per URL like a `PathFact`, with `in_index` and `visited` from the media history, the recent-work index and the ledger's browser lines, which now record the address-bar URL; `WindowInfo.url_host` gives the context hosts, and an unreadable address bar makes rule 3 fail closed; a dispatched job starts with `private_read` whenever its turn held ledger lines, facts keep the overlap test, and section 7 names the paraphrased-fact residual; the tier table's egress row now says tainted and private (2.10 item 11, 2.12, 3.3.3, 3.3.5; WP1 builds and acceptance 6, WP2 builds and acceptance 10, WP5 builds and acceptance 13, WP7 phase A; section 7, carried to WP5).
+
+**Engineering quality.**
+
+- a184cd-4 (scenario replay): the core's answer to each gating hook is recorded as a `HookAnswerRecord` line beside the hook input (`RecordLine`), compared by strict mode, used by scenario mode's hook divergence and kept by `record trim`; WP1 acceptance 13 names the 3.3.16 key; a turn sent again with its transcript unchanged keeps its key and is told apart by its send ordinal; check 18 fails a `since` later than the UTC date of the commit that introduced its line, with a WP0 fixture (3.3.14, 3.3.16, 4b.3; WP0 acceptance 8, WP1 builds and acceptance 13).
+
+**Feasibility on this PC.**
+
+- a1129a-7 (machine-wide memory files): `eileen_buildguard::samples` owns all three machine-wide files: the paging windows' line format with a `slot_held` mark, the shared lock and a one-line-per-window rule for two runtimes, the `buildguard.toml` keys and reader, and `auto_paging_limit` (slot-held windows left out, the fallback chain and the clamp), so the runtime's single dependency on the guard holds; `machine_root()` reads `LOCALAPPDATA`, so WP2's new acceptance 12 runs with a temporary folder and checks that a fake memory source writes nothing (2.5, 2.15, 3.1, 3.3.11, 6.1; WP0 phase A and acceptance 4, WP2 builds and acceptance 12).
+- 2026-10-21, revision applying the owner's answers to section 7 in full ([OWNER-DIRECTION.md](OWNER-DIRECTION.md), "Owner answers to BUILD.md's open questions", the standing rule, and the owner's entries after it). Decision D74 records the changes. Nothing was declined.
+
+**Section 7 and the decision log.**
+
+- Section 7's table now says, for each of the 23 answers, what it changed and where, in place of the questions; the four questions the first round's revision had added are settled by the standing rule as recommended (they were already in D54, D56, D58 and D63); the owner's entries after the answers are listed beside it; the section is renamed "Owner decisions, settled questions and risks", and the reviewers' note in the header says no question is left open for the owner.
+- `docs/DECISIONS.md`: the twenty statuses among D17 to D38 that read only "accepted" now name owner answer 1, following the file's own precedent for an owner's acceptance; D21, D25, D39 to D50 and the records added since already named theirs; D53, D58 and D60 say they are amended by D74. History is otherwise unchanged.
+- The scrub of owner answer 15 is done rather than scheduled: `docs/RESEARCH.md` (its opening line and section 8) and `docs/NAMING.md` describe the earlier working names and the franchise without naming them, as D15 and D16 already did; `wp0/guidance` no longer rewrites them, phase B's exempt list and check 6 say they were scrubbed, and WP0 acceptance 8 proves the seeded denylist against the pre-scrub copies of all three files from git history and against the current files (4b.3, 6.2).
+
+**Fleet machine identity on every OS (owner answer 6).**
+
+- The derivation is one function in the platform layer, `eileen_platform::machine::machine_hash`, with `normalise_os_id` (Windows' GUID form and Linux's plain form follow one rule; an id that is not 32 hex digits, all zeros or `uninitialized` counts as none) and length-prefixed inputs; `FileMachineIdentity` reads Linux's machine-id files and is tested on Linux from v0.1; `InstallId` is a contract type, and the install id never leaves the PC, so the public salt does not let anyone recompute a hash from an OS id (3.3.1, 3.4; WP0 phase A and acceptance 12).
+- The hash used to be computed only by WP9's fleet runner in W6, while scenario save (WP2) and voice consent records (WP4) needed it from W1 and W2. The runtime now creates the install id at `eileen setup` or the first run and writes the hash to `fleet\machine.toml` at every start; scenario save, consent records, the fleet runner (reading the user's own data directory, never the run's throwaway one) and benchmark lines all read it there, so one value appears in every result and scenario from that install (2.8, 2.15, 3.3.14, 3.5, 4.2 step 5, 4.7, 4.8; WP2 builds and acceptance 8 and 13, WP9 builds and acceptance 4). `eileen-runtime` may depend on `eileen-platform`, which its memory sampler already needed (3.1).
+- `FleetResult` names its operating system (`os: Platform`, `os_build` in place of `windows_build`), and failure clusters use the OS build (3.3.16, 4.8).
+- Results arrive as a contributor's pull request, a contributor's own commit (`--submit --push`, for those with write access) or the owner's relay (`--submit --file`); `devhub.yml` validates pull requests and pushes alike and reports a pushed file that fails, which ingest skips (3.5, 4b.3, 4.8; WP9 builds and acceptance 4).
+
+**The other answers and entries.**
+
+- Resolve (answer 9): `doctor resolve --route mcp|bridge` runs the checks through one route, and WP6 acceptance 1 runs them through ResolveMCP and again through the bridge once the owner is on 21.1 or later, so the fuscript Lua bridge stays a tested fallback (2.7, 3.5, 4.2, WP6 builds and acceptance 1).
+- The nightly lane (answer 10) is unattended from its first night, with no attended trial and no per-night arming; `cargo xtask nightly-local --install` creates the Task Scheduler entry once (4.6, 4b.5).
+- Languages (answer 21): `LanguageSupport` is a contract, the brain backend and the worker driver report one through `languages()` as the speech stages already did, each from the component itself, and section 2.8 states the later version's fallback (another engine that supports the language, or typing); Eileen's code holds no list of languages (section 1's proposed-ideas table, 2.8, 3.3.8; WP3 acceptance 6, WP4 builds).
+- ML projects (the owner's Colab entry): `JobKind::MlProject` is reserved with `JobKind::built_in_v0_1`, and the dispatcher refuses it with a `JobKindUnavailable` error that offers a research job; the connector stays v0.2 in section 1's spine and in ROADMAP, with its route chosen at v0.2 design time as the entry's route note says (section 1, 2.5, 3.3.2, 3.3.9, section 7; WP1 builds and acceptance 14).
+
+- 2026-10-21, an independent check of the fourth round's fixes and of the owner's answers. All eight items hold, each fixed or carried with an owning package and a test, and every owner answer is applied where it matters; four small corrections, none of which changes a decision:
+  - WP0 acceptance 8 proves the seeded denylist against `main`'s first commit, `9bb1909`, which holds the pre-scrub text of all three dated records; the branch commits it named before would not survive a squash or rebase merge (6.2).
+  - A benchmark line reads the machine hash from the user's own data directory, never a benchmark's throwaway one, as the fleet runner already did, so one install gives one hash (4.7; D74).
+  - WP7 acceptance 9 adds a case for the new `NotOnClaude` outcome: a fast-path command of three non-read steps (2.10 item 2; D70).
+  - Section 7's risk line now separates what taint gates from what always asks, and names the five-variable exception; ARCHITECTURE.md's path-guard line says the same, names D74 and its revision date.
