@@ -2114,8 +2114,8 @@ proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 proptest-state-machine = "0.9.0"
 arbitrary = { version = "1.5.0", features = ["derive"] }
 loom = "0.7.2"
-# shuttle and shuttle-tokio: WP2 pins the newest releases at least 14 days old (0.9.7 and 1.0.0 on 2026-10-20; 0.9.8 was
-# still inside the cooling-off period), behind a `shuttle` feature no shipped binary enables
+# shuttle and shuttle-tokio: WP0 pins the newest releases at least 14 days old (0.9.7 and 1.0.0 on 2026-10-20; 0.9.8 was
+# still inside the cooling-off period); WP2 uses them behind a `shuttle` feature no shipped binary enables
 ```
 
 Deliberately not used: `chacha20poly1305` and DPAPI wrapping (encryption at rest is v0.2, decision D40), `uiautomation` (it initialises COM on every construction; Eileen owns one MTA thread), `nucleo-matcher` (MPL-2.0; Eileen writes its own scorer), `xcap` (no gain over the own capture code), `gix` (skill history is in SQLite), `serde_yaml` and `serde_yml` (deprecated or unsound; config is TOML), `hyper` (the loopback endpoint is a small hand-written HTTP/1.1 server with strict limits and a fuzz target), the OpenTelemetry crates (v0.2, behind a feature). Any new dependency is an architectural change: say so in the pull request, and it must pass cargo-deny.
