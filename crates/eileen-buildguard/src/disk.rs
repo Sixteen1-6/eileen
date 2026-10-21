@@ -9,15 +9,19 @@ pub const MIN_FREE_DISK_GB: u64 = 20;
 /// where the guard cannot read it (off Windows, where std has no call for it).
 #[must_use]
 pub fn free_disk_gb(path: &Path) -> Option<u64> {
-    #[cfg(windows)]
-    {
-        crate::ffi::free_disk_bytes(path).ok().map(|bytes| bytes / (1024 * 1024 * 1024))
-    }
-    #[cfg(not(windows))]
-    {
-        let _unused = path;
-        None
-    }
+    free_disk_bytes(path).map(|bytes| bytes / (1024 * 1024 * 1024))
+}
+
+/// Free bytes on the volume holding `path`, as the calling user may use them.
+#[cfg(windows)]
+fn free_disk_bytes(path: &Path) -> Option<u64> {
+    crate::ffi::free_disk_bytes(path).ok()
+}
+
+/// Off Windows std has no call for free space, so the guard does not know it.
+#[cfg(not(windows))]
+const fn free_disk_bytes(_path: &Path) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]
