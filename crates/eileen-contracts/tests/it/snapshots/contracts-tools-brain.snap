@@ -1,0 +1,2199 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AskUser": {
+      "description": "`ask_user`: at most 140 characters and 4 options. Tier 0. Refused when it asks for a\npassword, PIN, one-time code or card number.",
+      "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An image to show with it."
+        },
+        "options": {
+          "default": [],
+          "description": "The options.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        },
+        "timeout_s": {
+          "description": "How long to wait, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "CapabilitiesArgs": {
+      "description": "`capabilities`: what Eileen can do here. Tier 0.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope",
+          "description": "How wide to look."
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
+    "CapabilityScope": {
+      "description": "How wide `capabilities` looks.",
+      "oneOf": [
+        {
+          "const": "focused_app",
+          "description": "The focused app.",
+          "type": "string"
+        },
+        {
+          "const": "everything",
+          "description": "Everything.",
+          "type": "string"
+        }
+      ]
+    },
+    "CorrectTarget": {
+      "description": "What `learned_correct` corrects.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A fact.",
+          "properties": {
+            "fact": {
+              "properties": {
+                "id": {
+                  "description": "The fact.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "fact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A skill.",
+          "properties": {
+            "skill": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DesktopLook": {
+      "description": "`desktop_look`: a screenshot for the brain. Tier 0.",
+      "properties": {
+        "max_edge_px": {
+          "description": "The longest edge, pixels; 1280 by default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/LookTarget",
+          "description": "What to look at."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "DesktopStateArgs": {
+      "description": "`desktop_state`. Tier 0.",
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/Detail",
+          "description": "How much to return."
+        },
+        "since_seq": {
+          "description": "Only changes after this sequence number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "type": "object"
+    },
+    "Detail": {
+      "description": "How much `desktop_state` returns.",
+      "oneOf": [
+        {
+          "const": "summary",
+          "description": "A short summary.",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "Everything.",
+          "type": "string"
+        }
+      ]
+    },
+    "DispatchedJob": {
+      "description": "One job `jobs_dispatch` started.",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        },
+        "name": {
+          "description": "Its spoken name.",
+          "type": "string"
+        },
+        "ordinal": {
+          "description": "Its ordinal.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "queued": {
+          "description": "Whether it waits for admission.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "job",
+        "name",
+        "queued"
+      ],
+      "type": "object"
+    },
+    "HudShow": {
+      "description": "`hud_show`: at most 8 KiB of Markdown. Tier 0.",
+      "properties": {
+        "markdown": {
+          "description": "The Markdown.",
+          "type": "string"
+        },
+        "title": {
+          "description": "A title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "markdown"
+      ],
+      "type": "object"
+    },
+    "JobAction": {
+      "description": "What `jobs_control` does.",
+      "oneOf": [
+        {
+          "const": "cancel",
+          "description": "Stop it.",
+          "type": "string"
+        },
+        {
+          "const": "interrupt",
+          "description": "Interrupt its current turn.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Interrupt it and give it new words.",
+          "properties": {
+            "steer": {
+              "properties": {
+                "text": {
+                  "description": "The words.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "steer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move it to another route, model or depth.",
+          "properties": {
+            "reroute": {
+              "properties": {
+                "depth": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Depth"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The depth."
+                },
+                "model": {
+                  "description": "The model.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "route": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Route"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The route."
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "reroute"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "focus",
+          "description": "Focus on it.",
+          "type": "string"
+        },
+        {
+          "const": "show_changes",
+          "description": "Show its changes.",
+          "type": "string"
+        },
+        {
+          "const": "keep",
+          "description": "Keep its changes.",
+          "type": "string"
+        },
+        {
+          "const": "undo",
+          "description": "Undo its changes.",
+          "type": "string"
+        }
+      ]
+    },
+    "JobRef": {
+      "description": "How a tool names a job.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "By id.",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/JobId"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "By slug.",
+          "properties": {
+            "slug": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "slug"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "By spoken name.",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "\"the second one\".",
+          "properties": {
+            "ordinal": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ordinal"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "JobsControl": {
+      "description": "`jobs_control`. Tier 1; `Keep` with cleanup tier 2.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/JobAction",
+          "description": "What to do."
+        },
+        "job": {
+          "$ref": "#/$defs/JobRef",
+          "description": "The job."
+        }
+      },
+      "required": [
+        "job",
+        "action"
+      ],
+      "type": "object"
+    },
+    "JobsDispatch": {
+      "description": "`jobs_dispatch`: start one job, or a fan-out. Tier 1 (asks first when plan usage is high and\n`fanout` is above 2).",
+      "properties": {
+        "anticipated": {
+          "default": false,
+          "description": "`DeepAnswer` only: started by anticipation.",
+          "type": "boolean"
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Depth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much thought it gets."
+        },
+        "fanout": {
+          "description": "How many workers, 1 to 8.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/JobKind",
+          "description": "The kind of job."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FanoutMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the workers share the task."
+        },
+        "model": {
+          "description": "A model name from `routing.models`, or a full id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "description": "A repository name or absolute path.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-path": true
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route; leave it out to let policy decide."
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A learned skill to follow."
+        },
+        "slots": {
+          "description": "Kind `Replay`: must equal the `[match]` block's skill and slots; any other kind with a\nskill: the slots the use is attributed with, validated against the skill's slot specs."
+        },
+        "subquestions": {
+          "default": [],
+          "description": "`DeepAnswer`: at most 4 subquestions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subtasks": {
+          "default": [],
+          "description": "`Split` mode: one subtask per worker.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "The task, up to 8,000 characters.",
+          "type": "string"
+        },
+        "title_hint": {
+          "description": "A hint for the job's spoken name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "topic": {
+          "description": "`DeepAnswer` only: a short topic key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "task"
+      ],
+      "type": "object"
+    },
+    "JobsDispatchOutput": {
+      "description": "What `jobs_dispatch` returns.",
+      "properties": {
+        "ack": {
+          "description": "What Eileen says to acknowledge them.",
+          "type": "string"
+        },
+        "jobs": {
+          "description": "The jobs it started.",
+          "items": {
+            "$ref": "#/$defs/DispatchedJob"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "jobs",
+        "ack"
+      ],
+      "type": "object"
+    },
+    "JobsStatus": {
+      "description": "`jobs_status`. Tier 0.",
+      "properties": {
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One job; leave it out for every live job."
+        }
+      },
+      "type": "object"
+    },
+    "LearnedCorrect": {
+      "description": "`learned_correct`. Tier 1, addressed turns only. The instruction is stored with provenance\n`User` only if it is a contiguous span of the turn's normalised transcript, else after a\n`UserInput` yes as `Approved`; a skill target queues `LearnCmd::Repair`.",
+      "properties": {
+        "instruction": {
+          "description": "How.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CorrectTarget",
+          "description": "What to correct."
+        }
+      },
+      "required": [
+        "target",
+        "instruction"
+      ],
+      "type": "object"
+    },
+    "LearnedForget": {
+      "description": "`learned_forget`. Tier 2. \"forget that I `<text>`\" maps to `About { text }` through the\ngrammar; the brain uses it for other phrasings.",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ForgetTarget",
+          "description": "What to forget."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "LearnedKind": {
+      "description": "What `learned_query` looks at.",
+      "oneOf": [
+        {
+          "const": "skills",
+          "description": "Learned skills.",
+          "type": "string"
+        },
+        {
+          "const": "facts",
+          "description": "Facts about the user.",
+          "type": "string"
+        },
+        {
+          "const": "both",
+          "description": "Both.",
+          "type": "string"
+        }
+      ]
+    },
+    "LearnedQuery": {
+      "description": "`learned_query`. Tier 0.",
+      "properties": {
+        "about": {
+          "description": "A topic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearnedKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Skills, facts or both."
+        },
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Only since this time, as the user said it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LedgerSearch": {
+      "description": "`ledger_search`. Tier 0.",
+      "properties": {
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        },
+        "since_hours": {
+          "description": "How far back, hours.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "LookTarget": {
+      "description": "What `desktop_look` looks at.",
+      "oneOf": [
+        {
+          "const": "screen",
+          "description": "Every monitor.",
+          "type": "string"
+        },
+        {
+          "const": "foreground",
+          "description": "The foreground window.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One window.",
+          "properties": {
+            "window": {
+              "properties": {
+                "hwnd": {
+                  "description": "The window.",
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "hwnd"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "window"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SaveTarget": {
+      "description": "What `scenario_save` saves.",
+      "oneOf": [
+        {
+          "const": "last",
+          "description": "The last request.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One turn.",
+          "properties": {
+            "turn": {
+              "properties": {
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "turn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One job.",
+          "properties": {
+            "job": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ScenarioSave": {
+      "description": "`scenario_save`. Tier 1.",
+      "properties": {
+        "expected": {
+          "description": "What should have happened.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "default": false,
+          "description": "Save it as a failure.",
+          "type": "boolean"
+        },
+        "which": {
+          "$ref": "#/$defs/SaveTarget",
+          "description": "What to save."
+        }
+      },
+      "required": [
+        "which"
+      ],
+      "type": "object"
+    },
+    "SettingsApply": {
+      "description": "`settings_apply`. The tier follows the proposal's risk; `Safety` keys need a `UserInput`\napproval.",
+      "properties": {
+        "proposal": {
+          "$ref": "#/$defs/ProposalId",
+          "description": "The proposal."
+        }
+      },
+      "required": [
+        "proposal"
+      ],
+      "type": "object"
+    },
+    "SettingsGet": {
+      "description": "`settings_get`. Tier 0.",
+      "properties": {
+        "keys": {
+          "default": [],
+          "description": "The keys; empty for a short summary.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SettingsPropose": {
+      "description": "`settings_propose`: returns a `Proposal`. Tier 0.",
+      "properties": {
+        "changes": {
+          "description": "The changes.",
+          "items": {
+            "$ref": "#/$defs/SettingChange"
+          },
+          "type": "array"
+        },
+        "utterance": {
+          "description": "What the user said.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "changes",
+        "utterance"
+      ],
+      "type": "object"
+    },
+    "SettingsUndo": {
+      "description": "`settings_undo`. Tier 1.",
+      "properties": {
+        "steps": {
+          "description": "How many versions back.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "to_version": {
+          "description": "Or straight to this version.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "tool_inputs": {
+    "ask_user": {
+      "$defs": {
+        "BlobRef": {
+          "description": "A content-addressed blob: b3: and its BLAKE3 hash",
+          "pattern": "^b3:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`ask_user`: at most 140 characters and 4 options. Tier 0. Refused when it asks for a\npassword, PIN, one-time code or card number.",
+      "properties": {
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An image to show with it."
+        },
+        "options": {
+          "default": [],
+          "description": "The options.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        },
+        "timeout_s": {
+          "description": "How long to wait, seconds.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "title": "AskUser",
+      "type": "object"
+    },
+    "capabilities": {
+      "$defs": {
+        "CapabilityScope": {
+          "description": "How wide `capabilities` looks.",
+          "oneOf": [
+            {
+              "const": "focused_app",
+              "description": "The focused app.",
+              "type": "string"
+            },
+            {
+              "const": "everything",
+              "description": "Everything.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`capabilities`: what Eileen can do here. Tier 0.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope",
+          "description": "How wide to look."
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "title": "CapabilitiesArgs",
+      "type": "object"
+    },
+    "desktop_look": {
+      "$defs": {
+        "LookTarget": {
+          "description": "What `desktop_look` looks at.",
+          "oneOf": [
+            {
+              "const": "screen",
+              "description": "Every monitor.",
+              "type": "string"
+            },
+            {
+              "const": "foreground",
+              "description": "The foreground window.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "One window.",
+              "properties": {
+                "window": {
+                  "properties": {
+                    "hwnd": {
+                      "description": "The window.",
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "hwnd"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "window"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_look`: a screenshot for the brain. Tier 0.",
+      "properties": {
+        "max_edge_px": {
+          "description": "The longest edge, pixels; 1280 by default.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/LookTarget",
+          "description": "What to look at."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "DesktopLook",
+      "type": "object"
+    },
+    "desktop_state": {
+      "$defs": {
+        "Detail": {
+          "description": "How much `desktop_state` returns.",
+          "oneOf": [
+            {
+              "const": "summary",
+              "description": "A short summary.",
+              "type": "string"
+            },
+            {
+              "const": "full",
+              "description": "Everything.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`desktop_state`. Tier 0.",
+      "properties": {
+        "detail": {
+          "$ref": "#/$defs/Detail",
+          "description": "How much to return."
+        },
+        "since_seq": {
+          "description": "Only changes after this sequence number.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "detail"
+      ],
+      "title": "DesktopStateArgs",
+      "type": "object"
+    },
+    "hud_show": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`hud_show`: at most 8 KiB of Markdown. Tier 0.",
+      "properties": {
+        "markdown": {
+          "description": "The Markdown.",
+          "type": "string"
+        },
+        "title": {
+          "description": "A title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "markdown"
+      ],
+      "title": "HudShow",
+      "type": "object"
+    },
+    "jobs_control": {
+      "$defs": {
+        "Depth": {
+          "description": "How much thought a request gets.",
+          "oneOf": [
+            {
+              "const": "instant",
+              "description": "Answered at once, by the fast path or the brain's first words.",
+              "type": "string"
+            },
+            {
+              "const": "quick",
+              "description": "A short job.",
+              "type": "string"
+            },
+            {
+              "const": "considered",
+              "description": "A job given room to think.",
+              "type": "string"
+            },
+            {
+              "const": "deep",
+              "description": "The deepest model and the most time.",
+              "type": "string"
+            }
+          ]
+        },
+        "JobAction": {
+          "description": "What `jobs_control` does.",
+          "oneOf": [
+            {
+              "const": "cancel",
+              "description": "Stop it.",
+              "type": "string"
+            },
+            {
+              "const": "interrupt",
+              "description": "Interrupt its current turn.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Interrupt it and give it new words.",
+              "properties": {
+                "steer": {
+                  "properties": {
+                    "text": {
+                      "description": "The words.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "steer"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Move it to another route, model or depth.",
+              "properties": {
+                "reroute": {
+                  "properties": {
+                    "depth": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Depth"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The depth."
+                    },
+                    "model": {
+                      "description": "The model.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "route": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Route"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The route."
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "reroute"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "focus",
+              "description": "Focus on it.",
+              "type": "string"
+            },
+            {
+              "const": "show_changes",
+              "description": "Show its changes.",
+              "type": "string"
+            },
+            {
+              "const": "keep",
+              "description": "Keep its changes.",
+              "type": "string"
+            },
+            {
+              "const": "undo",
+              "description": "Undo its changes.",
+              "type": "string"
+            }
+          ]
+        },
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "JobRef": {
+          "description": "How a tool names a job.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "By id.",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/JobId"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "By slug.",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slug"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "By spoken name.",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "\"the second one\".",
+              "properties": {
+                "ordinal": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ordinal"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Route": {
+          "description": "A route: which vendor harness or model family does a piece of work. Workers are named only\nby route.",
+          "oneOf": [
+            {
+              "const": "claude",
+              "description": "Claude, through the user's own signed-in `claude` CLI. The only route built in v0.1.",
+              "type": "string"
+            },
+            {
+              "const": "codex",
+              "description": "The Codex app server (a designed slot).",
+              "type": "string"
+            },
+            {
+              "const": "grok",
+              "description": "Grok over ACP (a designed slot).",
+              "type": "string"
+            },
+            {
+              "const": "deepseek",
+              "description": "`DeepSeek` (a designed slot; its API key is the one key Eileen would store).",
+              "type": "string"
+            },
+            {
+              "const": "local",
+              "description": "A local model (a designed slot).",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`jobs_control`. Tier 1; `Keep` with cleanup tier 2.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/JobAction",
+          "description": "What to do."
+        },
+        "job": {
+          "$ref": "#/$defs/JobRef",
+          "description": "The job."
+        }
+      },
+      "required": [
+        "job",
+        "action"
+      ],
+      "title": "JobsControl",
+      "type": "object"
+    },
+    "jobs_dispatch": {
+      "$defs": {
+        "Depth": {
+          "description": "How much thought a request gets.",
+          "oneOf": [
+            {
+              "const": "instant",
+              "description": "Answered at once, by the fast path or the brain's first words.",
+              "type": "string"
+            },
+            {
+              "const": "quick",
+              "description": "A short job.",
+              "type": "string"
+            },
+            {
+              "const": "considered",
+              "description": "A job given room to think.",
+              "type": "string"
+            },
+            {
+              "const": "deep",
+              "description": "The deepest model and the most time.",
+              "type": "string"
+            }
+          ]
+        },
+        "FanoutMode": {
+          "description": "How a fan-out's workers share a task.",
+          "oneOf": [
+            {
+              "const": "compete",
+              "description": "Every worker tries the whole task; the best result wins.",
+              "type": "string"
+            },
+            {
+              "const": "split",
+              "description": "Each worker takes one subtask.",
+              "type": "string"
+            }
+          ]
+        },
+        "JobKind": {
+          "description": "What kind of work a job is.",
+          "oneOf": [
+            {
+              "const": "coding",
+              "description": "Code changes in a repository worktree.",
+              "type": "string"
+            },
+            {
+              "const": "computer_use",
+              "description": "Driving the desktop through Eileen's desktop and apps tools.",
+              "type": "string"
+            },
+            {
+              "const": "general",
+              "description": "A general task with the desktop and apps toolsets.",
+              "type": "string"
+            },
+            {
+              "const": "research",
+              "description": "Research on the web.",
+              "type": "string"
+            },
+            {
+              "const": "deep_answer",
+              "description": "A deep answer to a question, in the background of a fast one.",
+              "type": "string"
+            },
+            {
+              "const": "librarian",
+              "description": "The learning loop's librarian.",
+              "type": "string"
+            },
+            {
+              "const": "replay",
+              "description": "A learned recipe replayed without a model.",
+              "type": "string"
+            },
+            {
+              "const": "continue_session",
+              "description": "Continuing an earlier Claude session.",
+              "type": "string"
+            },
+            {
+              "const": "app_task",
+              "description": "A task inside one app through its adapter.",
+              "type": "string"
+            },
+            {
+              "const": "act",
+              "description": "A fast-path command or a brain turn that ran `act` tools: no session, silent, ends with\nits turn.",
+              "type": "string"
+            },
+            {
+              "const": "ml_project",
+              "description": "Reserved for the v0.2 Colab connector; refused in v0.1.",
+              "type": "string"
+            }
+          ]
+        },
+        "Route": {
+          "description": "A route: which vendor harness or model family does a piece of work. Workers are named only\nby route.",
+          "oneOf": [
+            {
+              "const": "claude",
+              "description": "Claude, through the user's own signed-in `claude` CLI. The only route built in v0.1.",
+              "type": "string"
+            },
+            {
+              "const": "codex",
+              "description": "The Codex app server (a designed slot).",
+              "type": "string"
+            },
+            {
+              "const": "grok",
+              "description": "Grok over ACP (a designed slot).",
+              "type": "string"
+            },
+            {
+              "const": "deepseek",
+              "description": "`DeepSeek` (a designed slot; its API key is the one key Eileen would store).",
+              "type": "string"
+            },
+            {
+              "const": "local",
+              "description": "A local model (a designed slot).",
+              "type": "string"
+            }
+          ]
+        },
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`jobs_dispatch`: start one job, or a fan-out. Tier 1 (asks first when plan usage is high and\n`fanout` is above 2).",
+      "properties": {
+        "anticipated": {
+          "default": false,
+          "description": "`DeepAnswer` only: started by anticipation.",
+          "type": "boolean"
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Depth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much thought it gets."
+        },
+        "fanout": {
+          "description": "How many workers, 1 to 8.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/JobKind",
+          "description": "The kind of job."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FanoutMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the workers share the task."
+        },
+        "model": {
+          "description": "A model name from `routing.models`, or a full id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "description": "A repository name or absolute path.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-path": true
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route; leave it out to let policy decide."
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A learned skill to follow."
+        },
+        "slots": {
+          "description": "Kind `Replay`: must equal the `[match]` block's skill and slots; any other kind with a\nskill: the slots the use is attributed with, validated against the skill's slot specs."
+        },
+        "subquestions": {
+          "default": [],
+          "description": "`DeepAnswer`: at most 4 subquestions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subtasks": {
+          "default": [],
+          "description": "`Split` mode: one subtask per worker.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "The task, up to 8,000 characters.",
+          "type": "string"
+        },
+        "title_hint": {
+          "description": "A hint for the job's spoken name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "topic": {
+          "description": "`DeepAnswer` only: a short topic key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "task"
+      ],
+      "title": "JobsDispatch",
+      "type": "object"
+    },
+    "jobs_status": {
+      "$defs": {
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "JobRef": {
+          "description": "How a tool names a job.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "By id.",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/JobId"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "By slug.",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slug"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "By spoken name.",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "\"the second one\".",
+              "properties": {
+                "ordinal": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ordinal"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`jobs_status`. Tier 0.",
+      "properties": {
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "One job; leave it out for every live job."
+        }
+      },
+      "title": "JobsStatus",
+      "type": "object"
+    },
+    "learned_correct": {
+      "$defs": {
+        "CorrectTarget": {
+          "description": "What `learned_correct` corrects.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "A fact.",
+              "properties": {
+                "fact": {
+                  "properties": {
+                    "id": {
+                      "description": "The fact.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "fact"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A skill.",
+              "properties": {
+                "skill": {
+                  "properties": {
+                    "id": {
+                      "$ref": "#/$defs/SkillId",
+                      "description": "The skill."
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learned_correct`. Tier 1, addressed turns only. The instruction is stored with provenance\n`User` only if it is a contiguous span of the turn's normalised transcript, else after a\n`UserInput` yes as `Approved`; a skill target queues `LearnCmd::Repair`.",
+      "properties": {
+        "instruction": {
+          "description": "How.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/CorrectTarget",
+          "description": "What to correct."
+        }
+      },
+      "required": [
+        "target",
+        "instruction"
+      ],
+      "title": "LearnedCorrect",
+      "type": "object"
+    },
+    "learned_forget": {
+      "$defs": {
+        "ForgetTarget": {
+          "description": "What to forget.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "A skill.",
+              "properties": {
+                "skill": {
+                  "properties": {
+                    "id": {
+                      "$ref": "#/$defs/SkillId",
+                      "description": "The skill."
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "skill"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A fact.",
+              "properties": {
+                "fact": {
+                  "properties": {
+                    "id": {
+                      "description": "The fact.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "fact"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Everything about something (\"forget that I ...\").",
+              "properties": {
+                "about": {
+                  "properties": {
+                    "text": {
+                      "description": "What.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "about"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "last_used",
+              "description": "The last thing used.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "A job and everything it left.",
+              "properties": {
+                "job": {
+                  "properties": {
+                    "job": {
+                      "$ref": "#/$defs/JobId",
+                      "description": "The job."
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "SkillId": {
+          "description": "1 to 64 lower-case letters, digits and hyphens",
+          "pattern": "^[a-z0-9-]{1,64}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learned_forget`. Tier 2. \"forget that I `<text>`\" maps to `About { text }` through the\ngrammar; the brain uses it for other phrasings.",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/ForgetTarget",
+          "description": "What to forget."
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "title": "LearnedForget",
+      "type": "object"
+    },
+    "learned_query": {
+      "$defs": {
+        "LearnedKind": {
+          "description": "What `learned_query` looks at.",
+          "oneOf": [
+            {
+              "const": "skills",
+              "description": "Learned skills.",
+              "type": "string"
+            },
+            {
+              "const": "facts",
+              "description": "Facts about the user.",
+              "type": "string"
+            },
+            {
+              "const": "both",
+              "description": "Both.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`learned_query`. Tier 0.",
+      "properties": {
+        "about": {
+          "description": "A topic.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearnedKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Skills, facts or both."
+        },
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Only since this time, as the user said it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "LearnedQuery",
+      "type": "object"
+    },
+    "ledger_search": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`ledger_search`. Tier 0.",
+      "properties": {
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        },
+        "since_hours": {
+          "description": "How far back, hours.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "LedgerSearch",
+      "type": "object"
+    },
+    "scenario_save": {
+      "$defs": {
+        "JobId": {
+          "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+          "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        },
+        "SaveTarget": {
+          "description": "What `scenario_save` saves.",
+          "oneOf": [
+            {
+              "const": "last",
+              "description": "The last request.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "One turn.",
+              "properties": {
+                "turn": {
+                  "properties": {
+                    "turn": {
+                      "$ref": "#/$defs/TurnId",
+                      "description": "The turn."
+                    }
+                  },
+                  "required": [
+                    "turn"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "One job.",
+              "properties": {
+                "job": {
+                  "properties": {
+                    "job": {
+                      "$ref": "#/$defs/JobId",
+                      "description": "The job."
+                    }
+                  },
+                  "required": [
+                    "job"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TurnId": {
+          "description": "A ULID with the prefix `turn_`, upper-case Crockford base32",
+          "pattern": "^turn_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`scenario_save`. Tier 1.",
+      "properties": {
+        "expected": {
+          "description": "What should have happened.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failed": {
+          "default": false,
+          "description": "Save it as a failure.",
+          "type": "boolean"
+        },
+        "which": {
+          "$ref": "#/$defs/SaveTarget",
+          "description": "What to save."
+        }
+      },
+      "required": [
+        "which"
+      ],
+      "title": "ScenarioSave",
+      "type": "object"
+    },
+    "settings_apply": {
+      "$defs": {
+        "ProposalId": {
+          "description": "A ULID with the prefix `prop_`, upper-case Crockford base32",
+          "pattern": "^prop_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`settings_apply`. The tier follows the proposal's risk; `Safety` keys need a `UserInput`\napproval.",
+      "properties": {
+        "proposal": {
+          "$ref": "#/$defs/ProposalId",
+          "description": "The proposal."
+        }
+      },
+      "required": [
+        "proposal"
+      ],
+      "title": "SettingsApply",
+      "type": "object"
+    },
+    "settings_get": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`settings_get`. Tier 0.",
+      "properties": {
+        "keys": {
+          "default": [],
+          "description": "The keys; empty for a short summary.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "SettingsGet",
+      "type": "object"
+    },
+    "settings_propose": {
+      "$defs": {
+        "SettingChange": {
+          "description": "One change to a setting.",
+          "properties": {
+            "key": {
+              "description": "The dotted key.",
+              "type": "string"
+            },
+            "value": {
+              "description": "The new value."
+            }
+          },
+          "required": [
+            "key",
+            "value"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`settings_propose`: returns a `Proposal`. Tier 0.",
+      "properties": {
+        "changes": {
+          "description": "The changes.",
+          "items": {
+            "$ref": "#/$defs/SettingChange"
+          },
+          "type": "array"
+        },
+        "utterance": {
+          "description": "What the user said.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "changes",
+        "utterance"
+      ],
+      "title": "SettingsPropose",
+      "type": "object"
+    },
+    "settings_undo": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`settings_undo`. Tier 1.",
+      "properties": {
+        "steps": {
+          "description": "How many versions back.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "to_version": {
+          "description": "Or straight to this version.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "SettingsUndo",
+      "type": "object"
+    }
+  }
+}

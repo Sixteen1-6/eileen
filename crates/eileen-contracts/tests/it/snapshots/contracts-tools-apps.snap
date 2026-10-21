@@ -1,0 +1,2952 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AddVersionOutput": {
+      "description": "What `add_version` returns.",
+      "properties": {
+        "name": {
+          "description": "The new version.",
+          "type": "string"
+        },
+        "previous": {
+          "description": "The version that was current before.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ApplyDrxOutput": {
+      "description": "What `apply_drx` returns.",
+      "properties": {
+        "applied": {
+          "description": "Whether the grade was applied.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "applied"
+      ],
+      "type": "object"
+    },
+    "AppsExplorer": {
+      "description": "`apps_explorer`. Tier 0 or 1.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ExplorerOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    "AppsImage": {
+      "description": "`apps_image`: image analysis on files in the job's folders. Tier 0.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ImageOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    "AppsMedia": {
+      "description": "`apps_media`: the system's media sessions. `Status` tier 0, else 1.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MediaAction",
+          "description": "What to do."
+        },
+        "session": {
+          "description": "The session; the current one when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "AppsOffice": {
+      "description": "`apps_office`: Word and Excel over COM. Tier 0.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/OfficeOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    "AppsOpenPath": {
+      "description": "`apps_open_path`, by arguments (section 2.7): 1 for a document or folder; 2, HUD only, when\nit runs code or `with_app` is a shell or interpreter; 3 for a credential, Eileen-data or\nbrowser-profile path.",
+      "properties": {
+        "path": {
+          "description": "The file or folder.",
+          "type": "string",
+          "x-eileen-path": true
+        },
+        "with_app": {
+          "description": "The app to open it with.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "AppsOpenUri": {
+      "description": "`apps_open_uri`: allowlisted schemes only (`ms-settings:`, `mailto:` compose,\n`permissions.uri_schemes`). Tier 1.",
+      "properties": {
+        "uri": {
+          "description": "The URI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
+    "AppsOpenUrl": {
+      "description": "`apps_open_url`: https only. Tier 1, by arguments for the brain (section 2.12's URL rule)\nand for tainted workers (egress). With `reuse_playing`, a media session already showing\n`wait_for_media_title` is sought to `start_s` instead of opening the URL again; idempotent\nthen.",
+      "properties": {
+        "reuse_playing": {
+          "default": false,
+          "description": "Reuse a session already playing it.",
+          "type": "boolean"
+        },
+        "start_s": {
+          "description": "Where to start a video, seconds.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The URL.",
+          "type": "string"
+        },
+        "wait_for_media_title": {
+          "description": "Match-only: it only recognises the session, never picks what opens.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-match": true
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "AppsPhotoshop": {
+      "description": "`apps_photoshop`. Tier 1; `SmartSharpen` previews first; Generative Fill and Neural Filters,\nif ever added, are tier 2.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/PhotoshopOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    "AppsRecent": {
+      "description": "`apps_recent`: recent files and media. Tier 0.",
+      "properties": {
+        "kinds": {
+          "default": [],
+          "description": "Which kinds; every kind when empty.",
+          "items": {
+            "$ref": "#/$defs/FileKind"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        },
+        "thumbnails": {
+          "default": false,
+          "description": "Include thumbnails.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "AppsResolve": {
+      "description": "`apps_resolve`: the Resolve adapter.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ResolveOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    },
+    "Choice": {
+      "description": "How strong an effect is.",
+      "oneOf": [
+        {
+          "const": "subtle",
+          "description": "A little.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Clearly.",
+          "type": "string"
+        },
+        {
+          "const": "strong",
+          "description": "A lot.",
+          "type": "string"
+        }
+      ]
+    },
+    "CurrentItemOutput": {
+      "description": "What `current_item` returns.",
+      "properties": {
+        "end_offset_s": {
+          "description": "Its end, seconds from the timeline's start.",
+          "format": "double",
+          "type": "number"
+        },
+        "name": {
+          "description": "The clip.",
+          "type": "string"
+        },
+        "start_offset_s": {
+          "description": "Its start, seconds from the timeline's start.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "start_offset_s",
+        "end_offset_s"
+      ],
+      "type": "object"
+    },
+    "DrxTemplate": {
+      "description": "Eileen's DRX grade templates.",
+      "oneOf": [
+        {
+          "const": "sharpen",
+          "description": "Sharpen.",
+          "type": "string"
+        },
+        {
+          "const": "soften",
+          "description": "Soften.",
+          "type": "string"
+        }
+      ]
+    },
+    "ExplorerOp": {
+      "description": "The Explorer ops.",
+      "oneOf": [
+        {
+          "const": "selection",
+          "description": "The selected files (tier 0).",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Open a folder (tier 1).",
+          "properties": {
+            "open_folder": {
+              "properties": {
+                "path": {
+                  "description": "The folder.",
+                  "type": "string",
+                  "x-eileen-path": true
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "open_folder"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExportStillOutput": {
+      "description": "What `export_still` returns, and one entry of `export_stills`.",
+      "properties": {
+        "frame": {
+          "description": "The frame.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset_s": {
+          "description": "Seconds from the start.",
+          "format": "double",
+          "type": "number"
+        },
+        "path": {
+          "description": "The file, in the job's temp folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "offset_s",
+        "frame"
+      ],
+      "type": "object"
+    },
+    "ExportStillsOutput": {
+      "description": "What `export_stills` returns.",
+      "properties": {
+        "stills": {
+          "description": "The stills.",
+          "items": {
+            "$ref": "#/$defs/ExportStillOutput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stills"
+      ],
+      "type": "object"
+    },
+    "FileKind": {
+      "description": "The kinds of recent item.",
+      "oneOf": [
+        {
+          "const": "document",
+          "description": "A document.",
+          "type": "string"
+        },
+        {
+          "const": "spreadsheet",
+          "description": "A spreadsheet.",
+          "type": "string"
+        },
+        {
+          "const": "presentation",
+          "description": "A presentation.",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "description": "An image.",
+          "type": "string"
+        },
+        {
+          "const": "video",
+          "description": "A video file.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "An audio file.",
+          "type": "string"
+        },
+        {
+          "const": "code",
+          "description": "Source code.",
+          "type": "string"
+        },
+        {
+          "const": "folder",
+          "description": "A folder.",
+          "type": "string"
+        },
+        {
+          "const": "media",
+          "description": "Media the user watched or heard, in an app or a browser.",
+          "type": "string"
+        }
+      ]
+    },
+    "FrameBox": {
+      "description": "A box on one frame.",
+      "properties": {
+        "frame": {
+          "description": "The frame.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "The box, in the frame's pixels."
+        }
+      },
+      "required": [
+        "frame",
+        "rect"
+      ],
+      "type": "object"
+    },
+    "FusionTemplate": {
+      "description": "Eileen's Fusion templates.",
+      "oneOf": [
+        {
+          "const": "sharpen",
+          "description": "Sharpen inside the boxes.",
+          "type": "string"
+        },
+        {
+          "const": "blur",
+          "description": "Blur inside the boxes.",
+          "type": "string"
+        }
+      ]
+    },
+    "GotoOutput": {
+      "description": "What `goto` returns.",
+      "properties": {
+        "target_frame": {
+          "description": "The frame reached.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target_tc": {
+          "description": "The timecode reached.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_tc",
+        "target_frame"
+      ],
+      "type": "object"
+    },
+    "ImageOp": {
+      "description": "The image ops.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Find faces.",
+          "properties": {
+            "faces": {
+              "properties": {
+                "path": {
+                  "description": "The image.",
+                  "type": "string",
+                  "x-eileen-path": true
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "faces"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Pick one face by position.",
+          "properties": {
+            "pick_face": {
+              "properties": {
+                "path": {
+                  "description": "The image.",
+                  "type": "string",
+                  "x-eileen-path": true
+                },
+                "which": {
+                  "$ref": "#/$defs/Position",
+                  "description": "Which one."
+                }
+              },
+              "required": [
+                "path",
+                "which"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pick_face"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Crop.",
+          "properties": {
+            "crop": {
+              "properties": {
+                "path": {
+                  "description": "The image.",
+                  "type": "string",
+                  "x-eileen-path": true
+                },
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "The crop."
+                }
+              },
+              "required": [
+                "path",
+                "rect"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "crop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Measure sharpness.",
+          "properties": {
+            "sharpness": {
+              "properties": {
+                "path": {
+                  "description": "The image.",
+                  "type": "string",
+                  "x-eileen-path": true
+                },
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "Where."
+                }
+              },
+              "required": [
+                "path",
+                "rect"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "sharpness"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Track a face across stills.",
+          "properties": {
+            "track_face": {
+              "properties": {
+                "start": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "The face on the first still."
+                },
+                "stills": {
+                  "description": "The stills.",
+                  "items": {
+                    "$ref": "#/$defs/StillRef"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "stills",
+                "start"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "track_face"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImportFusionCompOutput": {
+      "description": "What `import_fusion_comp` returns.",
+      "properties": {
+        "name": {
+          "description": "The new composition.",
+          "type": "string"
+        },
+        "previous_current": {
+          "description": "The composition that was current before.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "MediaAction": {
+      "description": "What `apps_media` does.",
+      "oneOf": [
+        {
+          "const": "status",
+          "description": "Read what is playing.",
+          "type": "string"
+        },
+        {
+          "const": "play",
+          "description": "Play.",
+          "type": "string"
+        },
+        {
+          "const": "pause",
+          "description": "Pause.",
+          "type": "string"
+        },
+        {
+          "const": "toggle",
+          "description": "Toggle play and pause.",
+          "type": "string"
+        },
+        {
+          "const": "next",
+          "description": "The next track.",
+          "type": "string"
+        },
+        {
+          "const": "previous",
+          "description": "The previous track.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Seek to a position.",
+          "properties": {
+            "seek": {
+              "properties": {
+                "seconds": {
+                  "description": "Seconds from the start.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "seconds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "seek"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Seek by an amount.",
+          "properties": {
+            "seek_by": {
+              "properties": {
+                "seconds": {
+                  "description": "Seconds, forward or back.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "seconds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "seek_by"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MediaStatus": {
+      "description": "What `apps_media` `status` returns.",
+      "properties": {
+        "playing": {
+          "description": "Whether it is playing.",
+          "type": "boolean"
+        },
+        "position_s": {
+          "description": "The position, seconds.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "session": {
+          "description": "The session.",
+          "type": "string"
+        },
+        "title": {
+          "description": "What is playing.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "playing",
+        "session"
+      ],
+      "type": "object"
+    },
+    "NamesOutput": {
+      "description": "What `fusion_comps` and `versions` return.",
+      "properties": {
+        "current": {
+          "description": "The current one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "names": {
+          "description": "The names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "names"
+      ],
+      "type": "object"
+    },
+    "OfficeOp": {
+      "description": "The Office ops.",
+      "oneOf": [
+        {
+          "const": "word_selection",
+          "description": "The selection in Word.",
+          "type": "string"
+        },
+        {
+          "const": "excel_active_cell",
+          "description": "The active cell in Excel.",
+          "type": "string"
+        }
+      ]
+    },
+    "OpenUrlOutput": {
+      "description": "What `apps_open_url` returns.",
+      "properties": {
+        "media_title_seen": {
+          "description": "A media session showed the expected title.",
+          "type": "boolean"
+        },
+        "reused": {
+          "description": "An existing session was reused.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "media_title_seen",
+        "reused"
+      ],
+      "type": "object"
+    },
+    "PhotoshopOp": {
+      "description": "The Photoshop ops.",
+      "oneOf": [
+        {
+          "const": "recent",
+          "description": "Recent documents.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Open a document.",
+          "properties": {
+            "open": {
+              "properties": {
+                "path": {
+                  "description": "The document.",
+                  "type": "string",
+                  "x-eileen-path": true
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "open"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "duplicate_layer",
+          "description": "Duplicate the current layer.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An elliptical selection.",
+          "properties": {
+            "select_ellipse": {
+              "properties": {
+                "feather_px": {
+                  "description": "Feather, pixels.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rect": {
+                  "$ref": "#/$defs/Rect",
+                  "description": "Its bounds."
+                }
+              },
+              "required": [
+                "rect",
+                "feather_px"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "select_ellipse"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Smart Sharpen.",
+          "properties": {
+            "smart_sharpen": {
+              "properties": {
+                "amount_pct": {
+                  "description": "Amount, percent.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "radius_px": {
+                  "description": "Radius, pixels.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "amount_pct",
+                "radius_px"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "smart_sharpen"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PickFaceOutput": {
+      "description": "What `pick_face` returns.",
+      "properties": {
+        "crop": {
+          "description": "A crop of it, in the job's temp folder.",
+          "type": "string"
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "The face."
+        }
+      },
+      "required": [
+        "rect",
+        "crop"
+      ],
+      "type": "object"
+    },
+    "Position": {
+      "description": "Which face, by position.",
+      "oneOf": [
+        {
+          "const": "left",
+          "description": "The leftmost.",
+          "type": "string"
+        },
+        {
+          "const": "right",
+          "description": "The rightmost.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "The most central.",
+          "type": "string"
+        },
+        {
+          "const": "top",
+          "description": "The highest.",
+          "type": "string"
+        },
+        {
+          "const": "bottom",
+          "description": "The lowest.",
+          "type": "string"
+        },
+        {
+          "const": "largest",
+          "description": "The largest.",
+          "type": "string"
+        }
+      ]
+    },
+    "RecentHit": {
+      "description": "One recent item.",
+      "properties": {
+        "confidence": {
+          "description": "How well it matches, 0 to 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/FileKind",
+          "description": "Its kind."
+        },
+        "path": {
+          "description": "Its path, for a file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Its title.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Its URL, for web media.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "kind",
+        "confidence"
+      ],
+      "type": "object"
+    },
+    "RecentOutput": {
+      "description": "What `apps_recent` returns.",
+      "properties": {
+        "best": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecentHit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The best match, when there is one."
+        },
+        "confident": {
+          "description": "Whether the best match is confident.",
+          "type": "boolean"
+        },
+        "items": {
+          "description": "Every match.",
+          "items": {
+            "$ref": "#/$defs/RecentHit"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "confident",
+        "items"
+      ],
+      "type": "object"
+    },
+    "RenderStartOutput": {
+      "description": "What `render_start` returns.",
+      "properties": {
+        "render_job": {
+          "description": "The render job.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "render_job"
+      ],
+      "type": "object"
+    },
+    "ResolveOp": {
+      "description": "The Resolve ops. Tier 0: `Hello` to `IsRendering`. Tier 1: `OpenPage` to `MarkerAdd`\n(`DeleteFusionComp` only for names starting `eileen-`). By arguments: `LoadProject` (2 if\nthe open project has unsaved changes), `RenderStart` (2 if it would overwrite),\n`ImportFusionComp` (1 when its inverse was recorded in the same job, else 2; preview first)\nand `ApplyDrx` (1 after `AddVersion` in the same job, else 2; preview first). The `act`\ntoolset exposes only the tier-0 ops and `OpenPage`, `Goto`, `GotoTimecode`, `SetTimeline`,\n`LoadProject`, `RenderStart` and `MarkerAdd`.",
+      "oneOf": [
+        {
+          "const": "hello",
+          "description": "Check the bridge and Resolve's version.",
+          "type": "string"
+        },
+        {
+          "const": "timeline_info",
+          "description": "The current timeline and playhead.",
+          "type": "string"
+        },
+        {
+          "const": "projects_recent",
+          "description": "Recent projects.",
+          "type": "string"
+        },
+        {
+          "const": "timelines",
+          "description": "The project's timelines.",
+          "type": "string"
+        },
+        {
+          "const": "current_item",
+          "description": "The clip under the playhead.",
+          "type": "string"
+        },
+        {
+          "const": "versions",
+          "description": "The clip's versions.",
+          "type": "string"
+        },
+        {
+          "const": "fusion_comps",
+          "description": "The clip's Fusion compositions.",
+          "type": "string"
+        },
+        {
+          "const": "markers",
+          "description": "The timeline's markers.",
+          "type": "string"
+        },
+        {
+          "const": "render_status",
+          "description": "The render queue.",
+          "type": "string"
+        },
+        {
+          "const": "is_rendering",
+          "description": "Whether a render runs.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Open a page.",
+          "properties": {
+            "open_page": {
+              "properties": {
+                "page": {
+                  "$ref": "#/$defs/ResolvePage",
+                  "description": "The page."
+                }
+              },
+              "required": [
+                "page"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "open_page"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move the playhead to an offset from the timeline's start.",
+          "properties": {
+            "goto": {
+              "properties": {
+                "offset_s": {
+                  "description": "Seconds.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "offset_s"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "goto"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move the playhead to a timecode.",
+          "properties": {
+            "goto_timecode": {
+              "properties": {
+                "tc": {
+                  "description": "The timecode.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tc"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "goto_timecode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Switch timeline.",
+          "properties": {
+            "set_timeline": {
+              "properties": {
+                "name": {
+                  "description": "The timeline.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set_timeline"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "export_still",
+          "description": "Export the frame under the playhead into the job's temp folder.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Export frames over a range.",
+          "properties": {
+            "export_stills": {
+              "properties": {
+                "every_n_frames": {
+                  "description": "Every n-th frame.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "from_offset_s": {
+                  "description": "Start, seconds.",
+                  "format": "double",
+                  "type": "number"
+                },
+                "to_offset_s": {
+                  "description": "End, seconds.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "from_offset_s",
+                "to_offset_s"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "export_stills"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add a version to the clip.",
+          "properties": {
+            "add_version": {
+              "properties": {
+                "name": {
+                  "description": "Its name.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "add_version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Load a version.",
+          "properties": {
+            "load_version": {
+              "properties": {
+                "name": {
+                  "description": "Its name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "load_version"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Load a Fusion composition.",
+          "properties": {
+            "load_fusion_comp": {
+              "properties": {
+                "name": {
+                  "description": "Its name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "load_fusion_comp"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete a Fusion composition Eileen made.",
+          "properties": {
+            "delete_fusion_comp": {
+              "properties": {
+                "name": {
+                  "description": "Its name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delete_fusion_comp"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add a marker.",
+          "properties": {
+            "marker_add": {
+              "properties": {
+                "color": {
+                  "description": "Its colour, as Resolve names it.",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Its name.",
+                  "type": "string"
+                },
+                "offset_s": {
+                  "description": "Seconds from the start.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "offset_s",
+                "name",
+                "color"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "marker_add"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Open a project.",
+          "properties": {
+            "load_project": {
+              "properties": {
+                "name": {
+                  "description": "The project.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "load_project"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a render.",
+          "properties": {
+            "render_start": {
+              "properties": {
+                "file_name": {
+                  "description": "The output file name.",
+                  "type": "string"
+                },
+                "preset": {
+                  "description": "The render preset.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "preset",
+                "file_name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "render_start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Import a Fusion template over tracked boxes.",
+          "properties": {
+            "import_fusion_comp": {
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/Choice",
+                  "description": "How strong."
+                },
+                "boxes": {
+                  "description": "The boxes, per frame.",
+                  "items": {
+                    "$ref": "#/$defs/FrameBox"
+                  },
+                  "type": "array"
+                },
+                "template": {
+                  "$ref": "#/$defs/FusionTemplate",
+                  "description": "The template."
+                }
+              },
+              "required": [
+                "template",
+                "boxes",
+                "amount"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "import_fusion_comp"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Apply a grade from a DRX template.",
+          "properties": {
+            "apply_drx": {
+              "properties": {
+                "all_layers": {
+                  "description": "Apply to every layer.",
+                  "type": "boolean"
+                },
+                "template": {
+                  "$ref": "#/$defs/DrxTemplate",
+                  "description": "The template."
+                },
+                "window": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Rect"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "A window to limit it to."
+                }
+              },
+              "required": [
+                "template",
+                "all_layers"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "apply_drx"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ResolvePage": {
+      "description": "A Resolve page.",
+      "oneOf": [
+        {
+          "const": "media",
+          "description": "Media.",
+          "type": "string"
+        },
+        {
+          "const": "cut",
+          "description": "Cut.",
+          "type": "string"
+        },
+        {
+          "const": "edit",
+          "description": "Edit.",
+          "type": "string"
+        },
+        {
+          "const": "fusion",
+          "description": "Fusion.",
+          "type": "string"
+        },
+        {
+          "const": "color",
+          "description": "Color.",
+          "type": "string"
+        },
+        {
+          "const": "fairlight",
+          "description": "Fairlight.",
+          "type": "string"
+        },
+        {
+          "const": "deliver",
+          "description": "Deliver.",
+          "type": "string"
+        }
+      ]
+    },
+    "SharpnessOutput": {
+      "description": "What `sharpness` returns.",
+      "properties": {
+        "sharpness": {
+          "description": "The variance of the Laplacian.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "sharpness"
+      ],
+      "type": "object"
+    },
+    "StillRef": {
+      "description": "One still for face tracking.",
+      "properties": {
+        "frame": {
+          "description": "Its frame.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The image.",
+          "type": "string",
+          "x-eileen-path": true
+        }
+      },
+      "required": [
+        "path",
+        "frame"
+      ],
+      "type": "object"
+    },
+    "TimelineInfoOutput": {
+      "description": "What `timeline_info` returns.",
+      "properties": {
+        "drop_frame": {
+          "description": "Whether it uses drop-frame timecode.",
+          "type": "boolean"
+        },
+        "fps": {
+          "description": "Frames per second.",
+          "format": "double",
+          "type": "number"
+        },
+        "page": {
+          "$ref": "#/$defs/ResolvePage",
+          "description": "The open page."
+        },
+        "playhead_frame": {
+          "description": "The playhead's frame.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "playhead_tc": {
+          "description": "The playhead's timecode.",
+          "type": "string"
+        },
+        "start_tc": {
+          "description": "Its start timecode.",
+          "type": "string"
+        },
+        "timeline": {
+          "description": "The timeline.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "timeline",
+        "start_tc",
+        "fps",
+        "drop_frame",
+        "page",
+        "playhead_frame",
+        "playhead_tc"
+      ],
+      "type": "object"
+    },
+    "TrackFaceOutput": {
+      "description": "What `track_face` returns.",
+      "properties": {
+        "boxes": {
+          "description": "The face's box per frame.",
+          "items": {
+            "$ref": "#/$defs/FrameBox"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "boxes"
+      ],
+      "type": "object"
+    }
+  },
+  "tool_inputs": {
+    "apps_explorer": {
+      "$defs": {
+        "ExplorerOp": {
+          "description": "The Explorer ops.",
+          "oneOf": [
+            {
+              "const": "selection",
+              "description": "The selected files (tier 0).",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Open a folder (tier 1).",
+              "properties": {
+                "open_folder": {
+                  "properties": {
+                    "path": {
+                      "description": "The folder.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "open_folder"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_explorer`. Tier 0 or 1.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ExplorerOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AppsExplorer",
+      "type": "object"
+    },
+    "apps_image": {
+      "$defs": {
+        "ImageOp": {
+          "description": "The image ops.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "description": "Find faces.",
+              "properties": {
+                "faces": {
+                  "properties": {
+                    "path": {
+                      "description": "The image.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "faces"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Pick one face by position.",
+              "properties": {
+                "pick_face": {
+                  "properties": {
+                    "path": {
+                      "description": "The image.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    },
+                    "which": {
+                      "$ref": "#/$defs/Position",
+                      "description": "Which one."
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "which"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "pick_face"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Crop.",
+              "properties": {
+                "crop": {
+                  "properties": {
+                    "path": {
+                      "description": "The image.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    },
+                    "rect": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "The crop."
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "rect"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "crop"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Measure sharpness.",
+              "properties": {
+                "sharpness": {
+                  "properties": {
+                    "path": {
+                      "description": "The image.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    },
+                    "rect": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "Where."
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "rect"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "sharpness"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Track a face across stills.",
+              "properties": {
+                "track_face": {
+                  "properties": {
+                    "start": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "The face on the first still."
+                    },
+                    "stills": {
+                      "description": "The stills.",
+                      "items": {
+                        "$ref": "#/$defs/StillRef"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "stills",
+                    "start"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "track_face"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Position": {
+          "description": "Which face, by position.",
+          "oneOf": [
+            {
+              "const": "left",
+              "description": "The leftmost.",
+              "type": "string"
+            },
+            {
+              "const": "right",
+              "description": "The rightmost.",
+              "type": "string"
+            },
+            {
+              "const": "center",
+              "description": "The most central.",
+              "type": "string"
+            },
+            {
+              "const": "top",
+              "description": "The highest.",
+              "type": "string"
+            },
+            {
+              "const": "bottom",
+              "description": "The lowest.",
+              "type": "string"
+            },
+            {
+              "const": "largest",
+              "description": "The largest.",
+              "type": "string"
+            }
+          ]
+        },
+        "Rect": {
+          "description": "A rectangle in physical virtual-screen pixels.",
+          "properties": {
+            "h": {
+              "description": "Height.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "w": {
+              "description": "Width.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "description": "Left edge.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Top edge.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "type": "object"
+        },
+        "StillRef": {
+          "description": "One still for face tracking.",
+          "properties": {
+            "frame": {
+              "description": "Its frame.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "description": "The image.",
+              "type": "string",
+              "x-eileen-path": true
+            }
+          },
+          "required": [
+            "path",
+            "frame"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_image`: image analysis on files in the job's folders. Tier 0.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ImageOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AppsImage",
+      "type": "object"
+    },
+    "apps_media": {
+      "$defs": {
+        "MediaAction": {
+          "description": "What `apps_media` does.",
+          "oneOf": [
+            {
+              "const": "status",
+              "description": "Read what is playing.",
+              "type": "string"
+            },
+            {
+              "const": "play",
+              "description": "Play.",
+              "type": "string"
+            },
+            {
+              "const": "pause",
+              "description": "Pause.",
+              "type": "string"
+            },
+            {
+              "const": "toggle",
+              "description": "Toggle play and pause.",
+              "type": "string"
+            },
+            {
+              "const": "next",
+              "description": "The next track.",
+              "type": "string"
+            },
+            {
+              "const": "previous",
+              "description": "The previous track.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Seek to a position.",
+              "properties": {
+                "seek": {
+                  "properties": {
+                    "seconds": {
+                      "description": "Seconds from the start.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "seconds"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "seek"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Seek by an amount.",
+              "properties": {
+                "seek_by": {
+                  "properties": {
+                    "seconds": {
+                      "description": "Seconds, forward or back.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "seconds"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "seek_by"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_media`: the system's media sessions. `Status` tier 0, else 1.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MediaAction",
+          "description": "What to do."
+        },
+        "session": {
+          "description": "The session; the current one when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "AppsMedia",
+      "type": "object"
+    },
+    "apps_office": {
+      "$defs": {
+        "OfficeOp": {
+          "description": "The Office ops.",
+          "oneOf": [
+            {
+              "const": "word_selection",
+              "description": "The selection in Word.",
+              "type": "string"
+            },
+            {
+              "const": "excel_active_cell",
+              "description": "The active cell in Excel.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_office`: Word and Excel over COM. Tier 0.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/OfficeOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AppsOffice",
+      "type": "object"
+    },
+    "apps_open_path": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_open_path`, by arguments (section 2.7): 1 for a document or folder; 2, HUD only, when\nit runs code or `with_app` is a shell or interpreter; 3 for a credential, Eileen-data or\nbrowser-profile path.",
+      "properties": {
+        "path": {
+          "description": "The file or folder.",
+          "type": "string",
+          "x-eileen-path": true
+        },
+        "with_app": {
+          "description": "The app to open it with.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "AppsOpenPath",
+      "type": "object"
+    },
+    "apps_open_uri": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_open_uri`: allowlisted schemes only (`ms-settings:`, `mailto:` compose,\n`permissions.uri_schemes`). Tier 1.",
+      "properties": {
+        "uri": {
+          "description": "The URI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "title": "AppsOpenUri",
+      "type": "object"
+    },
+    "apps_open_url": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_open_url`: https only. Tier 1, by arguments for the brain (section 2.12's URL rule)\nand for tainted workers (egress). With `reuse_playing`, a media session already showing\n`wait_for_media_title` is sought to `start_s` instead of opening the URL again; idempotent\nthen.",
+      "properties": {
+        "reuse_playing": {
+          "default": false,
+          "description": "Reuse a session already playing it.",
+          "type": "boolean"
+        },
+        "start_s": {
+          "description": "Where to start a video, seconds.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The URL.",
+          "type": "string"
+        },
+        "wait_for_media_title": {
+          "description": "Match-only: it only recognises the session, never picks what opens.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-match": true
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "AppsOpenUrl",
+      "type": "object"
+    },
+    "apps_photoshop": {
+      "$defs": {
+        "PhotoshopOp": {
+          "description": "The Photoshop ops.",
+          "oneOf": [
+            {
+              "const": "recent",
+              "description": "Recent documents.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Open a document.",
+              "properties": {
+                "open": {
+                  "properties": {
+                    "path": {
+                      "description": "The document.",
+                      "type": "string",
+                      "x-eileen-path": true
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "open"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "duplicate_layer",
+              "description": "Duplicate the current layer.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "An elliptical selection.",
+              "properties": {
+                "select_ellipse": {
+                  "properties": {
+                    "feather_px": {
+                      "description": "Feather, pixels.",
+                      "format": "uint16",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "rect": {
+                      "$ref": "#/$defs/Rect",
+                      "description": "Its bounds."
+                    }
+                  },
+                  "required": [
+                    "rect",
+                    "feather_px"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "select_ellipse"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Smart Sharpen.",
+              "properties": {
+                "smart_sharpen": {
+                  "properties": {
+                    "amount_pct": {
+                      "description": "Amount, percent.",
+                      "format": "uint16",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "radius_px": {
+                      "description": "Radius, pixels.",
+                      "format": "uint16",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "amount_pct",
+                    "radius_px"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "smart_sharpen"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "Rect": {
+          "description": "A rectangle in physical virtual-screen pixels.",
+          "properties": {
+            "h": {
+              "description": "Height.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "w": {
+              "description": "Width.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "description": "Left edge.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Top edge.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_photoshop`. Tier 1; `SmartSharpen` previews first; Generative Fill and Neural Filters,\nif ever added, are tier 2.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/PhotoshopOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AppsPhotoshop",
+      "type": "object"
+    },
+    "apps_recent": {
+      "$defs": {
+        "FileKind": {
+          "description": "The kinds of recent item.",
+          "oneOf": [
+            {
+              "const": "document",
+              "description": "A document.",
+              "type": "string"
+            },
+            {
+              "const": "spreadsheet",
+              "description": "A spreadsheet.",
+              "type": "string"
+            },
+            {
+              "const": "presentation",
+              "description": "A presentation.",
+              "type": "string"
+            },
+            {
+              "const": "image",
+              "description": "An image.",
+              "type": "string"
+            },
+            {
+              "const": "video",
+              "description": "A video file.",
+              "type": "string"
+            },
+            {
+              "const": "audio",
+              "description": "An audio file.",
+              "type": "string"
+            },
+            {
+              "const": "code",
+              "description": "Source code.",
+              "type": "string"
+            },
+            {
+              "const": "folder",
+              "description": "A folder.",
+              "type": "string"
+            },
+            {
+              "const": "media",
+              "description": "Media the user watched or heard, in an app or a browser.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_recent`: recent files and media. Tier 0.",
+      "properties": {
+        "kinds": {
+          "default": [],
+          "description": "Which kinds; every kind when empty.",
+          "items": {
+            "$ref": "#/$defs/FileKind"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "description": "At most this many.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "What to look for.",
+          "type": "string"
+        },
+        "thumbnails": {
+          "default": false,
+          "description": "Include thumbnails.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "AppsRecent",
+      "type": "object"
+    },
+    "apps_resolve": {
+      "$defs": {
+        "Choice": {
+          "description": "How strong an effect is.",
+          "oneOf": [
+            {
+              "const": "subtle",
+              "description": "A little.",
+              "type": "string"
+            },
+            {
+              "const": "medium",
+              "description": "Clearly.",
+              "type": "string"
+            },
+            {
+              "const": "strong",
+              "description": "A lot.",
+              "type": "string"
+            }
+          ]
+        },
+        "DrxTemplate": {
+          "description": "Eileen's DRX grade templates.",
+          "oneOf": [
+            {
+              "const": "sharpen",
+              "description": "Sharpen.",
+              "type": "string"
+            },
+            {
+              "const": "soften",
+              "description": "Soften.",
+              "type": "string"
+            }
+          ]
+        },
+        "FrameBox": {
+          "description": "A box on one frame.",
+          "properties": {
+            "frame": {
+              "description": "The frame.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rect": {
+              "$ref": "#/$defs/Rect",
+              "description": "The box, in the frame's pixels."
+            }
+          },
+          "required": [
+            "frame",
+            "rect"
+          ],
+          "type": "object"
+        },
+        "FusionTemplate": {
+          "description": "Eileen's Fusion templates.",
+          "oneOf": [
+            {
+              "const": "sharpen",
+              "description": "Sharpen inside the boxes.",
+              "type": "string"
+            },
+            {
+              "const": "blur",
+              "description": "Blur inside the boxes.",
+              "type": "string"
+            }
+          ]
+        },
+        "Rect": {
+          "description": "A rectangle in physical virtual-screen pixels.",
+          "properties": {
+            "h": {
+              "description": "Height.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "w": {
+              "description": "Width.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "description": "Left edge.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "y": {
+              "description": "Top edge.",
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "w",
+            "h"
+          ],
+          "type": "object"
+        },
+        "ResolveOp": {
+          "description": "The Resolve ops. Tier 0: `Hello` to `IsRendering`. Tier 1: `OpenPage` to `MarkerAdd`\n(`DeleteFusionComp` only for names starting `eileen-`). By arguments: `LoadProject` (2 if\nthe open project has unsaved changes), `RenderStart` (2 if it would overwrite),\n`ImportFusionComp` (1 when its inverse was recorded in the same job, else 2; preview first)\nand `ApplyDrx` (1 after `AddVersion` in the same job, else 2; preview first). The `act`\ntoolset exposes only the tier-0 ops and `OpenPage`, `Goto`, `GotoTimecode`, `SetTimeline`,\n`LoadProject`, `RenderStart` and `MarkerAdd`.",
+          "oneOf": [
+            {
+              "const": "hello",
+              "description": "Check the bridge and Resolve's version.",
+              "type": "string"
+            },
+            {
+              "const": "timeline_info",
+              "description": "The current timeline and playhead.",
+              "type": "string"
+            },
+            {
+              "const": "projects_recent",
+              "description": "Recent projects.",
+              "type": "string"
+            },
+            {
+              "const": "timelines",
+              "description": "The project's timelines.",
+              "type": "string"
+            },
+            {
+              "const": "current_item",
+              "description": "The clip under the playhead.",
+              "type": "string"
+            },
+            {
+              "const": "versions",
+              "description": "The clip's versions.",
+              "type": "string"
+            },
+            {
+              "const": "fusion_comps",
+              "description": "The clip's Fusion compositions.",
+              "type": "string"
+            },
+            {
+              "const": "markers",
+              "description": "The timeline's markers.",
+              "type": "string"
+            },
+            {
+              "const": "render_status",
+              "description": "The render queue.",
+              "type": "string"
+            },
+            {
+              "const": "is_rendering",
+              "description": "Whether a render runs.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Open a page.",
+              "properties": {
+                "open_page": {
+                  "properties": {
+                    "page": {
+                      "$ref": "#/$defs/ResolvePage",
+                      "description": "The page."
+                    }
+                  },
+                  "required": [
+                    "page"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "open_page"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Move the playhead to an offset from the timeline's start.",
+              "properties": {
+                "goto": {
+                  "properties": {
+                    "offset_s": {
+                      "description": "Seconds.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "offset_s"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "goto"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Move the playhead to a timecode.",
+              "properties": {
+                "goto_timecode": {
+                  "properties": {
+                    "tc": {
+                      "description": "The timecode.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tc"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "goto_timecode"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Switch timeline.",
+              "properties": {
+                "set_timeline": {
+                  "properties": {
+                    "name": {
+                      "description": "The timeline.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "set_timeline"
+              ],
+              "type": "object"
+            },
+            {
+              "const": "export_still",
+              "description": "Export the frame under the playhead into the job's temp folder.",
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Export frames over a range.",
+              "properties": {
+                "export_stills": {
+                  "properties": {
+                    "every_n_frames": {
+                      "description": "Every n-th frame.",
+                      "format": "uint16",
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "from_offset_s": {
+                      "description": "Start, seconds.",
+                      "format": "double",
+                      "type": "number"
+                    },
+                    "to_offset_s": {
+                      "description": "End, seconds.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "from_offset_s",
+                    "to_offset_s"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "export_stills"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Add a version to the clip.",
+              "properties": {
+                "add_version": {
+                  "properties": {
+                    "name": {
+                      "description": "Its name.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "add_version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Load a version.",
+              "properties": {
+                "load_version": {
+                  "properties": {
+                    "name": {
+                      "description": "Its name.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "load_version"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Load a Fusion composition.",
+              "properties": {
+                "load_fusion_comp": {
+                  "properties": {
+                    "name": {
+                      "description": "Its name.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "load_fusion_comp"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Delete a Fusion composition Eileen made.",
+              "properties": {
+                "delete_fusion_comp": {
+                  "properties": {
+                    "name": {
+                      "description": "Its name.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "delete_fusion_comp"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Add a marker.",
+              "properties": {
+                "marker_add": {
+                  "properties": {
+                    "color": {
+                      "description": "Its colour, as Resolve names it.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "Its name.",
+                      "type": "string"
+                    },
+                    "offset_s": {
+                      "description": "Seconds from the start.",
+                      "format": "double",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "offset_s",
+                    "name",
+                    "color"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "marker_add"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Open a project.",
+              "properties": {
+                "load_project": {
+                  "properties": {
+                    "name": {
+                      "description": "The project.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "load_project"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Start a render.",
+              "properties": {
+                "render_start": {
+                  "properties": {
+                    "file_name": {
+                      "description": "The output file name.",
+                      "type": "string"
+                    },
+                    "preset": {
+                      "description": "The render preset.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "preset",
+                    "file_name"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "render_start"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Import a Fusion template over tracked boxes.",
+              "properties": {
+                "import_fusion_comp": {
+                  "properties": {
+                    "amount": {
+                      "$ref": "#/$defs/Choice",
+                      "description": "How strong."
+                    },
+                    "boxes": {
+                      "description": "The boxes, per frame.",
+                      "items": {
+                        "$ref": "#/$defs/FrameBox"
+                      },
+                      "type": "array"
+                    },
+                    "template": {
+                      "$ref": "#/$defs/FusionTemplate",
+                      "description": "The template."
+                    }
+                  },
+                  "required": [
+                    "template",
+                    "boxes",
+                    "amount"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "import_fusion_comp"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "Apply a grade from a DRX template.",
+              "properties": {
+                "apply_drx": {
+                  "properties": {
+                    "all_layers": {
+                      "description": "Apply to every layer.",
+                      "type": "boolean"
+                    },
+                    "template": {
+                      "$ref": "#/$defs/DrxTemplate",
+                      "description": "The template."
+                    },
+                    "window": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/Rect"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A window to limit it to."
+                    }
+                  },
+                  "required": [
+                    "template",
+                    "all_layers"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "apply_drx"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "ResolvePage": {
+          "description": "A Resolve page.",
+          "oneOf": [
+            {
+              "const": "media",
+              "description": "Media.",
+              "type": "string"
+            },
+            {
+              "const": "cut",
+              "description": "Cut.",
+              "type": "string"
+            },
+            {
+              "const": "edit",
+              "description": "Edit.",
+              "type": "string"
+            },
+            {
+              "const": "fusion",
+              "description": "Fusion.",
+              "type": "string"
+            },
+            {
+              "const": "color",
+              "description": "Color.",
+              "type": "string"
+            },
+            {
+              "const": "fairlight",
+              "description": "Fairlight.",
+              "type": "string"
+            },
+            {
+              "const": "deliver",
+              "description": "Deliver.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`apps_resolve`: the Resolve adapter.",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/ResolveOp",
+          "description": "The op."
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "AppsResolve",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,4900 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "Check": {
+      "description": "A check. Checks may only call ops that are read-only and tier 0; the linter enforces it\nagainst the connector manifests. With `tool` `None`, the check reads the step's own output.",
+      "properties": {
+        "args": {
+          "description": "Its arguments."
+        },
+        "expect": {
+          "$ref": "#/$defs/Expect",
+          "description": "What the value must be."
+        },
+        "op": {
+          "description": "The op's tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "A JSON pointer into the result.",
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tool to call, or `None` for the step's own output."
+        }
+      },
+      "required": [
+        "args",
+        "path",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "CheckPlan": {
+      "description": "A check the core must issue, with origin `Core`.",
+      "properties": {
+        "args": {
+          "description": "Its arguments, operands resolved."
+        },
+        "expect": {
+          "$ref": "#/$defs/Expect",
+          "description": "What the value must be."
+        },
+        "op": {
+          "description": "The op's tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "A JSON pointer into the result.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The recipe step whose postcondition it evaluates.",
+          "type": "string"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tool, or `None` for the step's own output."
+        }
+      },
+      "required": [
+        "step",
+        "args",
+        "path",
+        "expect"
+      ],
+      "type": "object"
+    },
+    "CommitReason": {
+      "description": "Why a skill version was committed.",
+      "oneOf": [
+        {
+          "const": "distill",
+          "description": "Distilled by the librarian.",
+          "type": "string"
+        },
+        {
+          "const": "repair",
+          "description": "Repaired after a failure or a retired fact.",
+          "type": "string"
+        },
+        {
+          "const": "user_edit",
+          "description": "Edited by the user.",
+          "type": "string"
+        },
+        {
+          "const": "user_correction",
+          "description": "Corrected by the user.",
+          "type": "string"
+        },
+        {
+          "const": "rollback",
+          "description": "Rolled back.",
+          "type": "string"
+        },
+        {
+          "const": "promote",
+          "description": "Promoted.",
+          "type": "string"
+        },
+        {
+          "const": "demote",
+          "description": "Demoted.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeferReason": {
+      "description": "Why a job's distillation was put off.",
+      "oneOf": [
+        {
+          "const": "plan_cap",
+          "description": "The plan share cap.",
+          "type": "string"
+        },
+        {
+          "const": "admission_refused",
+          "description": "Memory admission refused the librarian.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The librarian failed.",
+          "properties": {
+            "librarian_failed": {
+              "properties": {
+                "error": {
+                  "description": "Its error.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "librarian_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled, or left `Queued` or `Running` by a stopped runtime.",
+          "type": "string"
+        }
+      ]
+    },
+    "DesktopContext": {
+      "description": "The context a job ran in.",
+      "properties": {
+        "app_versions": {
+          "description": "The apps touched and their versions.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "connectors": {
+          "description": "The connectors involved.",
+          "items": {
+            "$ref": "#/$defs/ConnectorId"
+          },
+          "type": "array"
+        },
+        "document": {
+          "description": "The document's identity, redacted.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "focused_app": {
+          "description": "The focused app.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "app_versions",
+        "connectors"
+      ],
+      "type": "object"
+    },
+    "DistillOutcome": {
+      "description": "How a job's distillation finished.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A draft.",
+          "properties": {
+            "drafted": {
+              "properties": {
+                "held": {
+                  "$ref": "#/$defs/DraftHold",
+                  "description": "What is held."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "held"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "drafted"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "rejected",
+          "description": "Rejected.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Skipped.",
+          "properties": {
+            "skipped": {
+              "$ref": "#/$defs/SkipReason"
+            }
+          },
+          "required": [
+            "skipped"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Put off.",
+          "properties": {
+            "deferred": {
+              "$ref": "#/$defs/DeferReason"
+            }
+          },
+          "required": [
+            "deferred"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DistillState": {
+      "description": "One row per job in `librarian_runs` (section 2.10 item 2): idle distillation takes only jobs\nwith no row or a `Deferred` outcome. `Done { Rejected }` is final.",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Waiting for a batch.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "In a batch.",
+          "properties": {
+            "running": {
+              "properties": {
+                "batch": {
+                  "description": "The batch.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "batch"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "running"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Finished.",
+          "properties": {
+            "done": {
+              "properties": {
+                "outcome": {
+                  "$ref": "#/$defs/DistillOutcome",
+                  "description": "How."
+                }
+              },
+              "required": [
+                "outcome"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "done"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DraftHold": {
+      "description": "What part of a draft is held for review.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Nothing.",
+          "type": "string"
+        },
+        {
+          "const": "lines",
+          "description": "Some lines.",
+          "type": "string"
+        },
+        {
+          "const": "whole",
+          "description": "The whole draft.",
+          "type": "string"
+        }
+      ]
+    },
+    "Expect": {
+      "description": "What a checked value must be. `AtLeast`, `AtLeastRel`, `Within` and `Count` take numeric\noperands only (an array is wrapped in `Len`); `Count` compares the length of the array at\n`path` with its bounds.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Equal to.",
+          "properties": {
+            "equals": {
+              "$ref": "#/$defs/Operand"
+            }
+          },
+          "required": [
+            "equals"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Contains.",
+          "properties": {
+            "contains": {
+              "$ref": "#/$defs/Operand"
+            }
+          },
+          "required": [
+            "contains"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "At least.",
+          "properties": {
+            "at_least": {
+              "$ref": "#/$defs/Operand"
+            }
+          },
+          "required": [
+            "at_least"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "At least a factor of another value.",
+          "properties": {
+            "at_least_rel": {
+              "properties": {
+                "factor": {
+                  "description": "The factor.",
+                  "format": "double",
+                  "type": "number"
+                },
+                "of": {
+                  "$ref": "#/$defs/Operand",
+                  "description": "The other value."
+                }
+              },
+              "required": [
+                "of",
+                "factor"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "at_least_rel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Within a tolerance of another value.",
+          "properties": {
+            "within": {
+              "properties": {
+                "of": {
+                  "$ref": "#/$defs/Operand",
+                  "description": "The other value."
+                },
+                "tol": {
+                  "description": "The tolerance.",
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "of",
+                "tol"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "within"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An array's length between bounds.",
+          "properties": {
+            "count": {
+              "properties": {
+                "max": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Operand"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The greatest length."
+                },
+                "min": {
+                  "$ref": "#/$defs/Operand",
+                  "description": "The least length."
+                }
+              },
+              "required": [
+                "min"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "exists",
+          "description": "Present.",
+          "type": "string"
+        },
+        {
+          "const": "truthy",
+          "description": "Truthy.",
+          "type": "string"
+        }
+      ]
+    },
+    "FactDelta": {
+      "description": "A change to the facts.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A new fact.",
+          "properties": {
+            "add": {
+              "properties": {
+                "fact": {
+                  "$ref": "#/$defs/UserFact",
+                  "description": "The fact."
+                }
+              },
+              "required": [
+                "fact"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "add"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user confirmed a fact.",
+          "properties": {
+            "confirm": {
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/WallTime",
+                  "description": "When."
+                },
+                "id": {
+                  "description": "The fact.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "at"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "confirm"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A fact retired.",
+          "properties": {
+            "retire": {
+              "properties": {
+                "id": {
+                  "description": "The fact.",
+                  "type": "string"
+                },
+                "reason": {
+                  "$ref": "#/$defs/RetireReason",
+                  "description": "Why."
+                },
+                "replaced_by": {
+                  "description": "The fact that replaces it.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "retire"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FactKind": {
+      "description": "The kinds of fact. Sources are `SourceStat`s, not facts; `Phrasing` names the kind in\ncommands and queries and is stored as a `PhrasingFact`.",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "About the user.",
+          "type": "string"
+        },
+        {
+          "const": "feedback",
+          "description": "The user's feedback on answers.",
+          "type": "string"
+        },
+        {
+          "const": "project",
+          "description": "About a project.",
+          "type": "string"
+        },
+        {
+          "const": "reference",
+          "description": "A reference the user keeps.",
+          "type": "string"
+        },
+        {
+          "const": "vocabulary",
+          "description": "The user's vocabulary.",
+          "type": "string"
+        },
+        {
+          "const": "phrasing",
+          "description": "How the user phrases things.",
+          "type": "string"
+        }
+      ]
+    },
+    "ForgetPlan": {
+      "description": "Everything one forget removes. `phrasings`: every phrasing whose source turn or source job\nis in the plan; `answers`: the answers-cache rows those jobs wrote; `source_topics`: source\nstatistics topics no other job contributed to. The jobs and turns also go to\n`Persist(PurgeJobs)` for `eileen.db`.",
+      "properties": {
+        "answers": {
+          "description": "Answers-cache rows.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blobs": {
+          "description": "Blobs.",
+          "items": {
+            "$ref": "#/$defs/BlobRef"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "description": "Facts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "incidents": {
+          "description": "Incidents.",
+          "items": {
+            "$ref": "#/$defs/IncidentId"
+          },
+          "type": "array"
+        },
+        "jobs": {
+          "description": "Jobs.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "live_sessions": {
+          "description": "Live sessions to recycle.",
+          "items": {
+            "$ref": "#/$defs/WorkerSessionId"
+          },
+          "type": "array"
+        },
+        "phrasings": {
+          "description": "Phrasings.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recordings": {
+          "description": "Recordings.",
+          "items": {
+            "$ref": "#/$defs/RecordingId"
+          },
+          "type": "array"
+        },
+        "scenarios": {
+          "description": "Saved scenarios.",
+          "items": {
+            "$ref": "#/$defs/ScenarioId"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "description": "Skills.",
+          "items": {
+            "$ref": "#/$defs/SkillRef"
+          },
+          "type": "array"
+        },
+        "source_topics": {
+          "description": "Source statistics topics.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "turns": {
+          "description": "Turns.",
+          "items": {
+            "$ref": "#/$defs/TurnId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skills",
+        "facts",
+        "phrasings",
+        "answers",
+        "source_topics",
+        "jobs",
+        "turns",
+        "blobs",
+        "incidents",
+        "recordings",
+        "scenarios",
+        "live_sessions"
+      ],
+      "type": "object"
+    },
+    "ForgetReport": {
+      "description": "What a forget removed, by count.",
+      "properties": {
+        "answers": {
+          "description": "Answers-cache rows.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "blobs": {
+          "description": "Blobs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "facts": {
+          "description": "Facts.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "incidents": {
+          "description": "Incidents.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jobs": {
+          "description": "Jobs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "phrasings": {
+          "description": "Phrasings.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recordings": {
+          "description": "Recordings.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scenarios": {
+          "description": "Saved scenarios.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skills": {
+          "description": "Skills.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skills",
+        "facts",
+        "phrasings",
+        "answers",
+        "jobs",
+        "blobs",
+        "incidents",
+        "recordings",
+        "scenarios"
+      ],
+      "type": "object"
+    },
+    "ForgetTarget": {
+      "description": "What to forget.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A skill.",
+          "properties": {
+            "skill": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A fact.",
+          "properties": {
+            "fact": {
+              "properties": {
+                "id": {
+                  "description": "The fact.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "fact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Everything about something (\"forget that I ...\").",
+          "properties": {
+            "about": {
+              "properties": {
+                "text": {
+                  "description": "What.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "about"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "last_used",
+          "description": "The last thing used.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job and everything it left.",
+          "properties": {
+            "job": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "job"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HandoffBrief": {
+      "description": "What a worker gets when a replay hands off.",
+      "properties": {
+        "done_steps": {
+          "description": "The steps already done.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Why.",
+          "type": "string"
+        },
+        "skill": {
+          "$ref": "#/$defs/SkillRef",
+          "description": "The skill."
+        },
+        "step": {
+          "description": "The step that failed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill",
+        "step",
+        "reason",
+        "done_steps"
+      ],
+      "type": "object"
+    },
+    "JobOrigin": {
+      "description": "What kind of job a trajectory comes from.",
+      "oneOf": [
+        {
+          "const": "worker",
+          "description": "A worker session.",
+          "type": "string"
+        },
+        {
+          "const": "replay",
+          "description": "A replayed recipe.",
+          "type": "string"
+        },
+        {
+          "const": "fast_path",
+          "description": "The fast path.",
+          "type": "string"
+        },
+        {
+          "const": "act",
+          "description": "A brain turn that ran `act` tools.",
+          "type": "string"
+        }
+      ]
+    },
+    "LadderPolicy": {
+      "description": "The promotion ladder's policy (defaults in section 2.10).",
+      "properties": {
+        "archive_idle_days": {
+          "description": "Idle days that archive a skill (never deletion; pinned skills are never archived).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "demote_failures_in_last5": {
+          "description": "Failures in the last five uses that drop a level.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "light": {
+          "$ref": "#/$defs/Thresholds",
+          "description": "Light skills' thresholds."
+        },
+        "standard": {
+          "$ref": "#/$defs/Thresholds",
+          "description": "Standard skills' thresholds."
+        }
+      },
+      "required": [
+        "light",
+        "standard",
+        "demote_failures_in_last5",
+        "archive_idle_days"
+      ],
+      "type": "object"
+    },
+    "LearnBusEvent": {
+      "description": "The learning loop's bus events (dotted names `learn.skill_drafted`, `learn.verdict`, ...).\nEach distillation attempt of a job ends in exactly one of `SkillDrafted`, `DraftRejected`,\n`DistillSkipped` or `DistillDeferred`, and a job is distilled at most once.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A draft passed the linter.",
+          "properties": {
+            "skill_drafted": {
+              "properties": {
+                "held": {
+                  "$ref": "#/$defs/DraftHold",
+                  "description": "What is held for review."
+                },
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job it came from."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "job",
+                "skill",
+                "held"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill_drafted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A draft was rejected.",
+          "properties": {
+            "draft_rejected": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                }
+              },
+              "required": [
+                "job"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "draft_rejected"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The job was not distilled.",
+          "properties": {
+            "distill_skipped": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "reason": {
+                  "$ref": "#/$defs/SkipReason",
+                  "description": "Why."
+                }
+              },
+              "required": [
+                "job",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "distill_skipped"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The job's distillation was put off, for a later batch.",
+          "properties": {
+            "distill_deferred": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "reason": {
+                  "$ref": "#/$defs/DeferReason",
+                  "description": "Why."
+                }
+              },
+              "required": [
+                "job",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "distill_deferred"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A later undo removed a draft's only evidence.",
+          "properties": {
+            "draft_withdrawn": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "job",
+                "skill"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "draft_withdrawn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Lines of a skill wait for approval.",
+          "properties": {
+            "pending_approval": {
+              "properties": {
+                "lines": {
+                  "description": "The lines.",
+                  "items": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "lines"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pending_approval"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A skill moved up the ladder.",
+          "properties": {
+            "promoted": {
+              "properties": {
+                "level": {
+                  "$ref": "#/$defs/Level",
+                  "description": "Its new level."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "level"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "promoted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A skill moved down the ladder.",
+          "properties": {
+            "demoted": {
+              "properties": {
+                "level": {
+                  "$ref": "#/$defs/Level",
+                  "description": "Its new level."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "level"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "demoted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A forget finished.",
+          "properties": {
+            "forgot": {
+              "properties": {
+                "report": {
+                  "$ref": "#/$defs/ForgetReport",
+                  "description": "What it removed."
+                }
+              },
+              "required": [
+                "report"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "forgot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A replay step ran.",
+          "properties": {
+            "replay_step": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "ok": {
+                  "description": "Whether its checks passed.",
+                  "type": "boolean"
+                },
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "job",
+                "step",
+                "ok"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "replay_step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A replay handed off to a worker.",
+          "properties": {
+            "replay_handoff": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                },
+                "step": {
+                  "description": "The step that failed.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "job",
+                "step",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "replay_handoff"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The regret window closed.",
+          "properties": {
+            "verdict": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "verdict": {
+                  "$ref": "#/$defs/Verdict",
+                  "description": "The verdict."
+                }
+              },
+              "required": [
+                "job",
+                "verdict"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A worker proposed a route.",
+          "properties": {
+            "route_proposed": {
+              "properties": {
+                "app": {
+                  "description": "The app.",
+                  "type": "string"
+                },
+                "proposal": {
+                  "$ref": "#/$defs/RouteProposalId",
+                  "description": "The proposal."
+                }
+              },
+              "required": [
+                "proposal",
+                "app"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "route_proposed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A session's snapshot no longer matches its manifest.",
+          "properties": {
+            "snapshot_tampered": {
+              "properties": {
+                "session": {
+                  "$ref": "#/$defs/WorkerSessionId",
+                  "description": "The session."
+                }
+              },
+              "required": [
+                "session"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "snapshot_tampered"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LearnCmd": {
+      "description": "To the learning store.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Start a job's trajectory; an `Act` job carries its turn context (section 2.12).",
+          "properties": {
+            "begin": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "observed": {
+                  "description": "An `Act` job's observed turn context.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "x-eileen-text": "untrusted"
+                },
+                "taint": {
+                  "$ref": "#/$defs/Taint",
+                  "description": "What it has read already."
+                }
+              },
+              "required": [
+                "job",
+                "taint"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "begin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Record a step.",
+          "properties": {
+            "step": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "step": {
+                  "$ref": "#/$defs/TrajectoryStep",
+                  "description": "The step."
+                }
+              },
+              "required": [
+                "job",
+                "step"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "step"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Record a signal.",
+          "properties": {
+            "signal": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "signal": {
+                  "$ref": "#/$defs/Signal",
+                  "description": "The signal."
+                }
+              },
+              "required": [
+                "job",
+                "signal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "signal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Close a job's trajectory.",
+          "properties": {
+            "finish": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "outcome": {
+                  "$ref": "#/$defs/Outcome",
+                  "description": "How it ended."
+                }
+              },
+              "required": [
+                "job",
+                "outcome"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "finish"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Write a session's learned-skill snapshot.",
+          "properties": {
+            "write_snapshot": {
+              "properties": {
+                "select": {
+                  "description": "The skills to put in it.",
+                  "items": {
+                    "$ref": "#/$defs/SkillRef"
+                  },
+                  "type": "array"
+                },
+                "session": {
+                  "$ref": "#/$defs/WorkerSessionId",
+                  "description": "The session."
+                }
+              },
+              "required": [
+                "session",
+                "select"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "write_snapshot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run the librarian over a batch of jobs.",
+          "properties": {
+            "run_librarian": {
+              "properties": {
+                "batch": {
+                  "description": "The jobs.",
+                  "items": {
+                    "$ref": "#/$defs/JobId"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "batch"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "run_librarian"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Commit a skill version.",
+          "properties": {
+            "commit": {
+              "properties": {
+                "doc": {
+                  "$ref": "#/$defs/SkillDoc",
+                  "description": "Its files."
+                },
+                "reason": {
+                  "$ref": "#/$defs/CommitReason",
+                  "description": "Why."
+                }
+              },
+              "required": [
+                "doc",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "commit"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Carry out a forget.",
+          "properties": {
+            "forget": {
+              "$ref": "#/$defs/ForgetPlan"
+            }
+          },
+          "required": [
+            "forget"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Roll a skill back.",
+          "properties": {
+            "rollback": {
+              "properties": {
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                },
+                "to_version": {
+                  "description": "The version to return to.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skill",
+                "to_version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "rollback"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Change the facts.",
+          "properties": {
+            "fact_delta": {
+              "$ref": "#/$defs/FactDelta"
+            }
+          },
+          "required": [
+            "fact_delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Record a phrasing.",
+          "properties": {
+            "phrasing": {
+              "properties": {
+                "confirm": {
+                  "description": "Whether the user confirmed it.",
+                  "type": "boolean"
+                },
+                "ephemeral": {
+                  "description": "Made in the first run.",
+                  "type": "boolean"
+                },
+                "job": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/JobId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The `Act` job."
+                },
+                "subject": {
+                  "description": "The subject key.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "$ref": "#/$defs/PhrasingTarget",
+                  "description": "What it means."
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                },
+                "utterance": {
+                  "description": "What the user said.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "utterance",
+                "target",
+                "confirm",
+                "turn",
+                "ephemeral"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "phrasing"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete phrasings (journaled with the rows, so \"undo that\" restores them).",
+          "properties": {
+            "delete_phrasings": {
+              "properties": {
+                "ids": {
+                  "description": "The phrasings.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "ids"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delete_phrasings"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Queue a repair of a skill from the user's words.",
+          "properties": {
+            "repair": {
+              "properties": {
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                },
+                "words": {
+                  "description": "What the user said.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "skill",
+                "words",
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "repair"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Update the source statistics of a deep answer.",
+          "properties": {
+            "source_stat": {
+              "properties": {
+                "accepted": {
+                  "description": "Hosts of an accepted answer.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "cited": {
+                  "description": "Hosts it cited.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "opened": {
+                  "description": "Hosts the user opened.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "topic": {
+                  "description": "The topic.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "topic",
+                "cited",
+                "accepted",
+                "opened"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "source_stat"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Store a route proposal.",
+          "properties": {
+            "route_proposal": {
+              "$ref": "#/$defs/RouteProposal"
+            }
+          },
+          "required": [
+            "route_proposal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Update a route statistic.",
+          "properties": {
+            "route_stat": {
+              "$ref": "#/$defs/RouteStat"
+            }
+          },
+          "required": [
+            "route_stat"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LearnEvent": {
+      "description": "From the learning store.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The skills, recipes, phrasings or facts changed; the core rebuilds the resolver and the\nskill engine.",
+          "properties": {
+            "skills_changed": {
+              "properties": {
+                "facts": {
+                  "description": "Every active fact.",
+                  "items": {
+                    "$ref": "#/$defs/UserFact"
+                  },
+                  "type": "array"
+                },
+                "phrasings": {
+                  "description": "Every phrasing.",
+                  "items": {
+                    "$ref": "#/$defs/PhrasingFact"
+                  },
+                  "type": "array"
+                },
+                "recipes": {
+                  "description": "Every recipe.",
+                  "items": {
+                    "$ref": "#/$defs/Recipe"
+                  },
+                  "type": "array"
+                },
+                "skills": {
+                  "description": "Every skill.",
+                  "items": {
+                    "$ref": "#/$defs/SkillMeta"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "skills",
+                "recipes",
+                "phrasings",
+                "facts"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skills_changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A session's snapshot was written.",
+          "properties": {
+            "snapshot_written": {
+              "properties": {
+                "manifest": {
+                  "$ref": "#/$defs/SnapshotManifest",
+                  "description": "Its manifest."
+                },
+                "session": {
+                  "$ref": "#/$defs/WorkerSessionId",
+                  "description": "The session."
+                }
+              },
+              "required": [
+                "session",
+                "manifest"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "snapshot_written"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A session's snapshot no longer matches its manifest.",
+          "properties": {
+            "snapshot_tampered": {
+              "properties": {
+                "file": {
+                  "description": "The file.",
+                  "type": "string"
+                },
+                "session": {
+                  "$ref": "#/$defs/WorkerSessionId",
+                  "description": "The session."
+                }
+              },
+              "required": [
+                "session",
+                "file"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "snapshot_tampered"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A proposed skill version was committed, held or rejected.",
+          "properties": {
+            "proposed": {
+              "properties": {
+                "outcome": {
+                  "$ref": "#/$defs/ProposeOutcome",
+                  "description": "What happened."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill",
+                "outcome"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "proposed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A librarian batch finished.",
+          "properties": {
+            "librarian_finished": {
+              "properties": {
+                "cost": {
+                  "$ref": "#/$defs/Cost",
+                  "description": "What it cost."
+                },
+                "distilled": {
+                  "description": "Jobs distilled.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rejected": {
+                  "description": "Drafts rejected.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "cost",
+                "distilled",
+                "rejected"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "librarian_finished"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A forget finished.",
+          "properties": {
+            "forgot": {
+              "properties": {
+                "report": {
+                  "$ref": "#/$defs/ForgetReport",
+                  "description": "What it removed."
+                }
+              },
+              "required": [
+                "report"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "forgot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A worker proposed a route.",
+          "properties": {
+            "route_proposed": {
+              "properties": {
+                "proposal": {
+                  "$ref": "#/$defs/RouteProposal",
+                  "description": "The proposal."
+                }
+              },
+              "required": [
+                "proposal"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "route_proposed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "After each update (a job's verdict was final); the core rebuilds the skill engine and the\nresolver's introspection with them.",
+          "properties": {
+            "route_stats": {
+              "properties": {
+                "stats": {
+                  "description": "Every route statistic.",
+                  "items": {
+                    "$ref": "#/$defs/RouteStat"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "stats"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "route_stats"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "After each update; deep-answer jobs' facts blocks read them.",
+          "properties": {
+            "source_stats": {
+              "properties": {
+                "stats": {
+                  "description": "Every source statistic.",
+                  "items": {
+                    "$ref": "#/$defs/SourceStat"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "stats"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "source_stats"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Level": {
+      "description": "A skill's level on the promotion ladder.",
+      "oneOf": [
+        {
+          "const": "draft",
+          "description": "Level 1: a draft, offered to workers as a hint.",
+          "type": "string"
+        },
+        {
+          "const": "trusted",
+          "description": "Level 2: trusted, followed by workers.",
+          "type": "string"
+        },
+        {
+          "const": "recipe",
+          "description": "Level 3: a recipe, matched to the brain as a `[match]` block.",
+          "type": "string"
+        },
+        {
+          "const": "fast_path",
+          "description": "Level 4: replayed with no model.",
+          "type": "string"
+        }
+      ]
+    },
+    "LintError": {
+      "description": "One rule the linter found broken.",
+      "properties": {
+        "line": {
+          "description": "The line of `SKILL.md`, when it is about one.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "What is wrong.",
+          "type": "string"
+        },
+        "rule": {
+          "description": "The rule's id.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The recipe step, when it is about one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rule",
+        "message"
+      ],
+      "type": "object"
+    },
+    "McpPackage": {
+      "description": "A package to install: an exact version, installed once into\n`%LOCALAPPDATA%\\eileen\\mcp\\<app>\\`.",
+      "properties": {
+        "identifier": {
+          "description": "The package's identifier.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "registry_type": {
+          "$ref": "#/$defs/PackageType",
+          "description": "The package registry."
+        },
+        "version": {
+          "description": "The exact version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "registry_type",
+        "identifier",
+        "version"
+      ],
+      "type": "object"
+    },
+    "OnFail": {
+      "description": "What happens when a step fails. `Fallback`: run these steps (no fallbacks of their own),\nthen re-run the failed step once and re-check it; a second failure hands off. A fallback\nstep may point to earlier main steps and earlier steps of its own fallback; no main step and\nno other fallback may point into it.",
+      "oneOf": [
+        {
+          "const": "handoff",
+          "description": "Hand the job to a worker.",
+          "type": "string"
+        },
+        {
+          "const": "retry_once",
+          "description": "Retry once (idempotent ops only).",
+          "type": "string"
+        },
+        {
+          "const": "abort",
+          "description": "Stop.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run these steps, then re-run the failed step once.",
+          "properties": {
+            "fallback": {
+              "items": {
+                "$ref": "#/$defs/RecipeStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "fallback"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Operand": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$slot": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "$slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$step": {
+              "type": "string"
+            },
+            "ptr": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "$step",
+            "ptr"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$len": {
+              "$ref": "#/$defs/Operand"
+            }
+          },
+          "required": [
+            "$len"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "$lit": true
+          },
+          "required": [
+            "$lit"
+          ],
+          "type": "object"
+        },
+        true
+      ],
+      "description": "A literal, {\"$slot\": name}, {\"$step\": id, \"ptr\": pointer}, {\"$len\": operand}, or {\"$lit\": literal} for a literal of one of those shapes"
+    },
+    "Outcome": {
+      "description": "How a job ended.",
+      "properties": {
+        "objective_check": {
+          "description": "Whether an objective check passed (a verification hint or a skill postcondition).",
+          "type": "boolean"
+        },
+        "signals": {
+          "description": "The signals in the regret window.",
+          "items": {
+            "$ref": "#/$defs/Signal"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus",
+          "description": "Its terminal status."
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict",
+          "description": "The verdict."
+        }
+      },
+      "required": [
+        "status",
+        "signals",
+        "verdict",
+        "objective_check"
+      ],
+      "type": "object"
+    },
+    "PackageType": {
+      "description": "The package registries Eileen installs from.",
+      "oneOf": [
+        {
+          "const": "npm",
+          "description": "npm.",
+          "type": "string"
+        },
+        {
+          "const": "pypi",
+          "description": "`PyPI`.",
+          "type": "string"
+        },
+        {
+          "const": "app_bundled",
+          "description": "Shipped with the app.",
+          "type": "string"
+        }
+      ]
+    },
+    "PhrasingFact": {
+      "description": "A phrasing: how the user says something Eileen can do.",
+      "properties": {
+        "confirmed": {
+          "description": "Times the user confirmed it.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "embedding": {
+          "description": "The utterance's embedding.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "ephemeral": {
+          "description": "Made from a first-run demo turn: deleted when the first run ends.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Its id.",
+          "type": "string"
+        },
+        "provisional": {
+          "description": "Exact repeats only, until the first clean regret window.",
+          "type": "boolean"
+        },
+        "source_job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `Act` job it came from; forget plans use both."
+        },
+        "source_turn": {
+          "$ref": "#/$defs/TurnId",
+          "description": "The turn it came from."
+        },
+        "subject": {
+          "description": "`SlotAlias` targets: the subject key of the phrase (\"video editor\"), from a clarifying\nanswer or \"X means Y\"; a `SameSubject` correction deletes the others.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/PhrasingTarget",
+          "description": "What it means."
+        },
+        "utterance": {
+          "description": "What the user said.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "id",
+        "utterance",
+        "target",
+        "embedding",
+        "confirmed",
+        "provisional",
+        "source_turn",
+        "ephemeral"
+      ],
+      "type": "object"
+    },
+    "PhrasingTarget": {
+      "description": "What a phrasing means.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A tool call with no slots.",
+          "properties": {
+            "slot_free_call": {
+              "properties": {
+                "args": {
+                  "description": "Its arguments."
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "tool",
+                "args"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "slot_free_call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A grammar entry.",
+          "properties": {
+            "grammar_entry": {
+              "properties": {
+                "id": {
+                  "description": "The entry's id.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "grammar_entry"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A learned skill's template.",
+          "properties": {
+            "skill_template": {
+              "properties": {
+                "skill": {
+                  "$ref": "#/$defs/SkillId",
+                  "description": "The skill."
+                }
+              },
+              "required": [
+                "skill"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "skill_template"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Another name for a slot value (\"the video editor\" means Resolve).",
+          "properties": {
+            "slot_alias": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/SlotKind",
+                  "description": "The slot kind."
+                },
+                "value": {
+                  "description": "The value."
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "slot_alias"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProposalStatus": {
+      "description": "Where a route proposal is.",
+      "oneOf": [
+        {
+          "const": "open",
+          "description": "Waiting for the user.",
+          "type": "string"
+        },
+        {
+          "const": "accepted",
+          "description": "Accepted.",
+          "type": "string"
+        },
+        {
+          "const": "dismissed",
+          "description": "Dismissed.",
+          "type": "string"
+        },
+        {
+          "const": "refused",
+          "description": "Refused by Eileen's own checks.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProposeOutcome": {
+      "description": "What `learn_skill_propose` and a commit come to.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Committed.",
+          "properties": {
+            "committed": {
+              "properties": {
+                "version": {
+                  "description": "The new version.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "version"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "committed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Some lines wait for the user's approval.",
+          "properties": {
+            "pending_approval": {
+              "properties": {
+                "lines": {
+                  "description": "The held lines.",
+                  "items": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "lines"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pending_approval"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "pending_review",
+          "description": "The whole draft waits for review (free-text taint).",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Rejected by the linter.",
+          "properties": {
+            "rejected": {
+              "properties": {
+                "attempts_left": {
+                  "description": "Tries left before the draft is dropped.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "errors": {
+                  "description": "What is wrong.",
+                  "items": {
+                    "$ref": "#/$defs/LintError"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "errors",
+                "attempts_left"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "rejected"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Provenance": {
+      "description": "Where a line of a skill traces to. `User`: the user's own transcript. `Worker`: an untainted\nstep's arguments. `Tool`: Eileen's schemas and descriptions. `Observed`: overlaps observed\ntext or traces only to a tainted step. Computed by `eileen-skills`, never taken from the\nlibrarian.",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "The user's own transcript.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An untainted step's arguments.",
+          "properties": {
+            "worker": {
+              "properties": {
+                "route": {
+                  "$ref": "#/$defs/Route",
+                  "description": "The worker's route."
+                }
+              },
+              "required": [
+                "route"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "worker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Eileen's schemas and descriptions.",
+          "properties": {
+            "tool": {
+              "properties": {
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "tool"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Observed text, or a tainted step.",
+          "properties": {
+            "observed": {
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/ObservedSource",
+                  "description": "The source."
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "observed"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "librarian",
+          "description": "The librarian wrote it.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user approved it.",
+          "properties": {
+            "approved": {
+              "properties": {
+                "approval": {
+                  "$ref": "#/$defs/ApprovalId",
+                  "description": "The approval."
+                }
+              },
+              "required": [
+                "approval"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approved"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Publisher": {
+      "description": "A registry-verified publisher. `GitHub { user }` for `io.github.<user>` (verified by the\nregistry through that account); `Domain` for a reverse-DNS namespace (verified through DNS\nor HTTP); `display` is what the HUD shows and Eileen speaks.",
+      "properties": {
+        "display": {
+          "description": "What is shown and spoken.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PublisherKind",
+          "description": "How it was verified."
+        },
+        "namespace": {
+          "description": "The namespace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "kind",
+        "display"
+      ],
+      "type": "object"
+    },
+    "PublisherKind": {
+      "description": "How a publisher's namespace was verified.",
+      "oneOf": [
+        {
+          "const": "github",
+          "description": "Through a GitHub account.",
+          "type": "string"
+        },
+        {
+          "const": "domain",
+          "description": "Through DNS or HTTP.",
+          "type": "string"
+        }
+      ]
+    },
+    "Question": {
+      "description": "An `ask` step's question.",
+      "properties": {
+        "options": {
+          "description": "The options.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "slot": {
+          "description": "The slot it fills.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The recipe step.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The words of the question.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "slot",
+        "text",
+        "options"
+      ],
+      "type": "object"
+    },
+    "Recipe": {
+      "description": "A skill's model-free procedure.",
+      "properties": {
+        "pre": {
+          "description": "Checks before the first step.",
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "type": "array"
+        },
+        "skill": {
+          "$ref": "#/$defs/SkillRef",
+          "description": "The skill."
+        },
+        "steps": {
+          "description": "The steps.",
+          "items": {
+            "$ref": "#/$defs/RecipeStep"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skill",
+        "pre",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "RecipeStep": {
+      "description": "One step of a recipe. `post` is required (non-empty) on `Call` and `Delegate` steps and\nempty on `Ask` and `Confirm`, whose postconditions are implicit (the slot resolved; the user\nsaid yes). Every `Delegate` is followed by a `Call` step with a postcondition, which is its\nobjective check in shadow mode.",
+      "properties": {
+        "id": {
+          "description": "Its id, for pointers.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/StepKind",
+          "description": "What it does."
+        },
+        "on_fail": {
+          "$ref": "#/$defs/OnFail",
+          "description": "What happens when it fails."
+        },
+        "post": {
+          "description": "Checks after it.",
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "type": "array"
+        },
+        "pre": {
+          "description": "Checks before it.",
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "type": "array"
+        },
+        "timeout_ms": {
+          "description": "How long it may take.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "pre",
+        "post",
+        "timeout_ms",
+        "on_fail"
+      ],
+      "type": "object"
+    },
+    "ReplayRefusal": {
+      "description": "Why a replay cannot start.",
+      "oneOf": [
+        {
+          "const": "unknown_skill",
+          "description": "No such skill.",
+          "type": "string"
+        },
+        {
+          "const": "no_recipe",
+          "description": "The skill has no recipe.",
+          "type": "string"
+        },
+        {
+          "const": "level_too_low",
+          "description": "The skill is below level 4.",
+          "type": "string"
+        },
+        {
+          "const": "probation",
+          "description": "The skill is on probation.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A slot is ambiguous; replay never runs on an ambiguous slot.",
+          "properties": {
+            "ambiguous_slot": {
+              "properties": {
+                "slot": {
+                  "description": "The slot.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ambiguous_slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A required slot has no value.",
+          "properties": {
+            "missing_slot": {
+              "properties": {
+                "slot": {
+                  "description": "The slot.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "missing_slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool the recipe calls changed its schema hash.",
+          "properties": {
+            "tool_changed": {
+              "properties": {
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "tool"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_changed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReplayState": {
+      "description": "A replay in progress, kept by the core between steps.",
+      "properties": {
+        "fallback_step": {
+          "description": "The index inside the current step's fallback, while one runs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outputs": {
+          "additionalProperties": true,
+          "description": "Each finished step's output, by step id, for pointers.",
+          "type": "object"
+        },
+        "rerun": {
+          "description": "Whether the failed step has been re-run after its fallback or retry.",
+          "type": "boolean"
+        },
+        "skill": {
+          "$ref": "#/$defs/SkillRef",
+          "description": "The skill."
+        },
+        "slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SlotValue"
+          },
+          "description": "Its slots, `ask` answers included.",
+          "type": "object"
+        },
+        "step": {
+          "description": "The index of the main step in progress.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skill",
+        "slots",
+        "step",
+        "rerun",
+        "outputs"
+      ],
+      "type": "object"
+    },
+    "ReplayStep": {
+      "description": "What the replay machine wants next. A failed postcondition with a fallback yields the\nfallback's steps, then the re-run.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Call a tool.",
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/ToolCallPlan"
+            }
+          },
+          "required": [
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a check.",
+          "properties": {
+            "check": {
+              "$ref": "#/$defs/CheckPlan"
+            }
+          },
+          "required": [
+            "check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ask the user.",
+          "properties": {
+            "ask": {
+              "$ref": "#/$defs/Question"
+            }
+          },
+          "required": [
+            "ask"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start a narrow sub-job.",
+          "properties": {
+            "delegate": {
+              "$ref": "#/$defs/JobSpec"
+            }
+          },
+          "required": [
+            "delegate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ask the user to confirm.",
+          "properties": {
+            "confirm": {
+              "$ref": "#/$defs/AskUser"
+            }
+          },
+          "required": [
+            "confirm"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "done",
+          "description": "Finished.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Hand the job to a worker.",
+          "properties": {
+            "handoff": {
+              "$ref": "#/$defs/HandoffBrief"
+            }
+          },
+          "required": [
+            "handoff"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RetireReason": {
+      "description": "Why a fact retired. `Corrected` and `Forgotten` queue repairs of skills listing the fact;\n`Stale` and `Undone` do not.",
+      "oneOf": [
+        {
+          "const": "corrected",
+          "description": "The user corrected it.",
+          "type": "string"
+        },
+        {
+          "const": "forgotten",
+          "description": "The user asked Eileen to forget it.",
+          "type": "string"
+        },
+        {
+          "const": "stale",
+          "description": "Unconfirmed for too long.",
+          "type": "string"
+        },
+        {
+          "const": "undone",
+          "description": "Undone.",
+          "type": "string"
+        }
+      ]
+    },
+    "RiskClass": {
+      "description": "How much care a skill needs on the ladder.",
+      "oneOf": [
+        {
+          "const": "light",
+          "description": "Light thresholds.",
+          "type": "string"
+        },
+        {
+          "const": "standard",
+          "description": "Standard thresholds.",
+          "type": "string"
+        }
+      ]
+    },
+    "RouteKind": {
+      "description": "The kinds of route a worker can propose.",
+      "oneOf": [
+        {
+          "const": "app_mcp",
+          "description": "The app's own MCP server, from the registry.",
+          "type": "string"
+        },
+        {
+          "const": "app_api",
+          "description": "The app's scripting interface, by its documentation.",
+          "type": "string"
+        },
+        {
+          "const": "deep_link",
+          "description": "A URI scheme.",
+          "type": "string"
+        }
+      ]
+    },
+    "RouteProposal": {
+      "description": "A worker's proposal of a better route to an app. `app` is a key of Eileen's app index,\nvalidated by the dispatcher; `registry_id`, `McpPackage.version` and `Publisher.namespace`\nhave validated formats (a registry id, an exact semantic version, a reverse-DNS or\n`io.github.<user>` namespace). For `AppMcp` every other field but `why` comes from the\nregistry entry the proposal matched; `why` is the worker's note.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "from_app_vendor": {
+          "description": "The namespace is a domain listed for this app in `app-vendors.toml`; there is no\n\"official\" flag (the registry's `_meta` block is bookkeeping).",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/RouteProposalId",
+          "description": "Its id."
+        },
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job that proposed it."
+        },
+        "kind": {
+          "$ref": "#/$defs/RouteKind",
+          "description": "The kind of route."
+        },
+        "name": {
+          "description": "The server's name.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpPackage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The package to install."
+        },
+        "publisher": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Publisher"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The registry-verified namespace of the server name, never a free-text field."
+        },
+        "registry_id": {
+          "description": "The registry entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_url": {
+          "description": "`AppMcp`: the registry entry's repository; `AppApi`: the worker's link.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "status": {
+          "$ref": "#/$defs/ProposalStatus",
+          "description": "Where it is."
+        },
+        "uri_scheme": {
+          "description": "`DeepLink`: the URI scheme.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "untrusted"
+        },
+        "verified": {
+          "description": "`AppMcp` matched to a registry entry; `AppApi` and `DeepLink` are always false.",
+          "type": "boolean"
+        },
+        "why": {
+          "description": "The worker's note.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "id",
+        "app",
+        "kind",
+        "verified",
+        "name",
+        "from_app_vendor",
+        "source_url",
+        "why",
+        "job",
+        "status"
+      ],
+      "type": "object"
+    },
+    "RouteStat": {
+      "description": "How one route of an app has done at one task.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "app_major": {
+          "description": "The app's major version.",
+          "type": "string"
+        },
+        "failures": {
+          "description": "Failures.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "median_ms": {
+          "description": "The median time, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rung": {
+          "$ref": "#/$defs/Rung",
+          "description": "The route."
+        },
+        "rung_skipped": {
+          "description": "Times a better rung was skipped for it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "successes": {
+          "description": "Successes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task": {
+          "description": "The task, for example `navigation`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "app_major",
+        "task",
+        "rung",
+        "successes",
+        "failures",
+        "median_ms",
+        "rung_skipped"
+      ],
+      "type": "object"
+    },
+    "ShadowMiss": {
+      "description": "How a shadowed job differed from the recipe.",
+      "oneOf": [
+        {
+          "const": "missing_call",
+          "description": "A call the recipe makes is missing.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A call has different arguments.",
+          "properties": {
+            "different_args": {
+              "properties": {
+                "arg": {
+                  "description": "The argument.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "arg"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "different_args"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A call the recipe does not make.",
+          "properties": {
+            "extra_call": {
+              "properties": {
+                "call": {
+                  "$ref": "#/$defs/CallId",
+                  "description": "The call."
+                }
+              },
+              "required": [
+                "call"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "extra_call"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "postcondition_failed",
+          "description": "A postcondition failed.",
+          "type": "string"
+        },
+        {
+          "const": "empty_delegate_span",
+          "description": "A delegate step's span was empty.",
+          "type": "string"
+        },
+        {
+          "const": "ask_not_asked",
+          "description": "An `ask` step was not asked.",
+          "type": "string"
+        }
+      ]
+    },
+    "ShadowVerdict": {
+      "description": "`shadow::agree`'s result (section 2.10 item 7). Only `Agree` counts toward level 3; neither\nof the others is a failure.",
+      "oneOf": [
+        {
+          "const": "agree",
+          "description": "The job did what the recipe would have.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It did something else.",
+          "properties": {
+            "disagree": {
+              "properties": {
+                "reason": {
+                  "$ref": "#/$defs/ShadowMiss",
+                  "description": "How."
+                },
+                "step": {
+                  "description": "The recipe step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "disagree"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It could not be told.",
+          "properties": {
+            "inconclusive": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                },
+                "step": {
+                  "description": "The recipe step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "inconclusive"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Signal": {
+      "description": "What the user's reaction to a job says.",
+      "oneOf": [
+        {
+          "const": "accepted",
+          "description": "Accepted.",
+          "type": "string"
+        },
+        {
+          "const": "praised",
+          "description": "Praised.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Corrected.",
+          "properties": {
+            "corrected": {
+              "properties": {
+                "text": {
+                  "description": "What the user said.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "corrected"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Undone.",
+          "properties": {
+            "undone": {
+              "properties": {
+                "after_ms": {
+                  "description": "How long after the job ended, ms.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "after_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "undone"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "retried",
+          "description": "Retried.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Cancelled.",
+          "type": "string"
+        },
+        {
+          "const": "postcheck_passed",
+          "description": "A post-check passed.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A post-check failed.",
+          "properties": {
+            "postcheck_failed": {
+              "properties": {
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "postcheck_failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SkillDoc": {
+      "description": "A skill's files: the full content of `SKILL.md`, its references and its recipe.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        },
+        "recipe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Recipe"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`recipe.json`."
+        },
+        "references": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Reference files, by path inside the skill folder.",
+          "type": "object"
+        },
+        "skill_md": {
+          "description": "`SKILL.md`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "skill_md",
+        "references"
+      ],
+      "type": "object"
+    },
+    "SkillMeta": {
+      "description": "What the core and the resolver know about a skill.",
+      "properties": {
+        "apps": {
+          "description": "The apps and version ranges the recipe was proven on.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "Its description.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "facts_used": {
+          "description": "Facts bound into the evidence jobs whose values appear in the skill's literals or recipe\narguments; retiring one queues a repair and drops a level.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "has_recipe": {
+          "description": "Whether it has a recipe.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        },
+        "level": {
+          "$ref": "#/$defs/Level",
+          "description": "Its level."
+        },
+        "phrasings": {
+          "description": "Confirmed phrasings of it.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pinned": {
+          "description": "Pinned by the user; never archived.",
+          "type": "boolean"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskClass",
+          "description": "Its risk class."
+        },
+        "slots": {
+          "description": "Its slots.",
+          "items": {
+            "$ref": "#/$defs/SlotSpec"
+          },
+          "type": "array"
+        },
+        "tool_hashes": {
+          "description": "The schema hashes the recipe was proven with.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/ToolName"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "triggers": {
+          "description": "Its trigger templates.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "untrusted_origin": {
+          "description": "Learned from a job that read untrusted text.",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "Its version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "level",
+        "risk",
+        "description",
+        "triggers",
+        "slots",
+        "apps",
+        "tool_hashes",
+        "has_recipe",
+        "evidence",
+        "phrasings",
+        "facts_used",
+        "pinned",
+        "untrusted_origin"
+      ],
+      "type": "object"
+    },
+    "SkillRef": {
+      "description": "One version of one skill.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        },
+        "version": {
+          "description": "Its version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "SkillUse": {
+      "description": "One use of a skill. `slot_values`, from the first source that has them: the job's dispatched\nslots; the `Skill` call's arguments parsed with the skill's slot resolvers\n(`eileen_skills::slots::from_args`); the skill's template over the request. Else\n`SlotsUnknown`.",
+      "properties": {
+        "args": {
+          "description": "The `Skill` call's arguments.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "skill": {
+          "$ref": "#/$defs/SkillRef",
+          "description": "The skill."
+        },
+        "slot_values": {
+          "$ref": "#/$defs/SlotValuesOrUnknown",
+          "description": "The slot values the use is attributed with."
+        }
+      },
+      "required": [
+        "skill",
+        "args",
+        "slot_values"
+      ],
+      "type": "object"
+    },
+    "SkillVersion": {
+      "description": "One stored version of a skill.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was committed."
+        },
+        "doc": {
+          "$ref": "#/$defs/SkillDoc",
+          "description": "Its files."
+        },
+        "evidence": {
+          "description": "The jobs it was learned from.",
+          "items": {
+            "$ref": "#/$defs/JobId"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/CommitReason",
+          "description": "Why."
+        },
+        "skill": {
+          "$ref": "#/$defs/SkillId",
+          "description": "The skill."
+        },
+        "version": {
+          "description": "The version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "skill",
+        "version",
+        "at",
+        "reason",
+        "evidence",
+        "doc"
+      ],
+      "type": "object"
+    },
+    "SkipReason": {
+      "description": "Why a job was not distilled.",
+      "oneOf": [
+        {
+          "const": "failed",
+          "description": "It failed.",
+          "type": "string"
+        },
+        {
+          "const": "unclear",
+          "description": "Its verdict is unclear.",
+          "type": "string"
+        },
+        {
+          "const": "too_short",
+          "description": "It was too short to learn from.",
+          "type": "string"
+        },
+        {
+          "const": "no_learn",
+          "description": "The user asked not to learn from it.",
+          "type": "string"
+        },
+        {
+          "const": "stats_only",
+          "description": "It used a skill; only its statistics count.",
+          "type": "string"
+        },
+        {
+          "const": "not_on_claude",
+          "description": "It did not run on Claude (fast-path jobs).",
+          "type": "string"
+        },
+        {
+          "const": "nothing_proposed",
+          "description": "The librarian proposed nothing.",
+          "type": "string"
+        },
+        {
+          "const": "distill_off",
+          "description": "Distillation is off.",
+          "type": "string"
+        }
+      ]
+    },
+    "SlotKind": {
+      "description": "The kind of a slot. `Pick` is one of the options an `ask` step offered at run time, matched\nby the choice resolver against that list.",
+      "oneOf": [
+        {
+          "const": "offset",
+          "description": "A time offset (\"15:30\").",
+          "type": "string"
+        },
+        {
+          "const": "count",
+          "description": "A number of things.",
+          "type": "string"
+        },
+        {
+          "const": "text",
+          "description": "Free text.",
+          "type": "string"
+        },
+        {
+          "const": "app",
+          "description": "An app.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "A file.",
+          "type": "string"
+        },
+        {
+          "const": "url",
+          "description": "A URL.",
+          "type": "string"
+        },
+        {
+          "const": "media",
+          "description": "A piece of media.",
+          "type": "string"
+        },
+        {
+          "const": "position",
+          "description": "A position (\"the one on the right\").",
+          "type": "string"
+        },
+        {
+          "const": "monitor",
+          "description": "A monitor.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One of fixed options.",
+          "properties": {
+            "choice": {
+              "properties": {
+                "options": {
+                  "description": "The options.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "options"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "choice"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "pick",
+          "description": "One of the options an `ask` step offered.",
+          "type": "string"
+        }
+      ]
+    },
+    "SlotSpec": {
+      "description": "One slot of a skill.",
+      "properties": {
+        "asked": {
+          "description": "Filled only by the skill's `ask` step; never in the template, never from the request,\nnot part of a use's slot values.",
+          "type": "boolean"
+        },
+        "default": {
+          "description": "Its default."
+        },
+        "kind": {
+          "$ref": "#/$defs/SlotKind",
+          "description": "Its kind."
+        },
+        "name": {
+          "description": "Its name.",
+          "type": "string"
+        },
+        "required": {
+          "description": "Whether it must have a value.",
+          "type": "boolean"
+        },
+        "seen_values": {
+          "description": "Enumerated kinds: values a successful use has seen.",
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "required",
+        "asked",
+        "seen_values"
+      ],
+      "type": "object"
+    },
+    "SlotValuesOrUnknown": {
+      "description": "A use's slot values, or that they are unknown.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Known.",
+          "properties": {
+            "known": {
+              "additionalProperties": {
+                "$ref": "#/$defs/SlotValue"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "known"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "slots_unknown",
+          "description": "No source had them.",
+          "type": "string"
+        }
+      ]
+    },
+    "SnapshotManifest": {
+      "description": "Which skill files a session's snapshot holds: (skill, path, BLAKE3 hash) per file.",
+      "properties": {
+        "files": {
+          "description": "The files.",
+          "items": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/SkillRef"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "session": {
+          "$ref": "#/$defs/WorkerSessionId",
+          "description": "The session."
+        }
+      },
+      "required": [
+        "session",
+        "files"
+      ],
+      "type": "object"
+    },
+    "SourceStat": {
+      "description": "Which sources gave accepted deep answers per topic (section 2.10 item 11). `host` is a\nregistrable domain, nothing more; `topic` is the deep answer's topic key.",
+      "properties": {
+        "accepted": {
+          "description": "Times an answer citing it was accepted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cited": {
+          "description": "Times it was cited.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "host": {
+          "description": "The source's registrable domain.",
+          "type": "string"
+        },
+        "last": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was last used."
+        },
+        "opened": {
+          "description": "Times the user opened it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "topic": {
+          "description": "The topic.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "topic",
+        "host",
+        "cited",
+        "accepted",
+        "opened",
+        "last"
+      ],
+      "type": "object"
+    },
+    "StepKind": {
+      "description": "What a recipe step does. `Ask.question`, `Delegate.goal` and `Confirm.question` are literals\nfor tracing, overlap and the deny patterns (section 2.10 item 9).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Call a tool; argument values may be operands.",
+          "properties": {
+            "call": {
+              "properties": {
+                "args": {
+                  "description": "Its arguments, one flat object."
+                },
+                "op": {
+                  "description": "The op's tag.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tool": {
+                  "$ref": "#/$defs/ToolName",
+                  "description": "The tool."
+                }
+              },
+              "required": [
+                "tool",
+                "args"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The core's clarifying question; `slot` names a slot spec with `asked = true` (kind\n`Pick` when `options` is set); never skipped.",
+          "properties": {
+            "ask": {
+              "properties": {
+                "options": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Operand"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The options, from an earlier step."
+                },
+                "question": {
+                  "description": "The question.",
+                  "type": "string"
+                },
+                "slot": {
+                  "description": "The slot it fills.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "slot"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ask"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A narrow worker sub-job; its output is the sub-job's report.",
+          "properties": {
+            "delegate": {
+              "properties": {
+                "goal": {
+                  "description": "What the sub-job does.",
+                  "type": "string"
+                },
+                "inputs": {
+                  "description": "Its inputs."
+                }
+              },
+              "required": [
+                "goal",
+                "inputs"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delegate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ask the user to confirm; never skipped by replay.",
+          "properties": {
+            "confirm": {
+              "properties": {
+                "question": {
+                  "description": "The question.",
+                  "type": "string"
+                },
+                "show": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Operand"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "What to show with it."
+                }
+              },
+              "required": [
+                "question"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "confirm"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StepResult": {
+      "description": "The result of the step the core just ran, fed back to the replay machine.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A call's result.",
+          "properties": {
+            "call": {
+              "properties": {
+                "result": {
+                  "$ref": "#/$defs/ToolResult",
+                  "description": "The result."
+                },
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A check's result.",
+          "properties": {
+            "check": {
+              "properties": {
+                "passed": {
+                  "description": "Whether it passed.",
+                  "type": "boolean"
+                },
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "passed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user's answer to an `ask` step.",
+          "properties": {
+            "answer": {
+              "properties": {
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The value it resolved to."
+                }
+              },
+              "required": [
+                "step",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A delegated sub-job's report.",
+          "properties": {
+            "delegated": {
+              "properties": {
+                "report": {
+                  "description": "The report."
+                },
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "report"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delegated"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user's answer to a `confirm` step.",
+          "properties": {
+            "confirmed": {
+              "properties": {
+                "step": {
+                  "description": "The step.",
+                  "type": "string"
+                },
+                "yes": {
+                  "description": "Whether the user said yes.",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "step",
+                "yes"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "confirmed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Thresholds": {
+      "description": "Per level: level 2 needs successes and distinct slot values, level 3 agreeing shadows plus\napproval, level 4 clean replays and a clean share of the last 20 (0: no share required).",
+      "properties": {
+        "l2_distinct_slot_values": {
+          "description": "Level 2: distinct slot values among them.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l2_successes": {
+          "description": "Level 2: successful uses.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l3_agreeing_shadows": {
+          "description": "Level 3: agreeing shadow runs.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l4_clean_pct_last_20": {
+          "description": "Level 4: the clean share of the last 20 uses, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "l4_clean_replays": {
+          "description": "Level 4: clean replays.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "l2_successes",
+        "l2_distinct_slot_values",
+        "l3_agreeing_shadows",
+        "l4_clean_replays",
+        "l4_clean_pct_last_20"
+      ],
+      "type": "object"
+    },
+    "ToolCallPlan": {
+      "description": "A call the replay makes.",
+      "properties": {
+        "args": {
+          "description": "Its arguments, operands resolved, one flat object."
+        },
+        "op": {
+          "description": "The op's tag.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step": {
+          "description": "The recipe step.",
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName",
+          "description": "The tool."
+        }
+      },
+      "required": [
+        "step",
+        "tool",
+        "args"
+      ],
+      "type": "object"
+    },
+    "Trajectory": {
+      "description": "One job's record for the learning loop.",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/DesktopContext",
+          "description": "The focused app, app versions touched, document identity (redacted), connectors."
+        },
+        "cost": {
+          "$ref": "#/$defs/Cost",
+          "description": "What it cost."
+        },
+        "facts": {
+          "description": "The ids of the facts bound into the job (its facts block).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "job_id": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        },
+        "no_learn": {
+          "description": "The user asked not to learn from it.",
+          "type": "boolean"
+        },
+        "origin": {
+          "$ref": "#/$defs/JobOrigin",
+          "description": "What kind of job it was."
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Outcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it ended."
+        },
+        "redactions": {
+          "description": "How many values were redacted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request": {
+          "description": "What the user said.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "route": {
+          "$ref": "#/$defs/Route",
+          "description": "The route that ran it."
+        },
+        "schema": {
+          "description": "The format's version.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skills_used": {
+          "description": "The skills it used.",
+          "items": {
+            "$ref": "#/$defs/SkillUse"
+          },
+          "type": "array"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnapshotManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which skill versions the session had."
+        },
+        "snapshot_tampered": {
+          "description": "A hash or manifest mismatch: excluded from learning and statistics.",
+          "type": "boolean"
+        },
+        "steps": {
+          "description": "Its steps.",
+          "items": {
+            "$ref": "#/$defs/TrajectoryStep"
+          },
+          "type": "array"
+        },
+        "taint": {
+          "$ref": "#/$defs/Taint",
+          "description": "The observed sources the job read (section 2.12)."
+        },
+        "task": {
+          "description": "The dispatched task.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "job_id",
+        "request",
+        "task",
+        "context",
+        "route",
+        "origin",
+        "snapshot_tampered",
+        "skills_used",
+        "facts",
+        "taint",
+        "steps",
+        "cost",
+        "redactions",
+        "no_learn"
+      ],
+      "type": "object"
+    },
+    "TrajectoryStep": {
+      "description": "One step of a job.",
+      "properties": {
+        "app": {
+          "description": "The app and version touched.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approval": {
+          "description": "The user's answer, when it needed approval.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "args": {
+          "description": "Its arguments, redacted.",
+          "x-eileen-text": "untrusted"
+        },
+        "at_ms": {
+          "description": "When, ms since the job started.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "call": {
+          "$ref": "#/$defs/CallId",
+          "description": "The call."
+        },
+        "ok": {
+          "description": "Whether it succeeded.",
+          "type": "boolean"
+        },
+        "op": {
+          "description": "The op's tag, for tools with ops.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance",
+          "description": "Computed by `eileen-skills`, never taken from the librarian."
+        },
+        "result": {
+          "description": "Its result, redacted; long string leaves cut, every key and the structure kept.",
+          "x-eileen-text": "untrusted"
+        },
+        "rung": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rung"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route it took."
+        },
+        "schema_hash": {
+          "description": "The tool's schema hash.",
+          "type": "string"
+        },
+        "shadow_of": {
+          "description": "Set only on the core's shadow checks (section 2.10 item 7): the recipe step whose\npostcondition this read evaluated; never compiled.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tainted": {
+          "description": "Whether the job was tainted when it ran.",
+          "type": "boolean"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "Its tier."
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName",
+          "description": "The tool."
+        }
+      },
+      "required": [
+        "call",
+        "at_ms",
+        "tool",
+        "schema_hash",
+        "args",
+        "ok",
+        "result",
+        "tier",
+        "provenance",
+        "tainted"
+      ],
+      "type": "object"
+    },
+    "Transition": {
+      "description": "What `next_level` decides for a skill.",
+      "oneOf": [
+        {
+          "const": "stay",
+          "description": "No change.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Up the ladder (level 3 also needs the user's approval).",
+          "properties": {
+            "promote": {
+              "properties": {
+                "to": {
+                  "$ref": "#/$defs/Level",
+                  "description": "The new level."
+                }
+              },
+              "required": [
+                "to"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "promote"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Down the ladder.",
+          "properties": {
+            "demote": {
+              "properties": {
+                "to": {
+                  "$ref": "#/$defs/Level",
+                  "description": "The new level."
+                }
+              },
+              "required": [
+                "to"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "demote"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "archive",
+          "description": "Archived after idle days.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "On probation: one shadow run before the next replay.",
+          "properties": {
+            "probation": {
+              "properties": {
+                "reason": {
+                  "description": "Why (an app version or a tool's schema hash changed).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "probation"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "UseRecord": {
+      "description": "One use of a skill, for the ladder.",
+      "properties": {
+        "app_versions": {
+          "description": "The apps touched and their versions.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When."
+        },
+        "handoff": {
+          "description": "Whether the replay handed off.",
+          "type": "boolean"
+        },
+        "job": {
+          "$ref": "#/$defs/JobId",
+          "description": "The job."
+        },
+        "objective_check": {
+          "description": "Whether an objective check passed.",
+          "type": "boolean"
+        },
+        "replay": {
+          "description": "Whether it was a replay.",
+          "type": "boolean"
+        },
+        "slot_values": {
+          "$ref": "#/$defs/SlotValuesOrUnknown",
+          "description": "The slot values it was attributed with."
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict",
+          "description": "Its verdict."
+        }
+      },
+      "required": [
+        "job",
+        "at",
+        "verdict",
+        "objective_check",
+        "slot_values",
+        "replay",
+        "handoff",
+        "app_versions"
+      ],
+      "type": "object"
+    },
+    "UserFact": {
+      "description": "A fact about the user.",
+      "properties": {
+        "confidence_pct": {
+          "description": "How sure Eileen is, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "confirmed": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was last confirmed."
+        },
+        "created": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was made."
+        },
+        "id": {
+          "description": "Its id.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FactKind",
+          "description": "Its kind."
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance",
+          "description": "Where it traces to."
+        },
+        "scope": {
+          "description": "A topic, repository or app the fact applies to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job it came from."
+        },
+        "source_turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The turn it came from."
+        },
+        "subject": {
+          "description": "The subject key a correction matches (section 2.10 item 11).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "The fact.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "provenance",
+        "confidence_pct",
+        "created",
+        "confirmed"
+      ],
+      "type": "object"
+    },
+    "Verdict": {
+      "description": "A job's verdict once the regret window closes.",
+      "oneOf": [
+        {
+          "const": "success",
+          "description": "It worked.",
+          "type": "string"
+        },
+        {
+          "const": "failure",
+          "description": "It did not.",
+          "type": "string"
+        },
+        {
+          "const": "unclear",
+          "description": "It is not clear.",
+          "type": "string"
+        }
+      ]
+    },
+    "VocabularyEntry": {
+      "description": "One entry of the user's vocabulary, for the recognizer and the dictation cleaner.",
+      "properties": {
+        "heard_as": {
+          "description": "How the recognizer tends to hear it.",
+          "items": {
+            "type": "string",
+            "x-eileen-text": "personal"
+          },
+          "type": "array"
+        },
+        "written": {
+          "description": "How it is written.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "written",
+        "heard_as"
+      ],
+      "type": "object"
+    }
+  }
+}

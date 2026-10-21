@@ -1,0 +1,1244 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "EnrollKind": {
+      "description": "What an enrollment records.",
+      "oneOf": [
+        {
+          "const": "speaker_check",
+          "description": "The speaker check's voice print.",
+          "type": "string"
+        },
+        {
+          "const": "clone",
+          "description": "A voice to clone.",
+          "type": "string"
+        }
+      ]
+    },
+    "FrameHeader": {
+      "description": "The fixed header of every speech-pipe frame: 32 bytes, little-endian on the wire.",
+      "properties": {
+        "flags": {
+          "description": "Reserved flags, zero today.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "description": "The frame kind (see [`FrameKind`]).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "len": {
+          "description": "The body's length in bytes.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "The sender's frame counter.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "description": "The audio source: 0 is the PC microphone; later audio connectors (earbuds, a phone) get\ntheir own number.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "turn": {
+          "description": "The turn's ULID bytes, or zeros.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "flags",
+        "source",
+        "len",
+        "seq",
+        "turn"
+      ],
+      "type": "object"
+    },
+    "FrameKind": {
+      "description": "The kinds of speech-pipe frame.",
+      "oneOf": [
+        {
+          "const": "audio",
+          "description": "1, core to speech: 512 samples of `i16`, 16 kHz mono (one 32 ms window), `len` 1024.",
+          "type": "string"
+        },
+        {
+          "const": "command",
+          "description": "2, core to speech: JSON [`SpeechCommandFrame`].",
+          "type": "string"
+        },
+        {
+          "const": "event",
+          "description": "3, speech to core: JSON [`SpeechEventFrame`].",
+          "type": "string"
+        },
+        {
+          "const": "pcm",
+          "description": "4, speech to core: JSON [`PcmHeader`], then `i16` samples; at most 1 MiB.",
+          "type": "string"
+        },
+        {
+          "const": "ping",
+          "description": "5, a heartbeat every second.",
+          "type": "string"
+        },
+        {
+          "const": "pong",
+          "description": "6, the heartbeat's answer.",
+          "type": "string"
+        }
+      ]
+    },
+    "LanguageSupport": {
+      "description": "The languages a component handles, as BCP 47 tags, reported by the component itself: a\nspeech stage from its model's entry in `models.toml`, a brain backend or worker driver for\nits resolved model (the Claude backend and driver report `Any`). Eileen's code holds no list\nof supported languages.",
+      "oneOf": [
+        {
+          "const": "any",
+          "description": "Any language.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "These languages.",
+          "properties": {
+            "listed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "listed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListenMode": {
+      "description": "How the speech process listens.",
+      "oneOf": [
+        {
+          "const": "conversation",
+          "description": "Turns for the conversation.",
+          "type": "string"
+        },
+        {
+          "const": "dictation",
+          "description": "Dictation into a field: no addressee gate, the key ends the turn.",
+          "type": "string"
+        },
+        {
+          "const": "enrollment",
+          "description": "An enrollment or the first-run clip.",
+          "type": "string"
+        }
+      ]
+    },
+    "PcmHeader": {
+      "description": "The JSON part of a PCM frame; the samples follow it.",
+      "properties": {
+        "clause": {
+          "description": "Its clause.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "description": "The samples' rate, Hz.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "speak": {
+          "$ref": "#/$defs/SpeakId",
+          "description": "The utterance."
+        }
+      },
+      "required": [
+        "speak",
+        "clause",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "SpeechCheck": {
+      "description": "A check's result.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Whether the name was recognised in synthesized test sentences.",
+          "properties": {
+            "name_recognisable": {
+              "properties": {
+                "hits": {
+                  "description": "How many test sentences recognised it.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "passed": {
+                  "description": "Whether it passed.",
+                  "type": "boolean"
+                },
+                "tries": {
+                  "description": "Of how many.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "passed",
+                "hits",
+                "tries"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "name_recognisable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The speaker check's score.",
+          "properties": {
+            "speaker_match": {
+              "properties": {
+                "score_pct": {
+                  "description": "The score, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "score_pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speaker_match"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Time to the first audio of a cloned voice.",
+          "properties": {
+            "clone_timing": {
+              "properties": {
+                "ttfa_ms": {
+                  "description": "Time to first audio, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ttfa_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "clone_timing"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A voice's real-time factor.",
+          "properties": {
+            "voice_realtime": {
+              "properties": {
+                "rtf_per_mille": {
+                  "description": "Per mille.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rtf_per_mille"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "voice_realtime"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The check could not run.",
+          "properties": {
+            "unavailable": {
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unavailable"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SpeechCheckRequest": {
+      "description": "A check the core asks the speech process to run.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Can the recognizer pick this name out of speech?",
+          "properties": {
+            "name_recognisable": {
+              "properties": {
+                "name": {
+                  "description": "The name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "name_recognisable"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Does the speaker of a turn match the enrolled voice?",
+          "properties": {
+            "speaker_match": {
+              "properties": {
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speaker_match"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "How fast does a cloned voice start speaking?",
+          "properties": {
+            "clone_timing": {
+              "properties": {
+                "voice": {
+                  "description": "The voice.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "voice"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "clone_timing"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Does a voice render faster than real time?",
+          "properties": {
+            "voice_realtime": {
+              "properties": {
+                "engine": {
+                  "description": "The engine.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "voice": {
+                  "description": "The voice.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "voice"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "voice_realtime"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SpeechCmd": {
+      "description": "To the speech process.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Speak an utterance, clause by clause.",
+          "properties": {
+            "speak": {
+              "properties": {
+                "clauses": {
+                  "description": "The clauses, in order.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                },
+                "voice": {
+                  "description": "The voice.",
+                  "type": "string"
+                },
+                "whole_line": {
+                  "description": "The whole line, for engines that read ahead.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "speak",
+                "voice",
+                "clauses",
+                "whole_line"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speak"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stop synthesizing an utterance.",
+          "properties": {
+            "cancel": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "cancel"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Continue an utterance after a pause.",
+          "properties": {
+            "resume": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "resume"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Change how the speech process listens.",
+          "properties": {
+            "set_mode": {
+              "$ref": "#/$defs/ListenMode"
+            }
+          },
+          "required": [
+            "set_mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Words the recognizer should favour (the assistant's name, app names).",
+          "properties": {
+            "set_hotwords": {
+              "properties": {
+                "words": {
+                  "description": "The words.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "words"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set_hotwords"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Embed an utterance for the semantic matcher.",
+          "properties": {
+            "embed": {
+              "properties": {
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "description": "The utterance.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                }
+              },
+              "required": [
+                "request",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "embed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run a check.",
+          "properties": {
+            "check": {
+              "properties": {
+                "check": {
+                  "$ref": "#/$defs/SpeechCheckRequest",
+                  "description": "The check."
+                },
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "request",
+                "check"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "check"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Load a model.",
+          "properties": {
+            "load_model": {
+              "properties": {
+                "model": {
+                  "description": "The model's name in `models.toml`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "load_model"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Unload a model.",
+          "properties": {
+            "unload_model": {
+              "properties": {
+                "model": {
+                  "description": "The model's name in `models.toml`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unload_model"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Start an enrollment.",
+          "properties": {
+            "enroll": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/EnrollKind",
+                  "description": "What to enroll."
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "enroll"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Clone a voice from the recording just made.",
+          "properties": {
+            "clone_from_recording": {
+              "properties": {
+                "voice": {
+                  "description": "The new voice's name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "voice"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "clone_from_recording"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Delete a voice and its files.",
+          "properties": {
+            "delete_voice": {
+              "properties": {
+                "name": {
+                  "description": "The voice.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delete_voice"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SpeechCommandFrame": {
+      "description": "The body of a command frame.",
+      "properties": {
+        "cmd": {
+          "$ref": "#/$defs/SpeechCmd",
+          "description": "The command."
+        },
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Correlation."
+        },
+        "span": {
+          "description": "The core's span the command belongs to.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ctx",
+        "span",
+        "cmd"
+      ],
+      "type": "object"
+    },
+    "SpeechEventFrame": {
+      "description": "The body of an event frame.",
+      "properties": {
+        "ctx": {
+          "$ref": "#/$defs/TraceCtx",
+          "description": "Correlation."
+        },
+        "event": {
+          "$ref": "#/$defs/VoiceEvent",
+          "description": "The event."
+        },
+        "span": {
+          "description": "The speech process's span the event belongs to.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ctx",
+        "span",
+        "event"
+      ],
+      "type": "object"
+    },
+    "TurnEndReason": {
+      "description": "Why a turn ended.",
+      "oneOf": [
+        {
+          "const": "smart_turn",
+          "description": "The end-of-turn model said the user finished.",
+          "type": "string"
+        },
+        {
+          "const": "silence",
+          "description": "The silence limit passed.",
+          "type": "string"
+        },
+        {
+          "const": "max_length",
+          "description": "The turn reached its maximum length.",
+          "type": "string"
+        },
+        {
+          "const": "key_released",
+          "description": "The dictation key was released.",
+          "type": "string"
+        },
+        {
+          "const": "muted",
+          "description": "The microphone was muted.",
+          "type": "string"
+        }
+      ]
+    },
+    "VoiceCalibration": {
+      "description": "The listening half of the first run's calibration (section 2.8), as stored in\n`calibration.toml`: the addressee score's level reference and the name matcher's extra\naliases reach the core only through this type.",
+      "properties": {
+        "level_ref_db": {
+          "description": "The user's active speech level, dBFS.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": "integer"
+        },
+        "name_aliases": {
+          "description": "How the recognizer hears the assistant's name in this voice.",
+          "items": {
+            "type": "string",
+            "x-eileen-text": "personal"
+          },
+          "type": "array"
+        },
+        "noise_floor_db": {
+          "description": "The room's noise floor, dBFS.",
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "level_ref_db",
+        "noise_floor_db",
+        "name_aliases"
+      ],
+      "type": "object"
+    },
+    "VoiceEvent": {
+      "description": "From the speech process.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Speech began; the speech process minted the turn.",
+          "properties": {
+            "speech_started": {
+              "properties": {
+                "source": {
+                  "description": "The audio source.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn",
+                "source"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speech_started"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A partial transcript; it reaches only the HUD state while it is current.",
+          "properties": {
+            "partial": {
+              "properties": {
+                "stable": {
+                  "description": "Whether the recognizer will not change it.",
+                  "type": "boolean"
+                },
+                "text": {
+                  "description": "The text so far.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn",
+                "text",
+                "stable"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "partial"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Speech stopped (the turn may continue).",
+          "properties": {
+            "speech_ended": {
+              "properties": {
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speech_ended"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The turn ended, with its final transcript.",
+          "properties": {
+            "end_of_turn": {
+              "properties": {
+                "asr_confidence_pct": {
+                  "description": "The recognizer's confidence, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "level_db": {
+                  "description": "The active speech level: the median RMS of the turn's VAD-speech frames,\necho-cancelled, before Eileen's input gain, in dBFS.",
+                  "format": "int16",
+                  "maximum": 32767,
+                  "minimum": -32768,
+                  "type": "integer"
+                },
+                "reason": {
+                  "$ref": "#/$defs/TurnEndReason",
+                  "description": "Why the turn ended."
+                },
+                "silence_ms": {
+                  "description": "Silence before the end, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "smart_turn_pct": {
+                  "description": "The end-of-turn model's confidence, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "source": {
+                  "description": "The audio source.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "description": "The final transcript.",
+                  "type": "string",
+                  "x-eileen-text": "personal"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn",
+                "text",
+                "smart_turn_pct",
+                "silence_ms",
+                "asr_confidence_pct",
+                "reason",
+                "source",
+                "level_db"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "end_of_turn"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "After the first-run clip is measured; `None` after \"forget my voice\".",
+          "properties": {
+            "calibration": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VoiceCalibration"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "calibration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A barge-in window while Eileen speaks.",
+          "properties": {
+            "barge_in_window": {
+              "properties": {
+                "prob_pct": {
+                  "description": "The probability the user is speaking to interrupt, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance being spoken."
+                },
+                "window": {
+                  "description": "The window's number since playback began.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "speak",
+                "window",
+                "prob_pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "barge_in_window"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A clause is synthesized and its PCM sent.",
+          "properties": {
+            "clause_ready": {
+              "properties": {
+                "chars": {
+                  "description": "Its characters.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clause": {
+                  "description": "The clause.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "samples": {
+                  "description": "Its samples.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak",
+                "clause",
+                "chars",
+                "samples"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "clause_ready"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every clause of the utterance is synthesized.",
+          "properties": {
+            "speak_done": {
+              "properties": {
+                "speak": {
+                  "$ref": "#/$defs/SpeakId",
+                  "description": "The utterance."
+                }
+              },
+              "required": [
+                "speak"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speak_done"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An embedding the core asked for.",
+          "properties": {
+            "embedding": {
+              "properties": {
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "vector": {
+                  "description": "The vector.",
+                  "items": {
+                    "format": "float",
+                    "type": "number"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "request",
+                "vector"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "embedding"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A check the core asked for: name recognisability, speaker match, clone timing.",
+          "properties": {
+            "check_result": {
+              "properties": {
+                "request": {
+                  "description": "The request.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "result": {
+                  "$ref": "#/$defs/SpeechCheck",
+                  "description": "The result."
+                }
+              },
+              "required": [
+                "request",
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "check_result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The speaker check's score for a turn, only if the check is adopted and enrolled.",
+          "properties": {
+            "speaker_match": {
+              "properties": {
+                "score_pct": {
+                  "description": "The score, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn",
+                "score_pct"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speaker_match"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Real-time factor per engine, per mille.",
+          "properties": {
+            "health": {
+              "properties": {
+                "rtf_by_engine": {
+                  "additionalProperties": {
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "description": "Engine name to real-time factor.",
+                  "type": "object"
+                }
+              },
+              "required": [
+                "rtf_by_engine"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "health"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

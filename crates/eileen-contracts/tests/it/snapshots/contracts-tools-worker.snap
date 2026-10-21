@@ -1,0 +1,390 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "Approve": {
+      "description": "`approve`: only if WP3's contract test picks the permission-prompt-tool route; accepted only\nfor a pending ask with this `tool_use_id`. The reply's shape is recorded from the real CLI by\nWP3.",
+      "properties": {
+        "input": {
+          "description": "Its input."
+        },
+        "tool_name": {
+          "description": "The tool asking.",
+          "type": "string"
+        },
+        "tool_use_id": {
+          "description": "The vendor's id for the use.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_name",
+        "input",
+        "tool_use_id"
+      ],
+      "type": "object"
+    },
+    "RegistryPackage": {
+      "description": "One package of a registry entry.",
+      "properties": {
+        "identifier": {
+          "description": "The package's identifier.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "registry_type": {
+          "description": "The package registry (`npm`, `pypi`, ...).",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "version": {
+          "description": "The version.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "registry_type",
+        "identifier",
+        "version"
+      ],
+      "type": "object"
+    },
+    "RegistryServer": {
+      "description": "One registry entry. `namespace` is the registry-verified part of the server name before the\n`/`; `from_app_vendor` is computed by Eileen from `app-vendors.toml`; the registry's `_meta`\n\"official\" block is never read as an endorsement.",
+      "properties": {
+        "description": {
+          "description": "Its description.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "from_app_vendor": {
+          "description": "The namespace is a domain listed for this app in `app-vendors.toml`.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Its name.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "namespace": {
+          "description": "The verified namespace.",
+          "type": "string"
+        },
+        "packages": {
+          "description": "Its packages.",
+          "items": {
+            "$ref": "#/$defs/RegistryPackage"
+          },
+          "type": "array"
+        },
+        "registry_id": {
+          "description": "The registry's id for it.",
+          "type": "string"
+        },
+        "source_url": {
+          "description": "Its source repository.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "status": {
+          "description": "Its registry status.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        }
+      },
+      "required": [
+        "registry_id",
+        "name",
+        "namespace",
+        "from_app_vendor",
+        "status",
+        "description",
+        "source_url",
+        "packages"
+      ],
+      "type": "object"
+    },
+    "Report": {
+      "description": "`report`: a worker's result for its job.",
+      "properties": {
+        "artifacts": {
+          "default": [],
+          "description": "Files it made.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-eileen-path": true
+        },
+        "outcome": {
+          "$ref": "#/$defs/ReportOutcome",
+          "description": "How it ended."
+        },
+        "summary": {
+          "description": "What it did, in a few sentences.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ReportOutcome": {
+      "description": "How a worker's job ended.",
+      "oneOf": [
+        {
+          "const": "done",
+          "description": "Done.",
+          "type": "string"
+        },
+        {
+          "const": "blocked",
+          "description": "Blocked on something only the user can do.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Failed.",
+          "type": "string"
+        }
+      ]
+    },
+    "RoutesLookup": {
+      "description": "`routes_lookup`: Eileen's apps sidecar queries the official MCP registry (one fixed host,\nthrough the supervisor, 10 s, 256 KB cap, cached a day). Tier 0; observes `Web`.",
+      "properties": {
+        "app": {
+          "description": "The app, a key of Eileen's app index.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "type": "object"
+    },
+    "RoutesLookupOutput": {
+      "description": "What `routes_lookup` returns, all of it untrusted registry data.",
+      "properties": {
+        "servers": {
+          "description": "The servers the registry lists for the app.",
+          "items": {
+            "$ref": "#/$defs/RegistryServer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "servers"
+      ],
+      "type": "object"
+    },
+    "RoutesPropose": {
+      "description": "`routes_propose`: records a route proposal in `learn.sqlite` and shows it on the HUD;\ninstalls nothing. `AppMcp` needs `registry_id`, which must match an active `routes_lookup`\nentry cached for this job and app, and every shown field is copied from that entry; `AppApi`\n(with `link`, stored as `source_url`) and `DeepLink` (with `uri_scheme`) are stored as\nunverified. Tier 0.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RouteKind",
+          "description": "The kind of route."
+        },
+        "link": {
+          "description": "`AppApi`: the documentation link.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry_id": {
+          "description": "`AppMcp`: the registry entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri_scheme": {
+          "description": "`DeepLink`: the URI scheme.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "description": "The worker's note on why.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "kind",
+        "why"
+      ],
+      "type": "object"
+    }
+  },
+  "tool_inputs": {
+    "approve": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`approve`: only if WP3's contract test picks the permission-prompt-tool route; accepted only\nfor a pending ask with this `tool_use_id`. The reply's shape is recorded from the real CLI by\nWP3.",
+      "properties": {
+        "input": {
+          "description": "Its input."
+        },
+        "tool_name": {
+          "description": "The tool asking.",
+          "type": "string"
+        },
+        "tool_use_id": {
+          "description": "The vendor's id for the use.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_name",
+        "input",
+        "tool_use_id"
+      ],
+      "title": "Approve",
+      "type": "object"
+    },
+    "report": {
+      "$defs": {
+        "ReportOutcome": {
+          "description": "How a worker's job ended.",
+          "oneOf": [
+            {
+              "const": "done",
+              "description": "Done.",
+              "type": "string"
+            },
+            {
+              "const": "blocked",
+              "description": "Blocked on something only the user can do.",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "description": "Failed.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`report`: a worker's result for its job.",
+      "properties": {
+        "artifacts": {
+          "default": [],
+          "description": "Files it made.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-eileen-path": true
+        },
+        "outcome": {
+          "$ref": "#/$defs/ReportOutcome",
+          "description": "How it ended."
+        },
+        "summary": {
+          "description": "What it did, in a few sentences.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "outcome"
+      ],
+      "title": "Report",
+      "type": "object"
+    },
+    "routes_lookup": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`routes_lookup`: Eileen's apps sidecar queries the official MCP registry (one fixed host,\nthrough the supervisor, 10 s, 256 KB cap, cached a day). Tier 0; observes `Web`.",
+      "properties": {
+        "app": {
+          "description": "The app, a key of Eileen's app index.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "title": "RoutesLookup",
+      "type": "object"
+    },
+    "routes_propose": {
+      "$defs": {
+        "RouteKind": {
+          "description": "The kinds of route a worker can propose.",
+          "oneOf": [
+            {
+              "const": "app_mcp",
+              "description": "The app's own MCP server, from the registry.",
+              "type": "string"
+            },
+            {
+              "const": "app_api",
+              "description": "The app's scripting interface, by its documentation.",
+              "type": "string"
+            },
+            {
+              "const": "deep_link",
+              "description": "A URI scheme.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`routes_propose`: records a route proposal in `learn.sqlite` and shows it on the HUD;\ninstalls nothing. `AppMcp` needs `registry_id`, which must match an active `routes_lookup`\nentry cached for this job and app, and every shown field is copied from that entry; `AppApi`\n(with `link`, stored as `source_url`) and `DeepLink` (with `uri_scheme`) are stored as\nunverified. Tier 0.",
+      "properties": {
+        "app": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RouteKind",
+          "description": "The kind of route."
+        },
+        "link": {
+          "description": "`AppApi`: the documentation link.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry_id": {
+          "description": "`AppMcp`: the registry entry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri_scheme": {
+          "description": "`DeepLink`: the URI scheme.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "description": "The worker's note on why.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "app",
+        "kind",
+        "why"
+      ],
+      "title": "RoutesPropose",
+      "type": "object"
+    }
+  }
+}

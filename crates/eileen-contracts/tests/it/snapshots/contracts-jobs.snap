@@ -1,0 +1,1105 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "CallOrigin": {
+      "description": "Who made a tool call.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The brain, in a turn.",
+          "properties": {
+            "brain": {
+              "properties": {
+                "authority": {
+                  "$ref": "#/$defs/TurnAuthority",
+                  "description": "Whether the turn was addressed."
+                },
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn."
+                }
+              },
+              "required": [
+                "turn",
+                "authority"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "brain"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A worker session on a job.",
+          "properties": {
+            "worker": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The job."
+                },
+                "route": {
+                  "$ref": "#/$defs/Route",
+                  "description": "The session's route."
+                },
+                "session": {
+                  "$ref": "#/$defs/WorkerSessionId",
+                  "description": "The session."
+                }
+              },
+              "required": [
+                "job",
+                "session",
+                "route"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "worker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A replayed recipe.",
+          "properties": {
+            "replay": {
+              "properties": {
+                "job": {
+                  "$ref": "#/$defs/JobId",
+                  "description": "The replay job."
+                },
+                "skill": {
+                  "$ref": "#/$defs/SkillRef",
+                  "description": "The skill being replayed."
+                }
+              },
+              "required": [
+                "job",
+                "skill"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "replay"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The deterministic fast path.",
+          "properties": {
+            "fast_path": {
+              "properties": {
+                "turn": {
+                  "$ref": "#/$defs/TurnId",
+                  "description": "The turn it answered."
+                }
+              },
+              "required": [
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "fast_path"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "session",
+          "description": "The owner's own Claude session through the plugin.",
+          "type": "string"
+        },
+        {
+          "const": "core",
+          "description": "Eileen's own bookkeeping calls (checks, the intent highlight, media pause during\napprovals).",
+          "type": "string"
+        }
+      ]
+    },
+    "Cost": {
+      "description": "What a turn or job cost.",
+      "properties": {
+        "api_ms": {
+          "description": "Time in the vendor's API, ms.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "description": "Wall time, ms.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model_turns": {
+          "description": "Model turns.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens_cache_read": {
+          "description": "Input tokens read from the cache.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens_in": {
+          "description": "Input tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens_out": {
+          "description": "Output tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "duration_ms",
+        "api_ms",
+        "model_turns",
+        "tokens_in",
+        "tokens_out",
+        "tokens_cache_read"
+      ],
+      "type": "object"
+    },
+    "Depth": {
+      "description": "How much thought a request gets.",
+      "oneOf": [
+        {
+          "const": "instant",
+          "description": "Answered at once, by the fast path or the brain's first words.",
+          "type": "string"
+        },
+        {
+          "const": "quick",
+          "description": "A short job.",
+          "type": "string"
+        },
+        {
+          "const": "considered",
+          "description": "A job given room to think.",
+          "type": "string"
+        },
+        {
+          "const": "deep",
+          "description": "The deepest model and the most time.",
+          "type": "string"
+        }
+      ]
+    },
+    "FanoutMode": {
+      "description": "How a fan-out's workers share a task.",
+      "oneOf": [
+        {
+          "const": "compete",
+          "description": "Every worker tries the whole task; the best result wins.",
+          "type": "string"
+        },
+        {
+          "const": "split",
+          "description": "Each worker takes one subtask.",
+          "type": "string"
+        }
+      ]
+    },
+    "Grant": {
+      "description": "A permission the user granted.",
+      "properties": {
+        "granted_by": {
+          "$ref": "#/$defs/ApprovalId",
+          "description": "The approval that granted it."
+        },
+        "matcher": {
+          "$ref": "#/$defs/GrantMatcher",
+          "description": "What it matches."
+        },
+        "scope": {
+          "$ref": "#/$defs/GrantScope",
+          "description": "How long it lasts."
+        },
+        "summary": {
+          "description": "What the user was shown.",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The highest tier it allows."
+        }
+      },
+      "required": [
+        "matcher",
+        "tier",
+        "scope",
+        "granted_by",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "GrantMatcher": {
+      "description": "What a grant matches.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The normalised call that was shown to the user.",
+          "properties": {
+            "exact_call": {
+              "properties": {
+                "input_digest": {
+                  "description": "The digest of the normalised input.",
+                  "type": "string"
+                },
+                "tool": {
+                  "description": "The tool.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool",
+                "input_digest"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "exact_call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool pattern; tier 1 only.",
+          "properties": {
+            "tool_pattern": {
+              "properties": {
+                "pattern": {
+                  "description": "The pattern.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pattern"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_pattern"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "\"May Claude control Resolve?\"",
+          "properties": {
+            "desktop_app": {
+              "properties": {
+                "process": {
+                  "description": "The process name.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "process"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "desktop_app"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GrantScope": {
+      "description": "How long a grant lasts.",
+      "oneOf": [
+        {
+          "const": "this_job",
+          "description": "Until the job ends.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "Always: tier 1, or tier 2 with a logged decision id.",
+          "type": "string"
+        }
+      ]
+    },
+    "Job": {
+      "description": "A job as the registry, the HUD and the store see it.",
+      "properties": {
+        "approval_deadline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When an open approval question expires."
+        },
+        "branch": {
+          "description": "Its branch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost": {
+          "$ref": "#/$defs/Cost",
+          "description": "What it has cost so far."
+        },
+        "created": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was created."
+        },
+        "focus": {
+          "description": "Whether the user is focused on it.",
+          "type": "boolean"
+        },
+        "grants": {
+          "description": "The grants given to it.",
+          "items": {
+            "$ref": "#/$defs/Grant"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/JobId",
+          "description": "Its id."
+        },
+        "last_progress": {
+          "description": "The last progress line.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "untrusted"
+        },
+        "model": {
+          "description": "The resolved model id.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its spoken name.",
+          "type": "string"
+        },
+        "ordinal": {
+          "description": "\"the second one\": its ordinal among live jobs, when it has one.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "override_words": {
+          "description": "The spoken override that routed it, verbatim.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "progress_pct": {
+          "description": "Progress in percent, when known.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "route": {
+          "$ref": "#/$defs/Route",
+          "description": "The route that runs it."
+        },
+        "salience_pct": {
+          "description": "Drives announcement order.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerSessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The worker session bound to it."
+        },
+        "slug": {
+          "description": "Its name as a slug, for folders and branches.",
+          "type": "string"
+        },
+        "snapshot_ref": {
+          "description": "The snapshot it can be restored to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec",
+          "description": "What was asked for."
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus",
+          "description": "Where it is."
+        },
+        "taint": {
+          "$ref": "#/$defs/Taint",
+          "description": "What it has read from outside."
+        },
+        "updated": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it last changed."
+        },
+        "worktree": {
+          "description": "Its worktree folder.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "slug",
+        "spec",
+        "status",
+        "route",
+        "model",
+        "created",
+        "updated",
+        "salience_pct",
+        "cost",
+        "grants",
+        "taint",
+        "focus"
+      ],
+      "type": "object"
+    },
+    "JobKind": {
+      "description": "What kind of work a job is.",
+      "oneOf": [
+        {
+          "const": "coding",
+          "description": "Code changes in a repository worktree.",
+          "type": "string"
+        },
+        {
+          "const": "computer_use",
+          "description": "Driving the desktop through Eileen's desktop and apps tools.",
+          "type": "string"
+        },
+        {
+          "const": "general",
+          "description": "A general task with the desktop and apps toolsets.",
+          "type": "string"
+        },
+        {
+          "const": "research",
+          "description": "Research on the web.",
+          "type": "string"
+        },
+        {
+          "const": "deep_answer",
+          "description": "A deep answer to a question, in the background of a fast one.",
+          "type": "string"
+        },
+        {
+          "const": "librarian",
+          "description": "The learning loop's librarian.",
+          "type": "string"
+        },
+        {
+          "const": "replay",
+          "description": "A learned recipe replayed without a model.",
+          "type": "string"
+        },
+        {
+          "const": "continue_session",
+          "description": "Continuing an earlier Claude session.",
+          "type": "string"
+        },
+        {
+          "const": "app_task",
+          "description": "A task inside one app through its adapter.",
+          "type": "string"
+        },
+        {
+          "const": "act",
+          "description": "A fast-path command or a brain turn that ran `act` tools: no session, silent, ends with\nits turn.",
+          "type": "string"
+        },
+        {
+          "const": "ml_project",
+          "description": "Reserved for the v0.2 Colab connector; refused in v0.1.",
+          "type": "string"
+        }
+      ]
+    },
+    "JobSpec": {
+      "description": "What the brain or a skill asks for when it starts a job.",
+      "properties": {
+        "anticipated": {
+          "description": "A `DeepAnswer` started by anticipation; results go to the cache and the HUD only.",
+          "type": "boolean"
+        },
+        "authorized_by": {
+          "$ref": "#/$defs/TurnId",
+          "description": "The addressed turn that caused it; checked by the dispatcher."
+        },
+        "chrome": {
+          "description": "The user opted this job in to Claude in Chrome.",
+          "type": "boolean"
+        },
+        "depth": {
+          "$ref": "#/$defs/Depth",
+          "description": "How much thought it gets."
+        },
+        "fanout": {
+          "description": "How many workers, 1 to 8.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/JobKind",
+          "description": "The kind of job."
+        },
+        "mode": {
+          "$ref": "#/$defs/FanoutMode",
+          "description": "How the workers share the task."
+        },
+        "model": {
+          "description": "A name from `routing.models` or a full id; `None` lets policy decide. The harness\nresolves it to the full id it passes and records.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fan-out children point at their parent."
+        },
+        "repo": {
+          "description": "A repository name or absolute path.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-eileen-text": "personal"
+        },
+        "resume_session": {
+          "description": "`ContinueSession` only: the session to resume.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route; `None` lets policy decide."
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A learned skill to follow (`Replay`: the recipe to run)."
+        },
+        "slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SlotValue"
+          },
+          "description": "`Replay`: the slots of the `[match]` block; with any other skill job, the slots the use\nis attributed with (validated against the skill's slot specs).",
+          "type": "object"
+        },
+        "subquestions": {
+          "description": "`DeepAnswer`: at most 4 subquestions.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subtasks": {
+          "description": "`Split` mode: one subtask per worker.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task": {
+          "description": "The task, up to 8,000 characters.",
+          "type": "string"
+        },
+        "title_hint": {
+          "description": "A hint for the job's spoken name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "topic": {
+          "description": "`DeepAnswer`: a short topic key (\"food near me\") that scopes feedback facts and the\nanswers cache.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "task",
+        "depth",
+        "fanout",
+        "mode",
+        "subtasks",
+        "subquestions",
+        "slots",
+        "anticipated",
+        "authorized_by",
+        "chrome"
+      ],
+      "type": "object"
+    },
+    "JobStatus": {
+      "description": "Where a job is in its life.",
+      "oneOf": [
+        {
+          "const": "queued",
+          "description": "Accepted, waiting for memory, a build slot or the plan.",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "description": "A worker or replay is on it.",
+          "type": "string"
+        },
+        {
+          "const": "blocked",
+          "description": "Waiting on something outside the worker.",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_approval",
+          "description": "Waiting for the user to approve a call.",
+          "type": "string"
+        },
+        {
+          "const": "completed",
+          "description": "Finished successfully.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "Finished with an error.",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "Stopped by the user.",
+          "type": "string"
+        },
+        {
+          "const": "interrupted",
+          "description": "Stopped by a core restart while it ran.",
+          "type": "string"
+        }
+      ]
+    },
+    "MemoryPressure": {
+      "description": "The machine's memory, sampled every 5 s.",
+      "properties": {
+        "available_mb": {
+          "description": "`GlobalMemoryStatusEx` available physical memory (free plus standby), MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "commit_headroom_mb": {
+          "description": "The commit limit minus the commit charge, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "largest_process": {
+          "description": "The biggest process that is not Eileen's, and its working set in MB.",
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "string",
+              "x-eileen-text": "personal"
+            },
+            {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "paging_kb_s": {
+          "description": "The hard-fault paging rate over the last 30 s: the PDH counter `\\Memory\\Pages Input/sec`\n(pages, mapped-file reads included) times the page size, KB/s; judged against a baseline.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paging_limit_kb_s": {
+          "description": "The effective `memory.max_paging_kb_s`: the setting, or for `auto` the value the runtime\ncomputes once an hour from the stored 7-day averages.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "available_mb",
+        "commit_headroom_mb",
+        "paging_kb_s",
+        "paging_limit_kb_s"
+      ],
+      "type": "object"
+    },
+    "ObservedSource": {
+      "description": "The one set of observed sources (section 2.12): a job's taint and the learning loop's tainted\nsteps both use it.",
+      "oneOf": [
+        {
+          "const": "tree",
+          "description": "A UI Automation tree.",
+          "type": "string"
+        },
+        {
+          "const": "screen",
+          "description": "A screenshot.",
+          "type": "string"
+        },
+        {
+          "const": "selection",
+          "description": "The user's selection.",
+          "type": "string"
+        },
+        {
+          "const": "web",
+          "description": "A web page or a web service.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "A file.",
+          "type": "string"
+        },
+        {
+          "const": "notification",
+          "description": "A notification.",
+          "type": "string"
+        }
+      ]
+    },
+    "PlanUsage": {
+      "description": "The user's plan usage, from the vendor's rate-limit events.",
+      "properties": {
+        "five_hour_pct": {
+          "description": "The five-hour window, in percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the nearer window resets."
+        },
+        "seven_day_pct": {
+          "description": "The seven-day window, in percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PoolClass": {
+      "description": "A class of pooled worker session.",
+      "oneOf": [
+        {
+          "const": "computer_use",
+          "description": "A warm computer-use session.",
+          "type": "string"
+        },
+        {
+          "const": "deep",
+          "description": "A warm deep-answer session.",
+          "type": "string"
+        }
+      ]
+    },
+    "Route": {
+      "description": "A route: which vendor harness or model family does a piece of work. Workers are named only\nby route.",
+      "oneOf": [
+        {
+          "const": "claude",
+          "description": "Claude, through the user's own signed-in `claude` CLI. The only route built in v0.1.",
+          "type": "string"
+        },
+        {
+          "const": "codex",
+          "description": "The Codex app server (a designed slot).",
+          "type": "string"
+        },
+        {
+          "const": "grok",
+          "description": "Grok over ACP (a designed slot).",
+          "type": "string"
+        },
+        {
+          "const": "deepseek",
+          "description": "`DeepSeek` (a designed slot; its API key is the one key Eileen would store).",
+          "type": "string"
+        },
+        {
+          "const": "local",
+          "description": "A local model (a designed slot).",
+          "type": "string"
+        }
+      ]
+    },
+    "Taint": {
+      "description": "What a job has read from outside Eileen.",
+      "properties": {
+        "private_read": {
+          "description": "Read outside the job's folder and its skill snapshot, or started so because the\ndispatching turn held ledger lines or the task repeats an out-of-scope fact.",
+          "type": "boolean"
+        },
+        "sources": {
+          "description": "The observed sources the job read.",
+          "items": {
+            "$ref": "#/$defs/ObservedSource"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "sources",
+        "private_read"
+      ],
+      "type": "object"
+    },
+    "Tier": {
+      "description": "Permission tier of a call (section 2.12), ordered from harmless to refused.",
+      "oneOf": [
+        {
+          "const": "observe",
+          "description": "Tier 0: reads that change nothing.",
+          "type": "string"
+        },
+        {
+          "const": "reversible",
+          "description": "Tier 1: changes that are easy to undo.",
+          "type": "string"
+        },
+        {
+          "const": "consequential",
+          "description": "Tier 2: changes that need the user's own approval.",
+          "type": "string"
+        },
+        {
+          "const": "blocked",
+          "description": "Tier 3: never allowed.",
+          "type": "string"
+        }
+      ]
+    },
+    "Toolset": {
+      "description": "A set of Eileen tools given to one role (section 3.3.9).",
+      "oneOf": [
+        {
+          "const": "brain",
+          "description": "The brain's tools.",
+          "type": "string"
+        },
+        {
+          "const": "act",
+          "description": "Deterministic actions for the brain's addressed turns.",
+          "type": "string"
+        },
+        {
+          "const": "worker",
+          "description": "Tools every worker gets.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "The desktop tools for computer-use and general workers.",
+          "type": "string"
+        },
+        {
+          "const": "apps",
+          "description": "The app tools for computer-use and general workers.",
+          "type": "string"
+        },
+        {
+          "const": "learn",
+          "description": "The librarian's tools.",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "description": "The owner's own Claude sessions, through the plugin.",
+          "type": "string"
+        },
+        {
+          "const": "dev",
+          "description": "Read-only developer tools for coding workers in an Eileen worktree.",
+          "type": "string"
+        }
+      ]
+    },
+    "TurnAuthority": {
+      "description": "Whether a turn may use the brain's full tools.",
+      "oneOf": [
+        {
+          "const": "addressed",
+          "description": "Began from addressed user input (voice after the gate, typing in Eileen's UI, the HUD)\nor from the first-run demo's fixed requests: full brain tools.",
+          "type": "string"
+        },
+        {
+          "const": "ambient",
+          "description": "Everything else (job events, announcements, `Cli`, `ClaudeSession`): read-only brain\ntools.",
+          "type": "string"
+        }
+      ]
+    },
+    "TurnSource": {
+      "description": "Where a turn came from.",
+      "oneOf": [
+        {
+          "const": "voice",
+          "description": "The microphone.",
+          "type": "string"
+        },
+        {
+          "const": "typed",
+          "description": "Typing in Eileen's own UI.",
+          "type": "string"
+        },
+        {
+          "const": "hud",
+          "description": "A HUD click.",
+          "type": "string"
+        },
+        {
+          "const": "hotkey",
+          "description": "A hotkey.",
+          "type": "string"
+        },
+        {
+          "const": "tray",
+          "description": "The tray menu.",
+          "type": "string"
+        },
+        {
+          "const": "cli",
+          "description": "`eileen say` and other command-line input.",
+          "type": "string"
+        },
+        {
+          "const": "claude_session",
+          "description": "The owner's own Claude session, through the plugin.",
+          "type": "string"
+        },
+        {
+          "const": "job_event",
+          "description": "A job event the core announces.",
+          "type": "string"
+        },
+        {
+          "const": "scenario",
+          "description": "A scenario runner.",
+          "type": "string"
+        },
+        {
+          "const": "first_run",
+          "description": "The first run's fixed demo requests.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A connector other than the PC (later: a phone, the home).",
+          "properties": {
+            "connector": {
+              "$ref": "#/$defs/ConnectorId"
+            }
+          },
+          "required": [
+            "connector"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  }
+}

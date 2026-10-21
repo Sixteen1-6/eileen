@@ -3,7 +3,7 @@ resolver = "3"
 # Section 3.1's list is ["crates/*", "xtask", "tools/repo-tools"]. Cargo refuses a member path or
 # glob that matches nothing, so each entry joins this list in the WP0 pull request that creates its
 # first crate (crates/* with wp0/contracts, tools/repo-tools in phase B).
-members = ["xtask"]
+members = ["crates/*", "xtask"]
 exclude = ["fuzz"]
 
 [workspace.package]
@@ -18,6 +18,7 @@ publish = false
 # Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1. Each
 # line joins in the WP0 pull request that creates its crate, as `members` does: Dependabot's
 # cargo updater fails the whole run on a workspace dependency whose path holds no Cargo.toml.
+eileen-contracts = { path = "crates/eileen-contracts" }
 
 # Async and plumbing
 tokio = { version = "1.54.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }

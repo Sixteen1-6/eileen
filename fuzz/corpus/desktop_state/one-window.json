@@ -1,0 +1,108 @@
+{
+ "captured_at": 1792627199000000,
+ "monitors": [
+  {
+   "ordinal": 1,
+   "device_path": "\\\\.\\DISPLAY1",
+   "friendly_name": "Display",
+   "rect": {
+    "x": 0,
+    "y": 0,
+    "w": 1920,
+    "h": 1080
+   },
+   "work_rect": {
+    "x": 0,
+    "y": 0,
+    "w": 1920,
+    "h": 1040
+   },
+   "dpi": 144,
+   "is_primary": true
+  }
+ ],
+ "windows": [
+  {
+   "hwnd": 4523,
+   "pid": 912,
+   "process": "notepad.exe",
+   "exe_version": "11.2508",
+   "title": "notes.txt - Notepad",
+   "class": "Notepad",
+   "monitor_ordinal": 1,
+   "frame_rect": {
+    "x": -8,
+    "y": 0,
+    "w": 960,
+    "h": 1040
+   },
+   "z_order": 0,
+   "is_minimized": false,
+   "is_cloaked": false,
+   "is_foreground": true,
+   "is_eileen": false,
+   "is_private": false,
+   "url_host": null
+  }
+ ],
+ "foreground": {
+  "hwnd": 4523,
+  "pid": 912
+ },
+ "focused_element": {
+  "control_type": "Edit",
+  "name": "Text editor",
+  "automation_id": "15",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "w": 1920,
+   "h": 1080
+  },
+  "patterns": [
+   "Value",
+   "Text"
+  ],
+  "is_password": false,
+  "window": {
+   "hwnd": 4523,
+   "pid": 912
+  }
+ },
+ "selection": {
+  "text": "the selected line",
+  "source": "text_pattern"
+ },
+ "caret": {
+  "x": 120,
+  "y": 340,
+  "w": 1,
+  "h": 18
+ },
+ "recent_references": [
+  {
+   "kind": "window",
+   "label": "Notepad",
+   "window": {
+    "hwnd": 4523,
+    "pid": 912
+   },
+   "path": null,
+   "at": 1792627198000000
+  }
+ ],
+ "presentation": "full_screen",
+ "mic_in_use_elsewhere": false,
+ "now_playing": {
+  "session": "chrome",
+  "app": "chrome.exe",
+  "title": "A video",
+  "artist": null,
+  "position_s": 930.5,
+  "duration_s": 3600.0,
+  "playing": true
+ },
+ "degraded": [
+  "selection"
+ ]
+}

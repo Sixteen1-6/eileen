@@ -1,0 +1,147 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ApprovalId": {
+      "description": "A ULID with the prefix `appr_`, upper-case Crockford base32",
+      "pattern": "^appr_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "CallId": {
+      "description": "A ULID with the prefix `call_`, upper-case Crockford base32",
+      "pattern": "^call_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "ConnectorId": {
+      "description": "dot-separated lower-case segments, each starting with a letter, at most 64 bytes",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "type": "string"
+    },
+    "Date": {
+      "description": "A calendar date in UTC, YYYY-MM-DD",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "A ULID with the prefix `inc_`, upper-case Crockford base32",
+      "pattern": "^inc_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "InstallId": {
+      "description": "128 random bits as 32 lower-case hex characters",
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "JobId": {
+      "description": "A ULID with the prefix `job_`, upper-case Crockford base32",
+      "pattern": "^job_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "MachineHash": {
+      "description": "64 lower-case hex characters",
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "MonoTime": {
+      "description": "Monotonic nanoseconds since the core started",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ProposalId": {
+      "description": "A ULID with the prefix `prop_`, upper-case Crockford base32",
+      "pattern": "^prop_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "RecordingId": {
+      "description": "A ULID with the prefix `rec_`, upper-case Crockford base32",
+      "pattern": "^rec_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "RouteProposalId": {
+      "description": "A ULID with the prefix `route_`, upper-case Crockford base32",
+      "pattern": "^route_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "ScenarioId": {
+      "description": "lower-case letters, digits and hyphens",
+      "pattern": "^[a-z0-9-]+$",
+      "type": "string"
+    },
+    "SessionId": {
+      "description": "A ULID with the prefix `sess_`, upper-case Crockford base32",
+      "pattern": "^sess_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "SkillId": {
+      "description": "1 to 64 lower-case letters, digits and hyphens",
+      "pattern": "^[a-z0-9-]{1,64}$",
+      "type": "string"
+    },
+    "SpeakId": {
+      "description": "A ULID with the prefix `speak_`, upper-case Crockford base32",
+      "pattern": "^speak_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "ToolName": {
+      "description": "a lower-case letter, then 2 to 62 lower-case letters, digits and underscores",
+      "pattern": "^[a-z][a-z0-9_]{2,62}$",
+      "type": "string"
+    },
+    "TraceCtx": {
+      "description": "Correlation carried by every bus event, IPC frame and tool call.",
+      "properties": {
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tool call this belongs to, if any."
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job this belongs to, if any."
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The turn this belongs to, if any."
+        }
+      },
+      "type": "object"
+    },
+    "TurnId": {
+      "description": "A ULID with the prefix `turn_`, upper-case Crockford base32",
+      "pattern": "^turn_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    },
+    "WallTime": {
+      "description": "Microseconds since the Unix epoch, UTC",
+      "format": "int64",
+      "type": "integer"
+    },
+    "WorkerSessionId": {
+      "description": "A ULID with the prefix `ws_`, upper-case Crockford base32",
+      "pattern": "^ws_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "type": "string"
+    }
+  }
+}

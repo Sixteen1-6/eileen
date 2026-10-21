@@ -1,0 +1,1316 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "ConsentedAudio": {
+      "additionalProperties": false,
+      "description": "Consented audio in a scenario.",
+      "properties": {
+        "consent": {
+          "description": "The consent record, inside the scenario folder.",
+          "type": "string"
+        },
+        "file": {
+          "description": "The clip, inside the scenario folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "consent"
+      ],
+      "type": "object"
+    },
+    "Expectation": {
+      "description": "What must be true after a scenario. Sim-lane expectations are the ones the simulator can\ncheck (events, calls, spoken text, job status, settings, files in a simulated store);\ndesktop-lane ones need a real desktop.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Matched against the event trace with `[ANY]`, `[ANYLINE]` and `[UNORDERED]`.",
+          "properties": {
+            "kind": {
+              "const": "event",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "The pattern.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pattern"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A tool call whose arguments contain these.",
+          "properties": {
+            "args_contain": {
+              "description": "Arguments the call must contain."
+            },
+            "kind": {
+              "const": "call",
+              "type": "string"
+            },
+            "tool": {
+              "$ref": "#/$defs/ToolName",
+              "description": "The tool."
+            }
+          },
+          "required": [
+            "kind",
+            "tool",
+            "args_contain"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Eileen said something containing this.",
+          "properties": {
+            "contains": {
+              "description": "The text.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "spoken",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "contains"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Eileen said nothing.",
+          "properties": {
+            "kind": {
+              "const": "not_spoken",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A job ended in this status.",
+          "properties": {
+            "kind": {
+              "const": "job_status",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/JobStatus",
+              "description": "The status."
+            }
+          },
+          "required": [
+            "kind",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window is on a monitor.",
+          "properties": {
+            "kind": {
+              "const": "window_on_monitor",
+              "type": "string"
+            },
+            "ordinal": {
+              "description": "The monitor's ordinal.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "process": {
+              "description": "The window's process.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "process",
+            "ordinal"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A window is snapped.",
+          "properties": {
+            "kind": {
+              "const": "window_snapped",
+              "type": "string"
+            },
+            "process": {
+              "description": "The window's process.",
+              "type": "string"
+            },
+            "zone": {
+              "description": "The zone.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "process",
+            "zone"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A field holds text.",
+          "properties": {
+            "contains": {
+              "description": "The text.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "field_text",
+              "type": "string"
+            },
+            "selector": {
+              "$ref": "#/$defs/Selector",
+              "description": "The field."
+            }
+          },
+          "required": [
+            "kind",
+            "selector",
+            "contains"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A file exists.",
+          "properties": {
+            "contains": {
+              "description": "Text it contains.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "file",
+              "type": "string"
+            },
+            "path": {
+              "description": "Its path, under the run's folder.",
+              "type": "string"
+            },
+            "sha256": {
+              "description": "Its SHA-256.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Resolve's playhead is at a timecode.",
+          "properties": {
+            "kind": {
+              "const": "resolve_playhead",
+              "type": "string"
+            },
+            "timecode": {
+              "description": "The timecode.",
+              "type": "string"
+            },
+            "tolerance_frames": {
+              "description": "Frames of tolerance.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "timecode",
+            "tolerance_frames"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A media session is at a position.",
+          "properties": {
+            "kind": {
+              "const": "media_position",
+              "type": "string"
+            },
+            "seconds": {
+              "description": "Seconds.",
+              "format": "double",
+              "type": "number"
+            },
+            "tolerance_s": {
+              "description": "Tolerance, seconds.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds",
+            "tolerance_s"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sharpness went up.",
+          "properties": {
+            "kind": {
+              "const": "sharpness_increase",
+              "type": "string"
+            },
+            "min_pct": {
+              "description": "At least this much, percent.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "min_pct"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A setting has a value.",
+          "properties": {
+            "key": {
+              "description": "The key.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "setting_equals",
+              "type": "string"
+            },
+            "value": {
+              "description": "The value."
+            }
+          },
+          "required": [
+            "kind",
+            "key",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No file matches (for deletion checks: first run declined, forget).",
+          "properties": {
+            "glob": {
+              "description": "The pattern.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "no_file_left",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "glob"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExpectedOutcome": {
+      "description": "Whether a scenario should pass.",
+      "oneOf": [
+        {
+          "const": "pass",
+          "description": "It passes.",
+          "type": "string"
+        },
+        {
+          "const": "expected_fail",
+          "description": "A saved failure, until fixed.",
+          "type": "string"
+        }
+      ]
+    },
+    "FixtureApp": {
+      "additionalProperties": false,
+      "description": "An app to launch.",
+      "properties": {
+        "launch": {
+          "description": "The app.",
+          "type": "string"
+        },
+        "project_template": {
+          "description": "A project template to open, under the area's `_fixtures/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "launch"
+      ],
+      "type": "object"
+    },
+    "FixtureFile": {
+      "additionalProperties": false,
+      "description": "A file made from a template.",
+      "properties": {
+        "template": {
+          "description": "The template, under the area's `_fixtures/`.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Where it goes, under the run's folder.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "template",
+        "to"
+      ],
+      "type": "object"
+    },
+    "FixtureWindow": {
+      "additionalProperties": false,
+      "description": "Where a window starts.",
+      "properties": {
+        "monitor": {
+          "description": "The monitor's ordinal.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "process": {
+          "description": "The window's process.",
+          "type": "string"
+        },
+        "zone": {
+          "description": "A snap zone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "process",
+        "monitor"
+      ],
+      "type": "object"
+    },
+    "Fixtures": {
+      "additionalProperties": false,
+      "description": "What to set up. Contributed scenarios may use only fixture templates already in the\nrepository; they carry no binary files of their own.",
+      "properties": {
+        "apps": {
+          "default": [],
+          "description": "Apps to launch.",
+          "items": {
+            "$ref": "#/$defs/FixtureApp"
+          },
+          "type": "array"
+        },
+        "files": {
+          "default": [],
+          "description": "Files made from templates in the area's `_fixtures/`.",
+          "items": {
+            "$ref": "#/$defs/FixtureFile"
+          },
+          "type": "array"
+        },
+        "layout": {
+          "default": [],
+          "description": "Where windows start.",
+          "items": {
+            "$ref": "#/$defs/FixtureWindow"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Lane": {
+      "description": "A lane a scenario runs in.",
+      "oneOf": [
+        {
+          "const": "sim",
+          "description": "The simulator, on every pull request.",
+          "type": "string"
+        },
+        {
+          "const": "desktop",
+          "description": "A real desktop: the owner's PC and fleet PCs.",
+          "type": "string"
+        },
+        {
+          "const": "bench",
+          "description": "A timed benchmark.",
+          "type": "string"
+        }
+      ]
+    },
+    "Quarantine": {
+      "additionalProperties": false,
+      "description": "A known-flaky scenario's quarantine: at most 90 days, with an issue.",
+      "properties": {
+        "expires": {
+          "$ref": "#/$defs/Date",
+          "description": "When it ends."
+        },
+        "issue": {
+          "description": "The issue's link.",
+          "type": "string"
+        },
+        "since": {
+          "$ref": "#/$defs/Date",
+          "description": "When it started, written when it is set."
+        }
+      },
+      "required": [
+        "issue",
+        "since",
+        "expires"
+      ],
+      "type": "object"
+    },
+    "Scenario": {
+      "additionalProperties": false,
+      "description": "One scenario.",
+      "properties": {
+        "area": {
+          "description": "Its area, for example `apps/resolve`.",
+          "type": "string"
+        },
+        "contributor": {
+          "description": "The contributor's GitHub handle, never an e-mail address.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environment": {
+          "$ref": "#/$defs/ScenarioEnv",
+          "description": "What it needs."
+        },
+        "expect": {
+          "default": [],
+          "description": "What must be true.",
+          "items": {
+            "$ref": "#/$defs/Expectation"
+          },
+          "type": "array"
+        },
+        "fixtures": {
+          "$ref": "#/$defs/Fixtures",
+          "default": {
+            "apps": [],
+            "files": [],
+            "layout": []
+          },
+          "description": "Files, apps and windows to set up."
+        },
+        "id": {
+          "$ref": "#/$defs/ScenarioId",
+          "description": "Its folder's slug."
+        },
+        "intent": {
+          "$ref": "#/$defs/ScenarioIntent",
+          "description": "What the user says."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineHash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The machine that recorded it (owner answer 6): set by `eileen scenario save` from\n`fleet\\machine.toml` on every saved scenario and kept by share; `None` only on\nhand-written scenarios."
+        },
+        "origin": {
+          "$ref": "#/$defs/ScenarioOrigin",
+          "description": "Where it came from."
+        },
+        "outcome": {
+          "$ref": "#/$defs/ExpectedOutcome",
+          "description": "Whether it should pass."
+        },
+        "quarantine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quarantine"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required for a known-flaky scenario, at most 90 days."
+        },
+        "recorded_at_commit": {
+          "description": "The commit it was recorded at.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "The format version, 1.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimReplay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The sim-lane replay files."
+        },
+        "status": {
+          "$ref": "#/$defs/ScenarioStatus",
+          "default": "active",
+          "description": "Active, or stale for at most 30 days."
+        },
+        "steps": {
+          "default": [],
+          "description": "What happens.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "default": [],
+          "description": "Tags.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timing": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TimingBudget"
+          },
+          "default": {},
+          "description": "Timing budgets, `\"turn.ended -> job.completed\" = { max_ms, ci_factor }`.",
+          "type": "object"
+        },
+        "title": {
+          "description": "A title.",
+          "type": "string"
+        },
+        "world": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimWorld"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For hand-written sim scenarios: the simulated world."
+        }
+      },
+      "required": [
+        "schema",
+        "id",
+        "title",
+        "area",
+        "origin",
+        "outcome",
+        "intent",
+        "environment"
+      ],
+      "type": "object"
+    },
+    "ScenarioEnv": {
+      "additionalProperties": false,
+      "description": "What a scenario needs.",
+      "properties": {
+        "lanes": {
+          "description": "The lanes it runs in.",
+          "items": {
+            "$ref": "#/$defs/Lane"
+          },
+          "type": "array"
+        },
+        "min_windows_build": {
+          "description": "The oldest Windows build it runs on.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "requires": {
+          "default": [],
+          "description": "Capabilities, for example `resolve-studio>=21.0`, `monitors>=2`, `real-claude`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "lanes"
+      ],
+      "type": "object"
+    },
+    "ScenarioIntent": {
+      "additionalProperties": false,
+      "description": "What the user says.",
+      "properties": {
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsentedAudio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The speaker's own audio, only with its consent record."
+        },
+        "expected": {
+          "description": "The user's \"what should have happened\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "utterances": {
+          "description": "The utterances; placeholders allowed.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "voice": {
+          "description": "The stock voice runners use when they need audio, for example `kokoro:af_heart`; the\ntext is the source of truth.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "utterances"
+      ],
+      "type": "object"
+    },
+    "ScenarioMeta": {
+      "description": "The part of a scenario the expiry rule reads; both callers build it from the parsed file.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ScenarioId",
+          "description": "The scenario."
+        },
+        "quarantine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quarantine"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its quarantine."
+        },
+        "status": {
+          "$ref": "#/$defs/ScenarioStatus",
+          "description": "Its status."
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ScenarioOrigin": {
+      "description": "Where a scenario came from. Contributed scenarios are MIT like the code; consented audio is\nCC-BY-4.0 and enters only with the speaker's consent record.",
+      "oneOf": [
+        {
+          "const": "synthetic",
+          "description": "Written by hand.",
+          "type": "string"
+        },
+        {
+          "const": "synthetic-from-user",
+          "description": "Saved from real use and generalised by `eileen scenario share`.",
+          "type": "string"
+        },
+        {
+          "const": "contributed-consented-audio",
+          "description": "Saved from real use with the speaker's own audio and consent record.",
+          "type": "string"
+        },
+        {
+          "const": "from-skill",
+          "description": "Written from a learned skill's evidence.",
+          "type": "string"
+        }
+      ]
+    },
+    "ScenarioStatus": {
+      "description": "A scenario's status.",
+      "oneOf": [
+        {
+          "const": "active",
+          "description": "Runs normally.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No longer replays after a change, for at most 30 days; an expired stale scenario fails\nCI, like an expired quarantine.",
+          "properties": {
+            "stale": {
+              "additionalProperties": false,
+              "properties": {
+                "expires": {
+                  "$ref": "#/$defs/Date",
+                  "description": "When it expires."
+                },
+                "issue": {
+                  "description": "The issue's link.",
+                  "type": "string"
+                },
+                "since": {
+                  "$ref": "#/$defs/Date",
+                  "description": "When it was marked, written by `eileen scenario stale`."
+                },
+                "since_commit": {
+                  "description": "The commit that made it stale.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "since_commit",
+                "since",
+                "issue",
+                "expires"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "stale"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SimMemory": {
+      "additionalProperties": false,
+      "description": "Simulated memory pressure.",
+      "properties": {
+        "available_mb": {
+          "description": "Available memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "commit_headroom_mb": {
+          "description": "Commit headroom, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paging_kb_s": {
+          "description": "The paging rate, KB/s.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "available_mb",
+        "commit_headroom_mb",
+        "paging_kb_s"
+      ],
+      "type": "object"
+    },
+    "SimReplay": {
+      "additionalProperties": false,
+      "description": "The sim-lane replay files.",
+      "properties": {
+        "expected": {
+          "description": "`replay/expected.trace`.",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "`replay/inputs.jsonl`: plain JSON lines of `RecordLine`, size-capped.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "inputs",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "SimSidecar": {
+      "additionalProperties": false,
+      "description": "One simulated sidecar.",
+      "properties": {
+        "faults": {
+          "default": [],
+          "description": "Faults to inject, by name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "latency_ms": {
+          "description": "Its reply latency, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "latency_ms"
+      ],
+      "type": "object"
+    },
+    "SimWorld": {
+      "additionalProperties": false,
+      "description": "The simulated world of a hand-written sim scenario.",
+      "properties": {
+        "brain_script": {
+          "description": "The brain's stub script.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SimMemory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Memory pressure."
+        },
+        "profile": {
+          "description": "The sim profile.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sidecars": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SimSidecar"
+          },
+          "default": {},
+          "description": "Sidecar latency and faults.",
+          "type": "object"
+        },
+        "worker_scripts": {
+          "default": [],
+          "description": "Worker stub scripts, by fan-out index.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "StatusKind": {
+      "description": "Which of a scenario's limits a problem is about.",
+      "oneOf": [
+        {
+          "const": "stale",
+          "description": "The `Stale` status.",
+          "type": "string"
+        },
+        {
+          "const": "quarantine",
+          "description": "The quarantine.",
+          "type": "string"
+        }
+      ]
+    },
+    "StatusProblem": {
+      "description": "What the expiry rule found.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The status or quarantine has passed its expiry.",
+          "properties": {
+            "expired": {
+              "properties": {
+                "expires": {
+                  "$ref": "#/$defs/Date",
+                  "description": "When it expired."
+                },
+                "what": {
+                  "$ref": "#/$defs/StatusKind",
+                  "description": "Which."
+                }
+              },
+              "required": [
+                "what",
+                "expires"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "expired"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It names an expiry further from its `since` than its cap.",
+          "properties": {
+            "too_long": {
+              "properties": {
+                "cap": {
+                  "description": "The cap.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "days": {
+                  "description": "Days from `since` to `expires`.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "what": {
+                  "$ref": "#/$defs/StatusKind",
+                  "description": "Which."
+                }
+              },
+              "required": [
+                "what",
+                "days",
+                "cap"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "too_long"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Its `since` is after today.",
+          "properties": {
+            "since_in_future": {
+              "properties": {
+                "since": {
+                  "$ref": "#/$defs/Date",
+                  "description": "The date."
+                },
+                "what": {
+                  "$ref": "#/$defs/StatusKind",
+                  "description": "Which."
+                }
+              },
+              "required": [
+                "what",
+                "since"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "since_in_future"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It has no issue link.",
+          "properties": {
+            "no_issue": {
+              "properties": {
+                "what": {
+                  "$ref": "#/$defs/StatusKind",
+                  "description": "Which."
+                }
+              },
+              "required": [
+                "what"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "no_issue"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Step": {
+      "description": "One step of a scenario. A step with no fields is an empty struct variant, so the file writes\nit as an empty table (`approve = {}` under `[[steps]]`) and serde and the schema agree.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Say an utterance.",
+          "properties": {
+            "say": {
+              "additionalProperties": false,
+              "properties": {
+                "utterance": {
+                  "description": "Its index into `intent.utterances`.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "utterance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "say"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Type text.",
+          "properties": {
+            "type": {
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "description": "The text.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Press a hotkey.",
+          "properties": {
+            "hotkey": {
+              "additionalProperties": false,
+              "properties": {
+                "keys": {
+                  "description": "The chord.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "keys"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hotkey"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Click on the HUD.",
+          "properties": {
+            "hud": {
+              "additionalProperties": false,
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/HudInput",
+                  "description": "What is clicked."
+                }
+              },
+              "required": [
+                "input"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "hud"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Wait for an event.",
+          "properties": {
+            "wait_for": {
+              "additionalProperties": false,
+              "properties": {
+                "event": {
+                  "description": "A name from `docs/reference/events.md`.",
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "description": "How long, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "event",
+                "timeout_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "wait_for"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Approve the pending question.",
+          "properties": {
+            "approve": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "approve"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Deny the pending question.",
+          "properties": {
+            "deny": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "deny"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Wait.",
+          "properties": {
+            "pause": {
+              "additionalProperties": false,
+              "properties": {
+                "ms": {
+                  "description": "How long, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pause"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user touches the mouse.",
+          "properties": {
+            "physical_input": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "physical_input"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimingBudget": {
+      "additionalProperties": false,
+      "description": "A timing budget between two events.",
+      "properties": {
+        "ci_factor": {
+          "description": "How much slower CI may be.",
+          "format": "double",
+          "type": "number"
+        },
+        "max_ms": {
+          "description": "The budget on the owner's PC, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_ms",
+        "ci_factor"
+      ],
+      "type": "object"
+    }
+  }
+}

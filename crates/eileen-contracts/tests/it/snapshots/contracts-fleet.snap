@@ -1,0 +1,233 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "FleetMode": {
+      "description": "How a fleet run serves model responses.",
+      "oneOf": [
+        {
+          "const": "recorded",
+          "description": "Recorded responses, no model calls.",
+          "type": "string"
+        },
+        {
+          "const": "live",
+          "description": "The contributor's own Claude plan, within a turn budget.",
+          "type": "string"
+        }
+      ]
+    },
+    "FleetResult": {
+      "description": "One scenario run.",
+      "properties": {
+        "app_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The versions of the apps it used.",
+          "type": "object"
+        },
+        "cpu_class": {
+          "description": "The CPU class.",
+          "type": "string"
+        },
+        "dpi": {
+          "description": "Each monitor's DPI.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "expectations": {
+          "description": "Each expectation and whether it passed.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "free_ram_mb": {
+          "description": "Free RAM at the start, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "learning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Anonymous learning statistics."
+        },
+        "locale": {
+          "description": "The locale.",
+          "type": "string"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineHash",
+          "description": "The machine."
+        },
+        "mode": {
+          "$ref": "#/$defs/FleetMode",
+          "description": "Recorded (no model) or live (real Claude, within a turn budget)."
+        },
+        "monitors": {
+          "description": "Monitors.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "os": {
+          "$ref": "#/$defs/Platform",
+          "description": "The operating system, so a result from any OS reads alike."
+        },
+        "os_build": {
+          "description": "The Windows build number in v0.1; the distribution and kernel on Linux later.",
+          "type": "string"
+        },
+        "passed": {
+          "description": "Whether every expectation passed.",
+          "type": "boolean"
+        },
+        "phases_ms": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Phase timings, ms.",
+          "type": "object"
+        },
+        "ram_gb": {
+          "description": "RAM, GB.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "description": "The run.",
+          "type": "string"
+        },
+        "scenario": {
+          "$ref": "#/$defs/ScenarioId",
+          "description": "The scenario."
+        },
+        "scenario_commit": {
+          "description": "The commit the scenario was taken from.",
+          "type": "string"
+        },
+        "user_became_active": {
+          "description": "Whether the user became active during the run.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "machine",
+        "run",
+        "scenario",
+        "scenario_commit",
+        "mode",
+        "passed",
+        "expectations",
+        "phases_ms",
+        "os",
+        "os_build",
+        "monitors",
+        "dpi",
+        "app_versions",
+        "locale",
+        "cpu_class",
+        "ram_gb",
+        "free_ram_mb",
+        "user_became_active"
+      ],
+      "type": "object"
+    },
+    "FleetRun": {
+      "description": "One fleet run's results.",
+      "properties": {
+        "eileen_version": {
+          "description": "The version of Eileen.",
+          "type": "string"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineHash",
+          "description": "The machine."
+        },
+        "results": {
+          "description": "The results.",
+          "items": {
+            "$ref": "#/$defs/FleetResult"
+          },
+          "type": "array"
+        },
+        "started": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it started."
+        }
+      },
+      "required": [
+        "machine",
+        "eileen_version",
+        "started",
+        "results"
+      ],
+      "type": "object"
+    },
+    "LearningStats": {
+      "description": "Anonymous learning statistics: no names.",
+      "properties": {
+        "handoff_pct": {
+          "description": "Replays that handed off, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "median_turns_by_run": {
+          "description": "Median model turns by run index.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "skills_per_level": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "Skills per level.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "skills_per_level",
+        "handoff_pct",
+        "median_turns_by_run"
+      ],
+      "type": "object"
+    }
+  }
+}
