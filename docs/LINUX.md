@@ -75,7 +75,7 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
 |---|---|---|---|
 | `SystemMemory` | `/proc/meminfo` (`MemAvailable`; `CommitLimit` minus `Committed_AS` as the commit headroom), the 30 s paging rate from `/proc/vmstat` (`pgmajfault` and `pswpin` deltas), the largest non-Eileen process by resident size from `/proc/<pid>/status` | none (std); `rustix` 1.1.5 if needed, already in the lockfile | L0 |
 | `MachineIdentity` | `eileen_platform::machine::FileMachineIdentity`, already written | none | L0 |
-| `MachineProbe` | See the list after this table | none (std); `rustix` 1.1.5 for `statvfs` | L0 (with WP0 phase B's `wp0/machine-contracts`) |
+| `MachineProbe` | See the list after this table | `rustix` 1.1.5 for `statvfs`, already in the lockfile; `thiserror` | L0: the readers are built; the trait implementation lands with WP0 phase B's `wp0/machine-contracts` |
 | `SecretStore` | Secret Service over D-Bus through keyring-core, the same front as Windows; the kernel keyring as a fallback | `keyring-core` 1.0.1 (pinned in 4.1), `zbus-secret-service-keyring-store` 1.0.1, `linux-keyutils-keyring-store` 1.0.0, all MIT OR Apache-2.0 | L1 |
 | `MediaSessions` | MPRIS over D-Bus: list `org.mpris.MediaPlayer2.*`, read `PlaybackStatus`, `Metadata` and `Position`, call `PlayPause`, `Seek` and `SetPosition`, subscribe to `PropertiesChanged` and `Seeked` | `zbus` 5.19.0, MIT. `mpris-server` is MPL-2.0, which `deny.toml` does not allow, and the client side is small enough to write | L1 |
 | `ShellHost`: toasts | `org.freedesktop.Notifications` | `zbus` 5.19.0 | L1 |
@@ -93,18 +93,29 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
 | `Capture` | The ScreenCast portal and a PipeWire stream | `ashpd` 0.13.13, `pipewire` 0.10.1 | L2 |
 | `HudSurface` | wlr-layer-shell where the compositor has it; on GNOME, section 3's options | `smithay-client-toolkit` 0.21.1 and `wayland-client` 0.31.15 (both MIT) | L2 |
 
-`MachineProbe` reads these sources:
+`MachineProbe` reads these sources, all without elevation. The readers are in `crates/eileen-shell-linux`.
 
-- **CPU.** Logical and physical counts and the core classes from `/sys/devices/system/cpu/cpu*/topology` and `cpu_capacity`, where the kernel publishes it for hybrid parts. The feature flags (`avx2`, `avx512f`, `avx_vnni`) come from `/proc/cpuinfo`.
+- **CPU.**
+  - The name, the vendor and the features come from `/proc/cpuinfo`: `avx2`, `avx512f`, `avx_vnni` or `avx512_vnni`, and Arm's `asimd` and `asimddp`. An Arm kernel whose `cpuinfo` names no processor gives the chip's name instead, from `/sys/devices/soc0` or the device tree's `compatible` list.
+  - Logical processors are the `online` list. Physical cores are the distinct `topology/core_cpus_list` sets, because `core_id` restarts in each Arm cluster.
+  - Core classes come from Intel's hybrid PMU lists (`cpu_core`, `cpu_atom`), which give the same two classes Windows reports. Otherwise they come from distinct `cpu_capacity` values (Arm big.LITTLE), and otherwise there is one class.
 - **GPUs and NPUs.**
-  - Adapters come from `/sys/class/drm/card*/device`, with the vendor, the driver and, for amdgpu, `mem_info_vram_total`.
+  - Adapters come from `/sys/class/drm/card*/device/uevent`: the driver, the PCI ids and the slot, with names from `pci.ids`. Display-only and virtual adapters are left out.
+  - NVIDIA GPUs are discrete. Intel's are integrated at slot `00:02.0`. An amdgpu GPU is integrated when its VRAM is an APU's carve-out (2 GB or less, with more GTT than VRAM); its VRAM and GTT are the dedicated and shared memory.
+  - An Arm chip's own GPU (panthor, panfrost, msm and others) is integrated and has no PCI id.
+  - NVIDIA's own driver gives the model and the driver version from `/proc/driver/nvidia`. The GPU's UUID in the same file is never kept.
   - NPUs come from `/sys/class/accel`.
-  - NVIDIA's proprietary driver is read from `/proc/driver/nvidia`.
   - Under WSL the GPU is `/dev/dxg`, with no DRM card, so the adapters are listed as degraded.
-- **Disk.** `statvfs` on the data folder, and `queue/rotational` of its block device.
-- **OS.** `/etc/os-release` and the kernel release.
-- **Power.** `/sys/class/power_supply` and power-profiles-daemon.
-- **Monitors.** The DRM connectors whose status is `connected`.
+- **Disk.**
+  - `statvfs` on the data folder gives the space, or on its nearest existing parent before setup creates it.
+  - The block device's `queue/rotational` gives the media. The device is found by its number in `/sys/block`, partitions, LVM and LUKS included, or through `/proc/self/mountinfo` for btrfs, whose device numbers match no device.
+  - WSL's and virtual machines' disks claim to rotate. They are reported as `Unknown` and degraded, never as hard disks.
+- **OS.** `/etc/os-release`, or `/usr/lib/os-release`, and the kernel release: `ubuntu 24.04, kernel 6.8.0-45-generic`. The build changes with each kernel update, as Windows' update revision does, so benchmarks that depend on it run again.
+- **Power.**
+  - The battery comes from `/sys/class/power_supply`. A battery whose scope is `Device`, such as a mouse's, is not the PC's.
+  - Battery saver is the ACPI platform profile `low-power` or power-profiles-daemon's saved `power-saver` profile.
+  - L1 reads the active profile over D-Bus, which also sees a program's hold.
+- **Monitors.** The DRM connectors whose status is `connected` and that are not `disabled`.
 
 Three licence notes, from the crates.io data:
 
@@ -170,6 +181,7 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
      - The local Linux lane over every work package's branch, with findings reported to that package before it merges.
      - `eileen-shell-linux` with `SystemMemory` and, once WP0 phase B adds the machine contracts and the trait, `MachineProbe`.
      - A short Ubuntu developer setup that needs no `sudo`.
+   - Status on 2026-10-21: the machine facts' readers are in `crates/eileen-shell-linux`. They are tested over six fixture machines: one recorded under WSL2, plus synthetic trees for the owner's laptop shape, AMD on btrfs, NVIDIA on LVM, an Arm board and a QEMU virtual machine. Their types mirror BUILD.md 3.3.17 until the contracts land.
    - Acceptance:
      - Both lanes green on `ubuntu-24.04` and `ubuntu-26.04`.
      - A `SystemMemory` sample that matches recorded `/proc` fixtures exactly and a live reading within the kernel's own figures.
