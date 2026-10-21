@@ -2,13 +2,15 @@
 //!
 //! Section 6.1 rule 1, as functions of samples so tests drive them with fake memory:
 //!
-//! - **Slot 0** is admitted when commit headroom, minus the build's own estimated commit
-//!   (1 GB plus 0.5 GB per compile job of the ticket), stays at or above the floor over the
-//!   last 30 s, and the 30 s paging average is at or under the slot-0 limit, whatever the
-//!   available figure.
-//! - **Slot 1** is admitted only when available memory is at least 1.5 GB plus 0.5 GB per
-//!   compile job, the same headroom rule holds, and the first build has been sampled past its
-//!   peak (its memory has stopped rising for 30 s).
+//! - **Slot 0's rule**, for a build that starts while no other build holds a slot, admits it
+//!   when commit headroom, minus the build's own estimated commit (1 GB plus 0.5 GB per
+//!   compile job of the ticket), stays at or above the floor over the last 30 s, and the 30 s
+//!   paging average is at or under the slot-0 limit, whatever the available figure.
+//! - **Slot 1's rule**, for a second build while another holds a slot (whichever index is
+//!   free: slot 0's build may finish while slot 1's runs), admits it only when available
+//!   memory is at least 1.5 GB plus 0.5 GB per compile job, the same headroom rule holds, and
+//!   the running build has been sampled past its peak (its memory has stopped rising for
+//!   30 s).
 //! - The ticket's job count is [`jobs_for`]: `min(6, max(2, floor((available_gb - 1.5) /
 //!   0.5)))`, ceiling 8 when one holder has both slots; it never falls as memory rises.
 
@@ -158,14 +160,15 @@ pub enum Reason {
         /// The limit, KB/s.
         limit_kb_s: u32,
     },
-    /// Slot 1 needs more available memory.
+    /// A second build (slot 1's rule) needs more available memory.
     Slot1Memory {
         /// Available memory, MB.
         avail_mb: u32,
         /// What it needs, MB.
         needs_mb: u32,
     },
-    /// Slot 1 waits until the first build is past its peak.
+    /// A second build waits until the running build is past its peak (or until the running
+    /// build's holder record says when it started).
     Slot1BeforePeak,
     /// Both slots are held (or, for exclusive work, at least one is).
     SlotsTaken,
@@ -198,10 +201,10 @@ impl fmt::Display for Reason {
                 )
             }
             Self::Slot1Memory { avail_mb, needs_mb } => {
-                write!(f, "slot 1 needs {needs_mb} MB available and {avail_mb} MB is")
+                write!(f, "a second build needs {needs_mb} MB available and {avail_mb} MB is")
             }
             Self::Slot1BeforePeak => {
-                f.write_str("slot 1 waits until the running build is past its memory peak")
+                f.write_str("a second build waits until the running build is past its memory peak")
             }
             Self::SlotsTaken => f.write_str("the build slots are taken"),
             Self::DesktopTaken => f.write_str("another desktop session holds desktop.lock"),
@@ -253,7 +256,7 @@ const fn paging_ok(view: &View, t: &Thresholds) -> Result<(), Reason> {
     Ok(())
 }
 
-/// Slot 0's rule.
+/// Slot 0's rule, for a build that starts while no other build holds a slot.
 #[must_use]
 pub fn decide_slot0(view: &View, t: &Thresholds) -> Decision {
     let jobs = jobs_for(view.latest_avail_mb, false);
@@ -263,9 +266,10 @@ pub fn decide_slot0(view: &View, t: &Thresholds) -> Decision {
     }
 }
 
-/// Slot 1's rule, given whether the slot-0 build is past its peak.
+/// Slot 1's rule, for a second build while another holds a slot (whichever slot is free),
+/// given whether the running build is past its peak.
 #[must_use]
-pub fn decide_slot1(view: &View, slot0_past_peak: bool, t: &Thresholds) -> Decision {
+pub fn decide_slot1(view: &View, running_past_peak: bool, t: &Thresholds) -> Decision {
     let jobs = jobs_for(view.latest_avail_mb, false);
     let needs_mb = slot1_needs_mb(jobs);
     if view.latest_avail_mb < needs_mb {
@@ -274,7 +278,7 @@ pub fn decide_slot1(view: &View, slot0_past_peak: bool, t: &Thresholds) -> Decis
     if let Err(reason) = headroom_ok(view, jobs, t) {
         return Decision::Refuse(reason);
     }
-    if !slot0_past_peak {
+    if !running_past_peak {
         return Decision::Refuse(Reason::Slot1BeforePeak);
     }
     Decision::Admit { jobs }

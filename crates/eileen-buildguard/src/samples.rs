@@ -16,6 +16,9 @@
 //!
 //! Both line files are appended under a short [`std::fs::File::try_lock`] on
 //! `machine/memory-samples.lock`, so lines never interleave.
+//!
+//! The runtime needs nothing else from the guard: [`slot_held_now`] (and [`Store::slot_held`])
+//! probes the two build slot locks for the `slot_held` flag every sample and window carries.
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -303,6 +306,15 @@ impl Store {
         self.machine
     }
 
+    /// Whether either build slot's lock (`build-slot-0.lock`, `build-slot-1.lock` under this
+    /// root) is held now: the `slot_held` of a [`Sample`], and of a [`PagingWindow`] when any
+    /// of its samples saw it. A brief probe of each lock; a lock file that is missing or cannot
+    /// be read counts as free.
+    #[must_use]
+    pub fn slot_held(&self) -> bool {
+        crate::slots::any_slot_held(&self.root)
+    }
+
     fn path(&self, relative: &str) -> PathBuf {
         self.root.join(relative)
     }
@@ -473,6 +485,13 @@ pub fn paging_windows(days: u32) -> io::Result<Vec<PagingWindow>> {
     Store::machine()?.paging_windows_at(RealClock.now_ms(), days)
 }
 
+/// Whether either build slot is held now on this PC (see [`Store::slot_held`]); false when
+/// the machine root is unknown.
+#[must_use]
+pub fn slot_held_now() -> bool {
+    Store::machine().is_ok_and(|store| store.slot_held())
+}
+
 /// The machine root's `buildguard.toml`, parsed; `None` when it is missing, unreadable or
 /// malformed.
 #[must_use]
@@ -528,9 +547,10 @@ pub fn auto_paging_limit(windows: &[PagingWindow], baseline: Option<&Baseline>) 
 #[cfg(test)]
 mod tests {
     use super::{
-        Baseline, LimitSource, PagingWindow, Sample, Source, auto_paging_limit, p75_plus_25,
-        percentile, plus_25,
+        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit,
+        p75_plus_25, percentile, plus_25,
     };
+    use crate::slots::{Holder, Slot, try_take_slot};
 
     #[test]
     fn lines_round_trip_in_the_documented_format() {
@@ -597,6 +617,27 @@ mod tests {
             LimitSource::Default,
             "2,879 free windows and a slot-held one do not cover a day",
         );
+    }
+
+    #[test]
+    fn the_slot_probe_sees_a_held_and_a_free_slot() {
+        let dir = std::env::temp_dir()
+            .join(format!("eileen-buildguard-samples-{}-probe", std::process::id()));
+        let _ignored = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::at(&dir);
+        assert!(!store.slot_held(), "no lock files: free");
+        let holder = Holder {
+            pid: std::process::id(),
+            worktree: "wt".to_owned(),
+            command: "cargo xtask test".to_owned(),
+            started_ms: 0,
+        };
+        let held = try_take_slot(&dir, Slot::One, &holder).unwrap().unwrap();
+        assert!(store.slot_held(), "slot 1 held");
+        drop(held);
+        assert!(!store.slot_held(), "released: free again");
+        let _ignored = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use eileen_buildguard::admission::Reason;
 use eileen_buildguard::clock::{Clock, ManualClock};
-use eileen_buildguard::samples::{Baseline, Store};
+use eileen_buildguard::samples::{Baseline, Sample, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
 use eileen_buildguard::{EXIT_NO_SLOT, Env, FakeMemory, Refusal, Request, Slots, Ticket, acquire};
 
@@ -133,6 +133,52 @@ fn slot1_is_refused_below_its_requirement() {
         "below 2.5 GB"
     );
     assert_eq!(refusal.holders, vec![other_holder()], "the holder is named");
+}
+
+#[test]
+fn a_second_build_on_slot0_meets_slot1s_requirement_while_slot1_runs() {
+    // Slot 0's build finished while slot 1's runs: the free index is 0, but this is a second
+    // concurrent build, so slot 1's rule applies, and 1.3 GB is under its 2.5 GB.
+    let root = TempRoot::new("second-on-zero");
+    let store = Store::at(root.path());
+    prefill(&store, NOW, 1_331, 5_632, 300);
+    let _running = slots::try_take_slot(root.path(), Slot::One, &other_holder()).unwrap().unwrap();
+    let clock = ManualClock::new(NOW);
+    let request = Request::new("cargo xtask test", "wt").wait_max(Duration::ZERO);
+    let (result, _) = run(&store, &mut FakeMemory::default(), &clock, &request);
+    let refusal = result.unwrap_err();
+    assert_eq!(
+        refusal.reason,
+        Reason::Slot1Memory { avail_mb: 1_331, needs_mb: 2_560 },
+        "slot 1's requirement"
+    );
+    assert!(!slots::is_slot_held(root.path(), Slot::Zero).unwrap(), "slot 0 was not taken");
+}
+
+#[test]
+fn a_second_build_takes_slot0_once_slot1s_build_is_past_its_peak() {
+    let root = TempRoot::new("second-past-peak");
+    let store = Store::at(root.path());
+    // Slot 1's build started two minutes ago and its memory has been level since.
+    let started = NOW - 120_000;
+    for i in 0..=24 {
+        store
+            .append(&Sample {
+                at_ms: started + i * 5_000,
+                avail_mb: 6_144,
+                headroom_mb: 12_000,
+                paging_kb_s: 300,
+                slot_held: true,
+                src: Source::Runtime,
+            })
+            .unwrap();
+    }
+    let running = Holder { started_ms: started, ..other_holder() };
+    let _running = slots::try_take_slot(root.path(), Slot::One, &running).unwrap().unwrap();
+    let clock = ManualClock::new(NOW);
+    let request = Request::new("cargo xtask test", "wt").wait_max(Duration::ZERO);
+    let ticket = run(&store, &mut FakeMemory::default(), &clock, &request).0.unwrap();
+    assert_eq!((ticket.slots(), ticket.jobs()), (Slots::Zero, 6), "slot 0, under slot 1's rule");
 }
 
 #[test]

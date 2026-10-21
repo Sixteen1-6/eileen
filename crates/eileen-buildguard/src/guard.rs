@@ -270,10 +270,11 @@ fn report(env: &mut Env<'_>, reason: &Reason, holders: &[Holder], last: &mut Opt
 
 /// Takes a reading and appends it to the shared samples, unless the reading is fake and the
 /// store is the real machine root (a test with fake memory never writes the machine files);
-/// then it is kept in `local` only.
+/// then it is kept in `local` only. The sample is marked `slot_held` when this command holds a
+/// slot or the store's probe finds either slot held ([`Store::slot_held`]).
 fn take_sample(
     env: &mut Env<'_>,
-    slot_held: bool,
+    holds_slot: bool,
     local: &mut Vec<Sample>,
 ) -> Result<Sample, Reason> {
     let reading = env.memory.sample().map_err(|e| Reason::Unreadable(e.to_string()))?;
@@ -282,7 +283,7 @@ fn take_sample(
         avail_mb: reading.avail_mb,
         headroom_mb: reading.headroom_mb,
         paging_kb_s: reading.paging_kb_s,
-        slot_held,
+        slot_held: holds_slot || env.store.slot_held(),
         src: Source::Guard,
     };
     let shared =
@@ -353,8 +354,7 @@ pub fn acquire(request: &Request, env: &mut Env<'_>) -> Result<Ticket, Refusal> 
         let mut sampling = Reason::Sampling;
         if view.is_none() {
             // Not enough fresh shared samples: sample for ourselves, then look again.
-            let any_held = slots::any_slot_held(env.store.root());
-            if let Err(reason) = take_sample(env, any_held, &mut local) {
+            if let Err(reason) = take_sample(env, false, &mut local) {
                 sampling = reason;
             }
             view = window(env, &local, env.clock.now_ms()).filter(View::covers);
@@ -393,7 +393,22 @@ pub fn acquire(request: &Request, env: &mut Env<'_>) -> Result<Ticket, Refusal> 
     }
 }
 
+/// The job count of an admission, or its refusal.
+fn admitted(decision: Decision) -> Result<u32, Reason> {
+    match decision {
+        Decision::Admit { jobs } => Ok(jobs),
+        Decision::Refuse(reason) => Err(reason),
+    }
+}
+
 /// One admission attempt against a covering window.
+///
+/// It decides from the slots as they stand and takes a lock only once the rules admit, so a
+/// refused attempt holds nothing and writes no record. The rule depends on whether another
+/// build runs, not on which index is free: with both slots free it is slot 0's rule; with one
+/// held it is the second-build rule (slot 1's in section 6.1), for whichever slot is free. A
+/// take that loses a race to another command refuses for this tick, and the next tick decides
+/// again from the new state.
 fn admit(
     request: &Request,
     env: &Env<'_>,
@@ -401,6 +416,9 @@ fn admit(
     t: &Thresholds,
 ) -> Result<(Vec<Held>, Slots, u32), Reason> {
     let root = env.store.root();
+    let unreadable = |e: std::io::Error| Reason::Unreadable(format!("slot lock: {e}"));
+    let zero_held = slots::is_slot_held(root, Slot::Zero).map_err(unreadable)?;
+    let one_held = slots::is_slot_held(root, Slot::One).map_err(unreadable)?;
     let holder = Holder {
         pid: env.pid,
         worktree: request.worktree.clone(),
@@ -408,36 +426,42 @@ fn admit(
         started_ms: env.clock.now_ms(),
     };
     let take = |slot| {
-        slots::try_take_slot(root, slot, &holder)
-            .map_err(|e| Reason::Unreadable(format!("slot lock: {e}")))
+        slots::try_take_slot(root, slot, &holder).map_err(unreadable)?.ok_or(Reason::SlotsTaken)
     };
     if request.exclusive {
-        let zero = take(Slot::Zero)?.ok_or(Reason::SlotsTaken)?;
-        let one = take(Slot::One)?.ok_or(Reason::SlotsTaken)?;
-        return match decide_exclusive(view, t) {
-            Decision::Admit { jobs } => Ok((vec![zero, one], Slots::Both, jobs)),
-            Decision::Refuse(reason) => Err(reason),
-        };
+        if zero_held || one_held {
+            return Err(Reason::SlotsTaken);
+        }
+        let jobs = admitted(decide_exclusive(view, t))?;
+        let zero = take(Slot::Zero)?;
+        let one = take(Slot::One)?;
+        return Ok((vec![zero, one], Slots::Both, jobs));
     }
-    if let Some(zero) = take(Slot::Zero)? {
-        return match decide_slot0(view, t) {
-            Decision::Admit { jobs } => Ok((vec![zero], Slots::Zero, jobs)),
-            Decision::Refuse(reason) => Err(reason),
-        };
-    }
-    let Some(one) = take(Slot::One)? else {
-        return Err(Reason::SlotsTaken);
+    let (free, running) = match (zero_held, one_held) {
+        (false, false) => {
+            let jobs = admitted(decide_slot0(view, t))?;
+            return Ok((vec![take(Slot::Zero)?], Slots::Zero, jobs));
+        }
+        (false, true) => (Slot::Zero, Slot::One),
+        (true, false) => (Slot::One, Slot::Zero),
+        (true, true) => return Err(Reason::SlotsTaken),
     };
-    let first_start = slots::slot_holder(root, Slot::Zero).map_or(0, |h| h.started_ms);
+    // A held lock with no record is a take in progress or another command's brief probe, so
+    // the running build's start is unknown: wait for the next tick rather than guess it.
+    let Some(first) = slots::slot_holder(root, running) else {
+        return Err(Reason::Slot1BeforePeak);
+    };
     let now = env.clock.now_ms();
     let during = env
         .store
-        .recent_at(now, Duration::from_millis(now.saturating_sub(first_start)))
+        .recent_at(now, Duration::from_millis(now.saturating_sub(first.started_ms)))
         .unwrap_or_default();
-    match decide_slot1(view, past_peak(&during, first_start, now), t) {
-        Decision::Admit { jobs } => Ok((vec![one], Slots::One, jobs)),
-        Decision::Refuse(reason) => Err(reason),
-    }
+    let jobs = admitted(decide_slot1(view, past_peak(&during, first.started_ms, now), t))?;
+    let held = match free {
+        Slot::Zero => Slots::Zero,
+        Slot::One => Slots::One,
+    };
+    Ok((vec![take(free)?], held, jobs))
 }
 
 /// Takes `desktop.lock` for a desktop test or `cargo xtask desktop-lock --hold`, waiting up to
@@ -468,5 +492,91 @@ pub fn acquire_desktop(
             last_report = Some(now);
         }
         clock.sleep(Duration::from_millis(SAMPLE_EVERY_MS));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{Env, Request, admit};
+    use crate::admission::{Reason, Thresholds, View};
+    use crate::clock::ManualClock;
+    use crate::memory::FakeMemory;
+    use crate::samples::{Sample, Source, Store};
+    use crate::slots::{self, Holder, Slot};
+
+    /// 2026-10-22T12:00:00Z.
+    const NOW: u64 = 1_761_134_400_000;
+
+    fn root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("eileen-buildguard-guard-{}-{name}", std::process::id()));
+        let _ignored = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Thirty seconds of steady samples ending now.
+    fn view(avail_mb: u32, paging_kb_s: u32) -> View {
+        let samples: Vec<Sample> = (0..7)
+            .map(|i| Sample {
+                at_ms: NOW - (6 - i) * 5_000,
+                avail_mb,
+                headroom_mb: 9_000,
+                paging_kb_s,
+                slot_held: false,
+                src: Source::Guard,
+            })
+            .collect();
+        View::of(&samples, NOW).unwrap()
+    }
+
+    /// One admission attempt for a plain command against `dir`.
+    fn attempt(dir: &Path, view: &View) -> Result<(), Reason> {
+        let store = Store::at(dir);
+        let clock = ManualClock::new(NOW);
+        let mut memory = FakeMemory::default();
+        let mut report = |_: &Reason, _: &[Holder]| {};
+        let env = Env {
+            store: &store,
+            memory: &mut memory,
+            clock: &clock,
+            free_disk_gb: None,
+            slot_held: None,
+            pid: std::process::id(),
+            report: &mut report,
+        };
+        admit(&Request::new("cargo xtask test", "wt"), &env, view, &Thresholds::DEFAULT)
+            .map(|_admitted| ())
+    }
+
+    #[test]
+    fn a_held_slot_without_a_record_waits_for_the_peak() {
+        let dir = root("no-record");
+        let other = Holder {
+            pid: 4_242,
+            worktree: "other".to_owned(),
+            command: "cargo xtask test".to_owned(),
+            started_ms: 0,
+        };
+        let held = slots::try_take_slot(&dir, Slot::Zero, &other).unwrap().unwrap();
+        std::fs::remove_file(dir.join("build-slot-0.holder")).unwrap();
+        // Memory is plentiful, so only the unknown start of the running build refuses.
+        assert_eq!(attempt(&dir, &view(9_000, 100)), Err(Reason::Slot1BeforePeak), "waits");
+        drop(held);
+        let _ignored = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refused_attempt_takes_no_lock_and_writes_no_record() {
+        let dir = root("refused");
+        let refused = attempt(&dir, &view(1_331, 9_000));
+        assert!(matches!(refused, Err(Reason::Paging { .. })), "{refused:?}");
+        // The lock files are created only by a take, so none exists after a refusal.
+        for name in ["build-slot-0.lock", "build-slot-0.holder", "build-slot-1.lock"] {
+            assert!(!dir.join(name).exists(), "{name} was never touched");
+        }
+        let _ignored = std::fs::remove_dir_all(&dir);
     }
 }
