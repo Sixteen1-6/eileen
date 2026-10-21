@@ -359,6 +359,11 @@ mod tests {
     }
 
     #[test]
+    fn watermarking_is_opt_in() {
+        assert!(!Config::default().voice.watermark_exports, "no watermark unless the user asks");
+    }
+
+    #[test]
     fn a_partial_section_keeps_its_other_defaults() {
         let parsed: Config = serde_json::from_str(r#"{"conversation": {"window_s": 30}}"#).unwrap();
         assert_eq!(parsed.conversation.window_s, 30, "changed");

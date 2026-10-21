@@ -571,7 +571,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
             "live": null,
             "narration": null,
             "rate_pct": 100,
-            "watermark_exports": true
+            "watermark_exports": false
           },
           "description": "Voices."
         }
@@ -1984,8 +1984,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "integer"
         },
         "watermark_exports": {
-          "default": true,
-          "description": "Mark exported audio with the watermark.",
+          "default": false,
+          "description": "Mark saved and exported audio (`eileen voice render` files and the audio lanes of\nrecordings) with the AudioSeal watermark. Opt in: no engine watermarks by default, and\nturning this on is what makes `eileen setup` fetch the AudioSeal models.",
           "type": "boolean"
         }
       },
