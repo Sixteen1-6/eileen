@@ -1,19 +1,21 @@
 //! The notification client against fake notification servers on a private bus: a toast's
 //! arguments and hints, the body's escaping with and without `body-markup`, the capabilities
-//! kept per client and per server, ids and closing, servers that restart or take the name over,
-//! malformed replies, errors that never carry the text, and a bus where no server owns the name.
+//! kept per client and per server, ids and closing, the signals reaching the event stream,
+//! servers that restart or take the name over, malformed replies and signals, errors that never
+//! carry the text, and a bus where no server owns the name.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use eileen_contracts::core_io::Toast;
 use eileen_contracts::ids::Untrusted;
-use eileen_dbus_linux::testing::{PrivateBus, serve};
-use eileen_dbus_linux::{Names, owner_changes};
+use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, ready_now, round_trip, serve};
+use eileen_dbus_linux::{DRAIN_CAP, Names, owner_changes};
 use eileen_shell_linux::{
-    DbusError, NotificationId, NotificationServer, NotificationServerInfo, Notifier,
-    NotifierSettings,
+    DbusError, NotificationCloseReason, NotificationEvent, NotificationEvents, NotificationId,
+    NotificationServer, NotificationServerInfo, Notifier, NotifierSettings,
 };
+use zbus::MessageStream;
 use zbus::object_server::{Interface, SignalEmitter};
 use zbus::zvariant::{OwnedValue, Value};
 
@@ -24,9 +26,21 @@ const PATH: &str = "/org/freedesktop/Notifications";
 /// Its interface.
 const INTERFACE: &str = "org.freedesktop.Notifications";
 
+/// The name of a program that sends the server's signals without owning its name.
+const IMPOSTOR: &str = "org.eileen.Test.Impostor";
+
 /// A title and a body that must never reach an error.
 const TITLE: &str = "Results from Dr. Rivera";
 const BODY: &str = "Your appointment moved to Friday";
+
+/// Sends the signal `member` of the notification interface from `connection`, with the
+/// arguments `body`. A macro, because a function generic over the body would need serde's
+/// `Serialize`, which this crate reaches only through zbus's macro-support module.
+macro_rules! emit {
+    ($connection:expr, $member:expr, $body:expr) => {
+        $connection.emit_signal(None::<&str>, PATH, INTERFACE, $member, &$body).await.unwrap()
+    };
+}
 
 /// A hint's value as the fake received it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +252,12 @@ impl Unstartable {
     }
 }
 
+/// A service with nothing to call, for a connection that only sends signals and answers pings.
+struct Idle;
+
+#[zbus::interface(name = "org.eileen.Test.Idle")]
+impl Idle {}
+
 /// Serves `server` as the notification server on `bus`, with the name requested as `flags` set
 /// it: whether another may take it over, or whether this one takes it over.
 async fn serve_with(
@@ -300,10 +320,15 @@ fn assert_mistyped(error: &DbusError, what: &str, signature: &str) {
     assert!(!detail.contains("org.freedesktop."), "{what}: no error name: {detail}");
 }
 
-/// `future`, unchanged: it compiles only if the future may move between threads, as a
-/// `ShellHost` adapter's may.
-fn sendable<F: Send>(future: F) -> F {
-    future
+/// `value`, unchanged: it compiles only if the value may move between threads, as a
+/// `ShellHost` adapter's futures and streams may.
+fn sendable<T: Send>(value: T) -> T {
+    value
+}
+
+/// The stream's next event. No timer: nextest's slow-timeout ends a test that waits for good.
+async fn next_event(events: &mut NotificationEvents) -> NotificationEvent {
+    events.next().await.expect("the stream stays open")
 }
 
 /// The one `Notify` a fake listing `capabilities` receives for `toast`.
@@ -672,4 +697,230 @@ async fn a_nul_never_reaches_the_bus() {
     assert_eq!(call.body, "Free &lt;space&gt;", "and from the body, which is then escaped");
     notifier.close(&shown).await.unwrap();
     assert_eq!(log.closes(), [shown.get()], "the bus kept the connection");
+}
+
+#[tokio::test]
+async fn the_closed_signal_reaches_the_stream() {
+    let bus = PrivateBus::start();
+    let (server, _log) = FakeServer::new(&["body"]);
+    let _service = serve(&bus, NAME, PATH, server).await;
+    let notifier = client(&bus).await;
+    let mut events = sendable(sendable(notifier.events()).await.unwrap());
+    let shown = notifier.notify(&toast("Approval", "Push the branch?")).await.unwrap();
+    notifier.close(&shown).await.unwrap();
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: shown, reason: NotificationCloseReason::Closed },
+        "closed by the call"
+    );
+}
+
+#[tokio::test]
+async fn every_close_reason_and_an_action_reach_the_stream() {
+    let bus = PrivateBus::start();
+    let (server, _log) = FakeServer::new(&["body"]);
+    let service = serve(&bus, NAME, PATH, server).await;
+    let notifier = client(&bus).await;
+    let mut events = notifier.events().await.unwrap();
+    for reason in [1_u32, 2, 3, 4, 0, 9] {
+        emit!(service, "NotificationClosed", (5_u32, reason));
+    }
+    emit!(service, "ActionInvoked", (5_u32, "default"));
+    let mut seen = Vec::new();
+    for _ in 0..7 {
+        seen.push(next_event(&mut events).await);
+    }
+    let closed = |reason| NotificationEvent::Closed { id: id(&service, 5), reason };
+    let expected = vec![
+        closed(NotificationCloseReason::Expired),
+        closed(NotificationCloseReason::Dismissed),
+        closed(NotificationCloseReason::Closed),
+        closed(NotificationCloseReason::Undefined),
+        closed(NotificationCloseReason::Undefined),
+        closed(NotificationCloseReason::Undefined),
+        NotificationEvent::Action {
+            id: id(&service, 5),
+            key: Untrusted::new("default".to_owned()),
+        },
+    ];
+    assert_eq!(
+        seen, expected,
+        "1 to 3 named, 4 and numbers the specification lacks undefined; id 5 is no toast of \
+         this client's, so another app's events arrive too, with their server"
+    );
+}
+
+#[tokio::test]
+async fn malformed_signals_and_other_senders_are_passed_over() {
+    let bus = PrivateBus::start();
+    let (server, _log) = FakeServer::new(&["body"]);
+    let service = serve(&bus, NAME, PATH, server).await;
+    let impostor = serve(&bus, IMPOSTOR, PATH, Idle).await;
+    let connection = bus.connect().await;
+    // Another component's rule on the same connection, with no sender: the bus then delivers
+    // the impostor's signal to the connection too, and only the stream's own check stops it.
+    let any_sender = "type='signal',interface='org.freedesktop.Notifications'";
+    let _other_component =
+        MessageStream::for_match_rule(any_sender, &connection, None).await.unwrap();
+    let notifier = Notifier::new(&connection, &NotifierSettings::default());
+    let mut events = notifier.events().await.unwrap();
+    emit!(service, "NotificationClosed", ("five",));
+    emit!(service, "NotificationClosed", (5_u32,));
+    emit!(service, "NotificationClosed", (0_u32, 1_u32));
+    emit!(service, "ActionInvoked", (5_u32, 7_u32));
+    emit!(service, "ActionInvoked", (0_u32, "default"));
+    emit!(service, "ActivationToken", (5_u32, "token"));
+    emit!(impostor, "NotificationClosed", (5_u32, 2_u32));
+    round_trip(&connection, Some(NAME)).await;
+    round_trip(&connection, Some(IMPOSTOR)).await;
+    assert!(
+        nothing_ready(&mut events),
+        "wrong argument types, id 0, other signals and a sender that does not own the name are \
+         all passed over"
+    );
+    emit!(service, "NotificationClosed", (6_u32, 1_u32));
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: id(&service, 6), reason: NotificationCloseReason::Expired },
+        "and the server's next signal still comes"
+    );
+}
+
+#[tokio::test]
+async fn a_flood_of_signals_to_pass_over_yields_and_the_next_event_still_comes() {
+    let bus = PrivateBus::start();
+    let (server, _log) = FakeServer::new(&["body"]);
+    let service = serve(&bus, NAME, PATH, server).await;
+    let connection = bus.connect().await;
+    let notifier = Notifier::new(&connection, &NotifierSettings::default());
+    let mut events = notifier.events().await.unwrap();
+    for _ in 0..DRAIN_CAP + 6 {
+        emit!(service, "NotificationClosed", (0_u32, 1_u32));
+    }
+    emit!(service, "NotificationClosed", (5_u32, 1_u32));
+    round_trip(&connection, Some(NAME)).await;
+    assert!(
+        ready_now(&mut events).is_none(),
+        "one poll passes over DRAIN_CAP of them, then yields"
+    );
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: id(&service, 5), reason: NotificationCloseReason::Expired },
+        "the next poll comes back for the rest"
+    );
+}
+
+#[tokio::test]
+async fn the_stream_follows_a_server_that_starts_later() {
+    let bus = PrivateBus::start();
+    let notifier = client(&bus).await;
+    let mut events = notifier.events().await.unwrap();
+    let early = notifier.notify(&toast("Ready", "Eileen is listening")).await;
+    assert!(matches!(early, Err(DbusError::Unavailable { .. })), "no server yet: {early:?}");
+    let (server, _log) = FakeServer::new(&["body"]);
+    let service = serve(&bus, NAME, PATH, server).await;
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::ServerChanged { previous: None, current: Some(server_of(&service)) },
+        "the server's start"
+    );
+    let shown = notifier.notify(&toast("Ready", "Eileen is listening")).await.unwrap();
+    notifier.close(&shown).await.unwrap();
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: shown, reason: NotificationCloseReason::Closed },
+        "the stream was made before any server ran"
+    );
+}
+
+#[tokio::test]
+async fn the_stream_names_each_server_across_a_restart() {
+    let bus = PrivateBus::start();
+    let (first, _first_log) = FakeServer::new(&["body"]);
+    let first = serve(&bus, NAME, PATH, first).await;
+    let first_server = server_of(&first);
+    let connection = bus.connect().await;
+    let notifier = Notifier::new(&connection, &NotifierSettings::default());
+    let mut events = notifier.events().await.unwrap();
+    let ours = notifier.notify(&toast("Approval", "Push the branch?")).await.unwrap();
+    // The user dismisses it, and then the server exits.
+    emit!(first, "NotificationClosed", (ours.get(), 2_u32));
+    stop(&bus, first).await;
+    // The bus sent both before it answers this, so both wait in the stream.
+    round_trip(&connection, None).await;
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: ours.clone(), reason: NotificationCloseReason::Dismissed },
+        "the server's last signal comes first, though its exit waits in the stream too"
+    );
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::ServerChanged { previous: Some(first_server), current: None },
+        "then its exit"
+    );
+    let (second, _second_log) = FakeServer::new(&["body"]);
+    let second = serve(&bus, NAME, PATH, second).await;
+    let other_app = client(&bus).await;
+    let theirs = other_app.notify(&toast("Mail", "3 new messages")).await.unwrap();
+    emit!(second, "NotificationClosed", (theirs.get(), 2_u32));
+    // The new server's start and its first signal both wait in the stream now.
+    round_trip(&connection, Some(NAME)).await;
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::ServerChanged { previous: None, current: Some(server_of(&second)) },
+        "a new server under the same name, before any of its signals"
+    );
+    let dismissed = next_event(&mut events).await;
+    assert_eq!(
+        dismissed,
+        NotificationEvent::Closed { id: theirs, reason: NotificationCloseReason::Dismissed },
+        "the new server's dismissal names its own notification, the start having made it the owner"
+    );
+    assert_ne!(
+        dismissed,
+        NotificationEvent::Closed { id: ours, reason: NotificationCloseReason::Dismissed },
+        "never ours, though both are number 1"
+    );
+}
+
+#[tokio::test]
+async fn after_a_takeover_only_the_new_owner_speaks_for_the_server() {
+    let bus = PrivateBus::start();
+    let (first, _first_log) = FakeServer::new(&["body"]);
+    let first = serve_with(&bus, first, |builder| builder.allow_name_replacements(true)).await;
+    let connection = bus.connect().await;
+    // A rule with no sender, as in `malformed_signals_and_other_senders_are_passed_over`: the
+    // previous server's signals reach the connection, and only the stream's own check stops them.
+    let any_sender = "type='signal',interface='org.freedesktop.Notifications'";
+    let _other_component =
+        MessageStream::for_match_rule(any_sender, &connection, None).await.unwrap();
+    let notifier = Notifier::new(&connection, &NotifierSettings::default());
+    let mut events = notifier.events().await.unwrap();
+    let old = notifier.notify(&toast("One", "1 < 2")).await.unwrap();
+    let (second, _second_log) = FakeServer::new(&["body", "body-markup"]);
+    let second = serve_with(&bus, second, |builder| builder.replace_existing_names(true)).await;
+    let change = NotificationEvent::ServerChanged {
+        previous: Some(server_of(&first)),
+        current: Some(server_of(&second)),
+    };
+    assert_eq!(next_event(&mut events).await, change, "one change, between two running servers");
+    let new = notifier.notify(&toast("Two", "2 < 3")).await.unwrap();
+    notifier.close(&old).await.unwrap();
+    round_trip(&connection, Some(server_of(&first).as_str())).await;
+    assert!(nothing_ready(&mut events), "the first server's signal for its own 1 is passed over");
+    notifier.close(&new).await.unwrap();
+    assert_eq!(
+        next_event(&mut events).await,
+        NotificationEvent::Closed { id: new, reason: NotificationCloseReason::Closed },
+        "the owner's signal for its 1 comes"
+    );
+}
+
+#[tokio::test]
+async fn the_stream_ends_with_the_connection() {
+    let bus = PrivateBus::start();
+    let notifier = client(&bus).await;
+    let mut events = notifier.events().await.unwrap();
+    drop(bus);
+    assert_eq!(events.next().await, None, "the bus is gone");
 }

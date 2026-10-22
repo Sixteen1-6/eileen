@@ -8,8 +8,8 @@
 //! What each part serves (BUILD.md section 3.4; docs/LINUX.md section 4):
 //!
 //! - [`Notifier::notify`] serves `ShellHost::toast`, whose adapter drops the id it returns.
-//! - [`Notifier::close`] serves no trait method yet: it withdraws a toast once what it asked
-//!   about is settled.
+//! - [`Notifier::close`] and [`Notifier::events`] serve no trait method yet. They let a toast be
+//!   withdrawn once what it asked about is settled, and tell when the user dismissed it.
 //! - [`Notifier::capabilities`] and [`Notifier::server_information`] serve none either: they
 //!   are for diagnostics.
 //!
@@ -47,6 +47,9 @@
 //!   timer of its own.
 //! - Errors carry the call and the error's name, never the title, the body or the server's
 //!   message ([`DbusError::from_zbus`]).
+//! - [`NotificationEvents`] yields the server's `NotificationClosed` and `ActionInvoked` signals
+//!   and the name's owner changes, in the order the connection received them; the doc of its
+//!   module, `events`, gives its rules and traps.
 //!
 //! Traps:
 //!
@@ -64,6 +67,10 @@ use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{DbusError, name_owner};
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::zvariant::{DynamicDeserialize, Value};
+
+mod events;
+
+pub use events::{NotificationCloseReason, NotificationEvent, NotificationEvents};
 
 /// The server's well-known name.
 const NAME: &str = "org.freedesktop.Notifications";
@@ -289,8 +296,8 @@ impl Notifier {
     }
 
     /// Closes the notification `id` (`CloseNotification`) on the server that showed it, which
-    /// then sends `NotificationClosed` with reason 3, closed by a call. A notification that is
-    /// already gone, its server included, closes without error.
+    /// then sends `NotificationClosed` with [`NotificationCloseReason::Closed`]. A notification
+    /// that is already gone, its server included, closes without error.
     pub async fn close(&self, id: &NotificationId) -> Result<(), DbusError> {
         let reply = self
             .connection
