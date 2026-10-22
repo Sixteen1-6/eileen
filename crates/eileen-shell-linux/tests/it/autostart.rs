@@ -1,8 +1,9 @@
-//! Eileen's autostart entry, written and removed in a folder of each test's own.
+//! Eileen's autostart entry, written, removed and refused in a folder of each test's own.
 
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use eileen_shell_linux::{AutostartError, set_run_at_sign_in};
@@ -15,6 +16,10 @@ impl Scratch {
     /// A fresh, empty folder for the test `test`.
     fn new(test: &str) -> Self {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("autostart").join(test);
+        // A run killed while its autostart folder was read-only left it so, and nothing in it
+        // could be removed.
+        let _ignored =
+            fs::set_permissions(dir.join("autostart"), fs::Permissions::from_mode(0o755));
         let _ignored = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -30,6 +35,31 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         // Best effort: a leftover folder under the target folder is harmless.
         let _ignored = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Makes a folder read-only, so no file in it can be made, replaced or removed, and gives its
+/// permissions back when the guard drops, a failing test included, so that the scratch guard can
+/// remove it.
+struct ReadOnly {
+    folder: PathBuf,
+    before: fs::Permissions,
+}
+
+impl ReadOnly {
+    fn new(folder: &Path) -> Self {
+        let before = fs::metadata(folder).unwrap().permissions();
+        let mut read_only = before.clone();
+        read_only.set_readonly(true);
+        fs::set_permissions(folder, read_only).unwrap();
+        Self { folder: folder.to_owned(), before }
+    }
+}
+
+impl Drop for ReadOnly {
+    fn drop(&mut self) {
+        // Best effort: a folder left read-only only stops the scratch guard removing it.
+        let _ignored = fs::set_permissions(&self.folder, self.before.clone());
     }
 }
 
@@ -143,6 +173,44 @@ fn an_io_failure_names_the_entry_and_not_its_path() {
     let error = set_run_at_sign_in(&dir, "eileen", Path::new("/usr/bin/eileen"), true).unwrap_err();
     assert!(matches!(error, AutostartError::Io { what: "autostart entry", .. }), "{error}");
     assert!(!error.to_string().contains("io_failure"), "no path in the error: {error}");
+}
+
+#[test]
+fn a_folder_that_may_not_be_changed_refuses_the_entry() {
+    let scratch = Scratch::new("read_only");
+    // The folder the test made belongs to the user the tests run as, and permissions do not
+    // bind root.
+    if fs::metadata(&scratch.0).unwrap().uid() == 0 {
+        eprintln!("skipped: the tests run as root, and a read-only folder does not stop root");
+        return;
+    }
+    let dir = scratch.autostart();
+    let program = Path::new("/usr/bin/eileen");
+    let refused: Result<(), _> =
+        Err(AutostartError::Refused { what: "autostart entry", reason: "not writable" });
+
+    let config = ReadOnly::new(&scratch.0);
+    assert_eq!(
+        set_run_at_sign_in(&dir, "eileen", program, true),
+        refused,
+        "the autostart folder cannot be made"
+    );
+    drop(config);
+    assert!(!dir.exists(), "nothing was made");
+
+    set_run_at_sign_in(&dir, "eileen", program, true).unwrap();
+    let path = dir.join("eileen.desktop");
+    let entry = fs::read_to_string(&path).unwrap();
+    let autostart = ReadOnly::new(&dir);
+    assert_eq!(
+        set_run_at_sign_in(&dir, "eileen", Path::new("/opt/eileen"), true),
+        refused,
+        "the entry cannot be replaced"
+    );
+    assert_eq!(set_run_at_sign_in(&dir, "eileen", program, false), refused, "or removed");
+    drop(autostart);
+    assert_eq!(fs::read_to_string(&path).unwrap(), entry, "the entry is as it was");
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no partial file beside it");
 }
 
 #[test]
