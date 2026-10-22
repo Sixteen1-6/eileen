@@ -93,6 +93,7 @@ name = "eileen-apps-linux"
 version = "0.0.0"
 dependencies = [
  "eileen-contracts",
+ "proptest",
 ]
 
 [[package]]
@@ -113,6 +114,7 @@ name = "eileen-shell-linux"
 version = "0.0.0"
 dependencies = [
  "eileen-contracts",
+ "proptest",
  "rustix",
  "thiserror",
 ]

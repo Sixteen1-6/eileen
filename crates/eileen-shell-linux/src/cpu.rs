@@ -17,7 +17,7 @@ use eileen_contracts::ids::Untrusted;
 use crate::SysRoot;
 use crate::facts::{CoreClass, CpuFacts, CpuFeature, CpuVendor};
 
-/// The most CPUs a list may name; a longer list is malformed.
+/// The most CPUs a list may name: a list that names a CPU numbered this or higher is malformed.
 const MAX_CPUS: u32 = 8192;
 
 /// What `/proc/cpuinfo` says: the first value of each key it uses.
@@ -80,7 +80,7 @@ pub(crate) fn parse_cpuinfo(text: &str) -> CpuInfo {
 }
 
 /// Parses a kernel CPU list such as `0-3,8,10-11` (as in `online` and the PMUs' `cpus`).
-/// `None` when it is malformed or names more than [`MAX_CPUS`] CPUs.
+/// `None` when it is malformed or names a CPU numbered [`MAX_CPUS`] or higher.
 pub(crate) fn parse_cpu_list(text: &str) -> Option<BTreeSet<u32>> {
     let mut cpus = BTreeSet::new();
     let text = text.trim();
@@ -231,7 +231,11 @@ fn class_groups(root: &SysRoot, online: &BTreeSet<u32>) -> Vec<(u8, BTreeSet<u32
 
 #[cfg(test)]
 mod tests {
-    use super::{CpuFeature, CpuVendor, parse_cpu_list, parse_cpuinfo};
+    use std::collections::BTreeSet;
+
+    use proptest::prelude::*;
+
+    use super::{CpuFeature, CpuVendor, MAX_CPUS, parse_cpu_list, parse_cpuinfo};
 
     #[test]
     fn cpu_lists_take_ranges_singles_and_spaces() {
@@ -249,6 +253,65 @@ mod tests {
         assert!(parse_cpu_list("a-b").is_none(), "not numbers");
         assert!(parse_cpu_list("0-4294967295").is_none(), "too many CPUs");
         assert!(parse_cpu_list("0,,1").is_none(), "empty part");
+    }
+
+    #[test]
+    fn a_cpu_list_may_name_cpus_up_to_one_below_the_bound() {
+        let last = MAX_CPUS - 1;
+        assert_eq!(parse_cpu_list(&last.to_string()), Some(BTreeSet::from([last])), "the last");
+        assert_eq!(
+            parse_cpu_list(&format!("{}-{last}", last - 1)),
+            Some(BTreeSet::from([last - 1, last])),
+            "a range up to it"
+        );
+        assert!(parse_cpu_list(&MAX_CPUS.to_string()).is_none(), "the bound itself");
+        assert!(parse_cpu_list(&format!("0-{MAX_CPUS}")).is_none(), "a range that reaches it");
+    }
+
+    /// `cpus` as the kernel writes a CPU list: each run as a range, `0-3,8,10-11`.
+    fn cpu_list_text(cpus: &BTreeSet<u32>) -> String {
+        let mut runs: Vec<(u32, u32)> = Vec::new();
+        for &cpu in cpus {
+            match runs.last_mut() {
+                Some((_, last)) if *last + 1 == cpu => *last = cpu,
+                _ => runs.push((cpu, cpu)),
+            }
+        }
+        let run = |&(first, last): &(u32, u32)| {
+            if first == last { first.to_string() } else { format!("{first}-{last}") }
+        };
+        runs.iter().map(run).collect::<Vec<_>>().join(",")
+    }
+
+    /// A CPU a list may name, often one of the last few below the bound.
+    fn named_cpu() -> impl Strategy<Value = u32> {
+        prop_oneof![0..MAX_CPUS, MAX_CPUS - 4..MAX_CPUS]
+    }
+
+    /// Any CPU number, often one beside the bound, where an off-by-one would show.
+    fn cpu_number() -> impl Strategy<Value = u32> {
+        prop_oneof![0..2 * MAX_CPUS, MAX_CPUS - 2..=MAX_CPUS + 1]
+    }
+
+    proptest! {
+        #[test]
+        fn a_written_cpu_list_parses_back(cpus in prop::collection::btree_set(named_cpu(), 0..48)) {
+            prop_assert_eq!(parse_cpu_list(&cpu_list_text(&cpus)), Some(cpus.clone()));
+            let singles: Vec<String> = cpus.iter().map(u32::to_string).collect();
+            prop_assert_eq!(parse_cpu_list(&singles.join(",")), Some(cpus), "one number each");
+        }
+
+        #[test]
+        fn a_cpu_list_never_names_a_cpu_past_the_bound(
+            text in "[0-9 ,-]{0,24}",
+            first in cpu_number(),
+            last in cpu_number(),
+        ) {
+            for text in [text, format!("{first}-{last}"), format!("0,{first},{last}")] {
+                let cpus = parse_cpu_list(&text).unwrap_or_default();
+                prop_assert!(cpus.iter().all(|cpu| *cpu < MAX_CPUS), "{}", text);
+            }
+        }
     }
 
     #[test]

@@ -172,6 +172,8 @@ pub(crate) fn localized<'l>(lines: &'l [Line], key: &str, locales: &[String]) ->
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{list, locale_keys, localized, messages_locale, parse, unescape};
 
     const FILE: &str = "# A comment\n[Desktop Entry]\nType=Application\nName=Calculator\n\
@@ -212,6 +214,56 @@ mod tests {
             "a list"
         );
         assert_eq!(list(""), Vec::<String>::new(), "an empty list");
+    }
+
+    /// One list item as a writer escapes it: a backslash, semicolon, newline, tab and carriage
+    /// return as `\\`, `\;`, `\n`, `\t` and `\r`.
+    fn escape_item(item: &str) -> String {
+        let mut out = String::with_capacity(item.len());
+        for c in item.chars() {
+            match c {
+                '\\' => out.push_str(r"\\"),
+                ';' => out.push_str(r"\;"),
+                '\n' => out.push_str(r"\n"),
+                '\t' => out.push_str(r"\t"),
+                '\r' => out.push_str(r"\r"),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// A list item, never empty, often made of the characters a list escapes.
+    fn item() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "[a-z;\\\\ \t\n\r]{1,8}",
+            any::<String>().prop_filter("an item is never empty", |item| !item.is_empty()),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn a_list_splits_what_an_escaping_join_wrote(
+            items in prop::collection::vec(item(), 0..6),
+            terminated in any::<bool>(),
+        ) {
+            let escaped: Vec<String> = items.iter().map(|item| escape_item(item)).collect();
+            let mut raw = escaped.join(";");
+            if terminated {
+                raw.push(';');
+            }
+            prop_assert_eq!(list(&raw), items);
+        }
+
+        #[test]
+        fn locale_keys_end_with_the_bare_language(
+            locale in prop_oneof!["[a-zA-Z_.@-]{0,16}", any::<String>()],
+        ) {
+            let keys = locale_keys(&locale);
+            let language = locale.split(['_', '.', '@']).next().unwrap_or_default();
+            prop_assert!(keys.len() <= 4, "{:?}", keys);
+            prop_assert_eq!(keys.last().map(String::as_str), Some(language));
+        }
     }
 
     #[test]

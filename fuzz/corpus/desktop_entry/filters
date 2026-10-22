@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Konsole
+Exec=konsole
+OnlyShowIn=KDE;GNOME\;fake;
+NotShowIn=Unity;
+NoDisplay=false
+TryExec=/nonexistent/eileen-fixture-tool
+Terminal=true
+X-SnapInstanceName=konsole
