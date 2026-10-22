@@ -152,7 +152,8 @@ impl FakeGnome {
 enum PortalError {
     #[zbus(error)]
     ZBus(zbus::Error),
-    /// The desktop's lockdown or the permission store turned the portal off.
+    /// What other portals answer when the desktop's lockdown turns them off. xdg-desktop-portal's
+    /// `Inhibit` never sends it; another implementation might.
     NotAllowed(String),
 }
 
@@ -167,7 +168,8 @@ enum Answer {
     OldPath,
     /// Emits `Response` 0 before it replies, but serves no request object, so closing it fails.
     Unserved,
-    /// Refuses the call with `org.freedesktop.portal.Error.NotAllowed`.
+    /// Refuses the call with `org.freedesktop.portal.Error.NotAllowed`, as a portal other than
+    /// xdg-desktop-portal's might.
     NotAllowed,
 }
 
@@ -620,6 +622,7 @@ async fn a_portal_without_the_inhibit_interface_counts_as_absent() {
 async fn a_portal_the_desktop_does_not_allow_is_a_refusal() {
     let bus = PrivateBus::start();
     let _logind = serve_logind(&bus, FakeManager::default()).await;
+    // xdg-desktop-portal's Inhibit never answers NotAllowed; the mapping is for one that does.
     let mut portal = Portal::start(&bus, Answer::NotAllowed).await;
     let system = bus.connect().await;
     let session = bus.connect().await;

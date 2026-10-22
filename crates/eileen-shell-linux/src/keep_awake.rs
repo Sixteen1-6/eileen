@@ -38,15 +38,23 @@
 //!
 //! - **0:** the backend took the request, which is not always the desktop holding:
 //!   xdg-desktop-portal-gtk answers before GNOME's session manager or the screen saver does, and
-//!   xdg-desktop-portal-kde before KDE's power manager.
+//!   xdg-desktop-portal-kde before KDE's power manager. Nor is it always every flag asked for:
+//!   the portal passes its backend only the flags the permission store allows.
 //! - **1:** the user cancelled it: a refusal, not asked again.
 //! - **2:** the backend refused. Suspend and idle are asked again for idle alone (8): where
 //!   xdg-desktop-portal-gtk is the backend and GNOME's session manager is absent, it falls back
 //!   to `org.freedesktop.ScreenSaver` and refuses any flag there but idle.
 //! - **No answer by the deadline:** the request is closed and missed. The portal sends no
-//!   `Response` at all when the permission store masks every flag.
-//! - **`org.freedesktop.portal.Error.NotAllowed` for the call:** the desktop's lockdown or the
-//!   permission store turned the portal off, a refusal ([`DbusError::Refused`], "not allowed").
+//!   `Response` at all when the permission store masks every flag asked for
+//!   ([the portal's inhibit.c]), so a store that turns inhibiting off shows as a
+//!   [`DbusError::DeadlineExceeded`] miss once the whole deadline has passed, never as a quick
+//!   refusal.
+//! - **`org.freedesktop.portal.Error.NotAllowed` for the call:** a refusal
+//!   ([`DbusError::Refused`], "not allowed"), by `eileen-dbus-linux`'s mapping. Other portals
+//!   send it when the desktop's lockdown turns them off, but xdg-desktop-portal's `Inhibit`
+//!   handler never does: it checks no lockdown setting and refuses only flags it does not know
+//!   ([the portal's inhibit.c]). The mapping is defensive here, for other portal
+//!   implementations.
 //!
 //! The deadline is one budget for the portal's requests and their answers, signals that no method
 //! timeout bounds; each method call keeps its connection's method timeout, as
