@@ -7,8 +7,10 @@
 //! [`RecentlyUsed::bookmarks`] reads the file's usable bookmarks in the file's order. A missing
 //! file holds none, as GTK waits for its first write. A file that cannot be read, or is not a
 //! bookmark file, is a [`FileError`] that holds no path and none of the file's text; GTK and KIO
-//! replace such a file on their next write. The submodules hold the rules: `xbel` the file's
-//! layout and which bookmarks count, `uri` the path, `time` the times, `kind` the kind of file.
+//! replace such a file on their next write. The open never waits, as a FIFO's would for a
+//! writer, and what is neither a file nor a folder, such as a FIFO or a device, is refused
+//! before it is read. The submodules hold the rules: `xbel` the file's layout and which
+//! bookmarks count, `uri` the path, `time` the times, `kind` the kind of file.
 //!
 //! # The list
 //!
@@ -37,11 +39,13 @@ mod xbel;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader};
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::PathBuf;
 
 use eileen_contracts::ids::{Personal, Untrusted, WallTime};
 use eileen_contracts::tools::apps::FileKind;
 
+use crate::open::OPEN_FLAGS;
 use crate::{FileError, Session};
 
 /// The file's name in the user's data folder, and what its errors name.
@@ -100,13 +104,20 @@ impl RecentlyUsed {
 
     /// Every usable bookmark in the file, in the file's order: each local file that is not
     /// private and has a time, with its app and its kind. A path the file lists twice is here
-    /// twice. A missing file, or one with no root element, has none.
+    /// twice. A missing file, or one with no root element, has none. A FIFO or a device in the
+    /// file's place is [`FileError::Invalid`], opened without waiting and not read.
     pub fn bookmarks(&self) -> Result<Vec<RecentItem>, FileError> {
-        let file = match File::open(self.path.get()) {
+        let opened = File::options().read(true).custom_flags(OPEN_FLAGS).open(self.path.get());
+        let file = match opened {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(FileError::io(FILE_NAME, &error)),
         };
+        // A folder is left to fail at its first read, as it fails in GLib.
+        let meta = file.metadata().map_err(|error| FileError::io(FILE_NAME, &error))?;
+        if !meta.is_file() && !meta.is_dir() {
+            return Err(FileError::Invalid { what: FILE_NAME, detail: "not a file".to_owned() });
+        }
         xbel::read_bookmarks(BufReader::new(file))
     }
 }
