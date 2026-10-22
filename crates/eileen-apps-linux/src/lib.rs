@@ -11,8 +11,8 @@
 //! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
 //!   which bookmarks are local files, when each was last opened, by which app, of what kind.
 //!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
-//! - For `MediaSessions`: reading an MPRIS player's properties into a `MediaState`, leniently, for
-//!   players that send other types than the specification gives.
+//! - For `MediaSessions`: the MPRIS client, [`MprisSessions`]: which bus names are players, how
+//!   their properties become `MediaState`s, and each `MediaAction`'s call.
 //!
 //! # Does not own
 //!
@@ -29,9 +29,10 @@
 //!
 //! - Linux only: the crate is `cfg(target_os = "linux")` and compiles to an empty library
 //!   elsewhere, as the `-win` crates do off Windows.
-//! - It starts apps only through the desktop, never as its children: the portal starts the
-//!   default app, and D-Bus activation has the bus start the app (BUILD.md section 2.1).
-//!   Clippy's disallowed methods keep `Command` out.
+//! - It starts apps only through the desktop, never as its children: the portal starts the default
+//!   app, and D-Bus activation has the bus start the app (BUILD.md section 2.1). Clippy's
+//!   disallowed methods keep `Command` out. It calls a media player only through the unique name
+//!   that owns it, so no call starts one; a test pins a missing player as `Unavailable`.
 //! - The first data folder holding a desktop file ID decides it, as the specification orders them:
 //!   `XDG_DATA_HOME`, read once into [`Session`] for the recent files too, then `XDG_DATA_DIRS`.
 //! - A media player's text is `Untrusted` from where it is read, sanitized and kept to 512
@@ -49,10 +50,10 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
-//! - Layers: unit tests for the formats and the MPRIS values; property tests for the desktop entry
-//!   lists and locale keys; the fuzz target `desktop_entry`, whose seed corpus replays as a test;
-//!   integration tests over `tests/fixtures/`, which its README describes, and over the live
-//!   session; fakes on `eileen-dbus-linux`'s private bus for the D-Bus clients.
+//! - Layers: unit tests for the formats and the MPRIS values and calls; property tests for the
+//!   desktop entry lists and locale keys; the fuzz target `desktop_entry`, whose seed corpus
+//!   replays as a test; integration tests over `tests/fixtures/`, which its README describes, and
+//!   over the live session; fakes on `eileen-dbus-linux`'s private bus for the D-Bus clients.
 //!
 //! # Traps
 //!
@@ -85,10 +86,6 @@ mod error;
 pub mod fuzz_entry;
 mod index;
 mod keyfile;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "only the tests use the readers until the MPRIS client does")
-)]
 mod mpris;
 mod open;
 mod recent;
@@ -97,5 +94,6 @@ pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
 pub use error::FileError;
 pub use index::{AppEntry, AppKind, Session, entry_for, index};
+pub use mpris::MprisSessions;
 pub use open::{OpenError, Opener};
 pub use recent::{RecentItem, RecentlyUsed};
