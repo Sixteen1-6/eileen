@@ -29,8 +29,9 @@ impl KeyFile {
     }
 }
 
-/// Parses a desktop entry file. `None` when a line before the first group, or a line that is
-/// neither a group header, a `Key=Value` line, a comment nor blank, makes it malformed.
+/// Parses a desktop entry file. `None` when a line before the first group, a group name the
+/// format does not allow, or a line that is neither a group header, a `Key=Value` line, a
+/// comment nor blank, makes it malformed.
 pub(crate) fn parse(text: &str) -> Option<KeyFile> {
     let mut file = KeyFile::default();
     for line in text.lines() {
@@ -41,6 +42,9 @@ pub(crate) fn parse(text: &str) -> Option<KeyFile> {
         if let Some(name) =
             line.strip_prefix('[').and_then(|rest| rest.trim_end().strip_suffix(']'))
         {
+            if !is_group_name(name) {
+                return None;
+            }
             file.groups.push((name.to_owned(), Vec::new()));
             continue;
         }
@@ -57,6 +61,12 @@ pub(crate) fn parse(text: &str) -> Option<KeyFile> {
         lines.push(Line { key: key.to_owned(), locale, raw: value.trim_start().to_owned() });
     }
     Some(file)
+}
+
+/// Whether `name` may name a group: not empty, and none of the `[`, `]` and control characters
+/// the specification excludes. Characters beyond ASCII are allowed, as `GLib` allows them.
+fn is_group_name(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| matches!(c, '[' | ']') || c.is_ascii_control())
 }
 
 /// Resolves a string value's escapes: `\s`, `\n`, `\t`, `\r` and `\\`. An unknown escape is
@@ -186,6 +196,10 @@ mod tests {
         assert!(parse("[Desktop Entry]\nnot a key line\n").is_none(), "no equals sign");
         assert!(parse("[Desktop Entry]\nName[de=Broken\n").is_none(), "an unclosed locale");
         assert!(parse("[Desktop Entry]\nBad Key=1\n").is_none(), "a space in a key");
+        assert!(parse("[Desktop]Entry]\nName=x\n").is_none(), "a bracket in a group name");
+        assert!(parse("[]\nName=x\n").is_none(), "an empty group name");
+        assert!(parse("[Desktop\u{1}Entry]\n").is_none(), "a control character in a group name");
+        assert!(parse("[Desktop Action \u{d6}ffnen]\n").is_some(), "beyond ASCII, as GLib allows");
     }
 
     #[test]
