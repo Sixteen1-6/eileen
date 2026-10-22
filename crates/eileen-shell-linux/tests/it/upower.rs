@@ -667,6 +667,32 @@ async fn a_current_name_the_bus_cannot_start_falls_back_to_the_legacy_one() {
 }
 
 #[tokio::test]
+async fn a_failing_current_daemon_is_not_asked_again_under_the_legacy_name() {
+    let refused = "battery saver: the power-profiles daemon refused the reading (not authorized); \
+                   taken as off";
+    let unusable =
+        "battery saver: the power-profiles daemon sent a reply Eileen cannot use; taken as off";
+    for refusing in [true, false] {
+        let bus = PrivateBus::start();
+        let (_upower, _) = laptop(&bus, true).await;
+        let (_current, entry) = if refusing {
+            let words = RefusingProfiles { message: "the service's private words" };
+            (serve(&bus, PROFILES_NAME, PROFILES, words).await, refused)
+        } else {
+            (serve(&bus, PROFILES_NAME, PROFILES, WrongProfiles { active: 2 }).await, unusable)
+        };
+        // A reading that asked the legacy name would take its battery saver.
+        let _legacy = legacy(&bus, Profiles::active("power-saver")).await;
+        let reading = read(&bus).await;
+        assert_eq!(
+            reading,
+            self::reading(state(true, true, false), &[PowerDaemon::UPower], false, &[entry]),
+            "the current daemon's failure stands, and the legacy name is not read: {entry}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_daemon_that_does_not_answer_in_time_is_named_so() {
     let bus = PrivateBus::start();
     let _hung_upower = owner(&bus, UPOWER_NAME).await;
@@ -674,8 +700,7 @@ async fn a_daemon_that_does_not_answer_in_time_is_named_so() {
     let client = bus.connect_within(Duration::from_secs(5)).await;
     // Paused only now: the connections above are made in real time. From here every call goes
     // to a daemon that never answers, so the only timer is the method timeout, which tokio fires
-    // as soon as the runtime is idle. A hung current profiles daemon is not asked again under the
-    // legacy name.
+    // as soon as the runtime is idle.
     tokio::time::pause();
     let reading = LinuxPower::new(&client).read().await;
     assert_eq!(

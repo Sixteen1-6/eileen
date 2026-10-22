@@ -27,7 +27,7 @@ pub(super) struct ProfilesAnswer {
 /// The profiles daemon's facts, under the current name, else the legacy one.
 pub(super) async fn read_profiles(bus: &Connection) -> Result<ProfilesAnswer, DbusError> {
     match read_profiles_of(bus, PowerDaemon::PowerProfiles).await {
-        Err(current @ (DbusError::Unavailable { .. } | DbusError::NotFound { .. })) => {
+        Err(current) if tries_legacy(&current) => {
             match read_profiles_of(bus, PowerDaemon::LegacyPowerProfiles).await {
                 // Neither name has a daemon, or only the current one has, without the object.
                 Err(DbusError::Unavailable { .. }) => Err(current),
@@ -35,6 +35,20 @@ pub(super) async fn read_profiles(bus: &Connection) -> Result<ProfilesAnswer, Db
             }
         }
         answer => answer,
+    }
+}
+
+/// Whether a reading that failed under the current name with `error` tries the legacy name
+/// next: only when the current name has no daemon, one the bus cannot start included, or a
+/// daemon without the profiles object. A daemon that refused, sent a reply Eileen cannot use or
+/// did not answer in time is not asked twice, and a failed bus is not asked again.
+const fn tries_legacy(error: &DbusError) -> bool {
+    match error {
+        DbusError::Unavailable { .. } | DbusError::NotFound { .. } => true,
+        DbusError::DeadlineExceeded { .. }
+        | DbusError::Refused { .. }
+        | DbusError::Invalid { .. }
+        | DbusError::Io { .. } => false,
     }
 }
 
@@ -55,4 +69,29 @@ async fn read_profiles_of(
             == Some(POWER_SAVER)
     });
     Ok(ProfilesAnswer { daemon, saver: active == POWER_SAVER, saver_held })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbusError, tries_legacy};
+
+    #[test]
+    fn the_legacy_name_is_tried_only_when_the_current_one_has_no_daemon_or_object() {
+        let what = "the power-profiles daemon";
+        let cases = [
+            (DbusError::Unavailable { what }, true, "no daemon, or one the bus cannot start"),
+            (DbusError::NotFound { what }, true, "a daemon without the profiles object"),
+            (DbusError::DeadlineExceeded { call: what }, false, "a hung daemon is not asked twice"),
+            (DbusError::Refused { what, reason: "not authorized" }, false, "a refusal stands"),
+            (
+                DbusError::Invalid { what, detail: "ActiveProfile has another type".to_owned() },
+                false,
+                "a reply Eileen cannot use stands",
+            ),
+            (DbusError::Io { what, detail: "broken pipe".to_owned() }, false, "a failed bus"),
+        ];
+        for (error, legacy, case) in cases {
+            assert_eq!(tries_legacy(&error), legacy, "{case}");
+        }
+    }
 }
