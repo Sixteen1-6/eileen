@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Name[de]=Taschenrechner
+Name[de_DE]=Rechner
+Name[de@euro]=Euro-Rechner
+Name[de_DE@euro]=Euro-Taschenrechner
+Name[pt_BR]=Calculadora
+Name[sr@latin]=Kalkulator
+Name[]=empty locale
+Name[a[b]=bracket inside
+GenericName[de_DE.UTF-8]=with encoding
+Keywords[de]=Mathe;Rechnen;
+Exec=gnome-calculator

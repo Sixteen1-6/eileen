@@ -20,5 +20,8 @@ eileen-contracts.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

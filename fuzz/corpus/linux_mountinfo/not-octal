@@ -1,0 +1,5 @@
+60 29 0:60 / /home/sam/a\9zz rw - ext4 /dev/sdd1 rw
+61 29 0:61 / /home/sam/sign\+12 rw - ext4 /dev/sdd2 rw
+62 29 0:62 / /home/sam/past\400\777 rw - ext4 /dev/sdd3 rw
+63 29 0:63 / /home/sam/short\04 rw - ext4 \13
+64 29 0:64 / /home/sam/twice\134040 rw - ext4 end\

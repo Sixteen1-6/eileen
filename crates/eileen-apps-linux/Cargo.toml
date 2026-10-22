@@ -18,5 +18,8 @@ unsafe = "forbid"
 [target.'cfg(target_os = "linux")'.dependencies]
 eileen-contracts.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

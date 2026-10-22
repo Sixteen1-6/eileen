@@ -1,0 +1,5 @@
+# The user removed the calculator from the menu.
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Hidden=true

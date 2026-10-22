@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Back\sup photos\tnow\nand\rthen\\done
+GenericName=\s  leading\sspaces
+Keywords=photo\;video;;backup\\;keep\x;trailing\
+Exec=sh -c "rsync -a ~/Pictures /media/backup" \\
+StartupWMClass=back\\sup
+Comment=unknown \q escape and a lone \

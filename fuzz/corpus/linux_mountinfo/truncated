@@ -1,0 +1,6 @@
+36 35 98:0 /mnt1 /mnt2 rw,noatime master:1
+36 35 98:0
+1 2 3:4 / /x rw - ext4
+
+-
+1 2 3:4 / /cut rw - ext4 /dev/sd

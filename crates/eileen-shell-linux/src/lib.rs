@@ -52,11 +52,13 @@
 //!
 //! - Fast command: `cargo nextest run -p eileen-shell-linux` (`cargo xtask test -p
 //!   eileen-shell-linux` once `wp0/xtask` merges).
-//! - Layers: unit tests for each parser over the kernel's text formats; integration tests over
-//!   six fixture machines in `tests/fixtures/` (one recorded under WSL2, five synthetic: the
-//!   owner's laptop shape, AMD on btrfs, NVIDIA on LVM, an Arm board, a QEMU virtual machine),
-//!   each a `.tree` file the tests build into a folder; one live test that reads the machine
-//!   the tests run on.
+//! - Layers: unit tests for each parser over the kernel's text formats, and property tests for
+//!   the CPU lists, the busy share, the MB conversion and the `os-release` quotes; the fuzz
+//!   targets `linux_mountinfo` and `linux_proc_status` (module `fuzz_entry`), whose seed
+//!   corpora replay as tests; integration tests over six fixture machines in
+//!   `tests/fixtures/` (one recorded under WSL2, five synthetic: the owner's laptop shape, AMD
+//!   on btrfs, NVIDIA on LVM, an Arm board, a QEMU virtual machine), each a `.tree` file the
+//!   tests build into a folder; one live test that reads the machine the tests run on.
 //! - A bug here starts as a machine panel line that does not match the PC, or a plan class
 //!   (`Tight`, `Standard`, `Roomy`) that the PC's memory does not explain.
 //!
@@ -99,6 +101,8 @@ mod cpu;
 mod disk;
 mod error;
 pub mod facts;
+#[doc(hidden)]
+pub mod fuzz_entry;
 mod load;
 mod memory;
 mod monitors;

@@ -37,6 +37,8 @@ pub(crate) fn busy_pct(before: CpuTimes, now: CpuTimes) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{CpuTimes, busy_pct, parse_proc_stat};
 
     #[test]
@@ -62,5 +64,19 @@ mod tests {
             "counters went back"
         );
         assert_eq!(busy_pct(before, CpuTimes { busy: 1_002, total: 4_003 }), Some(67), "rounded");
+    }
+
+    /// A reading: small counters, as soon after boot, or any at all.
+    fn reading() -> impl Strategy<Value = CpuTimes> {
+        prop_oneof![(0..10_000_u64, 0..10_000_u64), any::<(u64, u64)>()]
+            .prop_map(|(busy, total)| CpuTimes { busy, total })
+    }
+
+    proptest! {
+        #[test]
+        fn the_busy_share_is_at_most_100(before in reading(), now in reading()) {
+            let pct = busy_pct(before, now);
+            prop_assert!(pct.is_none_or(|pct| pct <= 100), "{:?}", pct);
+        }
     }
 }

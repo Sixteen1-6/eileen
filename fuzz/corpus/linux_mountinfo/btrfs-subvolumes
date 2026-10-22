@@ -1,0 +1,6 @@
+22 1 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+61 1 0:35 /root / rw,relatime shared:1 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root
+88 61 0:35 /home /home rw,relatime shared:47 - btrfs /dev/nvme0n1p3 rw,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/home
+95 61 259:2 / /boot rw,relatime shared:51 - ext4 /dev/nvme0n1p2 rw,seclabel
+97 61 8:1 / /srv/media rw,relatime shared:53 - ext4 /dev/sda1 rw,seclabel
+41 61 0:38 / /tmp rw,nosuid,nodev shared:17 - tmpfs tmpfs rw,seclabel,size=32768000k

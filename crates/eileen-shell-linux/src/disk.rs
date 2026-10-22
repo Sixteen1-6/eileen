@@ -88,9 +88,12 @@ struct Block {
 pub(crate) struct Mount {
     /// Where it is mounted, with the kernel's octal escapes resolved.
     pub(crate) point: String,
-    /// The file system type, such as `ext4` or `btrfs`.
+    /// The file system type, such as `ext4`, `btrfs` or `fuse.sshfs`, as the kernel writes it,
+    /// escapes and all (`fuse.my\040fs`): a FUSE subtype is the user's choice, and kept escaped
+    /// it holds no space, tab or newline when a `degraded` message names it.
     pub(crate) fstype: String,
-    /// What was mounted, such as `/dev/nvme0n1p2`, `/dev/mapper/root` or `none`.
+    /// What was mounted, such as `/dev/nvme0n1p2`, `/dev/mapper/root` or `none`, with the
+    /// kernel's octal escapes resolved.
     pub(crate) source: String,
 }
 
@@ -113,7 +116,7 @@ pub(crate) fn parse_mountinfo(text: &str) -> Vec<Mount> {
 
 /// Resolves the kernel's octal escapes in mount fields (`\040` for a space, `\134` for a
 /// backslash): a backslash and three octal digits, up to `\377`. Any other backslash is kept.
-fn unescape(field: &str) -> String {
+pub(crate) fn unescape(field: &str) -> String {
     let mut out = String::with_capacity(field.len());
     let mut rest = field;
     while let Some(at) = rest.find('\\') {
@@ -348,6 +351,14 @@ mod tests {
         assert_eq!(unescape("a\\+12"), "a\\+12", "a sign is not an octal digit");
         assert_eq!(unescape("a\\400"), "a\\400", "past \\377");
         assert_eq!(unescape("end\\"), "end\\", "a trailing backslash");
+    }
+
+    #[test]
+    fn the_file_system_type_keeps_the_kernels_escapes() {
+        let line = "52 29 0:51 / /home/sam/remote rw - fuse.my\\040fs a\\040src rw\n";
+        let mounts = parse_mountinfo(line);
+        assert_eq!(mounts[0].fstype, "fuse.my\\040fs", "a FUSE subtype, as written");
+        assert_eq!(mounts[0].source, "a src", "the source's escapes resolved");
     }
 
     #[test]
