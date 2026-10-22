@@ -12,7 +12,9 @@
 //! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
 //!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
 //!   process outside Eileen's tree.
-//! - `ShellHost`'s session calls on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`]).
+//! - `ShellHost`'s session calls on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`]),
+//!   the lock state over logind ([`SessionLock`]), and keeping the session awake with logind's
+//!   lock and the desktop's idle hold ([`LinuxPowerRequest`]).
 //!
 //! # Does not own
 //!
@@ -21,15 +23,17 @@
 //!   and session calls implement the traits and [`facts`] becomes re-exports.
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
-//! - D-Bus plumbing: [`DbusError`], the buses, name owners and signal streams are
-//!   `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's D-Bus clients.
+//! - D-Bus plumbing: [`DbusError`] (re-exported), the buses, name owners, signal streams and the
+//!   portal `Request` are `eileen-dbus-linux`'s, not yet an answered `Close`.
 //!
 //! # Invariants
 //!
 //! - Linux only: the crate is `cfg(target_os = "linux")` and compiles to an empty library
 //!   elsewhere, as the `-win` crates do off Windows.
-//! - It changes nothing it is not asked to: the one file it writes is Eileen's own autostart
-//!   entry. It never starts a process and never needs elevation.
+//! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, asks the
+//!   session to lock only in [`SessionLock::lock_workstation`], and keeps it awake no longer than a
+//!   [`LinuxPowerRequest`] and the connections it was given. It starts no process itself, though a
+//!   call may let the bus start the service it names, and it never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -39,8 +43,8 @@
 //! # Boundaries
 //!
 //! - May depend on `eileen-contracts` (the text wrappers, `Platform`), `eileen-dbus-linux` (the
-//!   D-Bus helpers), `rustix` (`statvfs`) and `thiserror`. Nothing else in the workspace may
-//!   depend on it except the composition root on Linux.
+//!   D-Bus helpers), `zbus` (its clients' proxies), `tokio` (the portal's one deadline),
+//!   `rustix` (`statvfs`) and `thiserror`. Only the composition root on Linux may depend on it.
 //! - Wire types: none of its own; the facts become contract types.
 //!
 //! # Testing
@@ -50,26 +54,23 @@
 //!   the CPU lists, the busy share, the MB conversion and the `os-release` quotes; the fuzz
 //!   targets `linux_mountinfo` and `linux_proc_status` (module `fuzz_entry`), whose seed
 //!   corpora replay as tests; integration tests over six fixture machines in
-//!   `tests/fixtures/` (one recorded under WSL2, five synthetic), each a `.tree` file the tests
-//!   build into a folder; one live test of the machine the tests run on; the autostart entry in
-//!   folders a guard removes. D-Bus clients are tested against fakes on `eileen-dbus-linux`'s
-//!   private bus (its `private-bus` feature, on for this crate's tests only).
+//!   `tests/fixtures/` (one recorded under WSL2, five synthetic) built into folders, one live
+//!   test of the machine the tests run on, and the autostart entry in folders a guard removes.
+//!   D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (its `private-bus`
+//!   feature, tests only), the portal's deadline in tokio's paused time.
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class
 //!   (`Tight`, `Standard`, `Roomy`) that the PC's memory does not explain, or a session call
 //!   that the desktop does not honour.
 //!
 //! # Traps
 //!
-//! - Each source's traps are in its module's doc: sysfs links in `pci`, virtual disks and
-//!   btrfs in `disk`, APUs, framebuffers and WSL's GPU in `adapters`, core classes in `cpu`,
-//!   the paths an autostart entry cannot carry in `autostart`.
-//! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
-//!   `eileen-dbus-linux`'s.
+//! - Each source's traps are in its own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`,
+//!   `session_lock`, `keep_awake` and, for D-Bus, `eileen-dbus-linux`.
 //!
 //! # Logs and tracing
 //!
-//! - None yet: the reads are short synchronous file reads. Spans from `eileen_trace::names`
-//!   join with the trait implementation.
+//! - None yet: the file reads are short and synchronous, and the D-Bus clients log nothing of
+//!   their own. Spans from `eileen_trace::names` join with the trait implementations.
 //!
 //! # Do not change without a decision record
 //!
@@ -87,6 +88,7 @@ mod error;
 pub mod facts;
 #[doc(hidden)]
 pub mod fuzz_entry;
+mod keep_awake;
 mod load;
 mod memory;
 mod monitors;
@@ -96,11 +98,14 @@ mod power;
 mod pressure;
 mod probe;
 mod root;
+mod session_lock;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
 pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
+pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
+pub use session_lock::SessionLock;
