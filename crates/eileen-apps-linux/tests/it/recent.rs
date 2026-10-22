@@ -1,0 +1,334 @@
+//! The recent files over fixture files in `tests/fixtures/recent/`: one in the layout `GLib`
+//! writes, one in KIO's, and hand-written ones for the rules GTK never exercises, the namespaces,
+//! and the missing, empty and broken files.
+
+use std::path::{Path, PathBuf};
+
+use eileen_apps_linux::{FileError, RecentItem, RecentlyUsed};
+use eileen_contracts::ids::{Date, WallTime};
+use eileen_contracts::tools::apps::FileKind;
+
+/// One item as the tests compare it: path, app, kind and time.
+type Row<'a> = (&'a str, Option<&'a str>, Option<FileKind>, WallTime);
+
+/// The fixtures' folder.
+fn fixtures() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("recent")
+}
+
+/// The list in the fixture file `name`.
+fn list(name: &str) -> RecentlyUsed {
+    RecentlyUsed::at(fixtures().join(name))
+}
+
+/// The fixture home folder's file, which `GLib` wrote.
+fn gtk() -> RecentlyUsed {
+    list("home/sam/.local/share/recently-used.xbel")
+}
+
+/// Every bookmark in a list, in the file's order.
+fn all(list: &RecentlyUsed) -> Vec<RecentItem> {
+    list.bookmarks().unwrap()
+}
+
+/// A UTC time from its date, its `hh:mm:ss` and its microseconds, without the module's parser.
+fn utc(date: &str, clock: &str, micros: i64) -> WallTime {
+    let days = date.parse::<Date>().unwrap().days_since_epoch();
+    let seconds = clock.split(':').fold(0, |total, part| total * 60 + part.parse::<i64>().unwrap());
+    WallTime((days * 86_400 + seconds) * 1_000_000 + micros)
+}
+
+fn rows(items: &[RecentItem]) -> Vec<Row<'_>> {
+    items
+        .iter()
+        .map(|item| {
+            let app = item.app.as_ref().map(|app| app.get().as_str());
+            (item.path.get().as_str(), app, item.kind, item.opened_at)
+        })
+        .collect()
+}
+
+fn paths(items: &[RecentItem]) -> Vec<&str> {
+    items.iter().map(|item| item.path.get().as_str()).collect()
+}
+
+fn find<'a>(items: &'a [RecentItem], path: &str) -> &'a RecentItem {
+    items
+        .iter()
+        .find(|item| item.path.get() == path)
+        .unwrap_or_else(|| panic!("{path} is not listed"))
+}
+
+fn app_of(item: &RecentItem) -> Option<&str> {
+    item.app.as_ref().map(|app| app.get().as_str())
+}
+
+#[test]
+fn glibs_file_lists_its_local_public_files_in_the_files_order() {
+    assert_eq!(
+        rows(&all(&gtk())),
+        [
+            (
+                "/home/sam/Documents/Quarterly Report.odt",
+                Some("LibreOffice 24.2"),
+                Some(FileKind::Document),
+                utc("2026-10-20", "15:31:40", 551_201),
+            ),
+            (
+                "/home/sam/Downloads/fonts.zip",
+                Some("Archive Manager"),
+                None,
+                utc("2026-10-12", "13:45:51", 663_009),
+            ),
+            (
+                "/home/sam/Music/Rainier Timelapse Score.flac",
+                Some("Music"),
+                Some(FileKind::Audio),
+                utc("2026-10-16", "07:22:10", 81_736),
+            ),
+            (
+                "/home/sam/Pictures/写真",
+                Some("Files"),
+                Some(FileKind::Folder),
+                utc("2026-10-17", "11:03:27", 440_192),
+            ),
+            (
+                "/home/sam/Videos/Mount Rainier Timelapse.mp4",
+                Some("Videos"),
+                Some(FileKind::Video),
+                utc("2026-10-18", "20:41:55", 902_114),
+            ),
+            (
+                "/home/sam/Documents/Résumé 2026.pdf",
+                Some("org.kde.okular"),
+                Some(FileKind::Document),
+                utc("2026-10-19", "08:15:00", 250_000),
+            ),
+            (
+                "/home/sam/Documents/Sales & Costs 2026.ods",
+                Some("LibreOffice 24.2"),
+                Some(FileKind::Spreadsheet),
+                utc("2026-10-21", "09:58:14", 672_310),
+            ),
+            (
+                "/home/sam/Pictures/Beach Day/IMG_4412.jpg",
+                Some("Image Viewer"),
+                Some(FileKind::Image),
+                utc("2026-10-21", "18:44:09", 310_460),
+            ),
+            (
+                "/home/sam/Notes/Sam's notes.md",
+                Some("Text Editor"),
+                Some(FileKind::Document),
+                utc("2026-10-21", "12:30:02", 417),
+            ),
+            (
+                "/home/sam/src/eileen/crates/eileen-apps-linux/src/recent.rs",
+                Some("Text Editor"),
+                Some(FileKind::Code),
+                utc("2026-10-21", "21:07:33", 118_204),
+            ),
+        ],
+        "every local, public file, in the file's order, with its app, kind and time"
+    );
+}
+
+#[test]
+fn kios_file_reads_as_glibs_does() {
+    assert_eq!(
+        rows(&all(&list("xdg-data/recently-used.xbel"))),
+        [(
+            "/home/sam/Pictures/Screenshots/Screenshot_20261021_075830.png",
+            Some("org.kde.gwenview"),
+            Some(FileKind::Image),
+            utc("2026-10-21", "07:58:30", 512_000),
+        )],
+        "KIO's layout, with its milliseconds"
+    );
+}
+
+#[test]
+fn entities_and_percent_escapes_decode() {
+    let items = all(&gtk());
+    let paths = paths(&items);
+    assert!(paths.contains(&"/home/sam/Documents/Sales & Costs 2026.ods"), "&amp; and %20");
+    assert!(paths.contains(&"/home/sam/Notes/Sam's notes.md"), "&apos;");
+    assert!(paths.contains(&"/home/sam/Documents/Résumé 2026.pdf"), "escaped UTF-8");
+    assert!(paths.contains(&"/home/sam/Pictures/写真"), "escaped UTF-8 in three bytes a letter");
+}
+
+#[test]
+fn the_newest_application_names_the_app() {
+    let items = all(&gtk());
+    assert_eq!(
+        app_of(find(&items, "/home/sam/Pictures/Beach Day/IMG_4412.jpg")),
+        Some("Image Viewer"),
+        "listed first, opened last; GIMP is listed after it but opened it earlier"
+    );
+    let odd = all(&list("odd.xbel"));
+    assert_eq!(
+        app_of(find(&odd, "/home/sam/odd/app-newest.txt")),
+        Some("Newest App"),
+        "the later of two"
+    );
+    assert_eq!(
+        app_of(find(&odd, "/home/sam/odd/app-tie.txt")),
+        Some("Listed First"),
+        "the first listed of two with the same time"
+    );
+    let nameless = find(&odd, "/home/sam/odd/nameless.txt");
+    assert_eq!(app_of(nameless), Some("Named"), "an application without a name is ignored");
+    assert_eq!(
+        nameless.opened_at,
+        utc("2026-10-09", "11:00:00", 0),
+        "and so is its time, later than the named one's"
+    );
+}
+
+#[test]
+fn opened_at_is_the_newest_time_the_bookmark_and_its_applications_give() {
+    let odd = all(&list("odd.xbel"));
+    assert_eq!(
+        find(&odd, "/home/sam/odd/app-newest.txt").opened_at,
+        utc("2026-10-02", "12:00:00", 500_000),
+        "an application's modified, newer than the bookmark's"
+    );
+    assert_eq!(
+        find(&odd, "/home/sam/odd/visited-newest.txt").opened_at,
+        utc("2026-10-04", "16:30:00", 0),
+        "visited, given at +02:00"
+    );
+    assert_eq!(
+        find(&odd, "/home/sam/odd/added-only.txt").opened_at,
+        utc("2026-09-30", "23:59:59", 0),
+        "added, when nothing else is there"
+    );
+}
+
+#[test]
+fn only_local_public_files_are_listed() {
+    let paths_of = |list: &RecentlyUsed| -> Vec<String> {
+        all(list).iter().map(|item| item.path.get().clone()).collect()
+    };
+    let gtk = paths_of(&gtk());
+    assert!(!gtk.iter().any(|path| path.contains("budget-2027")), "an sftp: entry is skipped");
+    assert!(!gtk.iter().any(|path| path.contains("minutes")), "an smb: entry is skipped");
+    assert!(
+        !gtk.iter().any(|path| path.contains("statement")),
+        "a private entry is skipped, though it is the newest"
+    );
+    let odd = paths_of(&list("odd.xbel"));
+    for skipped in ["remote", "escape", "latin1"] {
+        assert!(!odd.iter().any(|path| path.contains(skipped)), "{skipped} is not a local path");
+    }
+    let namespaces = paths_of(&list("namespaces.xbel"));
+    assert!(!namespaces.iter().any(|path| path.ends_with("private.txt")), "private, under bm:");
+}
+
+#[test]
+fn unusable_entries_are_skipped_and_the_rest_read() {
+    let odd = all(&list("odd.xbel"));
+    assert_eq!(
+        rows(&odd),
+        [
+            (
+                "/home/sam/odd/app-newest.txt",
+                Some("Newest App"),
+                Some(FileKind::Document),
+                utc("2026-10-02", "12:00:00", 500_000)
+            ),
+            (
+                "/home/sam/odd/visited-newest.txt",
+                Some("Reader"),
+                Some(FileKind::Document),
+                utc("2026-10-04", "16:30:00", 0)
+            ),
+            ("/home/sam/odd/added-only.txt", None, None, utc("2026-09-30", "23:59:59", 0)),
+            ("/home/sam/odd/twice.txt", Some("Zeroth"), None, utc("2026-10-05", "14:00:00", 0)),
+            ("/home/sam/odd/twice.txt", Some("First"), None, utc("2026-10-06", "10:00:00", 0)),
+            ("/home/sam/odd/foreign.txt", None, None, utc("2026-10-08", "10:00:00", 0)),
+            ("/home/sam/odd/twice.txt", Some("Second"), None, utc("2026-10-07", "10:00:00", 0)),
+            ("/home/sam/odd/nameless.txt", Some("Named"), None, utc("2026-10-09", "11:00:00", 0)),
+            (
+                "/home/sam/odd/app-tie.txt",
+                Some("Listed First"),
+                None,
+                utc("2026-10-10", "10:00:00", 0)
+            ),
+            ("/home/sam/odd/no-info.txt", None, None, utc("2026-10-10", "08:00:00", 0)),
+            ("/home/sam/odd/tie-b.txt", None, None, utc("2026-10-11", "10:00:00", 0)),
+            ("/home/sam/odd/tie-a.txt", None, None, utc("2026-10-11", "10:00:00", 0)),
+            ("/home/sam/odd/empty-element.txt", None, None, utc("2026-10-12", "10:00:00", 0)),
+        ],
+        "skipped: no time, a bad time, a bad application time, no href, another host, an \
+         escaped slash, a path that is not UTF-8 and a bookmark inside a folder; a path the \
+         file lists three times is there three times, in the file's order"
+    );
+}
+
+#[test]
+fn metadata_counts_only_from_freedesktop_and_by_namespace() {
+    let odd = all(&list("odd.xbel"));
+    let foreign = find(&odd, "/home/sam/odd/foreign.txt");
+    assert_eq!(
+        (app_of(foreign), foreign.kind, foreign.opened_at),
+        (None, None, utc("2026-10-08", "10:00:00", 0)),
+        "another owner's metadata gives no app, kind or time"
+    );
+    let outside = find(&odd, "/home/sam/odd/no-info.txt");
+    assert_eq!(
+        (app_of(outside), outside.kind, outside.opened_at),
+        (None, None, utc("2026-10-10", "08:00:00", 0)),
+        "nor does metadata outside info"
+    );
+    assert_eq!(
+        rows(&all(&list("namespaces.xbel"))),
+        [
+            (
+                "/home/sam/ns/other-prefixes.odp",
+                Some("Impress"),
+                Some(FileKind::Presentation),
+                utc("2026-10-20", "10:00:00", 0)
+            ),
+            (
+                "/home/sam/ns/default-namespace.xlsx",
+                Some("Calc"),
+                Some(FileKind::Spreadsheet),
+                utc("2026-10-19", "10:00:00", 0)
+            ),
+            ("/home/sam/ns/other-namespaces.pptx", None, None, utc("2026-10-18", "10:00:00", 0)),
+        ],
+        "bm: and mt: prefixes and default namespaces are read; bookmark: and mime: bound to \
+         other namespaces are not, so that entry has no app or kind, is not private, and its \
+         later application time does not count"
+    );
+}
+
+#[test]
+fn a_missing_empty_or_cleared_file_has_no_recent_files() {
+    assert_eq!(list("no-such-folder/recently-used.xbel").bookmarks(), Ok(Vec::new()), "missing");
+    assert_eq!(list("empty.xbel").bookmarks(), Ok(Vec::new()), "empty");
+    assert_eq!(list("cleared.xbel").bookmarks(), Ok(Vec::new()), "GLib's file with no bookmarks");
+}
+
+#[test]
+fn a_broken_file_is_an_error() {
+    let problem = |name: &str| match list(name).bookmarks() {
+        Err(FileError::Invalid { what: "recently-used.xbel", detail }) => {
+            let (problem, offset) = detail.rsplit_once(" near byte ").unwrap();
+            assert!(offset.parse::<u64>().unwrap() > 0, "{name}: an offset into the file");
+            problem.to_owned()
+        }
+        other => panic!("{name} read as {other:?}"),
+    };
+    assert_eq!(problem("truncated.xbel"), "not well-formed XML", "cut off in an attribute");
+    assert_eq!(problem("mismatched.xbel"), "not well-formed XML", "an end tag that does not match");
+    assert_eq!(problem("not-xbel.xbel"), "not an XBEL bookmark file", "another root");
+    assert_eq!(
+        RecentlyUsed::at(fixtures()).bookmarks(),
+        Err(FileError::Io { what: "recently-used.xbel", detail: "is a directory".to_owned() }),
+        "a folder where the file should be is unreadable"
+    );
+    let message = list("truncated.xbel").bookmarks().unwrap_err().to_string();
+    assert!(!message.contains("/home/sam") && !message.contains("soffice"), "{message}");
+}

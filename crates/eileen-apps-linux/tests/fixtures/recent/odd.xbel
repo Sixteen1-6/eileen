@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Entries that GTK and KIO do not write, for the rules that keep or skip them. -->
+<!DOCTYPE xbel>
+<xbel version="1.0"
+      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info">
+  <title>Odd &amp; ends</title>
+  <desc><![CDATA[Text <in> a CDATA section]]> and a character reference, &#233;</desc>
+  <bookmark href="file:///home/sam/odd/app-newest.txt" added="2026-10-01T08:00:00Z" modified="2026-10-01T10:00:00Z" visited="2026-10-01T09:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="text/plain"/>
+        <bookmark:applications>
+          <bookmark:application name="Older App" exec="older %u" modified="2026-10-01T08:00:00Z" count="1"/>
+          <bookmark:application name="Newest App" exec="newest %u" modified="2026-10-02T12:00:00.5Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/visited-newest.txt" added="2026-10-03T08:00:00Z" modified="2026-10-03T09:00:00Z" visited="2026-10-04T18:30:00+02:00">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="text/plain"/>
+        <bookmark:applications>
+          <bookmark:application name="Reader" exec="reader %u" modified="2026-10-03T09:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/added-only.txt" added="2026-09-30T23:59:59Z"/>
+  <bookmark href="file:///home/sam/odd/no-time.txt">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="Timeless" exec="timeless %u" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/bad-time.txt" added="2026-10-05T08:00:00Z" modified="last Tuesday" visited="2026-10-05T08:00:00Z"/>
+  <bookmark href="file:///home/sam/odd/bad-application-time.txt" modified="2026-10-05T09:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="Clockless" exec="clockless %u" modified="2026-10-05T25:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark added="2026-10-05T10:00:00Z" modified="2026-10-05T10:00:00Z" visited="2026-10-05T10:00:00Z"/>
+  <bookmark href="file://nas.local/home/sam/odd/remote.txt" modified="2026-10-05T11:00:00Z"/>
+  <bookmark href="file:///home/sam/odd/bad%2Fescape.txt" modified="2026-10-05T12:00:00Z"/>
+  <bookmark href="file:///home/sam/odd/latin1-r%E9sum%E9.txt" modified="2026-10-05T13:00:00Z"/>
+  <bookmark href="file://localhost/home/sam/odd/twice.txt" modified="2026-10-05T14:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="Zeroth" exec="zeroth %u" modified="2026-10-05T14:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/twice.txt" modified="2026-10-06T10:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="First" exec="first %u" modified="2026-10-06T10:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/foreign.txt" modified="2026-10-08T10:00:00Z">
+    <info>
+      <metadata owner="http://example.org/another-owner">
+        <mime:mime-type type="text/plain"/>
+        <bookmark:applications>
+          <bookmark:application name="Foreign" exec="foreign %u" modified="2026-10-20T10:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/twice.txt" modified="2026-10-07T10:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="Second" exec="second %u" modified="2026-10-07T10:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/nameless.txt" modified="2026-10-09T10:00:00Z">
+    <!-- An application without a name does not count. -->
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:icon type="image/png" href="file:///usr/share/icons/hicolor/48x48/apps/named.png" name="named"/>
+        <bookmark:applications>
+          <bookmark:application exec="nameless %u" modified="2026-10-09T12:00:00Z" count="1"/>
+          <bookmark:application name="Named" exec="named %u" modified="2026-10-09T11:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/app-tie.txt" modified="2026-10-10T09:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <bookmark:applications>
+          <bookmark:application name="Listed First" exec="first %u" modified="2026-10-10T10:00:00Z" count="1"/>
+          <bookmark:application name="Listed Second" exec="second %u" modified="2026-10-10T10:00:00Z" count="1"/>
+        </bookmark:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/odd/no-info.txt" modified="2026-10-10T08:00:00Z">
+    <!-- Metadata outside info does not count. -->
+    <metadata owner="http://freedesktop.org">
+      <mime:mime-type type="text/plain"/>
+      <bookmark:applications>
+        <bookmark:application name="Outside Info" exec="outside %u" modified="2026-10-21T10:00:00Z" count="1"/>
+      </bookmark:applications>
+    </metadata>
+  </bookmark>
+  <folder>
+    <title>Old bookmarks</title>
+    <bookmark href="file:///home/sam/odd/in-a-folder.txt" modified="2026-10-13T10:00:00Z"/>
+  </folder>
+  <separator/>
+  <bookmark href="file:///home/sam/odd/tie-b.txt" modified="2026-10-11T10:00:00Z"/>
+  <bookmark href="file:///home/sam/odd/tie-a.txt" modified="2026-10-11T10:00:00Z"/>
+  <bookmark href="file:///home/sam/odd/empty-element.txt" modified="2026-10-12T10:00:00Z"/>
+</xbel>
