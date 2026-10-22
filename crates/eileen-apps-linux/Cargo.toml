@@ -18,6 +18,7 @@ unsafe = "forbid"
 [target.'cfg(target_os = "linux")'.dependencies]
 eileen-contracts.workspace = true
 eileen-dbus-linux.workspace = true
+quick-xml.workspace = true
 rustix.workspace = true
 tokio.workspace = true
 zbus.workspace = true

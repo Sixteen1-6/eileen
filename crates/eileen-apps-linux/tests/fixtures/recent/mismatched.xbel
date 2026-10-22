@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbel version="1.0"
+      xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mime="http://www.freedesktop.org/standards/shared-mime-info"
+>
+  <bookmark href="file:///home/sam/Documents/Quarterly%20Report.odt" added="2026-10-14T08:02:17.120934Z" modified="2026-10-20T15:31:40.551201Z" visited="2026-10-14T08:02:17.120935Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime:mime-type type="application/vnd.oasis.opendocument.text"/>
+      </metadata>
+  </bookmark>
+</xbel>

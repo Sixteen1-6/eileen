@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The metadata under other prefixes and a default namespace, and the usual prefixes bound to
+     other namespaces, which make that metadata someone else's. -->
+<xbel version="1.0"
+      xmlns:bm="http://www.freedesktop.org/standards/desktop-bookmarks"
+      xmlns:mt="http://www.freedesktop.org/standards/shared-mime-info">
+  <bookmark href="file:///home/sam/ns/other-prefixes.odp" added="2026-10-20T09:00:00Z" modified="2026-10-20T10:00:00Z" visited="2026-10-20T09:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mt:mime-type type="application/vnd.oasis.opendocument.presentation"/>
+        <bm:applications>
+          <bm:application name="Impress" exec="&apos;soffice --impress %u&apos;" modified="2026-10-20T10:00:00Z" count="1"/>
+        </bm:applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/ns/default-namespace.xlsx" modified="2026-10-19T10:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mime-type xmlns="http://www.freedesktop.org/standards/shared-mime-info" type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+        <applications xmlns="http://www.freedesktop.org/standards/desktop-bookmarks">
+          <application name="Calc" exec="&apos;soffice --calc %u&apos;" modified="2026-10-19T10:00:00Z" count="1"/>
+        </applications>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/ns/other-namespaces.pptx" modified="2026-10-18T10:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org" xmlns:bookmark="http://example.org/not-desktop-bookmarks" xmlns:mime="http://example.org/not-shared-mime-info">
+        <mime:mime-type type="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+        <bookmark:applications>
+          <bookmark:application name="Not Read" exec="not-read %u" modified="2026-10-22T10:00:00Z" count="1"/>
+        </bookmark:applications>
+        <bookmark:private/>
+      </metadata>
+    </info>
+  </bookmark>
+  <bookmark href="file:///home/sam/ns/private.txt" modified="2026-10-21T10:00:00Z">
+    <info>
+      <metadata owner="http://freedesktop.org">
+        <mt:mime-type type="text/plain"/>
+        <bm:private/>
+      </metadata>
+    </info>
+  </bookmark>
+</xbel>

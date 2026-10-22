@@ -1,10 +1,14 @@
 //! Recent files from `recently-used.xbel`, the list that GTK apps and KDE's KIO keep under the
 //! Desktop Bookmark Specification, version 0.8.5
 //! (<https://www.freedesktop.org/wiki/Specifications/desktop-bookmark-spec/>), for
-//! `RecentSources::recent` (BUILD.md section 3.4; docs/LINUX.md section 4).
+//! `RecentSources::recent` (BUILD.md section 3.4; docs/LINUX.md section 4). [`RecentItem`]
+//! stands in for that trait's item type.
 //!
-//! The submodules read the values a bookmark holds, and each one's doc states its rules: `uri`
-//! the path its `href` names, `time` its times, `kind` the kind of file its MIME type names.
+//! [`RecentlyUsed::bookmarks`] reads the file's usable bookmarks in the file's order. A missing
+//! file holds none, as GTK waits for its first write. A file that cannot be read, or is not a
+//! bookmark file, is a [`FileError`] that holds no path and none of the file's text; GTK and KIO
+//! replace such a file on their next write. The submodules hold the rules: `xbel` the file's
+//! layout and which bookmarks count, `uri` the path, `time` the times, `kind` the kind of file.
 //!
 //! # Not here
 //!
@@ -16,3 +20,59 @@
 mod kind;
 mod time;
 mod uri;
+mod xbel;
+
+use std::fs::File;
+use std::io::{self, BufReader};
+use std::path::PathBuf;
+
+use eileen_contracts::ids::{Personal, Untrusted, WallTime};
+use eileen_contracts::tools::apps::FileKind;
+
+use crate::FileError;
+
+/// The file's name in the user's data folder, and what its errors name.
+const FILE_NAME: &str = "recently-used.xbel";
+
+/// A recently used file: the `RecentSources` trait's `RecentItem` (`eileen-platform`, on the
+/// unmerged base crates) field for field, except that the app's name, which another app wrote,
+/// is [`Untrusted`] here and unwrapped by the trait's implementation. This type gives way to the
+/// trait's when that merges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentItem {
+    /// Its path.
+    pub path: Personal<String>,
+    /// The app that opened it, when known: the name the bookmark file gives it.
+    pub app: Option<Untrusted<String>>,
+    /// What kind of file.
+    pub kind: Option<FileKind>,
+    /// When it was last opened.
+    pub opened_at: WallTime,
+}
+
+/// The user's list of recently used files, `recently-used.xbel`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentlyUsed {
+    /// The file, under the user's home folder.
+    path: Personal<PathBuf>,
+}
+
+impl RecentlyUsed {
+    /// The list in the file at `path`.
+    #[must_use]
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: Personal::new(path.into()) }
+    }
+
+    /// Every usable bookmark in the file, in the file's order: each local file that is not
+    /// private and has a time, with its app and its kind. A path the file lists twice is here
+    /// twice. A missing file, or one with no root element, has none.
+    pub fn bookmarks(&self) -> Result<Vec<RecentItem>, FileError> {
+        let file = match File::open(self.path.get()) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(FileError::io(FILE_NAME, &error)),
+        };
+        xbel::read_bookmarks(BufReader::new(file))
+    }
+}

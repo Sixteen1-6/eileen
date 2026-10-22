@@ -8,17 +8,18 @@
 //!   format, which entries the menu shows, the data folders' precedence, desktop file IDs and which
 //!   apps are packaged; and [`Opener`]: opening through the `OpenURI` portal, and D-Bus activation
 //!   for the entry that [`entry_for`] finds from the trait's `AppEntry`.
-//! - For `RecentSources`: the values in `recently-used.xbel`'s bookmarks (the Desktop Bookmark
-//!   Specification 0.8.5): `file:` URIs and ISO 8601 times, read as `GLib` reads them, and the kind
-//!   of file a MIME type names.
+//! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
+//!   which bookmarks are local files, when each was last opened, by which app, of what kind.
+//!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
 //!
 //! # Does not own
 //!
 //! - The traits (`eileen-platform`, WP0). Thin adapters will serve them; until they merge,
-//!   [`AppEntry`], [`AppKind`] and [`FileError`] (`PlatformError` for files) mirror
-//!   `eileen-platform`'s types field for field.
+//!   [`AppEntry`], [`AppKind`], [`RecentItem`] and [`FileError`] (`PlatformError` for files) mirror
+//!   `eileen-platform`'s types field for field, but for `RecentItem`'s app name.
 //! - Launching apps that are not D-Bus activatable, and opening files with packaged apps: they need
 //!   `eileen_supervisor::user_launch` and its Linux process model (docs/LINUX.md section 5).
+//! - Ranking recent files, and the media history: the recent-work index (BUILD.md section 2.7).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
 //! - D-Bus plumbing: `eileen-dbus-linux`'s, [`DbusError`] (re-exported here) included.
 //!
@@ -37,17 +38,17 @@
 //! # Boundaries
 //!
 //! - May depend on `eileen-contracts` (the `ids` types and `FileKind`), `eileen-dbus-linux` (the
-//!   D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool) and `rustix` (open flags).
-//!   Nothing in the workspace may depend on it except the apps process's composition root on Linux.
+//!   D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool), `rustix` (open flags) and
+//!   `quick-xml` (the bookmark file). Nothing in the workspace may depend on it except the apps
+//!   process's composition root on Linux.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
 //! - Layers: unit tests for the formats; property tests for the desktop entry lists and locale
 //!   keys; the fuzz target `desktop_entry`, whose seed corpus replays as a test; integration tests
-//!   over the fixture session in `tests/fixtures/session/` (a home folder, the system folders and
-//!   Flatpak's and Snap's exports) and over the live session; fakes on `eileen-dbus-linux`'s
-//!   private bus for the D-Bus clients.
+//!   over `tests/fixtures/`, which its README describes, and over the live session; fakes on
+//!   `eileen-dbus-linux`'s private bus for the D-Bus clients.
 //!
 //! # Traps
 //!
@@ -57,6 +58,8 @@
 //!   not decide its ID: the specification gives no meaning to it.
 //! - `XDG_DATA_DIRS` usually lists Flatpak's and Snap's exports through the login profile; a
 //!   runtime started without that profile would miss those apps, so the index adds them.
+//! - `GLib` refuses a whole bookmark file over one bad date; the reader skips that bookmark. A
+//!   `private` bookmark is hidden from every app that did not register it, Eileen included.
 //! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
 //!   `eileen-dbus-linux`'s.
 //!
@@ -78,10 +81,6 @@ pub mod fuzz_entry;
 mod index;
 mod keyfile;
 mod open;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "only the tests read bookmark values until the file's reader does")
-)]
 mod recent;
 
 pub use eileen_dbus_linux::DbusError;
@@ -89,3 +88,4 @@ pub use entry::DesktopEntry;
 pub use error::FileError;
 pub use index::{AppEntry, AppKind, Session, entry_for, index};
 pub use open::{OpenError, Opener};
+pub use recent::{RecentItem, RecentlyUsed};
