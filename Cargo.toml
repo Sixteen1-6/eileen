@@ -21,7 +21,7 @@ publish = false
 eileen-contracts = { path = "crates/eileen-contracts" }
 
 # Async and plumbing
-tokio = { version = "1.54.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
+tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
 tokio-util = { version = "0.7.20", default-features = false }
 
 # Data and contracts
@@ -88,6 +88,11 @@ minidumper = "0.11.0"
 # Linux (docs/LINUX.md): used only by the -linux crates, under Linux target tables. rustix 1.1.5
 # (2026-09-16) is already in the lock through tempfile; `statvfs` needs its fs feature.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
+# zbus 5.19.0 (MIT), the newest release outside the cooling-off window (6.0.0 is inside it), on
+# Eileen's tokio runtime rather than its own async-io executor. quick-xml 0.42.0 (MIT) reads
+# recently-used.xbel.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+quick-xml = "0.42.0"
 
 # Audio and speech
 cpal = "0.18.2"

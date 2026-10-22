@@ -6,6 +6,8 @@
 #![cfg(target_os = "linux")]
 
 #[cfg(test)]
+mod bus;
+#[cfg(test)]
 mod live;
 #[cfg(test)]
 mod machines;

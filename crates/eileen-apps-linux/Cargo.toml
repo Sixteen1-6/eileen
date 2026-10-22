@@ -17,6 +17,10 @@ unsafe = "forbid"
 # dependencies (docs/LINUX.md section 4).
 [target.'cfg(target_os = "linux")'.dependencies]
 eileen-contracts.workspace = true
+zbus.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tokio.workspace = true
 
 [lints]
 workspace = true
