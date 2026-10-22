@@ -96,6 +96,7 @@
 
 mod adapters;
 mod cpu;
+pub mod dbus;
 mod disk;
 mod error;
 pub mod facts;

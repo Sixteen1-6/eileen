@@ -62,6 +62,7 @@
 #![cfg(target_os = "linux")]
 #![forbid(unsafe_code)]
 
+pub mod dbus;
 mod entry;
 mod index;
 mod keyfile;

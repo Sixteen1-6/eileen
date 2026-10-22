@@ -133,6 +133,7 @@ name = "eileen-apps-linux"
 version = "0.0.0"
 dependencies = [
  "eileen-contracts",
+ "thiserror",
  "tokio",
  "zbus",
 ]
