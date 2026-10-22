@@ -1,7 +1,7 @@
 //! The recent files over fixture files in `tests/fixtures/recent/`: one in the layout `GLib`
 //! writes, one in KIO's, and hand-written ones for the rules GTK never exercises, the namespaces,
-//! and the missing, empty and broken files. The bookmarks come in the file's order, the list
-//! newest first.
+//! and the missing, empty and broken files; and over a FIFO and a device in the file's place. The
+//! bookmarks come in the file's order, the list newest first.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use eileen_apps_linux::{FileError, RecentItem, RecentlyUsed, Session};
 use eileen_contracts::ids::{Date, WallTime};
 use eileen_contracts::tools::apps::FileKind;
+
+use crate::open::Scratch;
 
 /// One item as the tests compare it: path, app, kind and time.
 type Row<'a> = (&'a str, Option<&'a str>, Option<FileKind>, WallTime);
@@ -316,6 +318,22 @@ fn a_missing_empty_or_cleared_file_has_no_recent_files() {
     assert_eq!(list("no-such-folder/recently-used.xbel").bookmarks(), Ok(Vec::new()), "missing");
     assert_eq!(list("empty.xbel").bookmarks(), Ok(Vec::new()), "empty");
     assert_eq!(list("cleared.xbel").bookmarks(), Ok(Vec::new()), "GLib's file with no bookmarks");
+}
+
+#[test]
+fn a_fifo_or_a_device_in_the_files_place_is_refused_unread() {
+    // Nothing writes to the FIFO, so an open that waited for a writer would never return.
+    let scratch = Scratch::new();
+    let fifo = RecentlyUsed::at(scratch.fifo("recently-used.xbel"));
+    let not_a_file =
+        Err(FileError::Invalid { what: "recently-used.xbel", detail: "not a file".to_owned() });
+    assert_eq!(fifo.bookmarks(), not_a_file, "a FIFO, opened without waiting");
+    assert_eq!(fifo.recent(10), not_a_file, "and the list of it");
+    assert_eq!(
+        RecentlyUsed::at("/dev/null").bookmarks(),
+        not_a_file,
+        "a device, which would read as an empty file"
+    );
 }
 
 #[test]
