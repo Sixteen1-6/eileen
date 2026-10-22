@@ -21,7 +21,11 @@ publish = false
 eileen-contracts = { path = "crates/eileen-contracts" }
 
 # Async and plumbing
-tokio = { version = "1.54.0", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
+# tokio: 1.54.0 is yanked, and 1.53.3 (2026-10-13) and 1.54.1 (2026-10-21) are inside the
+# cooling-off period, so the pin is 1.53.2 (2026-10-03), the newest release at least 14 days old
+# on 2026-10-22. Cargo's first lock would take 1.54.1, so the pull request whose member first uses
+# tokio locks 1.53.2 with `cargo update -p tokio --precise 1.53.2`.
+tokio = { version = "1.53.2", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "process", "fs", "signal"] }
 tokio-util = { version = "0.7.20", default-features = false }
 
 # Data and contracts
@@ -88,6 +92,16 @@ minidumper = "0.11.0"
 # Linux (docs/LINUX.md): used only by the -linux crates, under Linux target tables. rustix 1.1.5
 # (2026-09-16) is already in the lock through tempfile; `statvfs` needs its fs feature.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
+# zbus 5.19.0 (2026-08-09, MIT) speaks D-Bus on Eileen's tokio runtime, not on its own async-io
+# executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
+# releases from 2026-10-09 to 2026-10-16 for five crates of its tree, so the pull request whose
+# member first uses zbus locks them with `cargo update --precise` at zbus_names 4.3.4, zvariant and
+# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.15, the workspace's own pin.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+# quick-xml 0.42.0 (2026-08-22, MIT) reads GTK's recently-used.xbel; it has no default features.
+quick-xml = "0.42.0"
+# Not pinned: zbus-secret-service-keyring-store 1.0.1, the Secret Service store for SecretStore.
+# It turns on zbus's default features, which bring back the async-io executor.
 
 # Audio and speech
 cpal = "0.18.2"
