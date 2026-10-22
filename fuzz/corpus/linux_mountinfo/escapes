@@ -1,0 +1,5 @@
+40 29 0:44 / /home/sam/My\040Disk rw - ext4 /dev/sdb1 rw
+41 29 8:33 / /media/sam/USB\040STICK\011#2 rw,nosuid,nodev,relatime shared:70 - vfat /dev/sdc1 rw,uid=1000,gid=1000
+52 29 0:51 / /home/sam/remote\012box rw,nosuid,nodev,relatime shared:60 - fuse.sshfs sam@host:/srv\040\0431 rw,user_id=1000,group_id=1000
+53 29 0:52 / /home/sam/back\134slash rw,relatime - fuse.my\040fs\043\134x a\040src rw,user_id=1000,group_id=1000
+54 29 0:53 / /home/sam/caf\303\251 rw,relatime - tmpfs src\040\043\134é rw

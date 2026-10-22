@@ -1,0 +1,15 @@
+  # Indented comment
+[Desktop Action new]
+Name=From the action group
+Exec=from-action
+[Desktop Entry]
+Hidden=false
+Hidden=true
+Type = Application
+Name =  Spaced
+Name=Second
+DBusActivatable=true
+[Desktop Entry]
+Name=From a second entry group
+  [Desktop Action new]
+Name=Again

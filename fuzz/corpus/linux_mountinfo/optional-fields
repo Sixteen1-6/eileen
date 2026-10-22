@@ -1,0 +1,4 @@
+36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
+70 26 0:70 / /srv/a rw shared:3 master:5 propagate_from:2 unbindable - tmpfs tmpfs rw
+71 26 0:71 / /srv/b rw - - - rw
+72 26 0:72 / - rw - ext4 /dev/sde1 rw

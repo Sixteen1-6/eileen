@@ -38,9 +38,11 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
-//! - Layers: unit tests for the format; integration tests over a fixture session in
-//!   `tests/fixtures/session/` (a home folder, the system folders and Flatpak's and Snap's
-//!   exports); one live test over the session the tests run in.
+//! - Layers: unit tests for the format, and property tests for its lists and locale keys; the
+//!   fuzz target `desktop_entry` (module `fuzz_entry`), whose seed corpus replays as a test;
+//!   integration tests over a fixture session in `tests/fixtures/session/` (a home folder, the
+//!   system folders and Flatpak's and Snap's exports); one live test over the session the
+//!   tests run in.
 //!
 //! # Traps
 //!
@@ -63,6 +65,8 @@
 #![forbid(unsafe_code)]
 
 mod entry;
+#[doc(hidden)]
+pub mod fuzz_entry;
 mod index;
 mod keyfile;
 

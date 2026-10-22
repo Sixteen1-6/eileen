@@ -105,6 +105,8 @@ pub(crate) fn read_os(root: &SysRoot, degraded: &mut Vec<String>) -> (String, St
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{Guest, guest, is_wsl, parse_os_release, unquote};
     use crate::SysRoot;
 
@@ -123,6 +125,21 @@ mod tests {
         assert_eq!(unquote("'single'"), "single", "single quotes");
         assert_eq!(unquote("bare"), "bare", "no quotes");
         assert_eq!(unquote("\"unterminated"), "\"unterminated", "left alone");
+    }
+
+    /// An `os-release` value as written: bare, or in double or single quotes, often with
+    /// backslashes and quotes inside.
+    fn written_value() -> impl Strategy<Value = String> {
+        let inner = prop_oneof![r#"[a-z\\"' ]{0,12}"#, any::<String>()];
+        (inner, prop::sample::select(vec!["", "\"", "'"]))
+            .prop_map(|(inner, quote)| format!("{quote}{inner}{quote}"))
+    }
+
+    proptest! {
+        #[test]
+        fn unquoting_never_grows_a_value(raw in written_value()) {
+            prop_assert!(unquote(&raw).len() <= raw.len(), "{:?}", raw);
+        }
     }
 
     #[test]

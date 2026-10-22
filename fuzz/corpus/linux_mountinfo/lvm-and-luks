@@ -1,0 +1,5 @@
+26 1 253:1 / / rw,relatime shared:1 - ext4 /dev/mapper/ubuntu--vg-ubuntu--lv rw,errors=remount-ro
+30 26 259:1 / /boot rw,relatime shared:58 - ext4 /dev/nvme0n1p2 rw
+31 30 259:0 / /boot/efi rw,relatime shared:60 - vfat /dev/nvme0n1p1 rw,fmask=0077,dmask=0077,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro
+44 26 253:2 / /home rw,relatime shared:62 - ext4 /dev/mapper/cryptdata rw
+45 26 9:0 / /srv/raid rw,relatime shared:64 - xfs /dev/md0 rw,attr2,inode64,logbufs=8,logbsize=32k,noquota

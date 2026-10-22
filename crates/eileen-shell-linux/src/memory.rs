@@ -85,6 +85,8 @@ pub(crate) fn kb_to_mb(kb: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{Overcommit, commit_headroom_kb, kb_to_mb, parse_meminfo, parse_overcommit};
 
     const MEMINFO: &str = "MemTotal:       16337548 kB\nMemFree:        13000000 kB\n\
@@ -137,5 +139,22 @@ mod tests {
         assert_eq!(parse_overcommit("2"), Some(Overcommit::Strict), "2");
         assert_eq!(parse_overcommit("7"), None, "unknown");
         assert_eq!(kb_to_mb(u64::MAX), u32::MAX, "saturates");
+    }
+
+    /// A figure in kB, often near the largest whole MB a `u32` holds (`2^42` kB).
+    fn kb() -> impl Strategy<Value = u64> {
+        prop_oneof![0..1_u64 << 44, any::<u64>()]
+    }
+
+    proptest! {
+        #[test]
+        fn kb_to_mb_is_monotonic_and_saturates(a in kb(), b in kb()) {
+            let (low, high) = (a.min(b), a.max(b));
+            prop_assert!(kb_to_mb(low) <= kb_to_mb(high), "monotonic");
+            for kb in [low, high] {
+                let mb = (kb / 1024).min(u64::from(u32::MAX));
+                prop_assert_eq!(u64::from(kb_to_mb(kb)), mb, "whole MB, saturating at u32::MAX");
+            }
+        }
     }
 }
