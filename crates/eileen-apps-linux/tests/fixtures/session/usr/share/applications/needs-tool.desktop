@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Needs a tool
+Exec=eileen-fixture-tool --run
+TryExec=eileen-fixture-tool

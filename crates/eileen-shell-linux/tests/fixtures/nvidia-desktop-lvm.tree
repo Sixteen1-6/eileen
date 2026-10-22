@@ -1,0 +1,104 @@
+# Synthetic: an Ubuntu 24.04 desktop with a Core i7-9700K (8 cores, no SMT, one core type),
+# 32 GB, its UHD 630 (i915) and an RTX 4070 on NVIDIA's own driver, ext4 on LVM on a hard
+# disk beside an NVMe disk, no battery and one monitor on the NVIDIA card. The NVIDIA
+# information file's GPU UUID is zeroed: the probe keeps only its Model line.
+
+proc/sys/kernel/osrelease = 6.8.0-87-generic
+
+<<< etc/os-release
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+ID=ubuntu
+ID_LIKE=debian
+>>>
+
+<<< proc/meminfo
+MemTotal:       32767264 kB
+MemFree:        25307136 kB
+MemAvailable:   29102448 kB
+SwapTotal:       2097148 kB
+SwapFree:        2097148 kB
+CommitLimit:    18480780 kB
+Committed_AS:    7423104 kB
+>>>
+
+<<< proc/cpuinfo
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 158
+model name	: Intel(R) Core(TM) i7-9700K CPU @ 3.60GHz
+siblings	: 8
+cpu cores	: 8
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch fsgsbase bmi1 avx2 smep bmi2 erms invpcid mpx rdseed adx smap clflushopt xsaveopt xsavec xgetbv1 xsaves md_clear flush_l1d
+
+processor	: 1
+processor	: 2
+processor	: 3
+processor	: 4
+processor	: 5
+processor	: 6
+processor	: 7
+>>>
+
+sys/devices/system/cpu/online = 0-7
+sys/devices/system/cpu/cpu{0-7}/topology/core_cpus_list = $n
+sys/bus/event_source/devices/cpu/type = 4
+
+sys/class/drm/version = drm 1.1.0 20060810
+<<< sys/class/drm/card0/device/uevent
+DRIVER=i915
+PCI_CLASS=30000
+PCI_ID=8086:3E98
+PCI_SUBSYS_ID=1462:7B17
+PCI_SLOT_NAME=0000:00:02.0
+>>>
+<<< sys/class/drm/card1/device/uevent
+DRIVER=nvidia
+PCI_CLASS=30000
+PCI_ID=10DE:2786
+PCI_SUBSYS_ID=1462:5156
+PCI_SLOT_NAME=0000:01:00.0
+>>>
+sys/class/drm/card0-DP-1/status = disconnected
+sys/class/drm/card0-HDMI-A-2/status = disconnected
+sys/class/drm/card1-DP-1/status = disconnected
+sys/class/drm/card1-HDMI-A-1/status = connected
+sys/class/drm/card1-HDMI-A-1/enabled = enabled
+<<< proc/driver/nvidia/version
+NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  Wed Aug 27 20:32:11 UTC 2025
+GCC version:  gcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04)
+>>>
+<<< proc/driver/nvidia/gpus/0000:01:00.0/information
+Model: 		 NVIDIA GeForce RTX 4070
+IRQ:   		 145
+GPU UUID: 	 GPU-00000000-0000-0000-0000-000000000000
+Video BIOS: 	 95.04.31.00.4b
+Bus Type: 	 PCIe
+DMA Size: 	 47 bits
+Bus Location: 	 0000:01:00.0
+Device Minor: 	 0
+>>>
+
+<<< usr/share/misc/pci.ids
+10de  NVIDIA Corporation
+	2786  AD104 [GeForce RTX 4070]
+8086  Intel Corporation
+	3e98  CoffeeLake-S GT2 [UHD Graphics 630]
+>>>
+
+sys/block/dm-0/dev = 252:0
+sys/block/dm-0/queue/rotational = 1
+sys/block/dm-0/dm/name = ubuntu--vg-ubuntu--lv
+sys/block/dm-0/slaves/sda3/dev = 8:3
+sys/block/nvme0n1/dev = 259:0
+sys/block/nvme0n1/queue/rotational = 0
+sys/block/nvme0n1/nvme0n1p1/dev = 259:1
+sys/block/sda/dev = 8:0
+sys/block/sda/queue/rotational = 1
+sys/block/sda/device/vendor = ATA
+sys/block/sda/device/model = ST2000DM008-2FR1
+sys/block/sda/sda1/dev = 8:1
+sys/block/sda/sda2/dev = 8:2
+sys/block/sda/sda3/dev = 8:3

@@ -85,6 +85,10 @@ windows-native-keyring-store = "1.1.0"
 crash-handler = "0.8.1"
 minidumper = "0.11.0"
 
+# Linux (docs/LINUX.md): used only by the -linux crates, under Linux target tables. rustix 1.1.5
+# (2026-09-16) is already in the lock through tempfile; `statvfs` needs its fs feature.
+rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
+
 # Audio and speech
 cpal = "0.18.2"
 sonora = "0.2.0"

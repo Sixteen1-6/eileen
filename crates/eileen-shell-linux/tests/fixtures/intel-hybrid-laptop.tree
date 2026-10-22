@@ -1,0 +1,222 @@
+# Synthetic: a laptop shaped like the owner's, a Core Ultra 7 155H (6 performance cores with two
+# threads each, 8 efficient and 2 low-power efficient cores, 22 threads) with 16 GB, under
+# Ubuntu 26.04. Its Arc GPU (i915) and NPU (intel_vpu), an NVMe disk, a discharging battery,
+# the power saver on, a Bluetooth mouse's battery, and the built-in panel as the only display.
+# The kernel also publishes cpu_capacity here (three values); the hybrid PMU lists win, giving
+# the two classes Windows reports.
+
+proc/sys/kernel/osrelease = 7.0.0-14-generic
+
+<<< etc/os-release
+PRETTY_NAME="Ubuntu 26.04 LTS"
+NAME="Ubuntu"
+VERSION_ID="26.04"
+VERSION="26.04 LTS (Resolute Raccoon)"
+ID=ubuntu
+ID_LIKE=debian
+>>>
+
+<<< proc/meminfo
+MemTotal:       16115104 kB
+MemFree:         6938212 kB
+MemAvailable:    9862644 kB
+SwapTotal:       4194300 kB
+SwapFree:        4194300 kB
+CommitLimit:    12251852 kB
+Committed_AS:   11203844 kB
+>>>
+
+<<< proc/cpuinfo
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 170
+model name	: Intel(R) Core(TM) Ultra 7 155H
+siblings	: 22
+cpu cores	: 16
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves avx_vnni umip gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize
+
+processor	: 1
+processor	: 2
+processor	: 3
+processor	: 4
+processor	: 5
+processor	: 6
+processor	: 7
+processor	: 8
+processor	: 9
+processor	: 10
+processor	: 11
+processor	: 12
+processor	: 13
+processor	: 14
+processor	: 15
+processor	: 16
+processor	: 17
+processor	: 18
+processor	: 19
+processor	: 20
+processor	: 21
+>>>
+
+sys/devices/system/cpu/online = 0-21
+sys/devices/system/cpu/cpu{0,1}/topology/core_cpus_list = 0-1
+sys/devices/system/cpu/cpu{2,3}/topology/core_cpus_list = 2-3
+sys/devices/system/cpu/cpu{4,5}/topology/core_cpus_list = 4-5
+sys/devices/system/cpu/cpu{6,7}/topology/core_cpus_list = 6-7
+sys/devices/system/cpu/cpu{8,9}/topology/core_cpus_list = 8-9
+sys/devices/system/cpu/cpu{10,11}/topology/core_cpus_list = 10-11
+sys/devices/system/cpu/cpu{12-21}/topology/core_cpus_list = $n
+sys/devices/system/cpu/cpu{0-11}/cpu_capacity = 1024
+sys/devices/system/cpu/cpu{12-19}/cpu_capacity = 589
+sys/devices/system/cpu/cpu{20-21}/cpu_capacity = 372
+sys/bus/event_source/devices/cpu_core/cpus = 0-11
+sys/bus/event_source/devices/cpu_atom/cpus = 12-21
+
+sys/class/drm/version = drm 1.1.0 20060810
+sys/class/drm/renderD128/dev = 226:128
+<<< sys/class/drm/card1/device/uevent
+DRIVER=i915
+PCI_CLASS=30000
+PCI_ID=8086:7D55
+PCI_SUBSYS_ID=1028:0C1A
+PCI_SLOT_NAME=0000:00:02.0
+MODALIAS=pci:v00008086d00007D55sv00001028sd00000C1Abc03sc00i00
+>>>
+sys/class/drm/card1-eDP-1/status = connected
+sys/class/drm/card1-eDP-1/enabled = enabled
+sys/class/drm/card1-DP-1/status = disconnected
+sys/class/drm/card1-DP-1/enabled = disabled
+sys/class/drm/card1-HDMI-A-1/status = disconnected
+sys/class/drm/card1-HDMI-A-1/enabled = disabled
+<<< sys/class/accel/accel0/device/uevent
+DRIVER=intel_vpu
+PCI_CLASS=120000
+PCI_ID=8086:7D1D
+PCI_SUBSYS_ID=1028:0C1A
+PCI_SLOT_NAME=0000:00:0b.0
+>>>
+
+<<< usr/share/misc/pci.ids
+# A few lines of the PCI ID database
+8086  Intel Corporation
+	7d1d  Meteor Lake NPU
+	7d55  Meteor Lake-P [Intel Arc Graphics]
+		1028 0c1a  A laptop's subsystem
+C 03  Display controller
+>>>
+
+sys/block/nvme0n1/dev = 259:0
+sys/block/nvme0n1/queue/rotational = 0
+sys/block/nvme0n1/device/model = KXG8AZNV1T02 LA KIOXIA
+sys/block/nvme0n1/nvme0n1p1/dev = 259:1
+sys/block/nvme0n1/nvme0n1p2/dev = 259:2
+sys/block/loop{0-5}/dev = 7:$n
+sys/block/loop{0-5}/queue/rotational = 0
+
+sys/class/power_supply/AC/type = Mains
+sys/class/power_supply/AC/online = 0
+sys/class/power_supply/BAT0/type = Battery
+sys/class/power_supply/BAT0/present = 1
+sys/class/power_supply/BAT0/status = Discharging
+sys/class/power_supply/BAT0/capacity = 64
+sys/class/power_supply/hidpp_battery_0/type = Battery
+sys/class/power_supply/hidpp_battery_0/scope = Device
+sys/class/power_supply/hidpp_battery_0/status = Discharging
+sys/firmware/acpi/platform_profile = low-power
+<<< var/lib/power-profiles-daemon/state.ini
+[State]
+CpuDriver=intel_pstate
+PlatformDriver=platform_profile
+Profile=power-saver
+battery_aware=true
+>>>
+
+# The memory sample: paging counters, the overcommit policy and a process tree. Eileen (5000)
+# and everything under it (speech, a Claude session and its node child, the biggest process
+# of all) are Eileen's own; the largest other process is the browser.
+<<< proc/vmstat
+pgpgin 812345
+pgpgout 402211
+pswpin 0
+pswpout 0
+pgfault 91234567
+pgmajfault 48213
+>>>
+proc/sys/vm/overcommit_memory = 0
+<<< proc/1/status
+Name:	systemd
+State:	S (sleeping)
+Pid:	1
+PPid:	0
+VmRSS:	   14212 kB
+>>>
+<<< proc/2/status
+Name:	kthreadd
+State:	S (sleeping)
+Pid:	2
+PPid:	0
+>>>
+<<< proc/1600/status
+Name:	systemd
+State:	S (sleeping)
+Pid:	1600
+PPid:	1
+VmRSS:	   11808 kB
+>>>
+<<< proc/1890/status
+Name:	gnome-shell
+State:	S (sleeping)
+Pid:	1890
+PPid:	1600
+VmRSS:	  412000 kB
+>>>
+<<< proc/4120/status
+Name:	firefox
+State:	S (sleeping)
+Pid:	4120
+PPid:	1600
+VmRSS:	 1254000 kB
+>>>
+<<< proc/4300/status
+Name:	Isolated Web Co
+State:	S (sleeping)
+Pid:	4300
+PPid:	4120
+VmRSS:	  610000 kB
+>>>
+<<< proc/5000/status
+Name:	eileen
+State:	S (sleeping)
+Pid:	5000
+PPid:	1600
+VmRSS:	  180000 kB
+>>>
+<<< proc/5010/status
+Name:	eileen-speech
+State:	S (sleeping)
+Pid:	5010
+PPid:	5000
+VmRSS:	 1650000 kB
+>>>
+<<< proc/5020/status
+Name:	claude
+State:	S (sleeping)
+Pid:	5020
+PPid:	5000
+VmRSS:	  420000 kB
+>>>
+<<< proc/5030/status
+Name:	node
+State:	S (sleeping)
+Pid:	5030
+PPid:	5020
+VmRSS:	 1900000 kB
+>>>
+
+# The load: the CPU line of /proc/stat (the tests rewrite it between calls).
+<<< proc/stat
+cpu  4705 356 584 3699 23 0 23 0 0 0
+cpu0 1393 280 307 2191 9 0 21 0 0 0
+intr 114930548
+>>>

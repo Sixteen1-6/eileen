@@ -1,0 +1,6 @@
+# The user's own copy, which replaces the system's.
+[Desktop Entry]
+Type=Application
+Name=Firefox (work profile)
+Exec=firefox -P work %u
+StartupWMClass=firefox

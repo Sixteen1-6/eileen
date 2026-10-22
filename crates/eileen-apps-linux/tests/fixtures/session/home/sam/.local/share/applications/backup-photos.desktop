@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Back\sup photos
+Exec=sh -c "rsync -a ~/Pictures /media/backup"
+Terminal=true

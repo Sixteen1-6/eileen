@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Name[de]=Taschenrechner
+Exec=gnome-calculator
+DBusActivatable=true
