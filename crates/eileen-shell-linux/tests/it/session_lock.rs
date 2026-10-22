@@ -10,6 +10,12 @@ use eileen_shell_linux::{DbusError, SessionLock};
 const LOGIND: &str = "org.freedesktop.login1";
 /// The caller's session object.
 const SESSION_PATH: &str = "/org/freedesktop/login1/session/auto";
+/// Another session's object, such as a greeter's.
+const OTHER_SESSION_PATH: &str = "/org/freedesktop/login1/session/c1";
+/// The interface of a session object.
+const SESSION_INTERFACE: &str = "org.freedesktop.login1.Session";
+/// What logind's bus answers on an object it does not find.
+const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 /// What the errors name.
 const SESSION: &str = "logind session";
 
@@ -64,12 +70,13 @@ impl OddSession {
 enum LoginError {
     #[zbus(error)]
     ZBus(zbus::Error),
-    /// The caller has no session and no display session.
+    /// The caller has no session and no display session: what logind's manager calls answer.
     #[zbus(name = "NoSessionForPID")]
     NoSession(String),
 }
 
-/// The session object of a caller outside every session, answering with logind's message.
+/// A session object that answers `Lock()` with `NoSessionForPID` and logind's message, which
+/// logind's own session objects never do: the guard's case.
 struct NoSession {
     message: &'static str,
 }
@@ -134,11 +141,34 @@ async fn a_hint_that_is_not_a_boolean_is_invalid() {
 #[tokio::test]
 async fn a_caller_outside_every_session_finds_none() {
     let bus = PrivateBus::start();
+    // logind serves the sessions it knows, and for a caller with no session and no display
+    // session none at `session/auto`: its bus answers UnknownObject there.
+    let _logind = serve(&bus, LOGIND, OTHER_SESSION_PATH, FakeSession::default()).await;
+    let caller = bus.connect().await;
+    let raw = caller
+        .call_method(Some(LOGIND), SESSION_PATH, Some(SESSION_INTERFACE), "Lock", &())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&raw, zbus::Error::MethodError(name, _, _) if name.as_str() == UNKNOWN_OBJECT),
+        "the fake answers as logind does: {raw}"
+    );
+    let lock = SessionLock::new(&caller);
+    let none = DbusError::NotFound { what: SESSION };
+    assert_eq!(lock.session_locked().await.unwrap_err(), none, "no hint to read");
+    let error = lock.lock_workstation().await.unwrap_err();
+    assert_eq!(error, none, "no session to lock");
+    assert!(!error.to_string().contains("/org"), "no service text in the error: {error}");
+}
+
+#[tokio::test]
+async fn a_no_session_for_pid_answer_finds_none_too() {
+    let bus = PrivateBus::start();
     let session = NoSession { message: "Caller does not belong to any known session." };
     let _logind = serve_session(&bus, session).await;
     let lock = SessionLock::new(&bus.connect().await);
     let error = lock.lock_workstation().await.unwrap_err();
-    assert_eq!(error, DbusError::NotFound { what: SESSION }, "NoSessionForPID");
+    assert_eq!(error, DbusError::NotFound { what: SESSION }, "NoSessionForPID, the guard");
     assert!(!error.to_string().contains("Caller"), "no service text in the error: {error}");
 }
 

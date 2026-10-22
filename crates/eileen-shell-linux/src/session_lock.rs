@@ -23,12 +23,17 @@
 //!   desktop that does not listen never locks. [`SessionLock::session_locked`] confirms where the
 //!   desktop sets the hint. logind lets the session's owner ask without authentication: its
 //!   polkit action, `org.freedesktop.login1.lock-sessions`, passes the session's own user.
-//! - A caller with neither a session nor a display session has none to read or lock:
-//!   `org.freedesktop.login1.NoSessionForPID` becomes [`DbusError::NotFound`], as does a logind
-//!   older than `LockedHint` (systemd 230).
+//! - A caller with neither a session nor a display session has none to read or lock, and logind
+//!   answers both calls with `org.freedesktop.DBus.Error.UnknownObject`: its lookup of
+//!   `session/auto` drops the `org.freedesktop.login1.NoSessionForPID` it makes and finds no
+//!   object (`session_object_find` in [logind-session-dbus.c]). That becomes
+//!   [`DbusError::NotFound`], as does a logind older than `LockedHint` (systemd 230).
+//!   `NoSessionForPID` itself, which logind's manager calls send, becomes
+//!   [`DbusError::NotFound`] too, as a guard.
 //!
 //! [logind's D-Bus API]: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html
 //! [logind-dbus.c]: https://github.com/systemd/systemd/blob/main/src/login/logind-dbus.c
+//! [logind-session-dbus.c]: https://github.com/systemd/systemd/blob/main/src/login/logind-session-dbus.c
 //! [screenShield.js]: https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/js/ui/screenShield.js
 //! [kscreenlocker]: https://invent.kde.org/plasma/kscreenlocker/-/merge_requests/10
 
@@ -36,7 +41,9 @@ use zbus::proxy::CacheProperties;
 
 use crate::DbusError;
 
-/// The error logind gives a caller that has no session and no display session.
+/// logind's error for a caller that has no session and no display session. Its manager's calls
+/// send it; on `session/auto` the caller gets `UnknownObject` instead (the module's doc says
+/// why), so this is a guard.
 const NO_SESSION_FOR_PID: &str = "org.freedesktop.login1.NoSessionForPID";
 
 /// What the errors name.
@@ -95,8 +102,9 @@ impl SessionLock {
     }
 }
 
-/// What a failed session call means: [`DbusError::from_zbus`], except that a caller with no
-/// session finds none.
+/// What a failed session call means: [`DbusError::from_zbus`], which makes the `UnknownObject`
+/// a caller with no session gets [`DbusError::NotFound`]. `NoSessionForPID`, the guard, is
+/// [`DbusError::NotFound`] too.
 fn session_error(error: &zbus::Error) -> DbusError {
     if let zbus::Error::MethodError(name, _, _) = error
         && name.as_str() == NO_SESSION_FOR_PID
