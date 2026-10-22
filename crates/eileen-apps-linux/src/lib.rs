@@ -1,32 +1,26 @@
-//! The apps process's platform implementations on Linux: what `eileen-apps-win` does on
-//! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L1 starts with the app index,
-//! [`index`]: every application the desktop's menu shows, read from the XDG desktop entries,
-//! as `shell:AppsFolder` gives it on Windows. [`Opener`] opens web addresses, URIs, files and
-//! folders for the user through the desktop's `OpenURI` portal, and starts D-Bus-activatable
-//! apps.
+//! The apps process's platform implementations on Linux: what `eileen-apps-win` does on Windows
+//! (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L1 starts with the app index, [`index`]:
+//! every app the desktop's menu shows, as `shell:AppsFolder` gives it on Windows.
 //!
 //! # Owns
 //!
-//! - The index, from desktop entries (the XDG Desktop Entry Specification 1.5): their format,
-//!   which entries the menu shows (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`,
-//!   `TryExec`), the precedence of data folders, desktop file IDs, and which apps are packaged.
-//! - Opening and launching for the user ([`Opener`]): `Apps::open_url`, `open_uri` and
-//!   `open_path` through the `OpenURI` portal, and `Apps::launch` and `open_path` with an app
-//!   through D-Bus activation, for the entry that [`entry_for`] finds from the trait's `AppEntry`.
-//! - The trait types, field for field until `eileen-platform` merges: [`AppEntry`] and
-//!   [`AppKind`] (`Apps`); and [`FileError`] for local files, which [`OpenError`] can hold.
+//! - For `Apps`: the index of desktop entries (the XDG Desktop Entry Specification 1.5): their
+//!   format, which entries the menu shows, the data folders' precedence, desktop file IDs and which
+//!   apps are packaged; and [`Opener`]: opening through the `OpenURI` portal, and D-Bus activation
+//!   for the entry that [`entry_for`] finds from the trait's `AppEntry`.
+//! - For `RecentSources`: the values in `recently-used.xbel`'s bookmarks (the Desktop Bookmark
+//!   Specification 0.8.5): `file:` URIs and ISO 8601 times, read as `GLib` reads them, and the kind
+//!   of file a MIME type names.
 //!
 //! # Does not own
 //!
-//! - The `Apps` trait (`eileen-platform`, WP0). When it merges, the index implements
-//!   `Apps::index`, [`Opener`] serves the opening calls, and the mirrored types give way.
-//! - Launching apps that are not D-Bus activatable, and opening files with packaged apps: those
-//!   need `eileen_supervisor::user_launch` (`gio launch`) and the supervisor's Linux process
-//!   model (docs/LINUX.md section 5).
+//! - The traits (`eileen-platform`, WP0). Thin adapters will serve them; until they merge,
+//!   [`AppEntry`], [`AppKind`] and [`FileError`] (`PlatformError` for files) mirror
+//!   `eileen-platform`'s types field for field.
+//! - Launching apps that are not D-Bus activatable, and opening files with packaged apps: they need
+//!   `eileen_supervisor::user_launch` and its Linux process model (docs/LINUX.md section 5).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
-//! - D-Bus plumbing: [`DbusError`], the buses, name owners, the portal request and signal
-//!   streams are `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's
-//!   D-Bus clients.
+//! - D-Bus plumbing: `eileen-dbus-linux`'s, [`DbusError`] (re-exported here) included.
 //!
 //! # Invariants
 //!
@@ -42,20 +36,18 @@
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (the `Personal` wrapper), `eileen-dbus-linux` (the D-Bus
-//!   helpers), `zbus`, `tokio` (files open on its blocking pool) and `rustix` (open flags).
-//!   Nothing in the workspace may depend on it except the apps process's composition root on
-//!   Linux.
+//! - May depend on `eileen-contracts` (the `ids` types and `FileKind`), `eileen-dbus-linux` (the
+//!   D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool) and `rustix` (open flags).
+//!   Nothing in the workspace may depend on it except the apps process's composition root on Linux.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
-//! - Layers: unit tests for the format, and property tests for its lists and locale keys; the
-//!   fuzz target `desktop_entry` (module `fuzz_entry`), whose seed corpus replays as a test;
-//!   integration tests over a fixture session in `tests/fixtures/session/` (a home folder, the
-//!   system folders and Flatpak's and Snap's exports); one live test over the session the
-//!   tests run in. D-Bus clients are tested against fakes on `eileen-dbus-linux`'s private bus
-//!   (its `private-bus` feature, on for this crate's tests only).
+//! - Layers: unit tests for the formats; property tests for the desktop entry lists and locale
+//!   keys; the fuzz target `desktop_entry`, whose seed corpus replays as a test; integration tests
+//!   over the fixture session in `tests/fixtures/session/` (a home folder, the system folders and
+//!   Flatpak's and Snap's exports) and over the live session; fakes on `eileen-dbus-linux`'s
+//!   private bus for the D-Bus clients.
 //!
 //! # Traps
 //!
@@ -86,6 +78,11 @@ pub mod fuzz_entry;
 mod index;
 mod keyfile;
 mod open;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the tests read bookmark values until the file's reader does")
+)]
+mod recent;
 
 pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
