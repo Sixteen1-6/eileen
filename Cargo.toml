@@ -89,8 +89,8 @@ windows-native-keyring-store = "1.1.0"
 crash-handler = "0.8.1"
 minidumper = "0.11.0"
 
-# Linux (docs/LINUX.md): used only by the -linux crates, under Linux target tables. rustix 1.1.5
-# (2026-09-16) is already in the lock through tempfile; `statvfs` needs its fs feature.
+# Linux (docs/LINUX.md): for the -linux crates. rustix 1.1.5 (2026-09-16) is already in the lock
+# through tempfile; `statvfs` needs its fs feature.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
 # zbus 5.19.0 (2026-08-09, MIT) speaks D-Bus on Eileen's tokio runtime, not on its own async-io
 # executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
@@ -101,7 +101,8 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 # quick-xml 0.42.0 (2026-08-22, MIT) reads GTK's recently-used.xbel; it has no default features.
 quick-xml = "0.42.0"
 # Not pinned: zbus-secret-service-keyring-store 1.0.1, the Secret Service store for SecretStore.
-# It turns on zbus's default features, which bring back the async-io executor.
+# It turns on zbus's default features, which bring back the async-io executor, so SecretStore on
+# Linux waits for a store that leaves async-io off.
 
 # Audio and speech
 cpal = "0.18.2"
