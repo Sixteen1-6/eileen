@@ -3,7 +3,7 @@
 //! bus. The [Desktop Notifications Specification][spec] (version 1.3) defines it, and GNOME
 //! Shell, KDE Plasma, dunst, mako and xfce4-notifyd serve it.
 //!
-//! [spec]: https://specifications.freedesktop.org/notification-spec/latest/
+//! [spec]: https://specifications.freedesktop.org/notification/latest/
 //!
 //! What each part serves (BUILD.md section 3.4; docs/LINUX.md section 4):
 //!
