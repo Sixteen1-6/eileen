@@ -21,6 +21,8 @@
 //!   or `gio launch`), which needs the supervisor's Linux process model (docs/LINUX.md section
 //!   5).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
+//! - D-Bus plumbing: [`DbusError`] and the buses are `eileen-dbus-linux`'s, and [`DbusError`] is
+//!   re-exported here for this crate's D-Bus clients.
 //!
 //! # Invariants
 //!
@@ -32,8 +34,9 @@
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (the `Personal` wrapper). Nothing in the workspace may
-//!   depend on it except the apps process's composition root on Linux.
+//! - May depend on `eileen-contracts` (the `Personal` wrapper) and `eileen-dbus-linux` (the
+//!   D-Bus helpers). Nothing in the workspace may depend on it except the apps process's
+//!   composition root on Linux.
 //!
 //! # Testing
 //!
@@ -42,7 +45,8 @@
 //!   fuzz target `desktop_entry` (module `fuzz_entry`), whose seed corpus replays as a test;
 //!   integration tests over a fixture session in `tests/fixtures/session/` (a home folder, the
 //!   system folders and Flatpak's and Snap's exports); one live test over the session the
-//!   tests run in.
+//!   tests run in. D-Bus clients are tested against fakes on `eileen-dbus-linux`'s private bus
+//!   (its `private-bus` feature, on for this crate's tests only).
 //!
 //! # Traps
 //!
@@ -70,5 +74,6 @@ pub mod fuzz_entry;
 mod index;
 mod keyfile;
 
+pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
 pub use index::{AppEntry, AppKind, Session, index};

@@ -9,6 +9,14 @@
 //!    owner's Core Ultra 7 155H: 6 performance cores and 10 others).
 //! 2. Distinct `cpu_capacity` values (Arm big.LITTLE and any kernel that publishes them).
 //! 3. One class with every core.
+//!
+//! # Traps
+//!
+//! - Arm's `core_id` restarts in each cluster: physical cores are counted from
+//!   `core_cpus_list`, never from `core_id`.
+//! - Equal `cpu_capacity` on every core means one core class, not a missing fact. Where the
+//!   kernel publishes both Intel's hybrid PMU lists and capacities, the PMU lists win: they
+//!   give Windows' two classes, the capacities three.
 
 use std::collections::{BTreeMap, BTreeSet};
 

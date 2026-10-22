@@ -18,6 +18,14 @@
 //! Windows reports it. Display-only and virtual adapters (a server's BMC VGA, a virtual
 //! machine's display, a firmware framebuffer, a system-on-chip's display controller) are not
 //! listed, because they compute nothing.
+//!
+//! # Traps
+//!
+//! - An AMD GPU's VRAM size alone does not tell an APU: a Strix Halo's carve-out can be 96 GB
+//!   and a small discrete card has 2 GB. The processor decides first.
+//! - `simpledrm` registers as the platform driver `simple-framebuffer`: a firmware framebuffer,
+//!   not a GPU.
+//! - Under WSL the GPU is `/dev/dxg` with no DRM card, which is degraded, never "no GPU".
 
 use std::collections::BTreeSet;
 

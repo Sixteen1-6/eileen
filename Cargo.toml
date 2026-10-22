@@ -19,6 +19,7 @@ publish = false
 # line joins in the WP0 pull request that creates its crate, as `members` does: Dependabot's
 # cargo updater fails the whole run on a workspace dependency whose path holds no Cargo.toml.
 eileen-contracts = { path = "crates/eileen-contracts" }
+eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
 
 # Async and plumbing
 # tokio: 1.54.0 is yanked, and 1.53.3 (2026-10-13) and 1.54.1 (2026-10-21) are inside the
