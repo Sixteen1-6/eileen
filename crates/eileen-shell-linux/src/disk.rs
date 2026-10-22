@@ -112,14 +112,18 @@ pub(crate) fn parse_mountinfo(text: &str) -> Vec<Mount> {
 }
 
 /// Resolves the kernel's octal escapes in mount fields (`\040` for a space, `\134` for a
-/// backslash).
+/// backslash): a backslash and three octal digits, up to `\377`. Any other backslash is kept.
 fn unescape(field: &str) -> String {
     let mut out = String::with_capacity(field.len());
     let mut rest = field;
     while let Some(at) = rest.find('\\') {
         let (before, after) = rest.split_at(at);
         out.push_str(before);
-        let code = after.get(1..4).and_then(|digits| u8::from_str_radix(digits, 8).ok());
+        // `from_str_radix` alone would also take a sign: `\+12` is not an escape.
+        let code = after
+            .get(1..4)
+            .filter(|digits| digits.bytes().all(|digit| matches!(digit, b'0'..=b'7')))
+            .and_then(|digits| u8::from_str_radix(digits, 8).ok());
         if let Some(code) = code {
             out.push(char::from(code));
             rest = after.get(4..).unwrap_or_default();
@@ -341,6 +345,8 @@ mod tests {
     fn escapes_that_are_not_octal_stay_as_written() {
         assert_eq!(unescape("C:\\134"), "C:\\", "a backslash");
         assert_eq!(unescape("a\\9zz"), "a\\9zz", "not octal");
+        assert_eq!(unescape("a\\+12"), "a\\+12", "a sign is not an octal digit");
+        assert_eq!(unescape("a\\400"), "a\\400", "past \\377");
         assert_eq!(unescape("end\\"), "end\\", "a trailing backslash");
     }
 
