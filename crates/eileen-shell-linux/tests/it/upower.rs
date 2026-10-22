@@ -1,17 +1,21 @@
 //! The power facts over D-Bus against a fake `UPower` (its root object, a system battery and a
 //! mouse's battery) and a fake profiles daemon on a private bus: each fact, a program's hold, the
 //! legacy name, each daemon absent, one the bus cannot start and one that does not answer in
-//! time, and replies Eileen cannot use.
+//! time, replies Eileen cannot use, and the stream of changes, with a bus monitor showing that
+//! the stream never has the bus start a daemon. No test waits on a wall-clock window: a round
+//! trip, a marker call or a change that must come next tells when nothing more is coming.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use eileen_dbus_linux::testing::{PrivateBus, serve};
+use eileen_dbus_linux::testing::{PrivateBus, next_message, nothing_ready, round_trip, serve};
+use eileen_dbus_linux::{Names, owner_changes};
 use eileen_shell_linux::facts::PowerState;
-use eileen_shell_linux::{LinuxPower, PowerDaemon, PowerReading};
-use zbus::message::Type as MessageType;
+use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};
+use zbus::message::{Flags, Type as MessageType};
+use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Str};
 use zbus::{Message, MessageStream};
 
@@ -57,6 +61,10 @@ impl FakeUPower {
     fn on_battery(&self) -> bool {
         self.on_battery
     }
+
+    #[zbus(signal)]
+    async fn device_added(emitter: &SignalEmitter<'_>, device: OwnedObjectPath)
+    -> zbus::Result<()>;
 }
 
 /// One power device, with a property the reader must never ask for.
@@ -716,4 +724,379 @@ async fn a_daemon_that_does_not_answer_in_time_is_named_so() {
         ),
         "the connection's method timeout passed for each"
     );
+}
+
+/// The stream of the power facts on `client`'s bus.
+async fn follow(client: &zbus::Connection) -> PowerChanges {
+    LinuxPower::new(client).changes().await.unwrap()
+}
+
+/// The stream's next state; nextest's slow-timeout ends a test that would wait for good.
+async fn next(changes: &mut PowerChanges) -> PowerState {
+    changes.next().await.expect("the stream is still open")
+}
+
+/// Waits until `owners` reports that its name lost its owner and none took it. The stream shares
+/// its subscription with the power stream's on the same connection, so that one has it too.
+async fn stopped_in(owners: &mut eileen_dbus_linux::OwnerChanges) {
+    while let Some(change) = owners.next().await {
+        if change.new.is_none() {
+            return;
+        }
+    }
+    panic!("the connection closed before the name lost its owner");
+}
+
+/// Polls `changes` once without waiting, so that a reading the waiting signals would start sends
+/// its first call now, before the marker call of `Monitor::seen`. It shows nothing by itself: a
+/// reading takes a round trip, so one poll never yields a state. The monitor's calls, and the
+/// state that must come next, are what a test asserts.
+fn poll_once(changes: &mut PowerChanges) {
+    let _pending = nothing_ready(changes);
+}
+
+#[tokio::test]
+async fn the_stream_yields_the_new_state_when_the_power_source_changes() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, false).await;
+    let _profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    assert_eq!(changes.state(), state(true, false, false), "it starts from a reading");
+    let reading = LinuxPower::new(&client).read().await;
+    assert_eq!(changes.state(), reading.state, "the same as a reading");
+
+    let root = service.object_server().interface::<_, FakeUPower>(ROOT).await.unwrap();
+    root.get_mut().await.on_battery = true;
+    root.get().await.on_battery_changed(root.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, true, false), "unplugged");
+    assert_eq!(changes.state(), state(true, true, false), "the state it last yielded");
+
+    root.get_mut().await.on_battery = false;
+    root.get().await.on_battery_changed(root.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, false, false), "plugged in again");
+}
+
+#[tokio::test]
+async fn the_stream_follows_battery_saver_and_ignores_the_charge_level() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, true).await;
+    let profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    let mut monitor = Monitor::of(&bus, &client).await;
+
+    let battery = service.object_server().interface::<_, FakeDevice>(BAT0).await.unwrap();
+    battery.get_mut().await.percentage = 80.0;
+    battery.get().await.percentage_changed(battery.signal_emitter()).await.unwrap();
+    // Back from a round trip to UPower, the client holds every signal UPower sent before it.
+    round_trip(&client, Some(UPOWER_NAME)).await;
+    poll_once(&mut changes);
+    // No call is no reading, and the stream's states come only from readings.
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "the charge level is no cause to read, so no new state"
+    );
+
+    let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
+    object.get_mut().await.0.active = "power-saver";
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, true, true), "battery saver on");
+    let _reading = monitor.seen(&client).await;
+    round_trip(&client, Some(PROFILES_NAME)).await;
+    poll_once(&mut changes);
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "nothing more: not even a reading"
+    );
+}
+
+#[tokio::test]
+async fn the_stream_follows_a_programs_hold() {
+    let bus = PrivateBus::start();
+    let (_upower, _) = laptop(&bus, true).await;
+    let profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+
+    let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
+    let mut held = object.get_mut().await;
+    held.0.active = "power-saver";
+    held.0.holds = vec![("power-saver", "org.gnome.SettingsDaemon.Power")];
+    drop(held);
+    object.get().await.active_profile_holds_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, true, true), "held");
+    let reading = LinuxPower::new(&client).read().await;
+    assert!(reading.saver_held, "a reading says a program holds it");
+}
+
+#[tokio::test]
+async fn the_stream_follows_the_system_battery_leaving_its_bay() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, false).await;
+    let _profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+
+    let battery = service.object_server().interface::<_, FakeDevice>(BAT0).await.unwrap();
+    battery.get_mut().await.is_present = false;
+    battery.get().await.is_present_changed(battery.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(false, false, false), "no battery now");
+}
+
+#[tokio::test]
+async fn the_stream_watches_a_battery_that_appears_later() {
+    let bus = PrivateBus::start();
+    let serials = Arc::new(AtomicU32::new(0));
+    let service = upower(&bus, false, vec![(AC, device(LINE_POWER, true, true, &serials))]).await;
+    let _profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    assert_eq!(changes.state(), state(false, false, false), "no battery yet");
+
+    service.object_server().at(BAT0, device(BATTERY, true, true, &serials)).await.unwrap();
+    let root = service.object_server().interface::<_, FakeUPower>(ROOT).await.unwrap();
+    root.get_mut().await.devices.push(BAT0);
+    let path = OwnedObjectPath::try_from(BAT0).unwrap();
+    FakeUPower::device_added(root.signal_emitter(), path).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, false, false), "the battery added");
+
+    let battery = service.object_server().interface::<_, FakeDevice>(BAT0).await.unwrap();
+    battery.get_mut().await.is_present = false;
+    battery.get().await.is_present_changed(battery.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(false, false, false), "and followed since");
+}
+
+#[tokio::test]
+async fn the_stream_reads_a_daemon_that_starts_later() {
+    let bus = PrivateBus::start();
+    let (_upower, _) = laptop(&bus, true).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    assert_eq!(changes.state(), state(true, true, false), "no profiles daemon yet");
+
+    let _profiles = current(&bus, Profiles::active("power-saver")).await;
+    assert_eq!(next(&mut changes).await, state(true, true, true), "read once it started");
+}
+
+#[tokio::test]
+async fn a_daemon_that_stops_keeps_its_last_facts() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, true).await;
+    let profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    let mut owners = owner_changes(&client, Names::Name(UPOWER_NAME)).await.unwrap();
+    let mut monitor = Monitor::of(&bus, &client).await;
+
+    service.close().await.unwrap();
+    stopped_in(&mut owners).await;
+    poll_once(&mut changes);
+    // No call is no reading, and the stream's states come only from readings.
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "a daemon stopping is no cause to read, so no new state"
+    );
+
+    let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
+    object.get_mut().await.0.active = "power-saver";
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(
+        next(&mut changes).await,
+        state(true, true, true),
+        "UPower's last facts stand while it is away"
+    );
+}
+
+/// A monitor of the bus (D-Bus's `BecomeMonitor`): the calls one connection sends and each name's
+/// change of owner, in the order the bus carries them. The private bus starts no daemon, so this
+/// is how a test sees a call that a real system bus would start a daemon for.
+struct Monitor {
+    _connection: zbus::Connection,
+    messages: MessageStream,
+}
+
+/// The name a marker call asks about.
+const MARKER: &str = "org.eileen.Test.Marker";
+
+impl Monitor {
+    /// Starts watching what `client` sends on `bus`.
+    async fn of(bus: &PrivateBus, client: &zbus::Connection) -> Self {
+        let connection = bus.connect().await;
+        let messages = MessageStream::from(&connection);
+        let calls = format!("type='method_call',sender='{}'", client.unique_name().unwrap());
+        let owners = "type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged'";
+        connection
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus.Monitoring"),
+                "BecomeMonitor",
+                &(vec![calls.as_str(), owners], 0_u32),
+            )
+            .await
+            .unwrap();
+        Self { _connection: connection, messages }
+    }
+
+    /// What it has seen since it started or was last asked, up to a marker call that `client`
+    /// makes now. The bus carries each connection's messages in order, so all that `client`
+    /// sent before the marker comes before it.
+    async fn seen(&mut self, client: &zbus::Connection) -> Vec<Message> {
+        client
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &(MARKER,),
+            )
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        loop {
+            let message = next_message(&mut self.messages).await;
+            let marker = message.message_type() == MessageType::MethodCall
+                && message.body().deserialize::<&str>().is_ok_and(|name| name == MARKER);
+            if marker {
+                return seen;
+            }
+            seen.push(message);
+        }
+    }
+}
+
+/// The calls among `seen`, other than the tests' own round trips (`org.freedesktop.DBus.Peer`).
+fn calls(seen: &[Message]) -> Vec<&Message> {
+    seen.iter()
+        .filter(|message| message.message_type() == MessageType::MethodCall)
+        .filter(|call| {
+            call.header()
+                .interface()
+                .is_none_or(|interface| interface != "org.freedesktop.DBus.Peer")
+        })
+        .collect()
+}
+
+/// A call as its method and destination.
+fn described(call: &Message) -> String {
+    let header = call.header();
+    let member = header.member().map(|member| member.as_str().to_owned()).unwrap_or_default();
+    let to = header.destination().map(|name| name.as_str().to_owned()).unwrap_or_default();
+    format!("{member} to {to}")
+}
+
+/// The calls among `seen`, described.
+fn made(seen: &[Message]) -> Vec<String> {
+    calls(seen).into_iter().map(described).collect()
+}
+
+/// Whether the bus may start a daemon for `call`: one to a daemon's name, rather than to the bus
+/// itself or to a unique name, without the no-auto-start flag.
+fn may_start_a_daemon(call: &Message) -> bool {
+    let header = call.header();
+    let to = header.destination().map(|name| name.as_str().to_owned()).unwrap_or_default();
+    let flagged = header.primary().flags().contains(Flags::NoAutoStart);
+    !flagged && !to.starts_with(':') && to != "org.freedesktop.DBus"
+}
+
+/// Whether `message` is the bus saying that `name` lost its owner and none took it.
+fn stopped(message: &Message, name: &str) -> bool {
+    message.header().member().is_some_and(|member| member == "NameOwnerChanged")
+        && message
+            .body()
+            .deserialize::<(&str, &str, &str)>()
+            .is_ok_and(|(owned, _, new_owner)| owned == name && new_owner.is_empty())
+}
+
+#[tokio::test]
+async fn a_daemon_that_stops_is_not_called_again() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, true).await;
+    let _profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    let mut owners = owner_changes(&client, Names::Name(UPOWER_NAME)).await.unwrap();
+    let mut monitor = Monitor::of(&bus, &client).await;
+
+    service.close().await.unwrap();
+    stopped_in(&mut owners).await;
+    poll_once(&mut changes);
+    let seen = monitor.seen(&client).await;
+    assert!(seen.iter().any(|message| stopped(message, UPOWER_NAME)), "the bus saw UPower stop");
+    assert_eq!(
+        made(&seen),
+        Vec::<String>::new(),
+        "no call once UPower stopped: it keeps its facts"
+    );
+}
+
+#[tokio::test]
+async fn the_watch_never_has_the_bus_start_a_daemon() {
+    let bus = PrivateBus::start();
+    let (service, _) = laptop(&bus, true).await;
+    let profiles = current(&bus, Profiles::active("balanced")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    let mut monitor = Monitor::of(&bus, &client).await;
+    let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
+
+    // A change read while its daemon runs.
+    object.get_mut().await.0.active = "power-saver";
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, true, true), "battery saver on");
+
+    // A change the watch reads only once its daemon has stopped, as when UPower signals and then
+    // stops, or crashes in the middle of a reading: the client holds the signal, unread, when
+    // UPower goes.
+    let root = service.object_server().interface::<_, FakeUPower>(ROOT).await.unwrap();
+    root.get_mut().await.on_battery = false;
+    root.get().await.on_battery_changed(root.signal_emitter()).await.unwrap();
+    drop(root);
+    round_trip(&client, Some(UPOWER_NAME)).await;
+    service.close().await.unwrap();
+
+    // The next state comes from a reading after UPower's, whose last facts stand.
+    object.get_mut().await.0.active = "balanced";
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, true, false), "UPower's last facts stand");
+
+    let seen = monitor.seen(&client).await;
+    let calls = calls(&seen);
+    let made: Vec<String> = calls.iter().copied().map(described).collect();
+    assert!(
+        made.iter().filter(|call| call.starts_with("Get to :")).count() >= 4,
+        "the watch read the profiles daemon twice at its owner's unique name: {made:?}"
+    );
+    let starting: Vec<String> =
+        calls.into_iter().filter(|call| may_start_a_daemon(call)).map(described).collect();
+    assert_eq!(starting, Vec::<String>::new(), "no call the bus could start a daemon for");
+}
+
+#[tokio::test]
+async fn the_stream_follows_the_legacy_name() {
+    let bus = PrivateBus::start();
+    let (_upower, _) = laptop(&bus, false).await;
+    let profiles = legacy(&bus, Profiles::active("power-saver")).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    assert_eq!(changes.state(), state(true, false, true), "read under the legacy name");
+
+    let object = profiles.object_server().interface::<_, LegacyProfiles>(LEGACY).await.unwrap();
+    object.get_mut().await.0.active = "balanced";
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
+    assert_eq!(next(&mut changes).await, state(true, false, false), "battery saver off");
+}
+
+#[tokio::test]
+async fn the_stream_ends_when_the_connection_closes() {
+    let bus = PrivateBus::start();
+    let (_upower, _) = laptop(&bus, false).await;
+    let client = bus.connect().await;
+    let mut changes = follow(&client).await;
+    client.close().await.unwrap();
+    assert_eq!(changes.next().await, None, "the stream ends with its connection");
 }

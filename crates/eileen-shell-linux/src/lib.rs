@@ -16,8 +16,8 @@
 //!   over logind ([`SessionLock`]), keeping the session awake with logind's lock and the desktop's
 //!   idle hold ([`LinuxPowerRequest`]), and toasts through the notification server ([`Notifier`]),
 //!   each id bound to the server that showed it, with its events ([`NotificationEvents`]).
-//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]);
-//!   [`LinuxMachineProbe`] does not use them yet.
+//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) and a
+//!   stream of their changes ([`PowerChanges`]); [`LinuxMachineProbe`] does not use them yet.
 //!
 //! # Does not own
 //!
@@ -117,4 +117,4 @@ pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
 pub use session_lock::SessionLock;
-pub use upower::{LinuxPower, PowerDaemon, PowerReading};
+pub use upower::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};
