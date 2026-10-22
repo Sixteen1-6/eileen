@@ -2,7 +2,7 @@
 //! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L0 starts with the machine
 //! profile's facts (BUILD.md section 2.16), which [`LinuxMachineProbe`] reads from `/proc`,
 //! `/sys` and `/etc`, and the memory sample of section 2.5, which [`LinuxSystemMemory`] takes.
-//! Phase L1 adds `ShellHost`'s toasts and session calls, one module each.
+//! Phase L1 adds `ShellHost`'s toasts and session calls, and the power facts over D-Bus.
 //!
 //! # Owns
 //!
@@ -16,6 +16,8 @@
 //!   over logind ([`SessionLock`]), keeping the session awake with logind's lock and the desktop's
 //!   idle hold ([`LinuxPowerRequest`]), and toasts through the notification server ([`Notifier`]),
 //!   each id bound to the server that showed it, with its events ([`NotificationEvents`]).
+//! - The power facts over D-Bus from `UPower` ([`LinuxPower`]); [`LinuxMachineProbe`] does not
+//!   use them yet.
 //!
 //! # Does not own
 //!
@@ -40,7 +42,8 @@
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
 //!   keeps a unit's id: of NVIDIA's information file only the `Model` line is kept, and PCI ids
-//!   are used to look names up, not kept.
+//!   are used to look names up, not kept. Over D-Bus each property is read alone, never with
+//!   `GetAll`, so no device's serial number is fetched.
 //!
 //! # Boundaries
 //!
@@ -52,22 +55,19 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-shell-linux`.
-//! - Layers: unit tests for each parser over the kernel's text formats, and property tests for
-//!   the CPU lists, the busy share, the MB conversion and the `os-release` quotes; the fuzz
-//!   targets `linux_mountinfo` and `linux_proc_status` (module `fuzz_entry`), whose seed
-//!   corpora replay as tests; integration tests over six fixture machines in
-//!   `tests/fixtures/` (one recorded under WSL2, five synthetic) built into folders, one live
-//!   test of the machine the tests run on, and the autostart entry in folders a guard removes.
-//!   D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (its `private-bus`
-//!   feature, tests only), the portal's deadline in tokio's paused time.
-//! - A bug here starts as a machine panel line that does not match the PC, a plan class
-//!   (`Tight`, `Standard`, `Roomy`) that the PC's memory does not explain, a session call that
-//!   the desktop does not honour, or a toast that never shows.
+//! - Layers: unit tests for each parser over the kernel's text formats, and property tests for the
+//!   CPU lists, the busy share, the MB conversion and the `os-release` quotes; the fuzz targets of
+//!   `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in `tests/fixtures/`
+//!   (one recorded under WSL2, five synthetic), one live test of this machine, and the autostart
+//!   entry in folders a guard removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s
+//!   private bus (its `private-bus` feature, tests only), their deadlines in tokio's paused time.
+//! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
+//!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
 //! # Traps
 //!
 //! - Each source's traps are in its own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`,
-//!   `session_lock`, `keep_awake`, `notifications` and, for D-Bus, `eileen-dbus-linux`.
+//!   `session_lock`, `keep_awake`, `notifications`, `upower` and, for D-Bus, `eileen-dbus-linux`.
 //!
 //! # Logs and tracing
 //!
@@ -102,6 +102,7 @@ mod pressure;
 mod probe;
 mod root;
 mod session_lock;
+mod upower;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
@@ -116,3 +117,4 @@ pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
 pub use session_lock::SessionLock;
+pub use upower::{LinuxPower, PowerDaemon, PowerReading};
