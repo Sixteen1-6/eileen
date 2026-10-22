@@ -747,6 +747,14 @@ async fn stopped_in(owners: &mut eileen_dbus_linux::OwnerChanges) {
     panic!("the connection closed before the name lost its owner");
 }
 
+/// Polls `changes` once without waiting, so that a reading the waiting signals would start sends
+/// its first call now, before the marker call of `Monitor::seen`. It shows nothing by itself: a
+/// reading takes a round trip, so one poll never yields a state. The monitor's calls, and the
+/// state that must come next, are what a test asserts.
+fn poll_once(changes: &mut PowerChanges) {
+    let _pending = nothing_ready(changes);
+}
+
 #[tokio::test]
 async fn the_stream_yields_the_new_state_when_the_power_source_changes() {
     let bus = PrivateBus::start();
@@ -783,8 +791,13 @@ async fn the_stream_follows_battery_saver_and_ignores_the_charge_level() {
     battery.get().await.percentage_changed(battery.signal_emitter()).await.unwrap();
     // Back from a round trip to UPower, the client holds every signal UPower sent before it.
     round_trip(&client, Some(UPOWER_NAME)).await;
-    assert!(nothing_ready(&mut changes), "the charge level is no new state");
-    assert_eq!(made(&monitor.seen(&client).await), Vec::<String>::new(), "nor cause to read");
+    poll_once(&mut changes);
+    // No call is no reading, and the stream's states come only from readings.
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "the charge level is no cause to read, so no new state"
+    );
 
     let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
     object.get_mut().await.0.active = "power-saver";
@@ -792,8 +805,12 @@ async fn the_stream_follows_battery_saver_and_ignores_the_charge_level() {
     assert_eq!(next(&mut changes).await, state(true, true, true), "battery saver on");
     let _reading = monitor.seen(&client).await;
     round_trip(&client, Some(PROFILES_NAME)).await;
-    assert!(nothing_ready(&mut changes), "nothing more");
-    assert_eq!(made(&monitor.seen(&client).await), Vec::<String>::new(), "not even a reading");
+    poll_once(&mut changes);
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "nothing more: not even a reading"
+    );
 }
 
 #[tokio::test]
@@ -872,10 +889,17 @@ async fn a_daemon_that_stops_keeps_its_last_facts() {
     let client = bus.connect().await;
     let mut changes = follow(&client).await;
     let mut owners = owner_changes(&client, Names::Name(UPOWER_NAME)).await.unwrap();
+    let mut monitor = Monitor::of(&bus, &client).await;
 
     service.close().await.unwrap();
     stopped_in(&mut owners).await;
-    assert!(nothing_ready(&mut changes), "a daemon stopping is no new state");
+    poll_once(&mut changes);
+    // No call is no reading, and the stream's states come only from readings.
+    assert_eq!(
+        made(&monitor.seen(&client).await),
+        Vec::<String>::new(),
+        "a daemon stopping is no cause to read, so no new state"
+    );
 
     let object = profiles.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
     object.get_mut().await.0.active = "power-saver";
@@ -1000,7 +1024,7 @@ async fn a_daemon_that_stops_is_not_called_again() {
 
     service.close().await.unwrap();
     stopped_in(&mut owners).await;
-    assert!(nothing_ready(&mut changes), "a daemon stopping is no new state");
+    poll_once(&mut changes);
     let seen = monitor.seen(&client).await;
     assert!(seen.iter().any(|message| stopped(message, UPOWER_NAME)), "the bus saw UPower stop");
     assert_eq!(
