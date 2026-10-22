@@ -9,6 +9,8 @@
 //!
 //! - `sessions`: [`MprisSessions::sessions`], each player as a `MediaState`.
 //! - `control`: [`MprisSessions::control`], each `MediaAction` as a `Player` method call.
+//! - `subscribe`: [`MprisSessions::subscribe`], which opens a [`MprisWatch`]: a stream the caller
+//!   polls, so nothing runs in the background, of each player's state and then each change.
 //!
 //! # Linux sources
 //!
@@ -20,6 +22,8 @@
 //!   for its name and `org.mpris.MediaPlayer2.Player` for playback, each read whole with
 //!   `org.freedesktop.DBus.Properties.GetAll`, and the `Player` interface's methods
 //!   (<https://specifications.freedesktop.org/mpris-spec/latest/Player_Interface.html>).
+//! - The changes: `PropertiesChanged` and `Seeked` from the players, and `NameOwnerChanged`
+//!   for their names (the `watch` module).
 //!
 //! Players differ from the specification in small ways, and the reads take each difference
 //! they can use (the `value` module). A player's text, its app's name included, is untrusted:
@@ -27,8 +31,10 @@
 //! errors never carry it.
 
 mod value;
+mod watch;
 
 use eileen_contracts::desktop::MediaState;
+use eileen_contracts::ids::Untrusted;
 use eileen_contracts::tools::apps::MediaAction;
 use eileen_dbus_linux::{DbusError, name_owner};
 use zbus::Connection;
@@ -37,6 +43,7 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 
 use self::value::{Playback, Properties, app_name, can, media_state, micros_of};
+pub use self::watch::{MprisEvent, MprisWatch};
 
 /// The start of every MPRIS player's bus name.
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
@@ -161,7 +168,7 @@ impl MprisSessions {
     pub async fn sessions(&self) -> Result<Vec<MediaState>, DbusError> {
         let mut sessions = Vec::new();
         for (name, owner) in players(&self.conn).await? {
-            if let Ok(state) = read(&self.conn, &name, &owner).await {
+            if let Ok((_, state)) = read(self.conn.clone(), name, owner, None).await {
                 sessions.push(state);
             }
         }
@@ -198,8 +205,8 @@ impl MprisSessions {
     /// - A player that is not on the bus is [`DbusError::Unavailable`]; a session that is not
     ///   an MPRIS player's bus name is [`DbusError::Invalid`].
     ///
-    /// It returns once the player has answered. That the player acted shows in its next
-    /// change, as an action is confirmed on Windows (BUILD.md section 2.7).
+    /// It returns once the player has answered. That the player acted shows in the next change
+    /// a [`MprisWatch`] reports, as an action is confirmed on Windows (BUILD.md section 2.7).
     pub async fn control(&self, session: &str, action: &MediaAction) -> Result<(), DbusError> {
         if !session.starts_with(PREFIX) || WellKnownName::try_from(session).is_err() {
             return Err(DbusError::Invalid {
@@ -231,6 +238,12 @@ impl MprisSessions {
             Call::SetPosition(track, position) => proxy.set_position(&track, position).await,
         }
         .map_err(failed)
+    }
+
+    /// Opens a [`MprisWatch`] on every player (`MediaSessions::subscribe`): each player's state,
+    /// then each change. It fails only when the watch's match rules cannot be added.
+    pub async fn subscribe(&self) -> Result<MprisWatch, DbusError> {
+        MprisWatch::open(&self.conn).await
     }
 }
 
@@ -334,17 +347,23 @@ async fn properties(
     reply.body().deserialize().map_err(failed)
 }
 
-/// The state of the player `name`, read from its owner: its `Player` properties, and its root
-/// interface's for its app's name. A root interface that cannot be read leaves the bus name to
-/// name the app.
+/// The player `name`, read from its owner: its app's name and its state from its `Player`
+/// properties. The app's name is `app` when the caller knows it already, and is read from the
+/// root interface only when it does not; a root interface that cannot be read leaves the bus
+/// name to name the app. It owns its arguments, so the watch can keep it while it waits.
 async fn read(
-    conn: &Connection,
-    name: &str,
-    owner: &OwnedUniqueName,
-) -> Result<MediaState, DbusError> {
-    let player = properties(conn, owner, PLAYER).await?;
-    let root = properties(conn, owner, ROOT).await.unwrap_or_default();
-    Ok(media_state(name, app_name(name, &root), &player))
+    conn: Connection,
+    name: String,
+    owner: OwnedUniqueName,
+    app: Option<Untrusted<String>>,
+) -> Result<(Untrusted<String>, MediaState), DbusError> {
+    let player = properties(&conn, &owner, PLAYER).await?;
+    let app = match app {
+        Some(app) => app,
+        None => app_name(&name, &properties(&conn, &owner, ROOT).await.unwrap_or_default()),
+    };
+    let state = media_state(&name, app.clone(), &player);
+    Ok((app, state))
 }
 
 #[cfg(test)]

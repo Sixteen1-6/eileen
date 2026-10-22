@@ -9,7 +9,7 @@ use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::PrivateBus;
 use tokio::sync::Notify;
-use zbus::object_server::InterfaceRef;
+use zbus::object_server::{InterfaceRef, SignalEmitter};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 /// The object every player serves.
@@ -145,6 +145,9 @@ impl Player {
     fn set_position(&mut self, track_id: ObjectPath<'_>, position: i64) {
         self.calls.push(Call::SetPosition(track_id.into(), position));
     }
+
+    #[zbus(signal)]
+    pub(super) async fn seeked(emitter: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
 
     #[zbus(property)]
     async fn playback_status(&self) -> String {
@@ -306,10 +309,19 @@ pub(super) async fn serve(
     root: Root,
     player: Player,
 ) -> zbus::Connection {
-    zbus::connection::Builder::address(bus.address())
-        .unwrap()
-        .name(name)
-        .unwrap()
+    serve_with(bus, name, root, player, |builder| builder).await
+}
+
+/// Serves a fake player, with `name_flags` applied to the connection's builder.
+pub(super) async fn serve_with(
+    bus: &PrivateBus,
+    name: &'static str,
+    root: Root,
+    player: Player,
+    name_flags: fn(zbus::connection::Builder<'static>) -> zbus::connection::Builder<'static>,
+) -> zbus::Connection {
+    let builder = zbus::connection::Builder::address(bus.address()).unwrap().name(name).unwrap();
+    name_flags(builder)
         .serve_at(OBJECT, root)
         .unwrap()
         .serve_at(OBJECT, player)
