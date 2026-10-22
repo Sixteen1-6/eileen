@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use zbus::Connection;
 use zbus::zvariant::OwnedValue;
 
-use super::{Callee, PowerDaemon};
+use super::{Callee, PowerDaemon, Reach};
 use crate::DbusError;
 
 /// The profile that is battery saver.
@@ -24,11 +24,15 @@ pub(super) struct ProfilesAnswer {
     pub(super) saver_held: bool,
 }
 
-/// The profiles daemon's facts, under the current name, else the legacy one.
-pub(super) async fn read_profiles(bus: &Connection) -> Result<ProfilesAnswer, DbusError> {
-    match read_profiles_of(bus, PowerDaemon::PowerProfiles).await {
+/// The profiles daemon's facts, under the current name, else the legacy one, reached as
+/// `reach` says.
+pub(super) async fn read_profiles(
+    bus: &Connection,
+    reach: Reach,
+) -> Result<ProfilesAnswer, DbusError> {
+    match read_profiles_of(bus, PowerDaemon::PowerProfiles, reach).await {
         Err(current) if tries_legacy(&current) => {
-            match read_profiles_of(bus, PowerDaemon::LegacyPowerProfiles).await {
+            match read_profiles_of(bus, PowerDaemon::LegacyPowerProfiles, reach).await {
                 // Neither name has a daemon, or only the current one has, without the object.
                 Err(DbusError::Unavailable { .. }) => Err(current),
                 legacy => legacy,
@@ -56,8 +60,9 @@ const fn tries_legacy(error: &DbusError) -> bool {
 async fn read_profiles_of(
     bus: &Connection,
     daemon: PowerDaemon,
+    reach: Reach,
 ) -> Result<ProfilesAnswer, DbusError> {
-    let profiles = Callee { bus, daemon };
+    let profiles = Callee::new(bus, daemon, reach).await?;
     let (path, interface) = (daemon.path(), daemon.name());
     let active: String = profiles.property(path, interface, "ActiveProfile").await?;
     // The holds only say who chose the profile; a daemon without a readable list (one older
