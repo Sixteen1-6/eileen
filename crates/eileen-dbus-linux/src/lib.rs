@@ -1,11 +1,13 @@
 //! The D-Bus helpers every Linux crate shares (docs/LINUX.md section 4): what a failed call
-//! means and the buses with a method timeout. `eileen-shell-linux` and `eileen-apps-linux` use
-//! them and never re-implement them.
+//! means, the buses with a method timeout, who owns a name, and the signal-stream conventions.
+//! `eileen-shell-linux` and `eileen-apps-linux` use them and never re-implement them.
 //!
 //! # Owns
 //!
 //! - [`DbusError`] and its mappings from zbus errors and D-Bus error names.
 //! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms.
+//! - [`name_owner`] and [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
+//! - The signal-stream conventions: [`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`].
 //! - `testing`, behind the `private-bus` feature: the private bus and fake services for tests.
 //!
 //! # Does not own
@@ -34,11 +36,16 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-dbus-linux`.
-//! - Layers: unit tests for every error mapping; integration tests in `tests/it/` against fake
-//!   services on a `testing::PrivateBus`. Deadlines use tokio's paused time.
+//! - Layers: unit tests for every error mapping and owner-change parse; integration tests in
+//!   `tests/it/` against fake services on a `testing::PrivateBus`. No test asserts that
+//!   nothing arrived within a wall-clock window: `testing::round_trip` and
+//!   `testing::nothing_ready` make that deterministic. Deadlines use tokio's paused time.
 //!
 //! # Traps
 //!
+//! - Every signal stream, the ones zbus's proxies make included, has the same traps: one
+//!   that is not polled stalls its whole connection, and one dropped outside the tokio runtime's
+//!   context panics. They are written once, in the doc of `src/stream.rs`.
 //! - The bus delivers a signal addressed to a connection whatever its match rules say: check
 //!   the sender of every signal that must come from a service.
 //!
@@ -55,8 +62,12 @@
 
 mod bus;
 mod error;
+mod names;
+mod stream;
 #[cfg(feature = "private-bus")]
 pub mod testing;
 
 pub use bus::{METHOD_TIMEOUT, session_bus, session_bus_within, system_bus, system_bus_within};
 pub use error::DbusError;
+pub use names::{Names, OwnerChange, OwnerChanges, name_owner, owner_changes};
+pub use stream::{DRAIN_CAP, QUEUE_SIZE, Stream, next};

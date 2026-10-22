@@ -21,8 +21,8 @@
 //!   or `gio launch`), which needs the supervisor's Linux process model (docs/LINUX.md section
 //!   5).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
-//! - D-Bus plumbing: [`DbusError`] and the buses are `eileen-dbus-linux`'s, and [`DbusError`] is
-//!   re-exported here for this crate's D-Bus clients.
+//! - D-Bus plumbing: [`DbusError`], the buses, name owners and signal streams are
+//!   `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's D-Bus clients.
 //!
 //! # Invariants
 //!
@@ -56,6 +56,8 @@
 //!   not decide its ID: the specification gives no meaning to it.
 //! - `XDG_DATA_DIRS` usually lists Flatpak's and Snap's exports through the login profile; a
 //!   runtime started without that profile would miss those apps, so the index adds them.
+//! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
+//!   `eileen-dbus-linux`'s.
 //!
 //! # Logs and tracing
 //!

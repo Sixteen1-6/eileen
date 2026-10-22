@@ -71,7 +71,7 @@ The traits are BUILD.md section 3.4's, with the signatures in `eileen-platform`.
 
 Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it compiles to an empty library, as the `-win` crates do on Linux.
 
-Their D-Bus clients share one more crate, `eileen-dbus-linux`, which has no Windows counterpart. It holds `DbusError` and its mappings, the session and system buses with a method timeout, and, for tests, a private bus behind its `private-bus` feature. No client writes its own.
+Their D-Bus clients share one more crate, `eileen-dbus-linux`, which has no Windows counterpart. It holds `DbusError` and its mappings, the session and system buses with a method timeout, name owners and their `NameOwnerChanged` signals, and, for tests, a private bus behind its `private-bus` feature. No client writes its own.
 
 | Trait | Linux implementation | Crates (eligible version, licence) | Phase |
 |---|---|---|---|
