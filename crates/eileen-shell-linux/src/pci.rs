@@ -1,5 +1,10 @@
 //! PCI devices as sysfs describes them: a device's `uevent` (its driver, vendor and device ids
 //! and slot), and names from the PCI ID database (`pci.ids`).
+//!
+//! # Traps
+//!
+//! - sysfs entries are symbolic links on a real machine and plain folders in the fixtures:
+//!   read through paths, never with `read_link`, and take a device's driver from its `uevent`.
 
 use crate::SysRoot;
 

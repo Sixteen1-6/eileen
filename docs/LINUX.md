@@ -71,6 +71,8 @@ The traits are BUILD.md section 3.4's, with the signatures in `eileen-platform`.
 
 Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it compiles to an empty library, as the `-win` crates do on Linux.
 
+Their D-Bus clients share one more crate, `eileen-dbus-linux`, which has no Windows counterpart. It holds `DbusError` and its mappings, the session and system buses with a method timeout, and, for tests, a private bus behind its `private-bus` feature. No client writes its own.
+
 | Trait | Linux implementation | Crates (eligible version, licence) | Phase |
 |---|---|---|---|
 | `SystemMemory` | `/proc/meminfo`'s `MemAvailable`. Commit headroom follows `vm.overcommit_memory`: `CommitLimit` minus `Committed_AS` under strict overcommit, else `MemAvailable` plus `SwapFree` (section 10). The paging rate is `pgmajfault` deltas at 4 KB per fault, the build guard's formula. The largest process is the one with the most resident memory (`VmRSS` in `/proc/<pid>/status`) outside Eileen's own process tree | none beyond the crate's | L0: built as `LinuxSystemMemory`; the trait implementation lands with `eileen-platform` |

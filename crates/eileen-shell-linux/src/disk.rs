@@ -9,6 +9,15 @@
 //! (a btrfs subvolume, whose number matches no device and not even its own line in
 //! `mountinfo`) is found through the mount that holds the folder and the device that mount
 //! names.
+//!
+//! # Traps
+//!
+//! - Virtual disks call themselves rotational, or solid-state for a network volume. A guest is
+//!   known by WSL's kernel release, the CPU's `hypervisor` flag or Xen's `/sys/hypervisor`,
+//!   and, where none says so (an Arm guest), by virtio and Xen disk names and models such as
+//!   `QEMU HARDDISK` and `Virtual Disk`. Its disk media is `Unknown` and degraded, never `Hdd`.
+//! - A btrfs subvolume's device number matches no block device and not even its own line in
+//!   `mountinfo`: the data folder's disk is found through the mount that holds the folder.
 
 use std::io;
 use std::os::unix::fs::MetadataExt;
