@@ -10,11 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 
-use eileen_dbus_linux::testing::{PrivateBus, round_trip, serve};
+use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip, serve};
 use eileen_dbus_linux::{Names, OwnerChanges, owner_changes};
 use eileen_shell_linux::{DbusError, DesktopHolder, LinuxPowerRequest};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
@@ -36,6 +37,10 @@ const COOKIE: u32 = 7;
 const WAIT: Duration = Duration::from_secs(30);
 /// The deadline a silent portal passes, in tokio's paused time.
 const DEADLINE: Duration = Duration::from_secs(5);
+/// What a slow portal spends of the deadline before its backend refuses, in paused time.
+const SPENT: Duration = Duration::from_secs(3);
+/// The portal's flag for idle alone, which it is asked for after its backend refuses.
+const IDLE_ALONE: u32 = 8;
 /// What the errors name.
 const PORTAL_WHAT: &str = "Inhibit portal";
 const LOCK_WHAT: &str = "logind inhibitor lock";
@@ -171,6 +176,9 @@ enum Answer {
     /// Refuses the call with `org.freedesktop.portal.Error.NotAllowed`, as a portal other than
     /// xdg-desktop-portal's might.
     NotAllowed,
+    /// Spends [`SPENT`] on suspend and idle, then emits `Response` 2 before it replies; replies
+    /// to idle alone and stays silent. A slow backend that holds nothing.
+    SlowRefusal,
 }
 
 /// One `Inhibit` call to the fake portal.
@@ -236,7 +244,11 @@ impl FakePortal {
         match self.answer {
             Answer::Now(code) => respond(connection, &request, code).await,
             Answer::Unserved => respond(connection, &request, 0).await,
-            Answer::Later | Answer::OldPath | Answer::NotAllowed => {}
+            Answer::SlowRefusal if flags != IDLE_ALONE => {
+                tokio::time::sleep(SPENT).await;
+                respond(connection, &request, 2).await;
+            }
+            Answer::Later | Answer::OldPath | Answer::NotAllowed | Answer::SlowRefusal => {}
         }
         Ok(request)
     }
@@ -345,6 +357,13 @@ async fn left(changes: &mut OwnerChanges) -> bool {
     changes.next().await.is_some_and(|change| change.new.is_none())
 }
 
+/// Whether the watched connection is still on the bus: after a round trip to the bus, the
+/// `NameOwnerChanged` of its leaving would be ready, had it left.
+async fn still_on_the_bus(observer: &zbus::Connection, changes: &mut OwnerChanges) -> bool {
+    round_trip(observer, None).await;
+    nothing_ready(changes)
+}
+
 /// logind's end of the fake's latest lock, which reads without waiting.
 fn watch_end(manager: &FakeManager) -> UnixStream {
     let watch = manager.watches.lock().unwrap().pop().unwrap();
@@ -451,21 +470,23 @@ async fn the_portal_holds_suspend_and_idle_even_while_logind_holds() {
 async fn a_refusal_after_the_reply_is_asked_again_for_idle_alone() {
     let bus = PrivateBus::start();
     let mut portal = Portal::start(&bus, Answer::Later).await;
+    // A system bus that logind is not on.
+    let system = bus.connect().await;
     let session = bus.connect().await;
     // As xdg-desktop-portal-gtk does without GNOME's session manager: the portal replies first,
     // and then its backend refuses anything but idle.
-    let (request, (first, second)) =
-        tokio::join!(LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT), async {
-            (portal.answer(2).await, portal.answer(0).await)
-        });
+    let (request, (first, second)) = tokio::join!(
+        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT),
+        async { (portal.answer(2).await, portal.answer(0).await) }
+    );
     assert_eq!((first.flags, second.flags), (12, 8), "suspend and idle first, then idle alone");
     assert_ne!(first.request, second.request, "each request on a handle of its own");
     let request = request.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::Portal), "idle is held");
     assert_eq!(
         request.missed(),
-        [DbusError::Unavailable { what: "system bus" }],
-        "only the system bus's absence is named"
+        [DbusError::Unavailable { what: LOCK_WHAT }],
+        "only logind's absence is named, as the lock's miss"
     );
     assert!(portal.calls().is_empty(), "two calls, and no third");
     request.release().await.unwrap();
@@ -528,6 +549,33 @@ async fn a_portal_that_never_answers_holds_nothing_past_the_deadline() {
     let error =
         LinuxPowerRequest::keep_awake(None, Some(session), WHY, DEADLINE).await.unwrap_err();
     assert_eq!(error, unconfirmed, "with nothing else holding, the deadline is the error");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_deadline_is_one_budget_for_both_portal_requests() {
+    let bus = PrivateBus::start();
+    // The backend spends 3 of the 5 seconds refusing suspend and idle, then never answers for
+    // idle alone. Paused time cannot skip the refusal: while the first call waits, the fake's
+    // sleep is the only timer, and the refusal comes before the reply the caller waits for.
+    let mut portal = Portal::start(&bus, Answer::SlowRefusal).await;
+    let session = bus.connect().await;
+    let start = Instant::now();
+    let error =
+        LinuxPowerRequest::keep_awake(None, Some(session), WHY, DEADLINE).await.unwrap_err();
+    assert_eq!(
+        error,
+        DbusError::DeadlineExceeded { call: "portal response" },
+        "idle alone was never confirmed"
+    );
+    assert_eq!(
+        start.elapsed(),
+        DEADLINE,
+        "the second request had what the first left of the deadline, not 5 seconds of its own"
+    );
+    let calls = portal.calls();
+    let [first, second] = calls.as_slice() else { panic!("two calls: {calls:?}") };
+    assert_eq!((first.flags, second.flags), (12, 8), "suspend and idle, then idle alone");
+    assert_eq!(portal.next_close().await, second.request, "the unconfirmed request was closed");
 }
 
 #[tokio::test]
@@ -668,6 +716,10 @@ async fn dropping_the_request_leaves_the_bus_so_the_desktop_ends_its_hold() {
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
     let sender = gnome.calls.lock().unwrap().first().unwrap().sender.clone();
     assert_eq!(sender, caller, "the hold was taken on the connection the request keeps");
+    assert!(
+        still_on_the_bus(&observer, &mut leaving).await,
+        "the caller stays on the bus while the request lives"
+    );
     drop(request);
     assert!(
         left(&mut leaving).await,
@@ -691,7 +743,12 @@ async fn a_request_dropped_on_a_plain_thread_still_releases() {
     let request =
         LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
-    let watch = watch_end(&manager);
+    let mut watch = watch_end(&manager);
+    assert!(still_held(&mut watch), "the lock holds while the request lives");
+    assert!(
+        still_on_the_bus(&observer, &mut leaving).await,
+        "and the session connection stays on the bus"
+    );
     std::thread::scope(|scope| {
         let dropped = scope.spawn(move || drop(request));
         assert!(dropped.join().is_ok(), "dropping it off the runtime does not panic");
