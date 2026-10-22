@@ -11,8 +11,10 @@
 //! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
 //!   which bookmarks are local files, when each was last opened, by which app, of what kind.
 //!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
-//! - For `MediaSessions`: the MPRIS client, [`MprisSessions`]: which bus names are players, how
-//!   their properties become `MediaState`s, and each `MediaAction`'s call.
+//! - For `MediaSessions`: the MPRIS client, [`MprisSessions`]: which bus names are players, their
+//!   properties as `MediaState`s, each `MediaAction`'s call, and [`MprisWatch`]'s rules: which
+//!   signals read a player again, folded into one read per player, and `Gone` when a player loses
+//!   its name.
 //!
 //! # Does not own
 //!
@@ -71,7 +73,7 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet: spans join with the trait implementations.
+//! - None yet: spans join with the trait implementations, around the calls and the watch's stream.
 //!
 //! # Do not change without a decision record
 //!

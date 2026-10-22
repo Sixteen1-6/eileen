@@ -147,9 +147,12 @@ async fn only_a_players_own_signals_read_it_and_an_unchanged_state_reports_nothi
 async fn a_flood_of_signals_is_folded_and_never_stalls_the_watch() {
     let bus = PrivateBus::start();
     let full = serve(&bus, FULL, full_root(), full_player()).await;
-    let mpris = MprisSessions::new(&bus.connect().await);
+    let odd = serve(&bus, ODD, odd_root(), odd_player()).await;
+    let conn = bus.connect().await;
+    let mpris = MprisSessions::new(&conn);
     let mut watch = mpris.subscribe().await.unwrap();
-    assert_eq!(next(&mut watch).await, MprisEvent::Changed(full_state()), "the player");
+    assert_eq!(next(&mut watch).await, MprisEvent::Changed(full_state()), "the first player");
+    assert_eq!(next(&mut watch).await, MprisEvent::Changed(odd_state()), "then the second");
 
     // More signals than the watch's queue holds, sent while nothing polls it.
     let player = interface(&full).await;
@@ -160,12 +163,25 @@ async fn a_flood_of_signals_is_folded_and_never_stalls_the_watch() {
     let sought = MediaState { position_s: Some(5.0), ..full_state() };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(sought.clone()), "one change");
 
-    // The rest of the flood reports nothing: the next change is the pause that follows it.
+    // The rest of the flood reports nothing. Its signals are ahead of the second player's seek,
+    // so a read they caused that reported the first player again would come first.
+    delivered(&full, &conn).await;
+    let second = interface(&odd).await;
+    second.get_mut().await.position = Some(7_000_000);
+    Player::seeked(second.signal_emitter(), 7_000_000).await.unwrap();
+    let second_sought = MediaState { position_s: Some(7.0), ..odd_state() };
+    assert_eq!(
+        next(&mut watch).await,
+        MprisEvent::Changed(second_sought.clone()),
+        "no more for the rest of the flood"
+    );
+
+    // The first player's own signals still count, and the connection still answers.
     player.get_mut().await.status = "Paused";
     player.get().await.playback_status_changed(player.signal_emitter()).await.unwrap();
     let paused = MediaState { playing: false, ..sought };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(paused.clone()), "then the pause");
-    assert_eq!(mpris.sessions().await.unwrap(), [paused], "the connection still answers");
+    assert_eq!(mpris.sessions().await.unwrap(), [paused, second_sought], "the listing");
 }
 
 #[tokio::test]
