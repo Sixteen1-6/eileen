@@ -20,10 +20,13 @@ eileen-contracts.workspace = true
 eileen-dbus-linux.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+zbus.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 eileen-dbus-linux = { workspace = true, features = ["private-bus"] }
 proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
