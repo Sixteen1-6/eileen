@@ -6,6 +6,8 @@
 //! [`LinuxPower::read`] serves the power state of `MachineProbe::facts` (the `power` field, with
 //! its `degraded` entries) and of `MachineProbe::load`, once `eileen-platform` has the trait
 //! (BUILD.md section 3.4; [`PowerState`] mirrors its contract type until then).
+//! [`LinuxPower::changes`] serves `MachineProbe::watch`'s `MachineChange::PowerSource` and
+//! `MachineChange::BatterySaver`; module `changes` gives the stream's own rules.
 //!
 //! # Sources
 //!
@@ -45,20 +47,28 @@
 //!   of it. When the bus cannot start it (its systemd unit masked or missing, or its program
 //!   failing), [`DbusError`] maps the bus's answer to `Unavailable`: the daemon is named as not
 //!   on the bus, and the legacy profiles name is tried next.
+//! - The first reading of [`LinuxPower::changes`] calls them by name too; its later readings
+//!   never have the bus start a daemon.
 //!
 //! # Traps
 //!
 //! - No call has a deadline of its own: give [`LinuxPower`] a connection with a method timeout,
 //!   as [`eileen_dbus_linux::system_bus`] makes, or a hung daemon holds the reading. A call
 //!   past it is worded "did not answer in time".
+//! - [`LinuxPower::read`] lets the bus start a daemon that is not running, so calling it on a
+//!   timer restarts a daemon the user stopped: between readings, take the state from
+//!   [`LinuxPower::changes`].
 
+mod changes;
 mod profiles;
 
+use eileen_dbus_linux::name_owner;
 use zbus::Connection;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use crate::DbusError;
 use crate::facts::PowerState;
+pub use changes::PowerChanges;
 use profiles::{ProfilesAnswer, read_profiles};
 
 /// `UPower`'s bus name, which is also its root object's interface.
@@ -140,9 +150,16 @@ impl LinuxPower {
     /// Reads the power facts from `UPower` and the profiles daemon. It never fails: a daemon
     /// that does not answer is named in [`PowerReading::degraded`].
     pub async fn read(&self) -> PowerReading {
-        let upower = read_upower(&self.bus).await;
-        let profiles = read_profiles(&self.bus).await;
+        let upower = read_upower(&self.bus, Reach::Start).await;
+        let profiles = read_profiles(&self.bus, Reach::Start).await;
         reading_of(upower.as_ref(), profiles.as_ref())
+    }
+
+    /// Starts following the power facts: the stream yields each new [`PowerState`], starting
+    /// from [`PowerChanges::state`]. It fails only when the bus refuses the subscriptions; a
+    /// daemon that is absent now is read when it starts.
+    pub async fn changes(&self) -> Result<PowerChanges, DbusError> {
+        changes::follow(&self.bus).await
     }
 }
 
@@ -232,8 +249,8 @@ fn failure(daemon: PowerDaemon, error: &DbusError) -> String {
 }
 
 /// `UPower`'s facts: `OnBattery` and each system battery.
-async fn read_upower(bus: &Connection) -> Result<UPowerAnswer, DbusError> {
-    let upower = Callee { bus, daemon: PowerDaemon::UPower };
+async fn read_upower(bus: &Connection, reach: Reach) -> Result<UPowerAnswer, DbusError> {
+    let upower = Callee::new(bus, PowerDaemon::UPower, reach).await?;
     let on_battery = upower.property(UPOWER_PATH, UPOWER, "OnBattery").await?;
     let devices = upower.devices().await?;
     let mut batteries = Vec::new();
@@ -266,16 +283,47 @@ async fn system_battery(
     upower.property(at, DEVICE, "IsPresent").await.map(Some)
 }
 
-/// One daemon as a reading calls it: by its name, every call bounded by the connection's
-/// method timeout.
+/// How a reading's calls reach a daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// By the daemon's name, so the bus starts a daemon that is installed but not running:
+    /// [`LinuxPower::read`] and the first reading of [`LinuxPower::changes`].
+    Start,
+    /// By the unique name of its name's owner, which the bus starts nothing for, so a daemon
+    /// that is not running is not read: the stream's later readings. zbus sets D-Bus's
+    /// no-auto-start flag only through `Proxy::call_with_flags`, which skips the connection's
+    /// method timeout: hence the unique name rather than the flag.
+    Running,
+}
+
+/// One daemon as a reading calls it, every call bounded by the connection's method timeout.
 struct Callee<'a> {
     /// The system bus.
     bus: &'a Connection,
     /// The daemon.
     daemon: PowerDaemon,
+    /// Where its calls go: the daemon's name, or the unique name of its name's owner.
+    to: String,
 }
 
-impl Callee<'_> {
+impl<'a> Callee<'a> {
+    /// `daemon` on `bus`, reached as `reach` says; with [`Reach::Running`], unavailable while
+    /// nothing owns the daemon's name.
+    async fn new(
+        bus: &'a Connection,
+        daemon: PowerDaemon,
+        reach: Reach,
+    ) -> Result<Self, DbusError> {
+        let to = match reach {
+            Reach::Start => daemon.name().to_owned(),
+            Reach::Running => name_owner(bus, daemon.name())
+                .await?
+                .ok_or_else(|| DbusError::Unavailable { what: daemon.what() })?
+                .to_string(),
+        };
+        Ok(Self { bus, daemon, to })
+    }
+
     /// The property `name` of `interface` at `path`, read alone with `Get`.
     async fn property<T>(
         &self,
@@ -286,7 +334,7 @@ impl Callee<'_> {
     where
         T: TryFrom<OwnedValue>,
     {
-        let (what, to) = (self.daemon.what(), self.daemon.name());
+        let (what, to) = (self.daemon.what(), self.to.as_str());
         let reply = self
             .bus
             .call_method(Some(to), path, Some(PROPERTIES), "Get", &(interface, name))
@@ -300,7 +348,7 @@ impl Callee<'_> {
 
     /// The devices `UPower` lists, with `EnumerateDevices`.
     async fn devices(&self) -> Result<Vec<OwnedObjectPath>, DbusError> {
-        let (what, to) = (self.daemon.what(), self.daemon.name());
+        let (what, to) = (self.daemon.what(), self.to.as_str());
         let reply = self
             .bus
             .call_method(Some(to), UPOWER_PATH, Some(UPOWER), "EnumerateDevices", &())
