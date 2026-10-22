@@ -16,6 +16,9 @@
 //! 5. [`Request::wait`] waits for the `Response` from that sender, within the caller's deadline:
 //!    the answer is a signal, which no method timeout bounds. Past the deadline it closes the
 //!    request, which dismisses a dialog the portal still shows.
+//! 6. A request that holds until it is closed, as an inhibition does, ends with
+//!    [`close_request`]: `Close`, answered within the connection's method timeout. It takes the
+//!    handle alone, so the holder need not keep the [`Request`] and its signal stream.
 //!
 //! Only a `Response` from the connection that answered the call counts. The match rule names the
 //! portal, which keeps other connections' broadcasts out on the bus, but the bus delivers a
@@ -30,13 +33,14 @@ use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use zbus::match_rule::Builder;
 use zbus::message::Flags;
 use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
-use zbus::{Connection, MatchRule, Message, MessageStream};
+use zbus::{Connection, MatchRule, Message};
 
 use crate::DbusError;
-use crate::stream::{QUEUE_SIZE, next};
+use crate::stream::{Signals, subscribe};
 
 /// The portal's bus name.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -59,7 +63,7 @@ pub struct Request {
     conn: Connection,
     token: String,
     path: OwnedObjectPath,
-    responses: Option<MessageStream>,
+    responses: Option<Signals>,
 }
 
 impl Request {
@@ -93,19 +97,14 @@ impl Request {
 
     /// Subscribes to the request's `Response`. Call it before the portal call.
     pub async fn responses(&mut self) -> Result<(), DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(WHAT, &error);
         let rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender(PORTAL)
             .and_then(|rule| rule.path(self.path.clone()))
             .and_then(|rule| rule.interface(REQUEST))
             .and_then(|rule| rule.member("Response"))
-            .map_err(failed)?
-            .build();
-        let stream = MessageStream::for_match_rule(rule, &self.conn, Some(QUEUE_SIZE))
-            .await
-            .map_err(failed)?;
-        self.responses = Some(stream);
+            .map(Builder::build);
+        self.responses = Some(subscribe(&self.conn, rule, WHAT).await?);
         Ok(())
     }
 
@@ -151,7 +150,7 @@ impl Request {
 
     /// Closes the request, best effort: `Close` is sent without waiting for an answer, within
     /// [`CLOSE_GRACE`]. The portal ends the request and dismisses any dialog it shows; a request
-    /// that has already ended is not there to close.
+    /// that has already ended is not there to close. [`close_request`] waits for the answer.
     pub async fn close(&self) {
         let close = async {
             let message = Message::method_call(self.path.clone(), "Close")?
@@ -165,13 +164,25 @@ impl Request {
     }
 }
 
+/// Closes the portal request at `handle` with its `Close`, and waits for the portal's answer
+/// within the connection's method timeout, as every method call does: for a request that holds
+/// until it is closed, whose end the caller must know. Errors name `what`; a request the portal
+/// no longer serves is [`DbusError::NotFound`].
+pub async fn close_request(
+    conn: &Connection,
+    handle: &ObjectPath<'_>,
+    what: &'static str,
+) -> Result<(), DbusError> {
+    conn.call_method(Some(PORTAL), handle, Some(REQUEST), "Close", &())
+        .await
+        .map(|_reply| ())
+        .map_err(|error| DbusError::from_zbus(what, &error))
+}
+
 /// The code of the first `Response` in `responses` that `portal` sent.
-async fn response(
-    responses: &mut MessageStream,
-    portal: &UniqueName<'_>,
-) -> Result<u32, DbusError> {
+async fn response(responses: &mut Signals, portal: &UniqueName<'_>) -> Result<u32, DbusError> {
     loop {
-        let message = next(responses).await.ok_or_else(|| DbusError::Io {
+        let message = responses.next().await.ok_or_else(|| DbusError::Io {
             what: WHAT,
             detail: "the bus connection closed".to_owned(),
         })?;

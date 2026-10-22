@@ -1,12 +1,14 @@
-//! The portal `Request` client against a fake portal on the private bus.
+//! The portal `Request` client and `close_request` against a fake portal on the private bus.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{PrivateBus, next_message, serve};
-use eileen_dbus_linux::{DbusError, Request};
+use eileen_dbus_linux::{DbusError, Request, close_request};
 use zbus::message::Header;
-use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
 
 /// The portal's bus name.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -20,6 +22,8 @@ const OLD_HANDLE: &str = "/org/freedesktop/portal/desktop/request/old/1";
 const SILENT: u32 = u32::MAX;
 /// How long a test waits for an answer the fake sends.
 const DEADLINE: Duration = Duration::from_secs(30);
+/// What the errors of closing a request name.
+const CLOSING: &str = "the request";
 
 /// A fake portal. `Ask` makes a request and answers with its handle: the one the token
 /// predicts, or [`OLD_HANDLE`]; with a code other than [`SILENT`], it first sends that
@@ -69,6 +73,29 @@ async fn respond(conn: &zbus::Connection, to: &str, handle: &str, code: u32, mal
         let body = (code, HashMap::<&str, Value<'_>>::new());
         conn.emit_signal(Some(to), path, interface, "Response", &body).await.unwrap();
     }
+}
+
+/// A request the fake portal holds: its `Close` counts itself, then answers, or never answers
+/// when `hang` is set.
+#[derive(Debug, Clone, Default)]
+struct FakeRequest {
+    closes: Arc<AtomicU32>,
+    hang: bool,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.Request")]
+impl FakeRequest {
+    async fn close(&self) {
+        self.closes.fetch_add(1, Ordering::SeqCst);
+        if self.hang {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// The handle the fake portal serves its request at.
+fn held() -> ObjectPath<'static> {
+    ObjectPath::try_from(OLD_HANDLE).unwrap()
 }
 
 /// The fake portal, and a client with a request subscribed to its responses.
@@ -177,4 +204,54 @@ async fn a_request_that_misses_its_deadline_is_closed() {
             break;
         }
     }
+}
+
+#[tokio::test]
+async fn closing_a_request_waits_for_the_portals_answer() {
+    let bus = PrivateBus::start();
+    let request = FakeRequest::default();
+    let _portal = serve(&bus, PORTAL, OLD_HANDLE, request.clone()).await;
+    let client = bus.connect().await;
+    assert_eq!(close_request(&client, &held(), CLOSING).await, Ok(()), "the portal answered");
+    assert_eq!(request.closes.load(Ordering::SeqCst), 1, "once it had closed the request");
+}
+
+#[tokio::test]
+async fn closing_a_request_the_portal_no_longer_serves_is_not_found() {
+    let bus = PrivateBus::start();
+    let _portal = serve(&bus, PORTAL, OLD_HANDLE, FakeRequest::default()).await;
+    let client = bus.connect().await;
+    let ended = ObjectPath::try_from("/org/freedesktop/portal/desktop/request/old/2").unwrap();
+    assert_eq!(
+        close_request(&client, &ended, CLOSING).await,
+        Err(DbusError::NotFound { what: CLOSING }),
+        "a request that has ended is not there to close"
+    );
+}
+
+#[tokio::test]
+async fn closing_a_request_without_a_portal_is_unavailable() {
+    let bus = PrivateBus::start();
+    let client = bus.connect().await;
+    assert_eq!(
+        close_request(&client, &held(), CLOSING).await,
+        Err(DbusError::Unavailable { what: CLOSING }),
+        "nothing owns the portal's name"
+    );
+}
+
+#[tokio::test]
+async fn a_close_the_portal_never_answers_passes_the_method_timeout() {
+    let bus = PrivateBus::start();
+    let request = FakeRequest { hang: true, ..FakeRequest::default() };
+    let _portal = serve(&bus, PORTAL, OLD_HANDLE, request).await;
+    let client = bus.connect_within(Duration::from_secs(5)).await;
+    // Paused only now, as in the bus's deadline test: the connections above are made in real
+    // time, and from here the only timer is the method timeout.
+    tokio::time::pause();
+    assert_eq!(
+        close_request(&client, &held(), CLOSING).await,
+        Err(DbusError::DeadlineExceeded { call: CLOSING }),
+        "bounded by the connection's method timeout, as every call is"
+    );
 }

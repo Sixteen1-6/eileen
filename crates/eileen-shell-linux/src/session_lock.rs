@@ -29,7 +29,7 @@
 //!   object (`session_object_find` in [logind-session-dbus.c]). That becomes
 //!   [`DbusError::NotFound`], as does a logind older than `LockedHint` (systemd 230).
 //!   `NoSessionForPID` itself, which logind's manager calls send, becomes
-//!   [`DbusError::NotFound`] too, as a guard.
+//!   [`DbusError::NotFound`] too, by `eileen-dbus-linux`'s mapping, as a guard.
 //!
 //! [logind's D-Bus API]: https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html
 //! [logind-dbus.c]: https://github.com/systemd/systemd/blob/main/src/login/logind-dbus.c
@@ -40,11 +40,6 @@
 use zbus::proxy::CacheProperties;
 
 use crate::DbusError;
-
-/// logind's error for a caller that has no session and no display session. Its manager's calls
-/// send it; on `session/auto` the caller gets `UnknownObject` instead (the module's doc says
-/// why), so this is a guard.
-const NO_SESSION_FOR_PID: &str = "org.freedesktop.login1.NoSessionForPID";
 
 /// What the errors name.
 const SESSION: &str = "logind session";
@@ -102,14 +97,8 @@ impl SessionLock {
     }
 }
 
-/// What a failed session call means: [`DbusError::from_zbus`], which makes the `UnknownObject`
-/// a caller with no session gets [`DbusError::NotFound`]. `NoSessionForPID`, the guard, is
-/// [`DbusError::NotFound`] too.
+/// What a failed session call means, by [`DbusError::from_zbus`]: the `UnknownObject` a caller
+/// with no session gets is [`DbusError::NotFound`], and so is `NoSessionForPID`, the guard.
 fn session_error(error: &zbus::Error) -> DbusError {
-    if let zbus::Error::MethodError(name, _, _) = error
-        && name.as_str() == NO_SESSION_FOR_PID
-    {
-        return DbusError::NotFound { what: SESSION };
-    }
     DbusError::from_zbus(SESSION, error)
 }

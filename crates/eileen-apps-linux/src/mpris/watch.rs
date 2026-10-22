@@ -15,11 +15,12 @@ use std::task::{Context, Poll};
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{
-    DRAIN_CAP, DbusError, Names, OwnerChange, OwnerChanges, QUEUE_SIZE, Stream, owner_changes,
+    DbusError, Names, OwnerChange, OwnerChanges, Signals, Stream, drain, owner_changes, subscribe,
 };
+use zbus::match_rule::Builder;
 use zbus::message::Type;
 use zbus::names::OwnedUniqueName;
-use zbus::{Connection, MatchRule, Message, MessageStream};
+use zbus::{Connection, MatchRule, Message};
 
 use super::{OBJECT, PLAYER, PREFIX, players, read};
 
@@ -230,14 +231,10 @@ impl Players {
 ///
 /// # Polling and dropping
 ///
-/// The watch holds zbus signal streams, with the traps `eileen-dbus-linux` gives for them:
-///
-/// - Keep polling it. Its signals queue on the connection, at most 256 of each kind, and a full
-///   queue stops the connection reading anything else, method replies included.
-/// - Drop it inside the tokio runtime's context: zbus spawns a task there to remove its match
-///   rules. Dropped on a plain thread, as a `Subscription`'s release closure may be, it panics
-///   and leaves its rules on the bus; dropped while a panic unwinds, it aborts the process. So
-///   a `subscribe` adapter polls the watch in a runtime task and releases it by ending the task.
+/// The watch holds signal streams, so the traps that `eileen-dbus-linux`'s stream module gives
+/// for them hold for it: keep polling it, since its full queues would stop the connection
+/// reading, method replies included, and drop it inside the tokio runtime's context. So a
+/// `subscribe` adapter polls the watch in a runtime task and releases it by ending the task.
 #[must_use = "a watch reports nothing unless it is polled"]
 pub struct MprisWatch {
     /// The bus the reads go to.
@@ -245,9 +242,9 @@ pub struct MprisWatch {
     /// `NameOwnerChanged` for the MPRIS names.
     owner_changes: OwnerChanges,
     /// `PropertiesChanged` on the `Player` interface.
-    properties_changed: MessageStream,
+    properties_changed: Signals,
     /// `Seeked`.
-    seeked: MessageStream,
+    seeked: Signals,
     /// What the watch knows of the players.
     players: Players,
     /// The listing or read the watch waits for.
@@ -259,7 +256,6 @@ pub struct MprisWatch {
 impl MprisWatch {
     /// Subscribes to the signals on `conn`; the players are listed on the first poll.
     pub(super) async fn open(conn: &Connection) -> Result<Self, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(SUBSCRIPTION, &error);
         let owner_changes = owner_changes(conn, Names::Namespace(NAMESPACE)).await?;
         let properties_changed = MatchRule::builder()
             .msg_type(Type::Signal)
@@ -267,19 +263,15 @@ impl MprisWatch {
             .and_then(|rule| rule.member("PropertiesChanged"))
             .and_then(|rule| rule.path(OBJECT))
             .and_then(|rule| rule.add_arg(PLAYER))
-            .map_err(failed)?
-            .build();
+            .map(Builder::build);
+        let properties_changed = subscribe(conn, properties_changed, SUBSCRIPTION).await?;
         let seeked = MatchRule::builder()
             .msg_type(Type::Signal)
             .interface(PLAYER)
             .and_then(|rule| rule.member("Seeked"))
             .and_then(|rule| rule.path(OBJECT))
-            .map_err(failed)?
-            .build();
-        let stream =
-            |rule: MatchRule<'static>| MessageStream::for_match_rule(rule, conn, Some(QUEUE_SIZE));
-        let properties_changed = stream(properties_changed).await.map_err(failed)?;
-        let seeked = stream(seeked).await.map_err(failed)?;
+            .map(Builder::build);
+        let seeked = subscribe(conn, seeked, SUBSCRIPTION).await?;
         let mut watch = Self {
             conn: conn.clone(),
             owner_changes,
@@ -299,19 +291,22 @@ impl MprisWatch {
         poll_fn(|cx| Pin::new(&mut *self).poll_next(cx)).await
     }
 
-    /// Takes the signals that have arrived, at most `DRAIN_CAP` of each kind.
-    fn drain(&mut self, cx: &mut Context<'_>) {
+    /// Takes the signals that have arrived, at most `DRAIN_CAP` of each kind. A stream with more
+    /// ready wakes the task to come back for the rest, rather than starve the reads.
+    fn take_signals(&mut self, cx: &mut Context<'_>) {
         let players = &mut self.players;
-        let mut ended = take_ready(&mut self.owner_changes, cx, |change| {
+        // Each `drain` gives no value, so it is ready only at the stream's end.
+        let polled = drain(&mut self.owner_changes, cx, |change| {
             players.owner_changed(&change);
+            None::<()>
         });
-        for stream in [&mut self.properties_changed, &mut self.seeked] {
-            ended |= take_ready(stream, cx, |item| {
-                // A read error is passed over: the stream's end follows it.
-                if let Ok(message) = item {
-                    players.changed(&message);
-                }
+        let mut ended = polled.is_ready();
+        for signals in [&mut self.properties_changed, &mut self.seeked] {
+            let polled = drain(signals, cx, |message| {
+                players.changed(&message);
+                None::<()>
             });
+            ended |= polled.is_ready();
         }
         self.ended |= ended;
     }
@@ -380,7 +375,7 @@ impl Stream for MprisWatch {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<MprisEvent>> {
         let this = self.get_mut();
         for _ in 0..MAX_STEPS {
-            this.drain(cx);
+            this.take_signals(cx);
             if let Some((_, state)) = this.players.gone.pop_first() {
                 return Poll::Ready(Some(MprisEvent::Gone(state)));
             }
@@ -416,25 +411,6 @@ impl fmt::Debug for MprisWatch {
             .field("ended", &self.ended)
             .finish_non_exhaustive()
     }
-}
-
-/// Takes what `stream` has ready, at most `DRAIN_CAP` items, each through `take`; true once the
-/// stream has ended. A stream with more ready wakes the task to come back for the rest, rather
-/// than starve the reads.
-fn take_ready<S: Stream + Unpin>(
-    stream: &mut S,
-    cx: &mut Context<'_>,
-    mut take: impl FnMut(S::Item),
-) -> bool {
-    for _ in 0..DRAIN_CAP {
-        match Pin::new(&mut *stream).poll_next(cx) {
-            Poll::Ready(Some(item)) => take(item),
-            Poll::Ready(None) => return true,
-            Poll::Pending => return false,
-        }
-    }
-    cx.waker().wake_by_ref();
-    false
 }
 
 /// Queues the player `name` to be read, behind the others, unless it waits already. The scan

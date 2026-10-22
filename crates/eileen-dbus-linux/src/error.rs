@@ -1,7 +1,8 @@
 //! [`DbusError`]: what a failed D-Bus call means, as `eileen-platform`'s `PlatformError` says it.
-//! The mappings follow the D-Bus specification's error names, systemd's and dbus-daemon's
-//! activation errors and the portal's `org.freedesktop.portal.Error` names
-//! ([the specification](https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names-error)).
+//! The mappings follow the D-Bus specification's error names
+//! ([the specification](https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names-error)),
+//! systemd's and dbus-daemon's activation errors, the portal's `org.freedesktop.portal.Error`
+//! names and logind's `NoSessionForPID`.
 
 /// How the error names begin that the bus answers a call with when it could not start the
 /// service for it: systemd's, when it would not or could not start the service's unit (such as
@@ -13,6 +14,10 @@ const ACTIVATION_FAILURES: [&str; 2] =
 /// The portal's answer when the desktop's lockdown or the permission store turns the request
 /// off.
 const PORTAL_NOT_ALLOWED: &str = "org.freedesktop.portal.Error.NotAllowed";
+
+/// logind's answer to a caller that has no session and no display session: there is no session
+/// to find.
+const LOGIND_NO_SESSION: &str = "org.freedesktop.login1.NoSessionForPID";
 
 /// What went wrong talking to a D-Bus service. The variants are `eileen-platform`'s
 /// `PlatformError` (on the unmerged base crates) field for field, so each maps one to one when
@@ -113,6 +118,9 @@ impl DbusError {
         if name == PORTAL_NOT_ALLOWED {
             return Self::Refused { what, reason: "not allowed" };
         }
+        if name == LOGIND_NO_SESSION {
+            return Self::NotFound { what };
+        }
         let short = name.rsplit('.').next().unwrap_or(name);
         match short {
             "ServiceUnknown" | "NameHasNoOwner" | "Disconnected" => Self::Unavailable { what },
@@ -196,6 +204,23 @@ mod tests {
                 detail: "org.example.Error.NotAllowed".to_owned()
             },
             "only the portal's name: another service's NotAllowed keeps its name"
+        );
+    }
+
+    #[test]
+    fn loginds_no_session_for_pid_is_not_found() {
+        assert_eq!(
+            of("org.freedesktop.login1.NoSessionForPID"),
+            DbusError::NotFound { what: "the call" },
+            "a caller in no session and no display session has none to find"
+        );
+        assert_eq!(
+            of("org.example.Error.NoSessionForPID"),
+            DbusError::Invalid {
+                what: "the call",
+                detail: "org.example.Error.NoSessionForPID".to_owned()
+            },
+            "only logind's name: another service's NoSessionForPID keeps its name"
         );
     }
 

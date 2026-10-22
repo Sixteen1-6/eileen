@@ -13,12 +13,13 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use zbus::match_rule::Builder;
 use zbus::message::Sequence;
 use zbus::names::{BusName, OwnedBusName, OwnedUniqueName};
-use zbus::{Connection, MatchRule, Message, MessageStream};
+use zbus::{Connection, MatchRule, Message};
 
 use crate::DbusError;
-use crate::stream::{DRAIN_CAP, QUEUE_SIZE, Stream};
+use crate::stream::{Signals, Stream, drain, subscribe};
 
 /// The bus's own name, which is also its interface's.
 const BUS: &str = "org.freedesktop.DBus";
@@ -105,7 +106,6 @@ impl OwnerChange {
 /// asked, so that no change between the two goes unseen; the crate's Traps say how to poll and
 /// drop it.
 pub async fn owner_changes(conn: &Connection, names: Names<'_>) -> Result<OwnerChanges, DbusError> {
-    let failed = |error: zbus::Error| DbusError::from_zbus(SUBSCRIPTION, &error);
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(BUS)
@@ -116,11 +116,8 @@ pub async fn owner_changes(conn: &Connection, names: Names<'_>) -> Result<OwnerC
             Names::Name(name) => rule.arg(0, name),
             Names::Namespace(namespace) => rule.arg0ns(namespace),
         })
-        .map_err(failed)?
-        .build();
-    let messages =
-        MessageStream::for_match_rule(rule, conn, Some(QUEUE_SIZE)).await.map_err(failed)?;
-    Ok(OwnerChanges { messages })
+        .map(Builder::build);
+    Ok(OwnerChanges { messages: subscribe(conn, rule, SUBSCRIPTION).await? })
 }
 
 /// The owner changes [`owner_changes`] subscribed to, in the order the bus sent them; it ends
@@ -128,7 +125,7 @@ pub async fn owner_changes(conn: &Connection, names: Names<'_>) -> Result<OwnerC
 /// error is followed by the end.
 #[derive(Debug)]
 pub struct OwnerChanges {
-    messages: MessageStream,
+    messages: Signals,
 }
 
 impl OwnerChanges {
@@ -142,21 +139,7 @@ impl Stream for OwnerChanges {
     type Item = OwnerChange;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<OwnerChange>> {
-        for _ in 0..DRAIN_CAP {
-            match Pin::new(&mut self.messages).poll_next(cx) {
-                Poll::Ready(Some(Ok(message))) => {
-                    if let Some(change) = OwnerChange::of(&message) {
-                        return Poll::Ready(Some(change));
-                    }
-                }
-                Poll::Ready(Some(Err(_))) => {}
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-        // A run of signals to pass over: yield, and come back for the rest.
-        cx.waker().wake_by_ref();
-        Poll::Pending
+        drain(&mut self.messages, cx, |message| OwnerChange::of(&message))
     }
 }
 

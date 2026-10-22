@@ -27,7 +27,7 @@
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
 //! - D-Bus plumbing: [`DbusError`] (re-exported), the buses, name owners, the portal `Request` and
-//!   the stream conventions are `eileen-dbus-linux`'s, not yet subscribing or an answered `Close`.
+//!   its answered `Close`, and the stream helpers and conventions are `eileen-dbus-linux`'s.
 //!
 //! # Invariants
 //!

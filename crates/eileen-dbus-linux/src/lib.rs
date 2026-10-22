@@ -1,6 +1,6 @@
 //! The D-Bus helpers every Linux crate shares (docs/LINUX.md section 4): what a failed call
 //! means, the buses with a method timeout, who owns a name, the portal request client and the
-//! signal-stream conventions.
+//! signal streams' helpers and conventions.
 //! `eileen-shell-linux` and `eileen-apps-linux` use them and never re-implement them.
 //!
 //! # Owns
@@ -8,8 +8,10 @@
 //! - [`DbusError`] and its mappings from zbus errors and D-Bus error names.
 //! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms.
 //! - [`name_owner`] and [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
-//! - [`Request`]: an xdg-desktop-portal request, from its token to its `Response`.
-//! - The signal-stream conventions: [`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`].
+//! - [`Request`]: an xdg-desktop-portal request, from its token to its `Response`, and
+//!   [`close_request`], which ends one and waits for the portal's answer.
+//! - The signal streams: [`subscribe`] and its [`Signals`], and [`drain`], which keep the
+//!   conventions of `src/stream.rs` ([`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`]).
 //! - `testing`, behind the `private-bus` feature: the private bus and fake services for tests.
 //!
 //! # Does not own
@@ -27,6 +29,10 @@
 //!   signal answers takes an explicit `Duration`, enforced with `tokio::time::timeout`.
 //! - Errors keep only error names and kinds, never a service's message text, a path or a user
 //!   name.
+//! - Constructors and calls take `&zbus::Connection` and clone it to keep, here and in the
+//!   crates that use these helpers, so the caller (or a test, with a private bus) picks the bus.
+//!   The one exception takes one by value because dropping it ends a hold: the session connection
+//!   of `LinuxPowerRequest::keep_awake`, whose close ends the desktop's hold.
 //! - It never starts a process, except `dbus-daemon` for a test through `testing`.
 //!
 //! # Boundaries
@@ -73,5 +79,5 @@ pub mod testing;
 pub use bus::{METHOD_TIMEOUT, session_bus, session_bus_within, system_bus, system_bus_within};
 pub use error::DbusError;
 pub use names::{Names, OwnerChange, OwnerChanges, name_owner, owner_changes};
-pub use portal::{CLOSE_GRACE, Request};
-pub use stream::{DRAIN_CAP, QUEUE_SIZE, Stream, next};
+pub use portal::{CLOSE_GRACE, Request, close_request};
+pub use stream::{DRAIN_CAP, QUEUE_SIZE, Signals, Stream, drain, next, subscribe};
