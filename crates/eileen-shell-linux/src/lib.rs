@@ -15,7 +15,7 @@
 //! - `ShellHost` on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`]), the lock state
 //!   over logind ([`SessionLock`]), keeping the session awake with logind's lock and the desktop's
 //!   idle hold ([`LinuxPowerRequest`]), and toasts through the notification server ([`Notifier`]),
-//!   each id bound to the server that showed it.
+//!   each id bound to the server that showed it, with its events ([`NotificationEvents`]).
 //!
 //! # Does not own
 //!
@@ -24,8 +24,8 @@
 //!   and `ShellHost` calls implement the traits and [`facts`] becomes re-exports.
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
-//! - D-Bus plumbing: [`DbusError`] (re-exported), the buses, name owners, signal streams and the
-//!   portal `Request` are `eileen-dbus-linux`'s, not yet an answered `Close`.
+//! - D-Bus plumbing: [`DbusError`] (re-exported), the buses, name owners, the portal `Request` and
+//!   the stream conventions are `eileen-dbus-linux`'s, not yet subscribing or an answered `Close`.
 //!
 //! # Invariants
 //!
@@ -109,8 +109,8 @@ pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use notifications::{
-    NotificationCapabilities, NotificationId, NotificationServer, NotificationServerInfo, Notifier,
-    NotifierSettings,
+    NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,
+    NotificationId, NotificationServer, NotificationServerInfo, Notifier, NotifierSettings,
 };
 pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
