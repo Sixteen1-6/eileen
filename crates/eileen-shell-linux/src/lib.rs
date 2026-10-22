@@ -12,7 +12,8 @@
 //! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
 //!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
 //!   process outside Eileen's tree.
-//! - `ShellHost`'s session calls on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`]).
+//! - `ShellHost`'s session calls on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`])
+//!   and the lock state over logind ([`SessionLock`]).
 //!
 //! # Does not own
 //!
@@ -28,8 +29,9 @@
 //!
 //! - Linux only: the crate is `cfg(target_os = "linux")` and compiles to an empty library
 //!   elsewhere, as the `-win` crates do off Windows.
-//! - It changes nothing it is not asked to: the one file it writes is Eileen's own autostart
-//!   entry. It never starts a process and never needs elevation.
+//! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, and asks
+//!   the session to lock only in [`SessionLock::lock_workstation`]. It starts no process itself,
+//!   though a call may let the bus start the service it names, and it never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -39,8 +41,8 @@
 //! # Boundaries
 //!
 //! - May depend on `eileen-contracts` (the text wrappers, `Platform`), `eileen-dbus-linux` (the
-//!   D-Bus helpers), `rustix` (`statvfs`) and `thiserror`. Nothing else in the workspace may
-//!   depend on it except the composition root on Linux.
+//!   D-Bus helpers), `zbus` (its clients' proxies), `rustix` (`statvfs`) and `thiserror`. Only
+//!   the composition root on Linux may depend on it.
 //! - Wire types: none of its own; the facts become contract types.
 //!
 //! # Testing
@@ -50,10 +52,10 @@
 //!   the CPU lists, the busy share, the MB conversion and the `os-release` quotes; the fuzz
 //!   targets `linux_mountinfo` and `linux_proc_status` (module `fuzz_entry`), whose seed
 //!   corpora replay as tests; integration tests over six fixture machines in
-//!   `tests/fixtures/` (one recorded under WSL2, five synthetic), each a `.tree` file the tests
-//!   build into a folder; one live test of the machine the tests run on; the autostart entry in
-//!   folders a guard removes. D-Bus clients are tested against fakes on `eileen-dbus-linux`'s
-//!   private bus (its `private-bus` feature, on for this crate's tests only).
+//!   `tests/fixtures/` (one recorded under WSL2, five synthetic) built into folders, one live
+//!   test of the machine the tests run on, and the autostart entry in folders a guard removes.
+//!   D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (its `private-bus`
+//!   feature, on for this crate's tests only).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class
 //!   (`Tight`, `Standard`, `Roomy`) that the PC's memory does not explain, or a session call
 //!   that the desktop does not honour.
@@ -62,14 +64,15 @@
 //!
 //! - Each source's traps are in its module's doc: sysfs links in `pci`, virtual disks and
 //!   btrfs in `disk`, APUs, framebuffers and WSL's GPU in `adapters`, core classes in `cpu`,
-//!   the paths an autostart entry cannot carry in `autostart`.
+//!   the paths an autostart entry cannot carry in `autostart`, what logind's lock hint misses in
+//!   `session_lock`.
 //! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
 //!   `eileen-dbus-linux`'s.
 //!
 //! # Logs and tracing
 //!
-//! - None yet: the reads are short synchronous file reads. Spans from `eileen_trace::names`
-//!   join with the trait implementation.
+//! - None yet: the file reads are short and synchronous, and the D-Bus clients log nothing of
+//!   their own. Spans from `eileen_trace::names` join with the trait implementations.
 //!
 //! # Do not change without a decision record
 //!
@@ -96,6 +99,7 @@ mod power;
 mod pressure;
 mod probe;
 mod root;
+mod session_lock;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
@@ -104,3 +108,4 @@ pub use error::{AutostartError, ReadError};
 pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
+pub use session_lock::SessionLock;

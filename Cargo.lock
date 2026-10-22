@@ -169,6 +169,8 @@ dependencies = [
  "proptest",
  "rustix",
  "thiserror",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]
