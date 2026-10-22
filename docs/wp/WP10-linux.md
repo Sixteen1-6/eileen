@@ -51,11 +51,12 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 3 | #28 | `wp10/parser-fixes` | Merged on 2026-10-22 as db428f3: two parser fixes the fuzz invariants found |
 | 4 | #30 | `wp10/codeowners-linux` | Merged on 2026-10-22 as 39e389e: Ayham beside the owner on the Linux paths in `.github/CODEOWNERS` |
 | 5 | #31 | `wp10/build-amendment` | Merged on 2026-10-22 as 9c6a6f3: WP10 into BUILD.md as section 6.12, with the three `-linux` crates in section 3.1 |
-| 6 | #32 | `wp10/parser-fuzzing` | After #31: fuzz entries, seed corpora and property tests for the Linux parsers |
-| 7 | this pull request | `docs/wp10-linux` | This file, and LINUX.md's pointers to it and to #31 |
-| 8 | not opened yet | `wp10/dbus-errors`, `wp10/dbus-names`, `wp10/dbus-portal` | Being finalized on #32: `eileen-dbus-linux`, the D-Bus helpers the Linux crates share |
-| 9 | not opened yet | `wp10/session-autostart`, `-lock`, `-keep-awake`; `wp10/notifications`, `wp10/notification-events`; `wp10/power-upower`, `-profiles`, `-changes` | Being finalized as one chain in `eileen-shell-linux`, on `wp10/dbus-portal` |
-| 9 | not opened yet | `wp10/open-portal`, `-launch`; `wp10/recent-values`, `-xbel`, `-files`; `wp10/mpris-values`, `-sessions`, `-watch` | Being finalized as one chain in `eileen-apps-linux`, on `wp10/dbus-portal` |
+| 6 | #32 | `wp10/parser-fuzzing` | Merged on 2026-10-22 as 8bdf1f4: fuzz entries, seed corpora and property tests for the Linux parsers |
+| 7 | #33 | `docs/wp10-linux` | Merged on 2026-10-22 as a5dfa2f: this file, and LINUX.md's pointers to it and to #31 |
+| 8 | #35, #36, #37 | `wp10/dbus-errors`, `wp10/dbus-names`, `wp10/dbus-portal` | Merged on 2026-10-22 as 7e971a2, 5f74241 and 437c4d8: `eileen-dbus-linux`, the D-Bus helpers the Linux crates share |
+| 9 | #38 to #45 | `wp10/session-autostart`, `-lock`, `-keep-awake`; `wp10/notifications`, `wp10/notification-events`; `wp10/power-upower`, `-profiles`, `-changes` | Merged on 2026-10-22, in order, in `eileen-shell-linux`: session #38 to #40 (bcfa948, cd587dd, 6ec27e5), notifications #41 and #42 (157d9f8, d2f3277), power #43 to #45 (017aa3f, fa4b7ea, c12af36) |
+| 9 | #46 to #53 | `wp10/open-portal`, `-launch`; `wp10/recent-values`, `-xbel`, `-files`; `wp10/mpris-values`, `-sessions`, `-watch` | Merged on 2026-10-22, in order, in `eileen-apps-linux`: open #46 and #47 (e499cf6, 2aa324e), recent #48 to #50 (739e69d, c01f5de, f7e7dd2), MPRIS #51 to #53 (64a8167, d247798, 8734897) |
+| 10 | this pull request | `docs/wp10-progress` | This file's progress, and LINUX.md's L1 rows and status as built |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Pull request #26 was one large change, 5,192 lines in 56 files, more than BUILD.md section 6.1's
@@ -74,6 +75,10 @@ signal-stream conventions, the portal `Request` client, and a private bus for te
 reviewed and fixed. Stacks in the same crate edit the same `lib.rs`, so each crate's stacks merge
 as one chain, in the critic's order: session, notifications, then power in `eileen-shell-linux`;
 open, recent, then MPRIS in `eileen-apps-linux`. The two chains do not touch each other's files.
+They merged on 2026-10-22. The repository squash-merges, and GitHub's "Update branch" cannot
+replay a stacked branch whose lower commits a squash replaced, so after each merge the next
+branch was rebased onto `main` with `git rebase --onto origin/main <old parent>`, its tree checked
+against the tested one, and pushed with `--force-with-lease`.
 
 Next, after the chains, each its own pull request:
 
@@ -82,6 +87,9 @@ Next, after the chains, each its own pull request:
   `DbusError`'s mappings.
 - Deadlines for `RecentlyUsed::recent` and `set_run_at_sign_in`, under the file-deadline record
   below.
+- `RecentlyUsed::bookmarks` refuses a FIFO or a device in `recently-used.xbel`'s place instead of
+  blocking on its open, as `open_path` already does. The chain's review found it; the fix and its
+  test are written and wait for this follow-up.
 - `AutostartError::Refused` for a folder that refuses the write, as `FileError` has.
 - One naming rule for change streams, and the `keep_awake` exception (a connection taken by value,
   because dropping it ends the hold) in `eileen-dbus-linux`'s Invariants.
@@ -311,6 +319,9 @@ Measured so far, each where it is recorded:
 - The Linux lane on `main` at daf8e13, under WSL2: every lane passes, 165 of 165 tests (LINUX.md
   sections 1 and 11). On `main` at db428f3, after #26 to #28: every lane passes, 229 of 229; at 39e389e, after #30, 231 of 231.
 - #32's head, e5e83a3: every lane passes with 243 of 243 tests.
+- The D-Bus pull requests #35 to #53, at each of their 19 heads on `main` at a5dfa2f: every lane
+  passes, from 251 to 378 tests up the shell chain and 291 to 365 up the apps chain.
+- `main` at 8734897, with every L1 D-Bus backend merged: every lane passes, 473 of 473 tests.
 - Pull request #26's head, 132c11b: every lane passes under WSL2 with 229 of 229 tests, and every
   job of CI run 39700538734 passes on the hosted runners (the pull request's Evidence).
 - Under WSL2, in a release build, each live test reads the facts, the load and a memory sample in

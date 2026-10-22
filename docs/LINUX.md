@@ -55,7 +55,7 @@ What GNOME on Wayland means for each part of Eileen:
   - secrets: the Secret Service (GNOME Keyring);
   - media: MPRIS, which browsers and media players expose;
   - power: UPower and power-profiles-daemon (its `power-saver` profile is the battery-saver fact);
-  - lock state: logind's session `LockedHint`.
+  - lock state: logind's session `LockedHint`, which GNOME Shell and KDE Plasma's locker set and swaylock does not.
 
 ## 4. Each trait on Linux
 
@@ -77,23 +77,25 @@ Their D-Bus clients share one more crate, `eileen-dbus-linux`, which has no Wind
 |---|---|---|---|
 | `SystemMemory` | `/proc/meminfo`'s `MemAvailable`. Commit headroom follows `vm.overcommit_memory`: `CommitLimit` minus `Committed_AS` under strict overcommit, else `MemAvailable` plus `SwapFree` (section 10). The paging rate is `pgmajfault` deltas at 4 KB per fault, the build guard's formula. The largest process is the one with the most resident memory (`VmRSS` in `/proc/<pid>/status`) outside Eileen's own process tree | none beyond the crate's | L0: built as `LinuxSystemMemory`; the trait implementation lands with `eileen-platform` |
 | `MachineIdentity` | `eileen_platform::machine::FileMachineIdentity`, already written | none | L0 |
-| `MachineProbe` | See the list after this table | `rustix` 1.1.5 for `statvfs`, already in the lockfile; `thiserror` | L0: the readers are built; the trait implementation lands with WP0 phase B's `wp0/machine-contracts` |
+| `MachineProbe` | See the list after this table | `rustix` 1.1.5 for `statvfs`, already in the lockfile; `thiserror`; `zbus` 5.19.0 for the power facts over D-Bus | L0: the readers are built. L1: the power facts over D-Bus are built as `LinuxPower` in `eileen-shell-linux`, which `LinuxMachineProbe` does not use yet. The trait implementation lands with WP0 phase B's `wp0/machine-contracts` |
 | `SecretStore` | Secret Service over D-Bus through keyring-core, the same front as Windows; the kernel keyring as a fallback | `keyring-core` 1.0.1 (pinned in 4.1), `zbus-secret-service-keyring-store` 1.0.1, `linux-keyutils-keyring-store` 1.0.0, all MIT OR Apache-2.0 | L1, waiting: the Secret Service store turns on zbus's default features, which Cargo would then turn on for every crate, so it waits for a store that leaves them off (BUILD.md 4.1's comment) |
-| `MediaSessions` | MPRIS over D-Bus: list `org.mpris.MediaPlayer2.*`, read `PlaybackStatus`, `Metadata` and `Position`, call `PlayPause`, `Seek` and `SetPosition`, subscribe to `PropertiesChanged` and `Seeked` | `zbus` 5.19.0, MIT. `mpris-server` is MPL-2.0, which `deny.toml` does not allow, and the client side is small enough to write | L1 |
-| `ShellHost`: toasts | `org.freedesktop.Notifications` | `zbus` 5.19.0 | L1 |
-| `ShellHost`: `keep_awake` | logind or ScreenSaver inhibitors | `zbus` 5.19.0 | L1 |
-| `ShellHost`: `session_locked`, `lock_workstation` | logind | `zbus` 5.19.0 | L1 |
-| `ShellHost`: `set_run_at_sign_in` | An XDG autostart desktop file | std | L1 |
+| `MediaSessions` | MPRIS 2.2 over D-Bus: list `org.mpris.MediaPlayer2.*`, read `PlaybackStatus`, `Metadata` and `Position`, call `Play`, `Pause`, `PlayPause`, `Next`, `Previous`, `Seek` and `SetPosition`, subscribe to `PropertiesChanged` and `Seeked`, and follow `NameOwnerChanged` as players arrive and leave | `zbus` 5.19.0, MIT. `mpris-server` is MPL-2.0, which `deny.toml` does not allow, and the client side is small enough to write | L1: built as `MprisSessions`, with its `MprisWatch` stream, in `eileen-apps-linux`; the trait implementation lands with `eileen-platform` |
+| `ShellHost`: toasts | `org.freedesktop.Notifications` | `zbus` 5.19.0 | L1: built as `Notifier`, with its `NotificationEvents` stream, in `eileen-shell-linux`; the trait implementation lands with `eileen-platform` |
+| `ShellHost`: `keep_awake` | logind's `sleep:idle` block lock, plus the desktop's hold on suspend and idle: GNOME's session manager (`Inhibit` flags 12), else the Inhibit portal (flags 12, then 8 after a backend's refusal) | `zbus` 5.19.0, `tokio` 1.53.2 | L1: built as `LinuxPowerRequest` in `eileen-shell-linux`; the trait implementation lands with `eileen-platform` |
+| `ShellHost`: `session_locked`, `lock_workstation` | logind's `session/auto` object: `LockedHint` and `Lock()` | `zbus` 5.19.0 | L1: built as `SessionLock` in `eileen-shell-linux`; the trait implementation lands with `eileen-platform` |
+| `ShellHost`: `set_run_at_sign_in` | `$XDG_CONFIG_HOME/autostart/<id>.desktop`, `Exec` quoted by the Desktop Entry rules | std | L1: built as `set_run_at_sign_in` in `eileen-shell-linux`; the trait implementation lands with `eileen-platform` |
 | `ShellHost`: `set_tray` | StatusNotifierItem | `ksni` 0.3.6, Unlicense (allowed) | L2 |
 | `ShellHost`: `register_hotkey`, `watch_input` | The GlobalShortcuts portal (section 3) | `ashpd` 0.13.13, MIT | L2 |
-| `Apps` | Index: XDG desktop entries under `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`, including the Flatpak and Snap exports. Launch: D-Bus activation or `gio launch`. Open: the OpenURI portal or `gio open` | own desktop-entry parser (the `freedesktop-desktop-entry` crate is MPL-2.0); `zbus` and `ashpd` for the portal | L1 |
-| `RecentSources` | GTK's `recently-used.xbel`, KDE's `RecentDocuments`, the media history; `inotify` for watching; thumbnails from the freedesktop thumbnail cache | `quick-xml` 0.42.0 (MIT), `inotify` 0.11.5 (ISC) | L1 |
+| `Apps` | Index: XDG desktop entries under `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`, including the Flatpak and Snap exports. Launch: D-Bus activation (`org.freedesktop.Application`; built), or `gio launch` through `eileen_supervisor::user_launch`. Open: the OpenURI portal (`OpenURI` and `OpenFile`; built) or `gio open` | own desktop-entry parser (the `freedesktop-desktop-entry` crate is MPL-2.0); `zbus` 5.19.0 for the portal and D-Bus activation; the portal's client is `eileen-dbus-linux`'s `Request`, so `ashpd` is not needed for `OpenURI` | L1: built in `eileen-apps-linux` as `index` and `Opener`, with `entry_for`. Launching an app that is not D-Bus activatable, and opening a file with a packaged app, wait for `eileen_supervisor::user_launch`. The trait implementation lands with `eileen-platform` |
+| `RecentSources` | `recently-used.xbel`, which GTK and KDE's KIO keep; the media history; `inotify` for watching; thumbnails from the freedesktop thumbnail cache | `quick-xml` 0.42.0 (MIT), `inotify` 0.11.5 (ISC) | L1: `recent` is built as `RecentlyUsed` in `eileen-apps-linux`. `watch` and `thumbnail` are not built yet, and the media history stays with the recent-work index (BUILD.md 2.7). The trait implementation lands with `eileen-platform` |
 | `AppHost` | Per app, as on Windows. LibreOffice through its own scripting bridge, the file manager through D-Bus `org.freedesktop.FileManager1`, Resolve on Linux through the same Lua bridge (Resolve Studio has a Linux build) | to choose per app | L2 and later |
 | `AudioEndpoints`, `SystemVolume` | PipeWire: the default source and sink. The far-end reference for AEC is the default sink's monitor, which plays the role of WASAPI loopback. Real-time priority comes through RealtimeKit (this is `register_audio_thread`). Volume and mute come from the sink. PipeWire's own echo-cancel module is the alternative to sonora, as the Communications category is on Windows | `pipewire` 0.10.1 (MIT; needs libpipewire, pkg-config and clang to build); `cpal` 0.18.2 streams through ALSA, which PipeWire serves | L2 |
 | `Grounding`, `Automation`, `TextInsertion` | AT-SPI2: trees, states, `Action`, `EditableText` and `Text`, focus events; selection through the `Text` interface; insertion through `EditableText`, then the clipboard (the Wayland data device) with a paste. Password fields are refused by the `password text` role, the rule Windows applies to `IsPassword` | `atspi` 0.30.0 (Apache-2.0 OR MIT), `wl-clipboard-rs` 0.9.4 (MIT OR Apache-2.0) | L2 |
 | `Input` | libei through the RemoteDesktop portal; `user_idle_ms` from GNOME's `org.gnome.Mutter.IdleMonitor` | `reis` 0.7.1 (MIT, pure Rust), `ashpd` 0.13.13 | L2 |
 | `Capture` | The ScreenCast portal and a PipeWire stream | `ashpd` 0.13.13, `pipewire` 0.10.1 | L2 |
 | `HudSurface` | wlr-layer-shell where the compositor has it; on GNOME, section 3's options | `smithay-client-toolkit` 0.21.1 and `wayland-client` 0.31.15 (both MIT) | L2 |
+
+The L1 rows that say built are tested in CI's `logic-linux` job: the D-Bus clients against fake services on `eileen-dbus-linux`'s private bus, the rest over fixture files and folders. Checks against the real services wait for the nightly Linux desktop lane (section 6).
 
 `MachineProbe` reads these sources, all without elevation. The readers are in `crates/eileen-shell-linux`.
 
@@ -117,7 +119,8 @@ Their D-Bus clients share one more crate, `eileen-dbus-linux`, which has no Wind
 - **Power.**
   - The battery comes from `/sys/class/power_supply`. A battery whose scope is `Device`, such as a mouse's, is not the PC's.
   - Battery saver is the ACPI platform profile `low-power` or power-profiles-daemon's saved `power-saver` profile.
-  - L1 reads the active profile over D-Bus, which also sees a program's hold.
+  - `UPower` gives the battery and the power source over D-Bus (`LinuxPower` in `crates/eileen-shell-linux`): `OnBattery`, and its devices of `Type` 2 with `PowerSupply` and `IsPresent`. A desktop on a discharging UPS reports `on_battery` without `has_battery`.
+  - L1 reads the active profile over D-Bus (`LinuxPower` in `crates/eileen-shell-linux`): `ActiveProfile` under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles`, which also sees a program's hold.
 - **Monitors.** The DRM connectors whose status is `connected` and that are not `disabled`.
 - **Load.** `MachineProbe::load`'s CPU busy share comes from the `cpu` line of `/proc/stat`: busy ticks over all ticks since the previous call, as `GetSystemTimes` differences give it on Windows. The power state comes with it.
 
@@ -197,7 +200,13 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
    - Builds: the D-Bus backends (`MediaSessions`, toasts, `keep_awake`, the lock state, the power facts, `SecretStore`, `Apps`, `RecentSources`) and the nightly Linux desktop lane.
    - Acceptance: each passes its trait's conformance suite against a fake service in CI and against the real service on Ubuntu 26.04.
    - Status on 2026-10-21: `Apps::index` is built in `crates/eileen-apps-linux`. It reads the desktop entries with Eileen's own parser and follows the specification's precedence and masking (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`, `TryExec`). Names follow `LANGUAGE` and the locale, as GNOME's menu does. Flatpak and Snap apps count as packaged. It is tested over a fixture session. Launch waits for the supervisor's Linux process model.
-   - Status on 2026-10-22: the other D-Bus backends are built on one shared crate, `eileen-dbus-linux`, and go in as small pull requests, which [docs/wp/WP10-linux.md](wp/WP10-linux.md) lists. `SecretStore` waits (section 4).
+   - Status on 2026-10-22: pull requests #35 to #53 merged the other L1 backends into `main` that day, with `eileen-dbus-linux`, the shared crate their D-Bus clients use; [docs/wp/WP10-linux.md](wp/WP10-linux.md) keeps the progress. Every L1 backend but `SecretStore` is built, `Apps` and `RecentSources` in part.
+     - `crates/eileen-shell-linux` holds the autostart entry (`set_run_at_sign_in`), the lock state (`SessionLock`), keeping the session awake (`LinuxPowerRequest`) and toasts (`Notifier`, with its `NotificationEvents` stream).
+     - The power facts are built in `crates/eileen-shell-linux` (`LinuxPower`): one reading from `UPower` and power-profiles-daemon that names a daemon that does not answer as degraded, and a stream of changes the caller drives (`PowerChanges`). After its first reading the stream never has the bus start a daemon, so a daemon the user stops stays stopped. They are tested against fake daemons on a private bus; `LinuxMachineProbe` does not use them yet.
+     - `crates/eileen-apps-linux` holds `Opener`, which opens addresses, URIs and files through the `OpenURI` portal and launches D-Bus-activatable apps, with `entry_for` to find an app's entry. It also holds the recent files from `recently-used.xbel` (`RecentlyUsed`) and the MPRIS client (`MprisSessions`, with its `MprisWatch` stream). Launching an app that is not D-Bus activatable still waits for the supervisor's Linux process model, and `RecentSources::watch` and `thumbnail` are not built yet.
+     - The other D-Bus clients are tested against fake services on `eileen-dbus-linux`'s private bus too, the autostart entry in folders of the tests' own and the recent files over fixture files, all in CI's `logic-linux` job.
+     - None is wired into a trait implementation yet, because `eileen-platform` is not on `main`; until it is, the crates mirror the traits' types. No conformance suite exists yet, and the checks against the real services wait for the nightly Linux desktop lane, which is not built yet.
+     - `SecretStore` waits (section 4).
 3. **L2, toward v0.2.**
    - Builds:
      - audio on PipeWire;
@@ -239,6 +248,10 @@ Pull request #31 added the text below to BUILD.md as section 6.12 on 2026-10-22,
   - On Linux, the window handle is an AT-SPI object reference mapped to an `i64` inside the `-linux` crate.
   - Element boxes are window-relative.
   - A contract that cannot express Linux gets an amendment, not a workaround.
+- **Autostart paths.** A program path with `%` or a backslash cannot go into an autostart entry, because systemd's autostart generator, which starts the entries of KDE Plasma's sessions, reads it differently from the specification. `set_run_at_sign_in` refuses such a path when it writes the entry.
+- **Keeping the session awake.**
+  - Before systemd 257, logind's block lock does not stop the user's own `Suspend()`, so on Ubuntu 24.04 the desktop's hold must cover suspend too.
+  - xdg-desktop-portal's Inhibit checks no lockdown setting and never answers `NotAllowed`. A permission store that masks every flag leaves the request unanswered, so it shows only once the deadline has passed.
 - **Native build dependencies.** PipeWire's binding needs `libpipewire-0.3-dev`, `pkg-config` and `clang` at build time, in CI and on developer machines. Everything in L0 and L1 is pure Rust.
 - **The runner image change.** `ubuntu-latest` changes from 24.04 to 26.04 during the current rollout, and tool versions with it. Pinning the image keeps a pull request's result from changing under it.
 
