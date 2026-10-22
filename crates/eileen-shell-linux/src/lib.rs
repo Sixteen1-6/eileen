@@ -16,8 +16,8 @@
 //!   over logind ([`SessionLock`]), keeping the session awake with logind's lock and the desktop's
 //!   idle hold ([`LinuxPowerRequest`]), and toasts through the notification server ([`Notifier`]),
 //!   each id bound to the server that showed it, with its events ([`NotificationEvents`]).
-//! - The power facts over D-Bus from `UPower` ([`LinuxPower`]); [`LinuxMachineProbe`] does not
-//!   use them yet.
+//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]);
+//!   [`LinuxMachineProbe`] does not use them yet.
 //!
 //! # Does not own
 //!
