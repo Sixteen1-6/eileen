@@ -41,6 +41,7 @@ pub fn desktop_entry(data: &[u8]) -> Result<(), &'static str> {
     check_parsed(&file, &text)?;
     reads_back(&file)?;
     let session = Session {
+        data_home: None,
         data_dirs: Vec::new(),
         locales: locale_keys("de_DE.UTF-8@euro"),
         desktops: vec!["GNOME".to_owned()],

@@ -35,7 +35,8 @@ of Flatpak and Snap, as `tests/it/index.rs` points `XDG_DATA_HOME` and `XDG_DATA
 
 ## `recent/`: bookmark files for the recent files
 
-`tests/it/recent.rs` reads each file through `RecentlyUsed::at`.
+`tests/it/recent.rs` reads each file through `RecentlyUsed::at`, and finds the two
+`recently-used.xbel` files through the session's data home.
 
 | Fixture | Made | What it is |
 |---|---|---|

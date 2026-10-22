@@ -165,6 +165,31 @@ fn data_folders_follow_the_xdg_rules_and_add_the_missing_exports() {
 }
 
 #[test]
+fn the_data_home_leads_the_data_folders() {
+    let vars = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| -> Option<OsString> {
+            pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).into())
+        }
+    };
+    let both = Session::from_vars(vars(&[("HOME", "/home/sam"), ("XDG_DATA_HOME", "/data/sam")]));
+    assert_eq!(both.data_home.as_deref(), Some(Path::new("/data/sam")), "XDG_DATA_HOME first");
+    assert_eq!(both.data_dirs.first(), both.data_home.as_ref(), "the index searches it first");
+    let home = Session::from_vars(vars(&[("HOME", "/home/sam"), ("XDG_DATA_HOME", "")]));
+    assert_eq!(
+        home.data_home.as_deref(),
+        Some(Path::new("/home/sam/.local/share")),
+        "an empty XDG_DATA_HOME is unset"
+    );
+    let neither = Session::from_vars(vars(&[("HOME", "home/sam")]));
+    assert_eq!(neither.data_home, None, "a relative HOME and no XDG_DATA_HOME");
+    assert_eq!(
+        neither.data_dirs.first().map(PathBuf::as_path),
+        Some(Path::new("/usr/local/share")),
+        "only the system's folders"
+    );
+}
+
+#[test]
 fn the_session_the_tests_run_in_indexes_cleanly() {
     for app in index(&Session::from_env()) {
         assert!(!app.name.is_empty(), "{} has a name", app.id);

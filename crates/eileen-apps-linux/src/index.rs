@@ -61,9 +61,12 @@ impl From<&DesktopEntry> for AppEntry {
     }
 }
 
-/// What the index reads from the session's environment.
+/// What the index and the recent files read from the session's environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
+    /// The user's data folder, `XDG_DATA_HOME`, else `$HOME/.local/share`; `None` when neither
+    /// is an absolute path. It leads [`Self::data_dirs`] and holds the recent files.
+    pub data_home: Option<PathBuf>,
     /// The data folders in precedence order.
     pub data_dirs: Vec<PathBuf>,
     /// The locale keys to try for localized values, most specific first.
@@ -104,7 +107,8 @@ impl Session {
             data_home.as_ref().map(|home| home.join("flatpak").join("exports").join("share"));
         let mut data_dirs = Vec::new();
         let candidates = data_home
-            .into_iter()
+            .iter()
+            .cloned()
             .chain(configured)
             .chain(user_exports)
             .chain(SYSTEM_EXPORTS.iter().map(PathBuf::from));
@@ -129,6 +133,7 @@ impl Session {
             }
         }
         Self {
+            data_home,
             data_dirs,
             locales,
             desktops: text("XDG_CURRENT_DESKTOP")
