@@ -23,7 +23,7 @@ records when they exist.
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
-| 3 | `wp0/base-crates` | Branch built and tested locally, 2026-10-21: 288 workspace tests pass on Windows; not pushed yet |
+| 3 | `wp0/base-crates` | Branch built and tested locally, 2026-10-21, with the review fixes: 310 workspace tests pass on Windows; not pushed yet; its amendment of section 6.1, pull request #22, merged on 2026-10-21 |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
@@ -127,6 +127,19 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   `compute_baseline`'s result with `Store::write_baseline` (warning below four hours from
   `baseline::hours_covered`), `--pressure` calls `pressure::pressure`, and `desktop-lock --hold`
   takes `acquire_desktop`.
+- `wp0/xtask` also keeps the guard's log that acceptance 4's owner's-PC half reads ("the guard's
+  log shows at least one refusal"): `eileen-buildguard` writes none, so xtask appends one line
+  per admission and per refusal (the time, the slot or slots, the reason, the job count, and the
+  window's paging average, lowest headroom and available memory) to a machine-wide JSON-lines
+  file under `samples::machine_root()`, and the acceptance record is taken from it.
+- Check 14's list of `#[expect(clippy::disallowed_methods)]` functions after `wp0/base-crates`,
+  which differs from section 4b.2's shorter names: `eileen_stdx::clock::SystemClock::now` and
+  `::system_now`, `eileen_stdx::ids::OsIds::ulid` (its `Ids` impl),
+  `eileen_stdx::thread::spawn_named_with_stack` (which `spawn_named` calls) and
+  `eileen_stdx::thread::sleep`, `eileen_rt::task::spawn_raw` and `eileen_rt::task::spawn_blocking`,
+  `eileen_supervisor::child::base_command`, and `eileen_buildguard::clock::instant_now`,
+  `eileen_buildguard::clock::system_now`, `eileen_buildguard::clock::RealClock::sleep` (its
+  `Clock` impl) and `eileen_buildguard::spawn::spawn_cargo`.
 
 ## Surprises
 
@@ -180,9 +193,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   inside a locked file. Each build slot's holder record (PID, worktree, command, start) lives
   beside its lock, `build-slot-0.holder` next to `build-slot-0.lock`, and is removed on release;
   `slots --kill-stale` removes the record of a slot whose lock the OS released when its holder
-  died. Section 6.1 rule 1 says the lock file records the holder, so this needs the one-line
-  amendment `wp0/holder-records-amendment`, which also names `samples::slot_held_now` in the
-  samples interface (below).
+  died. Section 6.1 rule 1 said the lock file records the holder, so the one-line amendment
+  `wp0/holder-records-amendment` (pull request #22, merged 2026-10-21) moved the record beside
+  its lock and named `samples::slot_held_now` in the samples interface (below).
 - Base crates: the `windows` union of section 4.1 lacked two features process-wrap turns on:
   `Win32_System_IO` from its `job-object` feature, and `std` from its `windows` dependency,
   which keeps `windows`' default features. Without them a build with the supervisor and a build
@@ -213,6 +226,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - Base crates: clippy 1.99 wants `Duration::from_mins` and `from_hours` and the renamed
   `AtomicU64::try_update`, and rustfmt can leave a trailing comma in a macro call it joins onto
   one line, which clippy then refuses.
+- Base crates: the review fixes were committed by an agent cut off by a usage limit before it
+  had built them; the resume found one parse error, two lints, a rustdoc error and nine
+  unformatted files. A fix batch is committed only after the build, clippy and the tests pass.
 
 ## Decisions
 
@@ -348,20 +364,26 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   slots as they stand and takes a lock only when the rules admit, so a waiting command never
   holds a slot or writes a record between its 5 s attempts; a take that loses a race, or a held
   lock whose record is not written yet, refuses for that tick and the next decides again.
-  `slots --kill-stale` reads and removes a stale record only while it holds that slot's lock. Samples cover the last
-  30 s when the oldest in the window is at least 25 s old (one 5 s interval of slack) and the
-  newest is under 10 s old. `SystemMemory` primes its paging counter when it opens, and a
-  reading taken less than a second after the prime or the previous reading first waits for the
-  rest, so a guarded command that samples straight after opening it never adds a rate over a
-  few microseconds to the shared file; off Windows it primes from `/proc/vmstat` the same way.
-  It is not `Send` on any OS, so code that moves one to another thread fails on Linux as on
-  Windows. `samples::slot_held_now` (and `Store::slot_held`) probes both slot locks, so the
-  runtime fills `slot_held` from the samples module alone, as section 3.1 requires. Percentiles are nearest-rank; "plus 25 percent" rounds to the
-  nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is `<slots>:<jobs>:<holder pid>` and counts only while
-  that holder's record names the PID and its lock is held, so a stale variable inherited by a
-  shell cannot bypass the guard. Low disk refuses at once with exit 75. Off Windows the machine
-  root falls back to `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads
-  `/proc` (`MemAvailable`, `CommitLimit` minus `Committed_AS`, major faults times 4 KB).
+  `slots --kill-stale` reads and removes a stale record only while it holds that slot's lock.
+  Every lock the guard takes for a moment (a probe, `--kill-stale`, the samples lock) or for a
+  build is unlocked explicitly before its handle closes, because Windows releases a lock left
+  on a closed handle only when the system gets to it. Samples cover the last 30 s when the
+  oldest in the window is at least 25 s old (one 5 s interval of slack) and the newest is under
+  10 s old. `SystemMemory` primes its paging counter when it opens, and a reading taken less
+  than a second after the prime or the previous reading first waits for the rest, so a guarded
+  command that samples straight after opening it never adds a rate over a few microseconds to
+  the shared file; off Windows it primes from `/proc/vmstat` the same way. It is not `Send` on
+  any OS, so code that moves one to another thread fails on Linux as on Windows.
+  `samples::slot_held_now` (and `Store::slot_held`) probes both slot locks, so the runtime fills
+  `slot_held` from the samples module alone, as section 3.1 requires. Percentiles are
+  nearest-rank; "plus 25 percent" rounds to the nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is
+  `<slots>:<jobs>:<holder pid>` and counts only while that holder's record names the PID and its
+  lock is held, so a stale variable inherited by a shell cannot bypass the guard. Low disk
+  refuses at once with exit 75. `procs::process_alive` waits on the process with a zero timeout
+  rather than reading its exit code, because a process may exit with 259, which is
+  `STILL_ACTIVE`. Off Windows the machine root falls back to
+  `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads `/proc`
+  (`MemAvailable`, `CommitLimit` minus `Committed_AS`, major faults times 4 KB).
 - Base crates, buildguard: `spawn_cargo` creates cargo suspended, puts it in a fresh
   kill-on-close Job Object, then resumes its threads (process-wrap's technique), so nothing it
   starts escapes the job; the guard's process holds the only handle. Its process tests run the
@@ -384,11 +406,11 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   (the line pass stays as a backstop), and the console layer writes through the Redactor;
   the canary covers a password with a quote, a backslash and a tab, the console, and checks that
   every file and dump line is JSON. `ring::parse_lines` counts the lines it skips. The `pii.`
-  key is `Option`al: with none, `pii.` fields keep their length alone, never a hash under a
-  constant key. The PII scan
-  accepts the reserved example domains and generic user folders (`Public`, `Default`, the CI
-  runner's); a scenario's text files are capped at 256 KiB, consented audio at 5 MiB and the
-  folder at 8 MiB.
+  key is `Option`al and `TraceConfig::new` leaves it out: with none, `pii.` fields keep their
+  length alone, never a hash under a constant key, and the runtime passes the per-install key it
+  derives. The PII scan accepts the reserved example domains and generic user folders
+  (`Public`, `Default`, the CI runner's); a scenario's text files are capped at 256 KiB,
+  consented audio at 5 MiB and the folder at 8 MiB.
 - Base crates, trace: the scenario privacy rules parse `scenario.toml` into the contracts'
   `Scenario` (so `eileen-trace` depends on `toml`). Audio passes only when the origin is
   `contributed-consented-audio`, `intent.audio.file` names it and the record at
@@ -403,13 +425,13 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   message loses any backtick-quoted text before it is logged, as the observability report asks
   of the panic hook.
 - Base crates, supervisor: it uses `windows` rather than `windows-sys`, because process-wrap's
-  `CreationFlags` takes `windows`' flag type (the root manifest's comment on `windows-sys` names
-  the supervisor too, which is now out of date). Children are of class `Sidecar`,
-  `ClaudeSession` (below normal priority) or `Tool`; stderr lines are forwarded at INFO, cut at
-  4 KB; restarts default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset after 2
-  stable minutes. The detached spawn falls back to a plain spawn only on access denied, and a
-  supervised child's own detached spawn cannot leave its job (the test checks `broke_away` is
-  false there). Stderr is read as bytes with at most 4 KB of a line kept and decoded lossily,
+  `CreationFlags` takes `windows`' flag type; the root manifest's comment on `windows-sys` now
+  names only the build guard and the dependencies whose features it lists. Children are of class
+  `Sidecar`, `ClaudeSession` (below normal priority) or `Tool`; stderr lines are forwarded at
+  INFO, cut at 4 KB; restarts default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset
+  after 2 stable minutes. The detached spawn falls back to a plain spawn only on access denied,
+  and a supervised child's own detached spawn cannot leave its job (the test checks `broke_away`
+  is false there). Stderr is read as bytes with at most 4 KB of a line kept and decoded lossily,
   so a tool writing in the ANSI code page or a megabyte with no newline neither stops the
   forwarding nor grows memory. `AudioBoost` is not `Send` on any OS. The off-Windows bodies of
   `opt_out_of_ecoqos` and `boost_audio_thread` are constants, so they carry a `cfg_attr`
@@ -442,6 +464,12 @@ Locally for `wp0/base-crates` on 2026-10-21 (the owner's PC with 2.8 to 4.5 GB f
 jobs, below-normal priority): the warm `cargo nextest run --workspace --profile ci` ran 288 tests
 in 4.7 to 7.0 s, the process tests included; clippy with `-D warnings`, the doc tests, `cargo doc`
 with `-D warnings`, cargo-deny and cargo-machete passed on Windows. The Linux lane is CI's.
+After the review fixes, on the same PC with 2.5 to 3.1 GB free and 2 jobs: 310 tests in 5.5 s
+warm, and the same checks pass. This host has no Linux target, so the off-Windows code of the
+build guard and of the supervisor's `qos` module was linted by compiling it here with
+`cfg(windows)` and `cfg(not(windows))` swapped, under the workspace's lint table and
+`clippy.toml`; the supervisor's `cfg(unix)` process code uses Unix-only APIs and waits for
+`logic-linux`.
 
 ## Outcome
 
