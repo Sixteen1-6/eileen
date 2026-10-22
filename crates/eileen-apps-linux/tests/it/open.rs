@@ -267,11 +267,12 @@ async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
     }
 }
 
-/// A fresh folder of the temporary directory, removed on drop.
-struct Scratch(PathBuf);
+/// A fresh folder of the temporary directory, removed on drop. The recent files' tests use it
+/// too.
+pub(crate) struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("eileen-open-{}-{n}", std::process::id()));
@@ -288,7 +289,7 @@ impl Scratch {
     }
 
     /// A FIFO in the folder, which nothing writes to.
-    fn fifo(&self, name: &str) -> PathBuf {
+    pub(crate) fn fifo(&self, name: &str) -> PathBuf {
         let path = self.0.join(name);
         mkfifoat(CWD, &path, Permissions::RUSR | Permissions::WUSR).unwrap();
         path

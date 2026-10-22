@@ -22,7 +22,9 @@
 //! whole") and needs no list of reserved characters.
 //!
 //! Turning it off removes the file, and an entry that is already absent is off. The program's
-//! path is checked only when the entry is written, so turning it off always works.
+//! path is checked only when the entry is written, so any path can turn it off. A folder the user
+//! may not change refuses the write and the removal alike ([`AutostartError::Refused`]), and the
+//! entry stays as it was.
 //!
 //! # Traps
 //!
