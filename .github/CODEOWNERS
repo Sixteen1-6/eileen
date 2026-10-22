@@ -1,3 +1,13 @@
 # The owner reviews every change. Files no package owns (docs/BUILD.md, docs/DECISIONS.md,
 # docs/OWNER-DIRECTION.md) change only through `amendment` pull requests (BUILD.md section 6.1).
+# Ayham builds the Linux side (docs/LINUX.md), so its paths name Ayham beside the owner. GitHub
+# uses the last matching line, so these lines come after the catch-all.
 * @Sixteen1-6
+/docs/LINUX.md @Sixteen1-6 @ayhamyousef
+/docs/wp/WP10-linux.md @Sixteen1-6 @ayhamyousef
+/crates/eileen-shell-linux/ @Sixteen1-6 @ayhamyousef
+/crates/eileen-apps-linux/ @Sixteen1-6 @ayhamyousef
+/crates/eileen-dbus-linux/ @Sixteen1-6 @ayhamyousef
+/fuzz/corpus/linux_mountinfo/ @Sixteen1-6 @ayhamyousef
+/fuzz/corpus/linux_proc_status/ @Sixteen1-6 @ayhamyousef
+/fuzz/corpus/desktop_entry/ @Sixteen1-6 @ayhamyousef
