@@ -76,7 +76,7 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
 | `SystemMemory` | `/proc/meminfo`'s `MemAvailable`. Commit headroom follows `vm.overcommit_memory`: `CommitLimit` minus `Committed_AS` under strict overcommit, else `MemAvailable` plus `SwapFree` (section 10). The paging rate is `pgmajfault` deltas at 4 KB per fault, the build guard's formula. The largest process is the one with the most resident memory (`VmRSS` in `/proc/<pid>/status`) outside Eileen's own process tree | none beyond the crate's | L0: built as `LinuxSystemMemory`; the trait implementation lands with `eileen-platform` |
 | `MachineIdentity` | `eileen_platform::machine::FileMachineIdentity`, already written | none | L0 |
 | `MachineProbe` | See the list after this table | `rustix` 1.1.5 for `statvfs`, already in the lockfile; `thiserror` | L0: the readers are built; the trait implementation lands with WP0 phase B's `wp0/machine-contracts` |
-| `SecretStore` | Secret Service over D-Bus through keyring-core, the same front as Windows; the kernel keyring as a fallback | `keyring-core` 1.0.1 (pinned in 4.1), `zbus-secret-service-keyring-store` 1.0.1, `linux-keyutils-keyring-store` 1.0.0, all MIT OR Apache-2.0 | L1 |
+| `SecretStore` | Secret Service over D-Bus through keyring-core, the same front as Windows; the kernel keyring as a fallback | `keyring-core` 1.0.1 (pinned in 4.1), `zbus-secret-service-keyring-store` 1.0.1, `linux-keyutils-keyring-store` 1.0.0, all MIT OR Apache-2.0 | L1, waiting: the Secret Service store turns on zbus's default features, which Cargo would then turn on for every crate, so it waits for a store that leaves them off (BUILD.md 4.1's comment) |
 | `MediaSessions` | MPRIS over D-Bus: list `org.mpris.MediaPlayer2.*`, read `PlaybackStatus`, `Metadata` and `Position`, call `PlayPause`, `Seek` and `SetPosition`, subscribe to `PropertiesChanged` and `Seeked` | `zbus` 5.19.0, MIT. `mpris-server` is MPL-2.0, which `deny.toml` does not allow, and the client side is small enough to write | L1 |
 | `ShellHost`: toasts | `org.freedesktop.Notifications` | `zbus` 5.19.0 | L1 |
 | `ShellHost`: `keep_awake` | logind or ScreenSaver inhibitors | `zbus` 5.19.0 | L1 |
@@ -195,6 +195,7 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
    - Builds: the D-Bus backends (`MediaSessions`, toasts, `keep_awake`, the lock state, the power facts, `SecretStore`, `Apps`, `RecentSources`) and the nightly Linux desktop lane.
    - Acceptance: each passes its trait's conformance suite against a fake service in CI and against the real service on Ubuntu 26.04.
    - Status on 2026-10-21: `Apps::index` is built in `crates/eileen-apps-linux`. It reads the desktop entries with Eileen's own parser and follows the specification's precedence and masking (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`, `TryExec`). Names follow `LANGUAGE` and the locale, as GNOME's menu does. Flatpak and Snap apps count as packaged. It is tested over a fixture session. Launch waits for the supervisor's Linux process model.
+   - Status on 2026-10-22: the other D-Bus backends are built on one shared crate, `eileen-dbus-linux`, and go in as small pull requests, which [docs/wp/WP10-linux.md](wp/WP10-linux.md) lists. `SecretStore` waits (section 4).
 3. **L2, toward v0.2.**
    - Builds:
      - audio on PipeWire;
@@ -214,14 +215,14 @@ Whether L2 ships with v0.1 or v0.2 is the owner's call. Nothing in L0 or L1 need
 
 ## 8. Proposed work package: WP10, Linux (Ubuntu first)
 
-The text below is for the owner to accept, change or strike. If accepted, it becomes BUILD.md section 6.12 through an amendment pull request.
+Pull request #31 added the text below to BUILD.md as section 6.12 on 2026-10-22, with one more crate, `eileen-dbus-linux`, which holds the D-Bus helpers the other Linux crates share; the owner can change or strike it there. [docs/wp/WP10-linux.md](wp/WP10-linux.md) keeps the progress.
 
 - **Branch** `wp10/<topic>` for each pull request.
 - **Depends on** WP0 phase A for the traits. Each Linux backend also depends on the package that owns its consumer: WP2 the runtime, WP4 voice, WP5 desktop, WP6 apps, WP8 the HUD.
 - **Desktop** Linux: a real Ubuntu desktop for L2 and later, never the owner's PC.
 - **Wave** Beside W0 to W6, on its own machine. It holds none of the owner PC's build slots, and its pull requests are small, so the owner's review time stays the only shared cost.
 - **Owns:**
-  - the crates: `eileen-shell-linux`, `eileen-audio-linux`, `eileen-desktop-linux`, `eileen-apps-linux`, `eileen-hud-linux`;
+  - the crates: `eileen-shell-linux`, `eileen-audio-linux`, `eileen-desktop-linux`, `eileen-apps-linux`, `eileen-hud-linux`, and `eileen-dbus-linux`, which they share;
   - the docs: `docs/LINUX.md` and `docs/wp/WP10-linux.md`;
   - the Linux scenarios: `scenarios/linux/`;
   - the Linux desktop lane's workflow file, by amendment with WP0, which owns `.github/`.
@@ -244,7 +245,7 @@ The text below is for the owner to accept, change or strike. If accepted, it bec
 Running the PR lanes on Ubuntu 24.04 over the unmerged `wp0/base-crates` work (`backup/wp0-base-crates` at ca336be) gave 305 of 305 tests passing and two failures that the Windows jobs cannot show. Reading the build guard's Linux memory code then showed a third problem, which no test exercises yet.
 
 - **A Linux-only clippy error.** In `eileen-supervisor`, `qos.rs` line 106, the test `an_audio_boost_reverts_on_drop` calls `drop(boost)`. Off Windows, `AudioBoost` holds no MMCSS handle and implements no `Drop`, so `clippy::drop_non_drop` fails the build under `-D warnings`. A `cfg_attr(not(windows), expect(clippy::drop_non_drop, reason = "..."))` on that statement, or ending the scope instead of calling `drop`, fixes it.
-- **A yanked pin.** `tokio` 1.54.0, BUILD.md 4.1's pin, is yanked on crates.io, so `cargo deny --locked check` fails. 1.54.1 appeared on 2026-10-21. The newest release outside the 14-day window is 1.53.2, of 2026-10-03.
+- **A yanked pin.** `tokio` 1.54.0, BUILD.md 4.1's pin, is yanked on crates.io, so `cargo deny --locked check` fails. 1.54.1 appeared on 2026-10-21. The newest release outside the 14-day window is 1.53.2, of 2026-10-03. Pull request #27 moved BUILD.md 4.1's pin and the root manifest to 1.53.2; `backup/wp0-base-crates` still locks 1.54.0.
 - **Commit headroom that Linux does not enforce.** On Linux the guard reads commit headroom as `CommitLimit` minus `Committed_AS`. The kernel enforces that limit only under strict overcommit (`vm.overcommit_memory = 2`). In the default mode, 0, `Committed_AS` can pass `CommitLimit` on a busy desktop, because browsers and runtimes reserve far more than they touch [inferred: the measurement below shows the mechanism, not how often a real desktop reaches it]. The headroom then reads 0 while gigabytes are free, and slot 0's rule refuses every build.
   - Measured on 2026-10-21, WSL2 with 16 GB and default overcommit: a 12 GB mapping that is never touched left `MemAvailable` at 13,957 MB but took the headroom from 9,691 MB to 0. Slot 0's rule, at the default 2,048 MB floor plus a two-job build's 2,048 MB estimate, went from admitting to refusing.
   - The fix that matches the kernel's policy is the one `LinuxSystemMemory` uses: under strict overcommit, keep `CommitLimit` minus `Committed_AS`; otherwise use `MemAvailable` plus `SwapFree`, the memory that can still be backed before the OOM killer acts. The guard and the runtime write the same machine-wide sample files, so both should use the same rule.
