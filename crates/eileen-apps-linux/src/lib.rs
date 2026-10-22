@@ -1,42 +1,48 @@
 //! The apps process's platform implementations on Linux: what `eileen-apps-win` does on
 //! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L1 starts with the app index,
 //! [`index`]: every application the desktop's menu shows, read from the XDG desktop entries,
-//! as `shell:AppsFolder` gives it on Windows.
+//! as `shell:AppsFolder` gives it on Windows. [`Opener`] opens web addresses, URIs, files and
+//! folders for the user through the desktop's `OpenURI` portal.
 //!
 //! # Owns
 //!
-//! - The desktop entry format (the XDG Desktop Entry Specification 1.5): groups, keys,
-//!   localized keys, escapes and lists.
-//! - The index: which entries the menu shows (`Hidden`, `NoDisplay`, `OnlyShowIn`,
-//!   `NotShowIn`, `TryExec`), the precedence of data folders, desktop file IDs, and which apps
-//!   are packaged (Flatpak, Snap).
-//! - [`AppEntry`] and [`AppKind`]: the `Apps` trait's index types, field for field, until
-//!   `eileen-platform` merges.
+//! - The index, from desktop entries (the XDG Desktop Entry Specification 1.5): their format,
+//!   which entries the menu shows (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`,
+//!   `TryExec`), the precedence of data folders, desktop file IDs, and which apps are packaged.
+//! - Opening for the user ([`Opener`]): `Apps::open_url`, `open_uri` and `open_path` through the
+//!   `OpenURI` portal, with the checks of what each may open.
+//! - The trait types, field for field until `eileen-platform` merges: [`AppEntry`] and
+//!   [`AppKind`] (`Apps`); and [`FileError`] for local files, which [`OpenError`] can hold.
 //!
 //! # Does not own
 //!
 //! - The `Apps` trait (`eileen-platform`, WP0). When it merges, the index implements
-//!   `Apps::index` and this crate's two types give way to the trait's.
+//!   `Apps::index`, [`Opener`] serves the opening calls, and the mirrored types give way.
 //! - Launching: `Apps::launch` goes through `eileen_supervisor::user_launch` (D-Bus activation
 //!   or `gio launch`), which needs the supervisor's Linux process model (docs/LINUX.md section
 //!   5).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
-//! - D-Bus plumbing: [`DbusError`], the buses, name owners and signal streams are
-//!   `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's D-Bus clients.
+//! - D-Bus plumbing: [`DbusError`], the buses, name owners, the portal request and signal
+//!   streams are `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's
+//!   D-Bus clients.
 //!
 //! # Invariants
 //!
 //! - Linux only: the crate is `cfg(target_os = "linux")` and compiles to an empty library
 //!   elsewhere, as the `-win` crates do off Windows.
-//! - Read only: it reads desktop entries and never runs what they name.
+//! - It starts no process: the desktop starts every app it opens for the user, so none is
+//!   Eileen's child (BUILD.md section 2.1). Clippy's disallowed methods keep `Command` out.
 //! - The first data folder holding a desktop file ID decides it, as the specification orders
 //!   them: `XDG_DATA_HOME`, then `XDG_DATA_DIRS`.
+//! - No error holds a path, a URI, a file's text or a service's message: only I/O kinds, error
+//!   names and fixed descriptions, which the tests check.
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (the `Personal` wrapper) and `eileen-dbus-linux` (the
-//!   D-Bus helpers). Nothing in the workspace may depend on it except the apps process's
-//!   composition root on Linux.
+//! - May depend on `eileen-contracts` (the `Personal` wrapper), `eileen-dbus-linux` (the D-Bus
+//!   helpers), `zbus`, `tokio` (files open on its blocking pool) and `rustix` (open flags).
+//!   Nothing in the workspace may depend on it except the apps process's composition root on
+//!   Linux.
 //!
 //! # Testing
 //!
@@ -61,7 +67,7 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet: the index is a short synchronous read. Spans join with the trait implementation.
+//! - None yet: spans join with the trait implementations.
 //!
 //! # Do not change without a decision record
 //!
@@ -71,11 +77,15 @@
 #![forbid(unsafe_code)]
 
 mod entry;
+mod error;
 #[doc(hidden)]
 pub mod fuzz_entry;
 mod index;
 mod keyfile;
+mod open;
 
 pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
+pub use error::FileError;
 pub use index::{AppEntry, AppKind, Session, index};
+pub use open::{OpenError, Opener};
