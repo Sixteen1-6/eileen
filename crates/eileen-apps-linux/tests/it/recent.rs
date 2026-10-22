@@ -1,10 +1,12 @@
 //! The recent files over fixture files in `tests/fixtures/recent/`: one in the layout `GLib`
 //! writes, one in KIO's, and hand-written ones for the rules GTK never exercises, the namespaces,
-//! and the missing, empty and broken files.
+//! and the missing, empty and broken files. The bookmarks come in the file's order, the list
+//! newest first.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use eileen_apps_linux::{FileError, RecentItem, RecentlyUsed};
+use eileen_apps_linux::{FileError, RecentItem, RecentlyUsed, Session};
 use eileen_contracts::ids::{Date, WallTime};
 use eileen_contracts::tools::apps::FileKind;
 
@@ -29,6 +31,11 @@ fn gtk() -> RecentlyUsed {
 /// Every bookmark in a list, in the file's order.
 fn all(list: &RecentlyUsed) -> Vec<RecentItem> {
     list.bookmarks().unwrap()
+}
+
+/// Every recent file in a list, newest first.
+fn newest(list: &RecentlyUsed) -> Vec<RecentItem> {
+    list.recent(usize::MAX).unwrap()
 }
 
 /// A UTC time from its date, its `hh:mm:ss` and its microseconds, without the module's parser.
@@ -331,4 +338,195 @@ fn a_broken_file_is_an_error() {
     );
     let message = list("truncated.xbel").bookmarks().unwrap_err().to_string();
     assert!(!message.contains("/home/sam") && !message.contains("soffice"), "{message}");
+}
+
+/// What the `GLib` fixture lists, newest first.
+fn gtk_rows() -> Vec<Row<'static>> {
+    vec![
+        (
+            "/home/sam/src/eileen/crates/eileen-apps-linux/src/recent.rs",
+            Some("Text Editor"),
+            Some(FileKind::Code),
+            utc("2026-10-21", "21:07:33", 118_204),
+        ),
+        (
+            "/home/sam/Pictures/Beach Day/IMG_4412.jpg",
+            Some("Image Viewer"),
+            Some(FileKind::Image),
+            utc("2026-10-21", "18:44:09", 310_460),
+        ),
+        (
+            "/home/sam/Notes/Sam's notes.md",
+            Some("Text Editor"),
+            Some(FileKind::Document),
+            utc("2026-10-21", "12:30:02", 417),
+        ),
+        (
+            "/home/sam/Documents/Sales & Costs 2026.ods",
+            Some("LibreOffice 24.2"),
+            Some(FileKind::Spreadsheet),
+            utc("2026-10-21", "09:58:14", 672_310),
+        ),
+        (
+            "/home/sam/Documents/Quarterly Report.odt",
+            Some("LibreOffice 24.2"),
+            Some(FileKind::Document),
+            utc("2026-10-20", "15:31:40", 551_201),
+        ),
+        (
+            "/home/sam/Documents/Résumé 2026.pdf",
+            Some("org.kde.okular"),
+            Some(FileKind::Document),
+            utc("2026-10-19", "08:15:00", 250_000),
+        ),
+        (
+            "/home/sam/Videos/Mount Rainier Timelapse.mp4",
+            Some("Videos"),
+            Some(FileKind::Video),
+            utc("2026-10-18", "20:41:55", 902_114),
+        ),
+        (
+            "/home/sam/Pictures/写真",
+            Some("Files"),
+            Some(FileKind::Folder),
+            utc("2026-10-17", "11:03:27", 440_192),
+        ),
+        (
+            "/home/sam/Music/Rainier Timelapse Score.flac",
+            Some("Music"),
+            Some(FileKind::Audio),
+            utc("2026-10-16", "07:22:10", 81_736),
+        ),
+        (
+            "/home/sam/Downloads/fonts.zip",
+            Some("Archive Manager"),
+            None,
+            utc("2026-10-12", "13:45:51", 663_009),
+        ),
+    ]
+}
+
+#[test]
+fn glibs_file_lists_its_local_files_newest_first() {
+    assert_eq!(
+        rows(&newest(&gtk())),
+        gtk_rows(),
+        "every local, public file, newest first, with its app, kind and time"
+    );
+}
+
+#[test]
+fn the_limit_keeps_the_newest() {
+    let list = gtk();
+    let expected = gtk_rows();
+    assert_eq!(rows(&list.recent(3).unwrap()), expected[..3], "the three newest");
+    assert_eq!(rows(&list.recent(1).unwrap()), expected[..1], "the newest");
+    assert!(list.recent(0).unwrap().is_empty(), "none");
+    assert_eq!(list.recent(100).unwrap().len(), expected.len(), "all, when the limit is higher");
+}
+
+#[test]
+fn the_usable_entries_list_newest_first_each_path_once() {
+    assert_eq!(
+        rows(&newest(&list("odd.xbel"))),
+        [
+            ("/home/sam/odd/empty-element.txt", None, None, utc("2026-10-12", "10:00:00", 0)),
+            ("/home/sam/odd/tie-b.txt", None, None, utc("2026-10-11", "10:00:00", 0)),
+            ("/home/sam/odd/tie-a.txt", None, None, utc("2026-10-11", "10:00:00", 0)),
+            (
+                "/home/sam/odd/app-tie.txt",
+                Some("Listed First"),
+                None,
+                utc("2026-10-10", "10:00:00", 0)
+            ),
+            ("/home/sam/odd/no-info.txt", None, None, utc("2026-10-10", "08:00:00", 0)),
+            ("/home/sam/odd/nameless.txt", Some("Named"), None, utc("2026-10-09", "11:00:00", 0)),
+            ("/home/sam/odd/foreign.txt", None, None, utc("2026-10-08", "10:00:00", 0)),
+            ("/home/sam/odd/twice.txt", Some("Second"), None, utc("2026-10-07", "10:00:00", 0)),
+            (
+                "/home/sam/odd/visited-newest.txt",
+                Some("Reader"),
+                Some(FileKind::Document),
+                utc("2026-10-04", "16:30:00", 0)
+            ),
+            (
+                "/home/sam/odd/app-newest.txt",
+                Some("Newest App"),
+                Some(FileKind::Document),
+                utc("2026-10-02", "12:00:00", 500_000)
+            ),
+            ("/home/sam/odd/added-only.txt", None, None, utc("2026-09-30", "23:59:59", 0)),
+        ],
+        "the usable entries newest first, the path the file lists three times once"
+    );
+}
+
+#[test]
+fn a_path_listed_twice_appears_once_at_its_newest() {
+    let odd = newest(&list("odd.xbel"));
+    let twice: Vec<&RecentItem> =
+        odd.iter().filter(|item| item.path.get() == "/home/sam/odd/twice.txt").collect();
+    assert_eq!(twice.len(), 1, "once, though file:/// and file://localhost/ name it three times");
+    assert_eq!(twice[0].opened_at, utc("2026-10-07", "10:00:00", 0), "at its newest");
+    assert_eq!(app_of(twice[0]), Some("Second"), "with that entry's app");
+}
+
+#[test]
+fn equal_times_keep_the_files_order() {
+    let odd = newest(&list("odd.xbel"));
+    let ties: Vec<&str> = paths(&odd).into_iter().filter(|path| path.contains("/tie-")).collect();
+    assert_eq!(ties, ["/home/sam/odd/tie-b.txt", "/home/sam/odd/tie-a.txt"], "b is written first");
+}
+
+#[test]
+fn the_list_of_a_missing_or_broken_file_is_its_bookmarks() {
+    assert_eq!(list("no-such-folder/recently-used.xbel").recent(10), Ok(Vec::new()), "missing");
+    assert_eq!(list("empty.xbel").recent(10), Ok(Vec::new()), "empty");
+    assert_eq!(list("cleared.xbel").recent(10), Ok(Vec::new()), "no bookmarks");
+    assert_eq!(
+        list("truncated.xbel").recent(10),
+        Err(list("truncated.xbel").bookmarks().unwrap_err()),
+        "the same error for a broken file"
+    );
+}
+
+#[test]
+fn the_file_is_xdg_data_homes_else_homes() {
+    let root = fixtures();
+    let home = root.join("home").join("sam");
+    let xdg = root.join("xdg-data");
+    let with = |pairs: &[(&str, &Path)]| {
+        let pairs: Vec<(String, OsString)> =
+            pairs.iter().map(|(name, value)| ((*name).to_owned(), value.into())).collect();
+        let session = Session::from_vars(move |name| {
+            pairs.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone())
+        });
+        RecentlyUsed::for_session(&session)
+    };
+    let first_path = |list: Option<RecentlyUsed>| {
+        list.expect("a data folder").recent(1).unwrap().first().map(|item| item.path.get().clone())
+    };
+    let screenshot =
+        Some("/home/sam/Pictures/Screenshots/Screenshot_20261021_075830.png".to_owned());
+    let newest_in_home =
+        Some("/home/sam/src/eileen/crates/eileen-apps-linux/src/recent.rs".to_owned());
+    assert_eq!(first_path(with(&[("HOME", &home)])), newest_in_home, "HOME's .local/share");
+    assert_eq!(
+        first_path(with(&[("XDG_DATA_HOME", &xdg), ("HOME", &home)])),
+        screenshot,
+        "XDG_DATA_HOME first"
+    );
+    assert_eq!(first_path(with(&[("XDG_DATA_HOME", &xdg)])), screenshot, "XDG_DATA_HOME alone");
+    assert_eq!(
+        first_path(with(&[("XDG_DATA_HOME", Path::new("")), ("HOME", &home)])),
+        newest_in_home,
+        "an empty XDG_DATA_HOME is unset"
+    );
+    assert_eq!(
+        first_path(with(&[("XDG_DATA_HOME", Path::new("relative/share")), ("HOME", &home)])),
+        newest_in_home,
+        "a relative XDG_DATA_HOME is ignored"
+    );
+    assert!(with(&[]).is_none(), "neither");
+    assert!(with(&[("HOME", Path::new("home/sam"))]).is_none(), "a relative HOME");
 }

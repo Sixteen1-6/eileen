@@ -30,8 +30,8 @@
 //! - It starts apps only through the desktop, never as its children: the portal starts the
 //!   default app, and D-Bus activation has the bus start the app (BUILD.md section 2.1).
 //!   Clippy's disallowed methods keep `Command` out.
-//! - The first data folder holding a desktop file ID decides it, as the specification orders
-//!   them: `XDG_DATA_HOME`, then `XDG_DATA_DIRS`.
+//! - The first data folder holding a desktop file ID decides it, as the specification orders them:
+//!   `XDG_DATA_HOME`, read once into [`Session`] for the recent files too, then `XDG_DATA_DIRS`.
 //! - No error holds a path, a URI, a file's text or a service's message: only I/O kinds, error
 //!   names and fixed descriptions, which the tests check.
 //!
@@ -58,8 +58,9 @@
 //!   not decide its ID: the specification gives no meaning to it.
 //! - `XDG_DATA_DIRS` usually lists Flatpak's and Snap's exports through the login profile; a
 //!   runtime started without that profile would miss those apps, so the index adds them.
-//! - `GLib` refuses a whole bookmark file over one bad date; the reader skips that bookmark. A
-//!   `private` bookmark is hidden from every app that did not register it, Eileen included.
+//! - `GLib` refuses a whole bookmark file over a bad date or a repeated `href`; the reader skips
+//!   that bookmark, and lists a path once at its newest time, as it does when two URIs name it.
+//!   A `private` bookmark is hidden from every app that did not register it, Eileen included.
 //! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
 //!   `eileen-dbus-linux`'s.
 //!

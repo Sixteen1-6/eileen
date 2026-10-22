@@ -10,6 +10,18 @@
 //! replace such a file on their next write. The submodules hold the rules: `xbel` the file's
 //! layout and which bookmarks count, `uri` the path, `time` the times, `kind` the kind of file.
 //!
+//! # The list
+//!
+//! [`RecentlyUsed::recent`] serves `RecentSources::recent`: the bookmarks newest first, as the
+//! trait asks, cut to the limit. That departs from the specification, which asks that bookmarks
+//! be shown in the file's order, so equal times keep the file's order, as close to the
+//! specification as the trait allows. A path appears once, at its newest time. The
+//! specification allows no two bookmarks with one URI, and `GLib` refuses a file that has them,
+//! but two URIs can still name one path, as `file:///x` and `file://localhost/x` do. The files
+//! are not checked to still exist. [`RecentlyUsed::for_session`] finds the file in the
+//! session's data home, [`Session::data_home`], the folder the index searches first, so
+//! `XDG_DATA_HOME` is read once.
+//!
 //! # Not here
 //!
 //! - `RecentSources::watch`: it needs `inotify` (docs/LINUX.md section 4), a new dependency.
@@ -22,6 +34,7 @@ mod time;
 mod uri;
 mod xbel;
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
@@ -29,7 +42,7 @@ use std::path::PathBuf;
 use eileen_contracts::ids::{Personal, Untrusted, WallTime};
 use eileen_contracts::tools::apps::FileKind;
 
-use crate::FileError;
+use crate::{FileError, Session};
 
 /// The file's name in the user's data folder, and what its errors name.
 const FILE_NAME: &str = "recently-used.xbel";
@@ -62,6 +75,27 @@ impl RecentlyUsed {
     #[must_use]
     pub fn at(path: impl Into<PathBuf>) -> Self {
         Self { path: Personal::new(path.into()) }
+    }
+
+    /// The session's list, `recently-used.xbel` in its data home ([`Session::data_home`]):
+    /// `$XDG_DATA_HOME`, else `$HOME/.local/share`. `None` when the session has no data home.
+    #[must_use]
+    pub fn for_session(session: &Session) -> Option<Self> {
+        session.data_home.as_ref().map(|home| Self::at(home.join(FILE_NAME)))
+    }
+
+    /// The most recent `limit` files, newest first: `RecentSources::recent`. Equal times keep
+    /// the file's order, and a path the file lists twice appears once, at its newest time.
+    pub fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, FileError> {
+        let mut items = self.bookmarks()?;
+        // A stable sort, so equal times keep the file's order.
+        items.sort_by_key(|item| std::cmp::Reverse(item.opened_at));
+        let mut listed = HashSet::new();
+        Ok(items
+            .into_iter()
+            .filter(|item| listed.insert(item.path.get().clone()))
+            .take(limit)
+            .collect())
     }
 
     /// Every usable bookmark in the file, in the file's order: each local file that is not
