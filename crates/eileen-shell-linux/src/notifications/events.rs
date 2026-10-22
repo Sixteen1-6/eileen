@@ -9,9 +9,11 @@
 //!
 //! The rules:
 //!
-//! - The caller polls the stream; the client spawns nothing of its own. The stream keeps
-//!   `eileen-dbus-linux`'s conventions for signal streams: its queue size, at most
-//!   [`DRAIN_CAP`] messages passed over per poll, and a read error passed over before the end.
+//! - The caller polls the stream; the client spawns nothing of its own. The stream subscribes
+//!   and drains with `eileen-dbus-linux`'s `subscribe` and `drain`, so it keeps the conventions
+//!   for signal streams: their queue size, at most
+//!   [`DRAIN_CAP`](eileen_dbus_linux::DRAIN_CAP) messages passed over per poll, and a read error
+//!   passed over before the end.
 //! - Only the name's owner speaks for the server. The stream knows the owner from the moment it
 //!   subscribes and follows each owner change in the order the connection received it, so a
 //!   signal from any other sender is passed over, though the bus delivers one to the connection
@@ -32,15 +34,16 @@
 //!   notification whose end it waits for.
 
 use std::pin::Pin;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{
-    DRAIN_CAP, DbusError, Names, OwnerChange, OwnerChanges, QUEUE_SIZE, Stream, name_owner,
-    owner_changes,
+    DbusError, Names, OwnerChange, OwnerChanges, Signals, Stream, drain, name_owner, owner_changes,
+    subscribe,
 };
+use zbus::MatchRule;
+use zbus::match_rule::Builder;
 use zbus::names::OwnedUniqueName;
-use zbus::{MatchRule, MessageStream};
 
 use super::{INTERFACE, NAME, NotificationId, NotificationServer, Notifier, PATH};
 
@@ -107,7 +110,6 @@ impl Notifier {
     /// follows the name to whichever program owns it, now or later, and says when that
     /// changes. Call it, and drop the stream, in the tokio runtime's context, as in a task.
     pub async fn events(&self) -> Result<NotificationEvents, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(SIGNALS, &error);
         // The owner changes first, then the signals, then the owner itself: no change after the
         // first subscription goes unseen, and no signal is judged by the wrong owner.
         let mut owners = owner_changes(&self.connection, Names::Name(NAME)).await?;
@@ -116,20 +118,12 @@ impl Notifier {
             .sender(NAME)
             .and_then(|rule| rule.path(PATH))
             .and_then(|rule| rule.interface(INTERFACE))
-            .map_err(failed)?
-            .build();
-        let signals = MessageStream::for_match_rule(rule, &self.connection, Some(QUEUE_SIZE))
-            .await
-            .map_err(failed)?;
+            .map(Builder::build);
+        let signals = subscribe(&self.connection, rule, SIGNALS).await?;
         let answer = name_owner(&self.connection, NAME).await?;
         let (owner, change) = start(answer, &mut owners).await;
-        Ok(NotificationEvents {
-            signals,
-            owners,
-            owner: owner.map(NotificationServer),
-            signal: Held::Nothing,
-            change,
-        })
+        let incoming = Incoming { signals, owners, signal: Held::Nothing, change };
+        Ok(NotificationEvents { incoming, owner: owner.map(NotificationServer) })
     }
 }
 
@@ -163,12 +157,19 @@ where
 #[derive(Debug)]
 #[must_use = "a stream does nothing unless polled"]
 pub struct NotificationEvents {
-    /// The server's signals as the bus routes them; their sender is checked here.
-    signals: MessageStream,
-    /// The bus's owner changes for the name.
-    owners: OwnerChanges,
+    /// What the two subscriptions give, in the order the connection received it.
+    incoming: Incoming,
     /// The name's owner where the stream has read to: only its signals count.
     owner: Option<NotificationServer>,
+}
+
+/// The two subscriptions behind [`NotificationEvents`], as one stream of their items.
+#[derive(Debug)]
+struct Incoming {
+    /// The server's signals as the bus routes them; their sender is checked by the events.
+    signals: Signals,
+    /// The bus's owner changes for the name.
+    owners: OwnerChanges,
     /// What `signals` gave that the stream has not passed on.
     signal: Held<zbus::Message>,
     /// What `owners` gave that the stream has not passed on.
@@ -201,24 +202,18 @@ impl NotificationEvents {
         std::future::poll_fn(|cx| self.poll_event(cx)).await
     }
 
-    /// Polls for the next event. It passes over at most [`DRAIN_CAP`] messages that make none,
-    /// then yields.
+    /// Polls for the next event. It passes over at most
+    /// [`DRAIN_CAP`](eileen_dbus_linux::DRAIN_CAP) messages that make none, then yields.
     fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<NotificationEvent>> {
-        for _ in 0..DRAIN_CAP {
-            let event = match ready!(self.poll_received(cx)) {
-                Some(Received::Signal(signal)) => self.signal_event(&signal),
-                Some(Received::Change(change)) => Some(self.change_event(change)),
-                None => return Poll::Ready(None),
-            };
-            if event.is_some() {
-                return Poll::Ready(event);
-            }
-        }
-        // A run of messages to pass over: yield, and come back for the rest.
-        cx.waker().wake_by_ref();
-        Poll::Pending
+        let owner = &mut self.owner;
+        drain(&mut self.incoming, cx, |received| match received {
+            Received::Signal(signal) => Self::signal_event(owner.as_ref(), &signal),
+            Received::Change(change) => Some(Self::change_event(owner, change)),
+        })
     }
+}
 
+impl Incoming {
     /// The next item of the two subscriptions, in the order the connection received them.
     /// zbus hands each message it reads to every subscription before it reads the next, so a
     /// subscription that has nothing once the other's item is held has nothing earlier to come.
@@ -260,16 +255,14 @@ impl NotificationEvents {
         }
     }
 
-    /// Takes the server's next signal, unless one is held or the subscription has ended. A read
-    /// error is passed over: the end follows it.
+    /// Takes the server's next signal, unless one is held or the subscription has ended.
     fn take_signal(&mut self, cx: &mut Context<'_>) {
-        while matches!(self.signal, Held::Nothing) {
-            match Pin::new(&mut self.signals).poll_next(cx) {
-                Poll::Ready(Some(Ok(signal))) => self.signal = Held::Item(signal),
-                Poll::Ready(Some(Err(_))) => {}
-                Poll::Ready(None) => self.signal = Held::End,
-                Poll::Pending => return,
-            }
+        if matches!(self.signal, Held::Nothing) {
+            self.signal = match Pin::new(&mut self.signals).poll_next(cx) {
+                Poll::Ready(Some(signal)) => Held::Item(signal),
+                Poll::Ready(None) => Held::End,
+                Poll::Pending => Held::Nothing,
+            };
         }
     }
 
@@ -283,13 +276,18 @@ impl NotificationEvents {
             };
         }
     }
+}
 
+impl NotificationEvents {
     /// The event `signal` reports: one the specification defines, with the arguments it
-    /// defines, from the name's owner.
-    fn signal_event(&self, signal: &zbus::Message) -> Option<NotificationEvent> {
+    /// defines, from the name's owner, `owner`.
+    fn signal_event(
+        owner: Option<&NotificationServer>,
+        signal: &zbus::Message,
+    ) -> Option<NotificationEvent> {
         let header = signal.header();
         let sender = header.sender()?;
-        if self.owner.as_ref().is_none_or(|owner| owner.as_str() != sender.as_str()) {
+        if owner.is_none_or(|owner| owner.as_str() != sender.as_str()) {
             return None;
         }
         let server = NotificationServer::of(sender);
@@ -309,11 +307,23 @@ impl NotificationEvents {
         }
     }
 
-    /// The event an owner change reports; from it on, the new owner speaks for the server.
-    fn change_event(&mut self, change: OwnerChange) -> NotificationEvent {
+    /// The event an owner change reports; from it on, the new owner, now `owner`, speaks for
+    /// the server.
+    fn change_event(
+        owner: &mut Option<NotificationServer>,
+        change: OwnerChange,
+    ) -> NotificationEvent {
         let current = change.new.map(NotificationServer);
-        self.owner.clone_from(&current);
+        owner.clone_from(&current);
         NotificationEvent::ServerChanged { previous: change.old.map(NotificationServer), current }
+    }
+}
+
+impl Stream for Incoming {
+    type Item = Received;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Received>> {
+        self.get_mut().poll_received(cx)
     }
 }
 

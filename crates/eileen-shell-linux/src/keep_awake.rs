@@ -76,7 +76,7 @@
 //! - It holds no signal stream, whose drop needs the tokio runtime (`eileen-dbus-linux`'s stream
 //!   traps): the portal's [`Request`] ends inside [`LinuxPowerRequest::keep_awake`].
 //! - [`LinuxPowerRequest::release`] ends both now and says whether the desktop agreed:
-//!   `Uninhibit(cookie)`, or the portal request's `Close()`, answered.
+//!   `Uninhibit(cookie)`, or the portal request's `Close()` ([`close_request`]), answered.
 //!
 //! # Traps
 //!
@@ -101,7 +101,7 @@ use std::fmt;
 use std::os::fd::OwnedFd;
 use std::time::Duration;
 
-use eileen_dbus_linux::Request;
+use eileen_dbus_linux::{Request, close_request};
 use tokio::time::Instant;
 use zbus::zvariant::{self, OwnedObjectPath};
 
@@ -118,11 +118,10 @@ const MODE: &str = "block";
 const SUSPEND: u32 = 4;
 const IDLE: u32 = 8;
 
-/// The portal's service, its object, and the interfaces of its inhibitions and its requests.
+/// The portal's service, its object, and the interface of its inhibitions.
 const PORTAL_SERVICE: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_OBJECT: &str = "/org/freedesktop/portal/desktop";
 const PORTAL_INHIBIT: &str = "org.freedesktop.portal.Inhibit";
-const PORTAL_REQUEST: &str = "org.freedesktop.portal.Request";
 
 /// What the errors name, each a bare noun.
 const LOGIND_LOCK: &str = "logind inhibitor lock";
@@ -311,14 +310,7 @@ impl LinuxPowerRequest {
                     GnomeSessionManagerProxy::new(&connection).await.map_err(failed(GNOME))?;
                 manager.uninhibit(cookie).await.map_err(failed(GNOME))
             }
-            End::Portal(handle) => {
-                // The request's own `Close`, answered: the shared `Request`'s `close` does not
-                // wait for the portal.
-                let close = connection
-                    .call_method(Some(PORTAL_SERVICE), &handle, Some(PORTAL_REQUEST), "Close", &())
-                    .await;
-                close.map(|_reply| ()).map_err(failed(PORTAL))
-            }
+            End::Portal(handle) => close_request(&connection, &handle, PORTAL).await,
         }
     }
 }

@@ -20,8 +20,9 @@
 //!
 //! # Traps
 //!
-//! - It follows `eileen-dbus-linux`'s stream conventions (`QUEUE_SIZE`, `DRAIN_CAP`) and has the
-//!   traps written there: poll it steadily or drop it, and drop it inside the tokio runtime.
+//! - It subscribes and drains with `eileen-dbus-linux`'s `subscribe` and `drain`, so it keeps the
+//!   stream conventions and has the traps written there: poll it steadily or drop it, and drop it
+//!   inside the tokio runtime.
 //! - power-profiles-daemon 0.20 and later serves both names from one process and signals each
 //!   change on both objects; signals already waiting are read as one.
 
@@ -31,10 +32,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use eileen_dbus_linux::{DRAIN_CAP, Names, OwnerChange, OwnerChanges, QUEUE_SIZE, Stream};
+use eileen_dbus_linux::{Names, OwnerChange, OwnerChanges, Signals, Stream, drain, subscribe};
 use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, Value};
-use zbus::{Connection, MatchRule, Message, MessageStream};
+use zbus::{Connection, MatchRule, Message};
 
 use super::profiles::{ProfilesAnswer, read_profiles};
 use super::{DEVICE, LEGACY_PROFILES, PROFILES, PROPERTIES, UPOWER, UPOWER_PATH};
@@ -60,10 +61,10 @@ pub(super) async fn follow(bus: &Connection) -> Result<PowerChanges, DbusError> 
     for daemon in daemons {
         owners.push(eileen_dbus_linux::owner_changes(bus, Names::Name(daemon.name())).await?);
     }
-    let mut objects = vec![(Source::UPowerRoot, subscribe(bus, root_rule()).await?)];
+    let mut objects = vec![(Source::UPowerRoot, subscribe(bus, root_rule(), WATCH).await?)];
     for daemon in [PowerDaemon::PowerProfiles, PowerDaemon::LegacyPowerProfiles] {
         let rule = properties_rule(daemon.name(), daemon.path(), daemon.name());
-        objects.push((Source::Profiles(daemon), subscribe(bus, rule).await?));
+        objects.push((Source::Profiles(daemon), subscribe(bus, rule, WATCH).await?));
     }
     let mut watch = Watch {
         bus: bus.clone(),
@@ -170,17 +171,6 @@ enum Source {
     Profiles(PowerDaemon),
 }
 
-/// What one subscription had waiting, the strongest last.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Drained {
-    /// Nothing more for now.
-    Waiting,
-    /// More than one poll takes: poll again.
-    More,
-    /// The subscription has ended: the connection closed.
-    Ended,
-}
-
 /// The subscriptions behind [`PowerChanges`], and the facts last read.
 struct Watch {
     /// The system bus.
@@ -194,9 +184,9 @@ struct Watch {
     /// Each daemon's name's owner changes.
     owners: Vec<OwnerChanges>,
     /// `UPower`'s root object and both profiles objects.
-    objects: Vec<(Source, MessageStream)>,
+    objects: Vec<(Source, Signals)>,
     /// One subscription per system battery.
-    batteries: Vec<(OwnedObjectPath, MessageStream)>,
+    batteries: Vec<(OwnedObjectPath, Signals)>,
 }
 
 impl Watch {
@@ -253,9 +243,8 @@ impl Watch {
                 continue;
             }
             // A battery the bus will not follow is read again with UPower's other changes.
-            if let Ok(stream) =
-                subscribe(&self.bus, properties_rule(UPOWER, battery.as_str(), DEVICE)).await
-            {
+            let rule = properties_rule(UPOWER, battery.as_str(), DEVICE);
+            if let Ok(stream) = subscribe(&self.bus, rule, WATCH).await {
                 self.batteries.push((battery.clone(), stream));
                 added = true;
             }
@@ -264,50 +253,36 @@ impl Watch {
     }
 
     /// Takes every signal waiting: what they make outdated, or `None` once the connection closed.
+    /// A subscription with more waiting than one poll takes has woken the task to come back.
     fn poll_outdated(&mut self, cx: &mut Context<'_>) -> Poll<Option<Outdated>> {
         let mut outdated = Outdated::default();
-        let mut drained = Drained::Waiting;
+        // Each `drain` takes everything waiting and gives no value, so it is ready only at the
+        // subscription's end.
+        let mut ended = false;
         for owners in &mut self.owners {
-            drained = drained.max(drain(owners, cx, |change| outdated.merge(started(&change))));
+            let polled = drain(owners, cx, |change| {
+                outdated.merge(started(&change));
+                None::<()>
+            });
+            ended |= polled.is_ready();
         }
         let objects = self.objects.iter_mut().map(|(source, stream)| (*source, stream));
         let batteries = self.batteries.iter_mut().map(|(_, stream)| (Source::Battery, stream));
         for (source, stream) in objects.chain(batteries) {
-            // A read error is passed over; the subscription's end follows it.
-            let note = |item: zbus::Result<Message>| {
-                if let Ok(message) = item {
-                    outdated.merge(outdated_by(source, &message));
-                }
-            };
-            drained = drained.max(drain(stream, cx, note));
+            let polled = drain(stream, cx, |message| {
+                outdated.merge(outdated_by(source, &message));
+                None::<()>
+            });
+            ended |= polled.is_ready();
         }
-        if drained == Drained::Ended {
+        if ended {
             Poll::Ready(None)
         } else if outdated.any() {
             Poll::Ready(Some(outdated))
         } else {
-            if drained == Drained::More {
-                cx.waker().wake_by_ref();
-            }
             Poll::Pending
         }
     }
-}
-
-/// Takes up to [`DRAIN_CAP`] items from `stream`, handing each to `note`.
-fn drain<S: Stream + Unpin>(
-    stream: &mut S,
-    cx: &mut Context<'_>,
-    mut note: impl FnMut(S::Item),
-) -> Drained {
-    for _ in 0..DRAIN_CAP {
-        match Pin::new(&mut *stream).poll_next(cx) {
-            Poll::Ready(Some(item)) => note(item),
-            Poll::Ready(None) => return Drained::Ended,
-            Poll::Pending => return Drained::Waiting,
-        }
-    }
-    Drained::More
 }
 
 /// What an owner change makes outdated. A daemon that starts or is replaced has facts to read;
@@ -360,17 +335,6 @@ fn changes_any(message: &Message, interface: &str, names: &[&str]) -> bool {
         }
         Err(_) => true,
     }
-}
-
-/// A subscription to the signals `rule` matches, queueing `QUEUE_SIZE` of them.
-async fn subscribe(
-    bus: &Connection,
-    rule: zbus::Result<MatchRule<'_>>,
-) -> Result<MessageStream, DbusError> {
-    let failed = |error: zbus::Error| DbusError::from_zbus(WATCH, &error);
-    MessageStream::for_match_rule(rule.map_err(failed)?, bus, Some(QUEUE_SIZE))
-        .await
-        .map_err(failed)
 }
 
 /// Every signal of `UPower`'s root object: `PropertiesChanged`, `DeviceAdded`, `DeviceRemoved`.
