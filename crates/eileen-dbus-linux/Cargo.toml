@@ -1,6 +1,6 @@
 [package]
 name = "eileen-dbus-linux"
-description = "The D-Bus helpers every Linux crate shares: the error type and the buses"
+description = "The D-Bus helpers every Linux crate shares: the error type, the buses, name owners and signal streams"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -24,8 +24,8 @@
 //!   [`LinuxSystemMemory`] implement the traits and [`facts`] becomes re-exports.
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
-//! - D-Bus plumbing: [`DbusError`] and the buses are `eileen-dbus-linux`'s, and [`DbusError`] is
-//!   re-exported here for this crate's D-Bus clients.
+//! - D-Bus plumbing: [`DbusError`], the buses, name owners and signal streams are
+//!   `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's D-Bus clients.
 //!
 //! # Invariants
 //!
@@ -63,6 +63,8 @@
 //!
 //! - Each source's traps are in its module's doc: sysfs links in `pci`, virtual disks and
 //!   btrfs in `disk`, APUs, framebuffers and WSL's GPU in `adapters`, core classes in `cpu`.
+//! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
+//!   `eileen-dbus-linux`'s.
 //!
 //! # Logs and tracing
 //!

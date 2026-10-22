@@ -1,9 +1,11 @@
-//! The private bus and the method timeout.
+//! The private bus, the method timeout and the round-trip barrier.
 
 use std::time::Duration;
 
-use eileen_dbus_linux::DbusError;
-use eileen_dbus_linux::testing::{PrivateBus, serve};
+use eileen_dbus_linux::testing::{
+    PrivateBus, next_message, nothing_ready, ready_now, round_trip, serve,
+};
+use eileen_dbus_linux::{DbusError, next};
 
 /// The fake service's name.
 const NAME: &str = "org.eileen.Test";
@@ -26,6 +28,16 @@ impl Echo {
     async fn hang(&self) {
         std::future::pending::<()>().await;
     }
+}
+
+/// The signals of the fake's interface, as `conn` receives them.
+async fn signals(conn: &zbus::Connection) -> zbus::MessageStream {
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface(INTERFACE)
+        .unwrap()
+        .build();
+    zbus::MessageStream::for_match_rule(rule, conn, None).await.unwrap()
 }
 
 #[tokio::test]
@@ -65,4 +77,35 @@ async fn dropping_the_bus_stops_its_daemon_and_removes_its_folder() {
     drop(bus);
     assert!(!proc.exists(), "the daemon is killed and reaped");
     assert!(!dir.exists(), "its folder is removed");
+}
+
+#[tokio::test]
+async fn after_a_round_trip_every_earlier_signal_is_ready_and_nothing_else() {
+    let bus = PrivateBus::start();
+    let service = serve(&bus, NAME, PATH, Echo { prefix: "" }).await;
+    let client = bus.connect().await;
+    let mut signals = signals(&client).await;
+    for number in [1_u32, 2] {
+        service.emit_signal(None::<()>, PATH, INTERFACE, "Tick", &(number,)).await.unwrap();
+    }
+    round_trip(&client, Some(NAME)).await;
+    for number in [1_u32, 2] {
+        let signal = ready_now(&mut signals).expect("ready").expect("a message");
+        assert_eq!(signal.body().deserialize::<u32>().unwrap(), number, "in the order sent");
+    }
+    round_trip(&client, Some(NAME)).await;
+    assert!(nothing_ready(&mut signals), "nothing more was sent");
+}
+
+#[tokio::test]
+async fn next_ends_once_the_bus_has_gone() {
+    let bus = PrivateBus::start();
+    let service = serve(&bus, NAME, PATH, Echo { prefix: "" }).await;
+    let client = bus.connect().await;
+    let mut signals = signals(&client).await;
+    service.emit_signal(None::<()>, PATH, INTERFACE, "Tick", &(7_u32,)).await.unwrap();
+    let signal = next_message(&mut signals).await;
+    assert_eq!(signal.body().deserialize::<u32>().unwrap(), 7, "the signal");
+    drop(bus);
+    assert!(next(&mut signals).await.is_none(), "the read error is passed over, then the end");
 }
