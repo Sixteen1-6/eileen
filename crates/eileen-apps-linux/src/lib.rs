@@ -11,6 +11,8 @@
 //! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
 //!   which bookmarks are local files, when each was last opened, by which app, of what kind.
 //!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
+//! - For `MediaSessions`: reading an MPRIS player's properties into a `MediaState`, leniently, for
+//!   players that send other types than the specification gives.
 //!
 //! # Does not own
 //!
@@ -32,23 +34,25 @@
 //!   Clippy's disallowed methods keep `Command` out.
 //! - The first data folder holding a desktop file ID decides it, as the specification orders them:
 //!   `XDG_DATA_HOME`, read once into [`Session`] for the recent files too, then `XDG_DATA_DIRS`.
+//! - A media player's text is `Untrusted` from where it is read, sanitized and kept to 512
+//!   characters: the MPRIS readers return no other kind, and their unit tests pin it.
 //! - No error holds a path, a URI, a file's text or a service's message: only I/O kinds, error
 //!   names and fixed descriptions, which the tests check.
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (the `ids` types and `FileKind`), `eileen-dbus-linux` (the
-//!   D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool), `rustix` (open flags) and
-//!   `quick-xml` (the bookmark file). Nothing in the workspace may depend on it except the apps
-//!   process's composition root on Linux.
+//! - May depend on `eileen-contracts` (the `ids` types, `FileKind` and the media types),
+//!   `eileen-dbus-linux` (the D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool),
+//!   `rustix` (open flags) and `quick-xml` (the bookmark file). Nothing in the workspace may depend
+//!   on it except the apps process's composition root on Linux.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
-//! - Layers: unit tests for the formats; property tests for the desktop entry lists and locale
-//!   keys; the fuzz target `desktop_entry`, whose seed corpus replays as a test; integration tests
-//!   over `tests/fixtures/`, which its README describes, and over the live session; fakes on
-//!   `eileen-dbus-linux`'s private bus for the D-Bus clients.
+//! - Layers: unit tests for the formats and the MPRIS values; property tests for the desktop entry
+//!   lists and locale keys; the fuzz target `desktop_entry`, whose seed corpus replays as a test;
+//!   integration tests over `tests/fixtures/`, which its README describes, and over the live
+//!   session; fakes on `eileen-dbus-linux`'s private bus for the D-Bus clients.
 //!
 //! # Traps
 //!
@@ -81,6 +85,11 @@ mod error;
 pub mod fuzz_entry;
 mod index;
 mod keyfile;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the tests use the readers until the MPRIS client does")
+)]
+mod mpris;
 mod open;
 mod recent;
 
