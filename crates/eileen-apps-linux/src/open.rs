@@ -1,8 +1,8 @@
-//! Opening web addresses, URIs, files and folders for the user through the desktop's `OpenURI`
-//! portal: the Linux side of the `Apps` trait's `open_url`, `open_uri`, and `open_path` without an
-//! app (BUILD.md section 3.4; docs/LINUX.md section 4). The portal opens each target with the
-//! user's default app, which the desktop starts, so none is Eileen's child, as BUILD.md section
-//! 2.1 asks of every app Eileen opens for the user.
+//! Opening web addresses, URIs, files and folders for the user, and starting apps over D-Bus:
+//! the Linux side of the `Apps` trait's `open_url`, `open_uri` and `open_path`, and of `launch`
+//! for an app whose desktop entry says `DBusActivatable=true` (BUILD.md section 3.4;
+//! docs/LINUX.md section 4). The desktop starts each app, so none is Eileen's child, as BUILD.md
+//! section 2.1 asks of every app Eileen opens for the user.
 //!
 //! # What the portal is asked
 //!
@@ -38,34 +38,60 @@
 //! drops: bound the wait with `deadline`, not by dropping the call.
 //!
 //! [`Opener::open_path`]'s `deadline` bounds the checks of the path and the file too, and the
-//! `Response` wait gets what they leave of it. The checks (a stat, the open and a stat of the
-//! descriptor, on tokio's blocking pool) wait on another process when a FUSE daemon or a network
-//! file server holds the file, and either can hang: BUILD.md section 2.1 (rule 2) gives every
-//! call to another process a deadline. Checks past it are left to their thread, and the answer
-//! is a [`FileError::Io`] that says they timed out.
+//! `Response` wait gets what they leave of it. [`Opener::open_path_with`], which waits for no
+//! signal, bounds its check of the path as it bounds its call: by the connection's method
+//! timeout, or [`METHOD_TIMEOUT`] on a connection without one. The checks (a stat, and for the
+//! portal the open and a stat of the descriptor, on tokio's blocking pool) wait on another
+//! process when a FUSE daemon or a network file server holds the file, and either can hang:
+//! BUILD.md section 2.1 (rule 2) gives every call to another process a deadline. Checks past
+//! their bound are left to their thread, and the answer is a [`FileError::Io`] that says they
+//! timed out.
+//!
+//! # D-Bus activation
+//!
+//! [`Opener::launch`] calls `org.freedesktop.Application.Activate` on the app's well-known name,
+//! its desktop file ID without `.desktop`, at the object path made from that name: a `/` before
+//! it, each `.` as `/` and each `-` as `_` ([the desktop entry specification][activation]). The
+//! bus starts the app if it is not running. The process ID is that of the connection that
+//! answered, from the bus's `GetConnectionUnixProcessID`. A Flatpak app whose bus access is
+//! filtered reaches the bus through `xdg-dbus-proxy`, so its ID is probably the proxy's, which
+//! is yet to be measured on Ubuntu 26.04. [`Opener::open_path_with`] checks the path as
+//! [`Opener::open_path`] does, without opening it, and calls the app's `Open` with the file's
+//! URI. These are method calls, bounded by the connection's method timeout, as the check of the
+//! path is. The trait names the app by its `AppEntry`, whose indexed entry
+//! [`entry_for`](crate::entry_for) finds.
+//!
+//! An app that is not D-Bus activatable starts from its `Exec` line, which needs
+//! `eileen_supervisor::user_launch` (docs/LINUX.md section 5), so these calls answer
+//! `Unavailable` for it. So does opening a file with a packaged app: a sandboxed app reads files
+//! through the document portal, which the `Exec` line's file forwarding arranges and a plain
+//! `Open` does not.
 //!
 //! # Errors
 //!
-//! A failed request is a [`DbusError`], and so is an address or URI refused before it. The path
-//! and the file it names fail as the crate's other local files do, with a [`FileError`];
-//! [`OpenError`] holds one or the other. None carries the address, the URI or the path, nor the
-//! portal's message text.
+//! A failed request or call is a [`DbusError`], and so is an address, a URI or a desktop file ID
+//! refused before it. The path and the file it names fail as the crate's other local files do,
+//! with a [`FileError`]; [`OpenError`] holds one or the other. None carries the address, the URI
+//! or the path, nor a service's message text.
 //!
 //! [openuri]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.OpenURI.html
 //! [request]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html
+//! [activation]: https://specifications.freedesktop.org/desktop-entry/latest/dbus.html
 
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::Duration;
 
-use eileen_dbus_linux::{DbusError, Request};
+use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, Request};
 use rustix::fs::OFlags;
 use tokio::time::Instant;
-use zbus::zvariant::{Fd, Value};
+use zbus::names::WellKnownName;
+use zbus::zvariant::{Fd, OwnedObjectPath, Value};
 
-use crate::FileError;
+use crate::{AppKind, DesktopEntry, FileError};
 
 /// The portal's bus name.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -74,9 +100,19 @@ const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 /// The `OpenURI` portal's interface.
 const OPEN_URI: &str = "org.freedesktop.portal.OpenURI";
 
-/// The requests, as errors name them.
+/// The interface a D-Bus-activatable app serves.
+const APPLICATION: &str = "org.freedesktop.Application";
+/// The bus's name, which is also its interface's.
+const BUS: &str = "org.freedesktop.DBus";
+/// The bus's object.
+const BUS_PATH: &str = "/org/freedesktop/DBus";
+
+/// The requests and calls, as errors name them.
 const OPEN_URI_REQUEST: &str = "OpenURI request";
 const OPEN_FILE_REQUEST: &str = "OpenFile request";
+const ACTIVATE_CALL: &str = "app Activate call";
+const OPEN_CALL: &str = "app Open call";
+const PROCESS_ID_LOOKUP: &str = "process ID lookup";
 /// The file or folder being opened, as errors name it.
 const FILE: &str = "file to open";
 
@@ -120,8 +156,8 @@ impl From<DbusError> for OpenError {
     }
 }
 
-/// Opens web addresses, URIs, files and folders through the desktop's `OpenURI` portal, over the
-/// session bus its caller gives (a private bus in tests).
+/// Opens web addresses, URIs, files and folders through the desktop's `OpenURI` portal, and
+/// starts D-Bus-activatable apps, over the session bus its caller gives (a private bus in tests).
 #[derive(Debug, Clone)]
 pub struct Opener {
     conn: zbus::Connection,
@@ -162,6 +198,73 @@ impl Opener {
         let file = within(deadline, open_read_only(path)).await?;
         let left = until.map_or(deadline, |until| until.saturating_duration_since(Instant::now()));
         Ok(self.ask_portal(Target::File(&file), left).await?)
+    }
+
+    /// Opens a file or folder with `app` (`Apps::open_path` with an app) through the app's
+    /// `Open`, when the app is D-Bus activatable and not packaged; any other app is
+    /// [`DbusError::Unavailable`], as it needs `eileen_supervisor::user_launch`. The path is
+    /// checked as [`Self::open_path`] checks it, but not opened: the app opens it. The check is
+    /// bounded as the call is, by the connection's method timeout ([`METHOD_TIMEOUT`] when it
+    /// has none); past it, a [`FileError::Io`] that says it timed out.
+    pub async fn open_path_with(&self, path: &Path, app: &DesktopEntry) -> Result<(), OpenError> {
+        let address = address(app, "opening files with apps that are not D-Bus activatable")?;
+        if app.kind == AppKind::Packaged {
+            let what = "opening files with packaged apps over D-Bus";
+            return Err(DbusError::Unavailable { what }.into());
+        }
+        let bound = self.conn.method_timeout().unwrap_or(METHOD_TIMEOUT);
+        within(bound, check_path(path)).await?;
+        let uris = [file_uri(path)];
+        let body = (uris.as_slice(), platform_data());
+        self.conn
+            .call_method(
+                Some(address.name.as_str()),
+                &address.path,
+                Some(APPLICATION),
+                "Open",
+                &body,
+            )
+            .await
+            .map_err(|error| DbusError::from_zbus(OPEN_CALL, &error))?;
+        Ok(())
+    }
+
+    /// Starts a D-Bus-activatable app, or brings it forward when it runs already, and returns
+    /// its process ID (`Apps::launch`). An app that is not D-Bus activatable is
+    /// [`DbusError::Unavailable`]: it needs `eileen_supervisor::user_launch`.
+    pub async fn launch(&self, app: &DesktopEntry) -> Result<u32, DbusError> {
+        let address = address(app, "launching apps that are not D-Bus activatable")?;
+        let body = (platform_data(),);
+        let reply = self
+            .conn
+            .call_method(
+                Some(address.name.as_str()),
+                &address.path,
+                Some(APPLICATION),
+                "Activate",
+                &body,
+            )
+            .await
+            .map_err(|error| DbusError::from_zbus(ACTIVATE_CALL, &error))?;
+        self.process_id(&reply).await
+    }
+
+    /// The process ID of the connection that sent `reply`, from the bus, which sets the sender
+    /// of every message it routes, so a later change of the name's owner cannot race it.
+    async fn process_id(&self, reply: &zbus::Message) -> Result<u32, DbusError> {
+        let fail = |error: zbus::Error| DbusError::from_zbus(PROCESS_ID_LOOKUP, &error);
+        let header = reply.header();
+        let sender = header.sender().ok_or_else(|| DbusError::Invalid {
+            what: ACTIVATE_CALL,
+            detail: "the reply has no sender".to_owned(),
+        })?;
+        let body = (sender.as_str(),);
+        let reply = self
+            .conn
+            .call_method(Some(BUS), BUS_PATH, Some(BUS), "GetConnectionUnixProcessID", &body)
+            .await
+            .map_err(fail)?;
+        reply.body().deserialize().map_err(fail)
     }
 
     /// One portal request for `target`, and what its `Response` says.
@@ -277,12 +380,17 @@ async fn within<T>(
 /// path is checked first, so a device is refused without being opened (opening one can act on
 /// it, as a serial port raises its modem lines); then [`open_checked`] opens it.
 async fn open_read_only(path: &Path) -> Result<tokio::fs::File, FileError> {
+    check_path(path).await?;
+    open_checked(path).await
+}
+
+/// Refuses `path` unless it is absolute and names a file or a folder, without opening it.
+async fn check_path(path: &Path) -> Result<(), FileError> {
     if !path.is_absolute() {
         return Err(not_a_target("not absolute"));
     }
     let meta = tokio::fs::metadata(path).await.map_err(|error| FileError::io(FILE, &error))?;
-    file_or_folder(&meta)?;
-    open_checked(path).await
+    file_or_folder(&meta)
 }
 
 /// Opens `path` read-only without waiting (see [`OPEN_FLAGS`]), and refuses the descriptor
@@ -305,19 +413,98 @@ fn file_or_folder(meta: &std::fs::Metadata) -> Result<(), FileError> {
     if meta.is_file() || meta.is_dir() { Ok(()) } else { Err(not_a_target("not a file or folder")) }
 }
 
-/// A path refused before the portal is asked.
+/// A path refused before the portal or the app is asked.
 fn not_a_target(detail: &str) -> FileError {
     FileError::Invalid { what: "path", detail: detail.to_owned() }
 }
 
+/// Where a D-Bus-activatable app answers: its well-known name and its object path.
+#[derive(Debug)]
+struct Address {
+    name: String,
+    path: OwnedObjectPath,
+}
+
+/// Where `app` answers on the bus, when its entry says it is D-Bus activatable; otherwise
+/// [`DbusError::Unavailable`] for `unavailable`. Its desktop file ID without `.desktop` must be
+/// a well-known name, as the specification requires of such an app.
+fn address(app: &DesktopEntry, unavailable: &'static str) -> Result<Address, DbusError> {
+    if !app.dbus_activatable {
+        return Err(DbusError::Unavailable { what: unavailable });
+    }
+    let name = app.id.strip_suffix(".desktop").unwrap_or(&app.id);
+    let not_a_name = || invalid("desktop file ID", "not a D-Bus well-known name");
+    WellKnownName::try_from(name).map_err(|_error| not_a_name())?;
+    let path = OwnedObjectPath::try_from(object_path(name)).map_err(|_error| not_a_name())?;
+    Ok(Address { name: name.to_owned(), path })
+}
+
+/// The object path of the app with the well-known name `name`: a `/` before it, each `.` as `/`
+/// and each `-` as `_`.
+fn object_path(name: &str) -> String {
+    let mut path = String::with_capacity(name.len().saturating_add(1));
+    path.push('/');
+    path.extend(name.chars().map(|c| match c {
+        '.' => '/',
+        '-' => '_',
+        other => other,
+    }));
+    path
+}
+
+/// The `platform_data` sent with `Activate` and `Open`: empty, as Eileen has no startup
+/// notification ID or activation token to pass on.
+fn platform_data() -> HashMap<&'static str, Value<'static>> {
+    HashMap::new()
+}
+
+/// The `file:` URI of the absolute path `path`, with every byte outside RFC 3986's unreserved
+/// characters and `/` percent-encoded, so a name with spaces, `#`, `%` or bytes that are not
+/// UTF-8 stays one path.
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            uri.push(char::from(byte));
+        } else {
+            let _ignored = write!(uri, "%{byte:02X}");
+        }
+    }
+    uri
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
 
     use rustix::fs::{CWD, Mode, mkfifoat};
 
-    use super::{OpenError, check_uri, check_url, open_checked, outcome, parse};
+    use super::{
+        OpenError, check_uri, check_url, file_uri, object_path, open_checked, outcome, parse,
+    };
     use crate::{DbusError, FileError};
+
+    #[test]
+    fn app_object_paths_follow_the_specification() {
+        assert_eq!(object_path("org.example.FooViewer"), "/org/example/FooViewer", "dots");
+        assert_eq!(object_path("org.example.foo-viewer"), "/org/example/foo_viewer", "a dash");
+    }
+
+    #[test]
+    fn file_uris_escape_everything_but_unreserved_bytes() {
+        assert_eq!(
+            file_uri(Path::new("/home/sam/Notes 1#%?.txt")),
+            "file:///home/sam/Notes%201%23%25%3F.txt",
+            "space, hash, percent and question mark"
+        );
+        assert_eq!(
+            file_uri(Path::new(OsStr::from_bytes(b"/tmp/caf\xc3\xa9-\xff~"))),
+            "file:///tmp/caf%C3%A9-%FF~",
+            "UTF-8 and bytes that are not"
+        );
+    }
 
     #[test]
     fn schemes_follow_rfc_3986() {
