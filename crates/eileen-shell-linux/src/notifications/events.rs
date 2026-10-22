@@ -5,7 +5,7 @@
 //! defines the two signals. They serve no trait method yet: they tell when the user dismissed a
 //! toast.
 //!
-//! [spec]: https://specifications.freedesktop.org/notification-spec/latest/
+//! [spec]: https://specifications.freedesktop.org/notification/latest/protocol.html#signals
 //!
 //! The rules:
 //!
@@ -39,6 +39,7 @@ use eileen_dbus_linux::{
     DRAIN_CAP, DbusError, Names, OwnerChange, OwnerChanges, QUEUE_SIZE, Stream, name_owner,
     owner_changes,
 };
+use zbus::names::OwnedUniqueName;
 use zbus::{MatchRule, MessageStream};
 
 use super::{INTERFACE, NAME, NotificationId, NotificationServer, Notifier, PATH};
@@ -120,17 +121,8 @@ impl Notifier {
         let signals = MessageStream::for_match_rule(rule, &self.connection, Some(QUEUE_SIZE))
             .await
             .map_err(failed)?;
-        let owner = name_owner(&self.connection, NAME).await?;
-        // A change the bus made before it answered came in ahead of the answer, and zbus hands
-        // each message to its streams before it reads the next. So a change ready now is the
-        // first since the subscriptions began, and its previous owner is the one they began with;
-        // with none ready, the answer is.
-        let ready = std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut owners).poll_next(cx)));
-        let (owner, change) = match ready.await {
-            Poll::Ready(Some(change)) => (change.old.clone(), Held::Item(change)),
-            Poll::Ready(None) => (owner, Held::End),
-            Poll::Pending => (owner, Held::Nothing),
-        };
+        let answer = name_owner(&self.connection, NAME).await?;
+        let (owner, change) = start(answer, &mut owners).await;
         Ok(NotificationEvents {
             signals,
             owners,
@@ -138,6 +130,28 @@ impl Notifier {
             signal: Held::Nothing,
             change,
         })
+    }
+}
+
+/// Where the stream starts: the owner its subscriptions began with, and the owner change it
+/// holds. `answer` is the name's owner as the bus gave it once both subscriptions began, and
+/// `owners` the owner changes, polled once and never waited on. A change the bus made before it
+/// answered came in ahead of the answer, and zbus hands each message to its streams before it
+/// reads the next. So a change ready then is the first since the subscriptions began, and its
+/// previous owner is the one they began with, though the answer may already name the next one;
+/// with none ready, the answer is.
+async fn start<S>(
+    answer: Option<OwnedUniqueName>,
+    owners: &mut S,
+) -> (Option<OwnedUniqueName>, Held<OwnerChange>)
+where
+    S: Stream<Item = OwnerChange> + Unpin,
+{
+    let ready = std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut *owners).poll_next(cx)));
+    match ready.await {
+        Poll::Ready(Some(change)) => (change.old.clone(), Held::Item(change)),
+        Poll::Ready(None) => (answer, Held::End),
+        Poll::Pending => (answer, Held::Nothing),
     }
 }
 
@@ -162,7 +176,7 @@ pub struct NotificationEvents {
 }
 
 /// What one of the two subscriptions gave that the stream has not passed on.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum Held<T> {
     /// Nothing.
     Nothing,
@@ -313,7 +327,92 @@ impl Stream for NotificationEvents {
 
 #[cfg(test)]
 mod tests {
-    use super::NotificationCloseReason;
+    use std::pin::{Pin, pin};
+    use std::task::{Context, Poll, Waker};
+
+    use eileen_dbus_linux::{OwnerChange, Stream};
+    use zbus::message::Sequence;
+    use zbus::names::{OwnedBusName, OwnedUniqueName};
+
+    use super::{Held, NAME, NotificationCloseReason, start};
+
+    /// The connection a unique bus name names, such as `:1.7`.
+    fn server(unique_name: &str) -> OwnedUniqueName {
+        OwnedUniqueName::try_from(unique_name).unwrap()
+    }
+
+    /// The bus's word that the server's name went from `old` to `new`.
+    fn change(old: Option<&str>, new: Option<&str>) -> OwnerChange {
+        OwnerChange {
+            name: OwnedBusName::try_from(NAME).unwrap(),
+            old: old.map(server),
+            new: new.map(server),
+            received: Sequence::default(),
+        }
+    }
+
+    /// Owner changes that have the one result they hold ready at the first poll, and nothing
+    /// after it.
+    struct Owners(Poll<Option<OwnerChange>>);
+
+    impl Stream for Owners {
+        type Item = OwnerChange;
+
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<OwnerChange>> {
+            std::mem::replace(&mut self.0, Poll::Pending)
+        }
+    }
+
+    /// Where the stream starts for the lookup's `answer` when the owner changes have `ready`
+    /// ready. One poll finishes `start`, since it never waits for an owner change.
+    fn start_with(
+        answer: Option<&str>,
+        ready: Poll<Option<OwnerChange>>,
+    ) -> (Option<OwnedUniqueName>, Held<OwnerChange>) {
+        let mut owners = Owners(ready);
+        let mut cx = Context::from_waker(Waker::noop());
+        match pin!(start(answer.map(server), &mut owners)).poll(&mut cx) {
+            Poll::Ready(started) => started,
+            Poll::Pending => panic!("start waited for an owner change"),
+        }
+    }
+
+    #[test]
+    fn with_no_change_ready_the_stream_starts_from_the_answer() {
+        assert_eq!(
+            start_with(Some(":1.7"), Poll::Pending),
+            (Some(server(":1.7")), Held::Nothing),
+            "no change came in by the answer, so its owner is the one the subscriptions began with"
+        );
+        assert_eq!(start_with(None, Poll::Pending), (None, Held::Nothing), "no server, none came");
+        assert_eq!(
+            start_with(Some(":1.7"), Poll::Ready(None)),
+            (Some(server(":1.7")), Held::End),
+            "the connection ended: the end is held for the stream to report"
+        );
+    }
+
+    #[test]
+    fn a_change_ready_at_the_answer_starts_the_stream_from_its_previous_owner() {
+        let takeover = change(Some(":1.7"), Some(":1.9"));
+        assert_eq!(
+            start_with(Some(":1.7"), Poll::Ready(Some(takeover.clone()))),
+            (Some(server(":1.7")), Held::Item(takeover.clone())),
+            "a takeover that came in after the answer: the answer's owner, and the change held"
+        );
+        assert_eq!(
+            start_with(Some(":1.9"), Poll::Ready(Some(takeover.clone()))),
+            (Some(server(":1.7")), Held::Item(takeover)),
+            "one that came in before the answer, which already names the new owner: the signals \
+             before the change are still the previous owner's"
+        );
+        let started = change(None, Some(":1.9"));
+        assert_eq!(
+            start_with(Some(":1.9"), Poll::Ready(Some(started.clone()))),
+            (None, Held::Item(started)),
+            "a server that started before the answer: nothing spoke for the server before it"
+        );
+    }
 
     #[test]
     fn close_reasons_follow_the_specification() {
