@@ -135,6 +135,9 @@ dependencies = [
  "eileen-contracts",
  "eileen-dbus-linux",
  "proptest",
+ "rustix",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]
