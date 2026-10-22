@@ -1,5 +1,6 @@
-//! The opener against a fake `OpenURI` portal on the private bus. The fake records each call and
-//! answers on the request handle its `handle_token` names, as the real portal does.
+//! The opener against fakes on the private bus: an `OpenURI` portal that records each call and
+//! answers on the request handle its `handle_token` names, as the real portal does, and
+//! D-Bus-activatable apps.
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd};
@@ -7,7 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use eileen_apps_linux::{DbusError, FileError, OpenError, Opener};
+use eileen_apps_linux::{
+    AppEntry, AppKind, DbusError, DesktopEntry, FileError, OpenError, Opener, Session, entry_for,
+    index,
+};
+use eileen_contracts::ids::Personal;
 use eileen_dbus_linux::testing::{PrivateBus, round_trip, serve};
 use rustix::fs::{CWD, Mode as Permissions, OFlags, fcntl_getfl, mkfifoat};
 use tokio::sync::mpsc;
@@ -314,6 +319,99 @@ fn stall_file_checks() -> tokio::sync::oneshot::Sender<()> {
     release
 }
 
+/// The test app's names: its well-known name, its object path, and its desktop file ID.
+const APP: &str = "org.eileen.TestApp";
+const APP_PATH: &str = "/org/eileen/TestApp";
+const APP_ID: &str = "org.eileen.TestApp.desktop";
+
+/// What a fake app does with `Activate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Behaviour {
+    /// Answers at once.
+    Answer,
+    /// Records the call, then never answers.
+    Hang,
+    /// Fails as the bus answers for a service whose process exited as it started.
+    ExitAtStart,
+}
+
+/// One call to a fake app's `org.freedesktop.Application`.
+#[derive(Debug)]
+struct AppCall {
+    method: &'static str,
+    uris: Vec<String>,
+    platform_data: Vec<String>,
+}
+
+/// The error the bus answers when a service it started exited at once.
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.freedesktop.DBus.Error.Spawn")]
+enum SpawnError {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    ChildExited(String),
+}
+
+/// A fake D-Bus-activatable app.
+struct FakeApp {
+    behaviour: Behaviour,
+    calls: mpsc::Sender<AppCall>,
+}
+
+#[zbus::interface(name = "org.freedesktop.Application")]
+impl FakeApp {
+    async fn activate(&self, platform_data: HashMap<String, OwnedValue>) -> Result<(), SpawnError> {
+        if self.behaviour == Behaviour::ExitAtStart {
+            return Err(SpawnError::ChildExited("exited with status 1".to_owned()));
+        }
+        let platform_data = platform_data.into_keys().collect();
+        let call = AppCall { method: "Activate", uris: Vec::new(), platform_data };
+        self.calls.send(call).await.unwrap();
+        if self.behaviour == Behaviour::Hang {
+            std::future::pending::<()>().await;
+        }
+        Ok(())
+    }
+
+    async fn open(&self, uris: Vec<String>, platform_data: HashMap<String, OwnedValue>) {
+        let platform_data = platform_data.into_keys().collect();
+        self.calls.send(AppCall { method: "Open", uris, platform_data }).await.unwrap();
+    }
+}
+
+/// A fake app owning `name` on `bus` with its interface at `path`, and the calls it sees. Hold
+/// the connection for the whole test.
+async fn app(
+    bus: &PrivateBus,
+    name: &str,
+    path: &str,
+    behaviour: Behaviour,
+) -> (zbus::Connection, mpsc::Receiver<AppCall>) {
+    let (calls, seen) = mpsc::channel(16);
+    (serve(bus, name, path, FakeApp { behaviour, calls }).await, seen)
+}
+
+/// The next call a fake app saw. No timer, as for the portal's.
+async fn app_seen(seen: &mut mpsc::Receiver<AppCall>) -> AppCall {
+    seen.recv().await.expect("the fake app is still on the bus")
+}
+
+/// A desktop entry with the desktop file ID `id`.
+fn entry(id: &str, dbus_activatable: bool, kind: AppKind) -> DesktopEntry {
+    DesktopEntry {
+        id: id.to_owned(),
+        name: "Test App".to_owned(),
+        generic_name: None,
+        keywords: Vec::new(),
+        exec: Some(Personal::new("test-app %U".to_owned())),
+        terminal: false,
+        dbus_activatable,
+        startup_wm_class: None,
+        kind,
+        path: Personal::new(PathBuf::from("/usr/share/applications").join(id)),
+    }
+}
+
 #[tokio::test]
 async fn a_web_address_opens_through_the_portal_on_the_predicted_handle() {
     let bus = PrivateBus::start();
@@ -582,4 +680,209 @@ async fn without_the_portal_opening_is_unavailable() {
         unavailable("OpenFile request").map_err(OpenError::Bus),
         "a file"
     );
+}
+
+#[tokio::test]
+async fn an_activatable_app_is_activated_and_its_process_id_returned() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    assert_eq!(
+        opener.launch(&entry(APP_ID, true, AppKind::Desktop)).await,
+        Ok(std::process::id()),
+        "the fake app answers from the test's own process"
+    );
+    let call = app_seen(&mut seen).await;
+    assert_eq!(call.method, "Activate", "started without files");
+    assert!(call.platform_data.is_empty(), "no platform data");
+    assert_eq!(
+        opener.launch(&entry(APP_ID, true, AppKind::Packaged)).await,
+        Ok(std::process::id()),
+        "a packaged app launches the same way"
+    );
+}
+
+#[tokio::test]
+async fn a_dash_in_the_name_is_an_underscore_in_the_path() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) =
+        app(&bus, "org.eileen.Test-App", "/org/eileen/Test_App", Behaviour::Answer).await;
+    let (_elsewhere, _ignored) =
+        app(&bus, "org.eileen.Elsewhere", "/somewhere/else", Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    let dashed = entry("org.eileen.Test-App.desktop", true, AppKind::Desktop);
+    assert_eq!(opener.launch(&dashed).await, Ok(std::process::id()), "at /org/eileen/Test_App");
+    assert_eq!(app_seen(&mut seen).await.method, "Activate", "activated");
+    assert_eq!(
+        opener.launch(&entry("org.eileen.Elsewhere.desktop", true, AppKind::Desktop)).await,
+        Err(DbusError::NotFound { what: "app Activate call" }),
+        "an app that serves the interface elsewhere"
+    );
+}
+
+#[tokio::test]
+async fn the_indexed_text_editor_launches_from_its_app_entry() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session/usr/share");
+    let mut session =
+        Session::from_vars(|name| (name == "XDG_CURRENT_DESKTOP").then(|| "GNOME".into()));
+    session.data_dirs = vec![fixture];
+    let entries = index(&session);
+    // What the trait's caller holds from `Apps::index`, and gives back to `Apps::launch`.
+    let listed: Vec<AppEntry> = entries.iter().map(AppEntry::from).collect();
+    let editor = listed.iter().find(|app| app.name == "Text Editor").unwrap();
+    let bus = PrivateBus::start();
+    let (_service, mut seen) =
+        app(&bus, "org.gnome.TextEditor", "/org/gnome/TextEditor", Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    let desktop = entry_for(&entries, editor).unwrap();
+    assert_eq!(opener.launch(desktop).await, Ok(std::process::id()), "launched");
+    assert_eq!(app_seen(&mut seen).await.method, "Activate", "over D-Bus, not its Exec line");
+}
+
+#[tokio::test]
+async fn apps_that_cannot_be_activated_over_d_bus_are_refused_first() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    assert_eq!(
+        opener.launch(&entry(APP_ID, false, AppKind::Desktop)).await,
+        Err(DbusError::Unavailable { what: "launching apps that are not D-Bus activatable" }),
+        "an Exec-only app needs eileen_supervisor::user_launch"
+    );
+    assert!(
+        matches!(
+            opener.launch(&entry("kde4-kate.desktop", true, AppKind::Desktop)).await,
+            Err(DbusError::Invalid { what: "desktop file ID", .. })
+        ),
+        "an ID that is not a well-known name"
+    );
+    // The fake records a call before it answers, so a call made would be here by now.
+    assert!(seen.try_recv().is_err(), "the app was never called");
+}
+
+#[tokio::test]
+async fn an_app_that_is_not_on_the_bus_is_unavailable() {
+    let bus = PrivateBus::start();
+    let opener = Opener::new(&bus.connect().await);
+    assert_eq!(
+        opener.launch(&entry(APP_ID, true, AppKind::Desktop)).await,
+        Err(DbusError::Unavailable { what: "app Activate call" }),
+        "nothing owns the name and the bus cannot start it"
+    );
+}
+
+#[tokio::test]
+async fn an_app_that_exits_as_it_starts_is_unavailable() {
+    let bus = PrivateBus::start();
+    let (_service, _seen) = app(&bus, APP, APP_PATH, Behaviour::ExitAtStart).await;
+    let opener = Opener::new(&bus.connect().await);
+    assert_eq!(
+        opener.launch(&entry(APP_ID, true, AppKind::Desktop)).await,
+        Err(DbusError::Unavailable { what: "app Activate call" }),
+        "org.freedesktop.DBus.Error.Spawn.ChildExited: the service is not there"
+    );
+}
+
+#[tokio::test]
+async fn a_hung_app_passes_the_method_timeout() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Hang).await;
+    // A short real method timeout, not paused time: the call goes through the bus daemon,
+    // another process, so paused time would fire the timeout before any reply could come. The
+    // fake never answers, so the outcome does not depend on how quickly the bus routes the call.
+    let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await);
+    assert_eq!(
+        opener.launch(&entry(APP_ID, true, AppKind::Desktop)).await,
+        Err(DbusError::DeadlineExceeded { call: "app Activate call" }),
+        "Activate never answered"
+    );
+    assert_eq!(app_seen(&mut seen).await.method, "Activate", "the call reached the app");
+}
+
+#[tokio::test]
+async fn a_file_opens_with_an_activatable_app_through_its_open() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    let scratch = Scratch::new();
+    let file = scratch.file("Quarterly report #3.odt");
+    let with = entry(APP_ID, true, AppKind::Desktop);
+    assert_eq!(opener.open_path_with(&file, &with).await, Ok(()), "opened");
+    let call = app_seen(&mut seen).await;
+    assert_eq!(call.method, "Open", "started with a file");
+    let expected = format!("file://{}/Quarterly%20report%20%233.odt", scratch.0.display());
+    assert_eq!(call.uris, [expected], "the file's URI, escaped");
+    assert!(call.platform_data.is_empty(), "no platform data");
+}
+
+#[tokio::test]
+async fn files_open_over_d_bus_only_with_unpackaged_activatable_apps() {
+    let bus = PrivateBus::start();
+    let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
+    let opener = Opener::new(&bus.connect().await);
+    let scratch = Scratch::new();
+    let file = scratch.file("notes.txt");
+    let unavailable = |what| Err(OpenError::Bus(DbusError::Unavailable { what }));
+    assert_eq!(
+        opener.open_path_with(&file, &entry(APP_ID, false, AppKind::Desktop)).await,
+        unavailable("opening files with apps that are not D-Bus activatable"),
+        "an Exec-only app"
+    );
+    assert_eq!(
+        opener.open_path_with(&file, &entry(APP_ID, true, AppKind::Packaged)).await,
+        unavailable("opening files with packaged apps over D-Bus"),
+        "a sandboxed app needs the document portal"
+    );
+    let desktop = entry(APP_ID, true, AppKind::Desktop);
+    let refused = |error| Err(OpenError::File(error));
+    assert_eq!(
+        opener.open_path_with(&scratch.0.join("gone.txt"), &desktop).await,
+        refused(FileError::NotFound { what: "file to open" }),
+        "a missing file"
+    );
+    assert_eq!(
+        opener.open_path_with(Path::new("notes.txt"), &desktop).await,
+        refused(FileError::Invalid { what: "path", detail: "not absolute".to_owned() }),
+        "a relative path"
+    );
+    assert_eq!(
+        opener.open_path_with(&scratch.fifo("pipe"), &desktop).await,
+        refused(FileError::Invalid { what: "path", detail: "not a file or folder".to_owned() }),
+        "a FIFO"
+    );
+    // The fake records a call before it answers, so a call made would be here by now.
+    assert!(seen.try_recv().is_err(), "the app was never called");
+}
+
+#[test]
+fn a_file_check_that_stalls_passes_the_method_timeout() {
+    // A real timer, as in a_file_check_that_stalls_passes_the_deadline.
+    one_blocking_thread().block_on(async {
+        let bus = PrivateBus::start();
+        let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
+        let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await);
+        let scratch = Scratch::new();
+        let file = scratch.file("notes.txt");
+        let with = entry(APP_ID, true, AppKind::Desktop);
+        let release = stall_file_checks();
+        assert_eq!(
+            opener.open_path_with(&file, &with).await,
+            Err(OpenError::File(FileError::Io {
+                what: "file to open",
+                detail: "timed out".to_owned()
+            })),
+            "the check still waited behind the stall when the method timeout passed"
+        );
+        // open_path_with answered before any call to the app.
+        assert!(seen.try_recv().is_err(), "the app was not called");
+        drop(release);
+        // A connection without a method timeout, whose checks take METHOD_TIMEOUT.
+        let unstalled = Opener::new(&bus.connect().await);
+        assert_eq!(
+            unstalled.open_path_with(&file, &with).await,
+            Ok(()),
+            "the same file, unstalled"
+        );
+        assert_eq!(app_seen(&mut seen).await.method, "Open", "called once the check ran");
+    });
 }

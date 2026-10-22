@@ -1,12 +1,12 @@
 //! The app index over the fixture session: precedence, masking, the desktop's filters,
-//! `TryExec`, locales and packaged apps.
+//! `TryExec`, locales and packaged apps, and finding the entry of a trait's `AppEntry`.
 
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use eileen_apps_linux::{AppEntry, AppKind, DesktopEntry, Session, index};
+use eileen_apps_linux::{AppEntry, AppKind, DesktopEntry, FileError, Session, entry_for, index};
 
 /// The fixture session's root.
 fn fixture() -> PathBuf {
@@ -194,4 +194,22 @@ fn an_empty_try_exec_is_no_condition() {
     let mut session = session("en_US.UTF-8", "GNOME", None);
     session.data_dirs = vec![root.join("share")];
     assert_eq!(names(&index(&session)), ["Plain"], "listed");
+}
+
+#[test]
+fn an_app_entry_finds_its_indexed_entry_by_its_desktop_file_id() {
+    let apps = index(&session("en_US.UTF-8", "ubuntu:GNOME", None));
+    let firefox = AppEntry::from(find(&apps, "firefox.desktop"));
+    let found = entry_for(&apps, &firefox).map(|entry| entry.path.get().clone());
+    assert_eq!(
+        found,
+        Ok(fixture().join("home/sam/.local/share/applications/firefox.desktop")),
+        "the entry that decides the ID: the user's copy"
+    );
+    let removed = AppEntry { id: "org.gnome.Calculator.desktop".to_owned(), ..firefox };
+    assert_eq!(
+        entry_for(&apps, &removed),
+        Err(FileError::NotFound { what: "desktop entry" }),
+        "an app the user removed has no entry, as one uninstalled since the caller listed it"
+    );
 }

@@ -2,15 +2,17 @@
 //! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L1 starts with the app index,
 //! [`index`]: every application the desktop's menu shows, read from the XDG desktop entries,
 //! as `shell:AppsFolder` gives it on Windows. [`Opener`] opens web addresses, URIs, files and
-//! folders for the user through the desktop's `OpenURI` portal.
+//! folders for the user through the desktop's `OpenURI` portal, and starts D-Bus-activatable
+//! apps.
 //!
 //! # Owns
 //!
 //! - The index, from desktop entries (the XDG Desktop Entry Specification 1.5): their format,
 //!   which entries the menu shows (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`,
 //!   `TryExec`), the precedence of data folders, desktop file IDs, and which apps are packaged.
-//! - Opening for the user ([`Opener`]): `Apps::open_url`, `open_uri` and `open_path` through the
-//!   `OpenURI` portal, with the checks of what each may open.
+//! - Opening and launching for the user ([`Opener`]): `Apps::open_url`, `open_uri` and
+//!   `open_path` through the `OpenURI` portal, and `Apps::launch` and `open_path` with an app
+//!   through D-Bus activation, for the entry that [`entry_for`] finds from the trait's `AppEntry`.
 //! - The trait types, field for field until `eileen-platform` merges: [`AppEntry`] and
 //!   [`AppKind`] (`Apps`); and [`FileError`] for local files, which [`OpenError`] can hold.
 //!
@@ -18,9 +20,9 @@
 //!
 //! - The `Apps` trait (`eileen-platform`, WP0). When it merges, the index implements
 //!   `Apps::index`, [`Opener`] serves the opening calls, and the mirrored types give way.
-//! - Launching: `Apps::launch` goes through `eileen_supervisor::user_launch` (D-Bus activation
-//!   or `gio launch`), which needs the supervisor's Linux process model (docs/LINUX.md section
-//!   5).
+//! - Launching apps that are not D-Bus activatable, and opening files with packaged apps: those
+//!   need `eileen_supervisor::user_launch` (`gio launch`) and the supervisor's Linux process
+//!   model (docs/LINUX.md section 5).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
 //! - D-Bus plumbing: [`DbusError`], the buses, name owners, the portal request and signal
 //!   streams are `eileen-dbus-linux`'s, and [`DbusError`] is re-exported here for this crate's
@@ -30,8 +32,9 @@
 //!
 //! - Linux only: the crate is `cfg(target_os = "linux")` and compiles to an empty library
 //!   elsewhere, as the `-win` crates do off Windows.
-//! - It starts no process: the desktop starts every app it opens for the user, so none is
-//!   Eileen's child (BUILD.md section 2.1). Clippy's disallowed methods keep `Command` out.
+//! - It starts apps only through the desktop, never as its children: the portal starts the
+//!   default app, and D-Bus activation has the bus start the app (BUILD.md section 2.1).
+//!   Clippy's disallowed methods keep `Command` out.
 //! - The first data folder holding a desktop file ID decides it, as the specification orders
 //!   them: `XDG_DATA_HOME`, then `XDG_DATA_DIRS`.
 //! - No error holds a path, a URI, a file's text or a service's message: only I/O kinds, error
@@ -87,5 +90,5 @@ mod open;
 pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
 pub use error::FileError;
-pub use index::{AppEntry, AppKind, Session, index};
+pub use index::{AppEntry, AppKind, Session, entry_for, index};
 pub use open::{OpenError, Opener};

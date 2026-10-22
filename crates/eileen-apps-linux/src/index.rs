@@ -5,6 +5,9 @@
 //! Data folders are searched in precedence order, `XDG_DATA_HOME` first, and the first file
 //! with a desktop file ID decides it: a user's copy replaces the system's, and a user's
 //! `Hidden=true` copy removes the app.
+//!
+//! [`entry_for`] finds the indexed entry of the trait's [`AppEntry`], for `Apps::launch` and
+//! `Apps::open_path` with an app.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -12,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use eileen_contracts::ids::Personal;
 
+use crate::FileError;
 use crate::entry::{DesktopEntry, Meaning, interpret};
 use crate::keyfile::{locale_keys, messages_locale, parse};
 
@@ -170,6 +174,21 @@ pub fn index(session: &Session) -> Vec<DesktopEntry> {
         a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id))
     });
     apps
+}
+
+/// The indexed entry of the trait's `app`: the one in `entries`, an earlier [`index`], with its
+/// desktop file ID. `Apps::launch` and `Apps::open_path` name an app by its [`AppEntry`], and the
+/// [`Opener`](crate::Opener) needs its [`DesktopEntry`], so the trait's implementation keeps the
+/// entries of its last index for this. [`FileError::NotFound`] when none has that ID now, as
+/// after the app was removed.
+pub fn entry_for<'a>(
+    entries: &'a [DesktopEntry],
+    app: &AppEntry,
+) -> Result<&'a DesktopEntry, FileError> {
+    entries
+        .iter()
+        .find(|entry| entry.id == app.id)
+        .ok_or(FileError::NotFound { what: "desktop entry" })
 }
 
 /// Whether a data folder is one of Flatpak's or Snap's export folders, whose apps are packaged.
