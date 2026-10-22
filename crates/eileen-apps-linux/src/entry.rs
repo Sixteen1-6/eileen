@@ -4,6 +4,8 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use eileen_contracts::ids::Personal;
+
 use crate::keyfile::{KeyFile, Line, list, localized, unescape};
 use crate::{AppKind, Session};
 
@@ -20,7 +22,8 @@ pub struct DesktopEntry {
     /// `Keywords`, localized.
     pub keywords: Vec<String>,
     /// `Exec` as written, field codes (`%U`) included; `None` for an app started over D-Bus.
-    pub exec: Option<String>,
+    /// A user's own entry can name their files, so it is personal.
+    pub exec: Option<Personal<String>>,
     /// `Terminal`: the app runs in a terminal.
     pub terminal: bool,
     /// `DBusActivatable`: the app is started over D-Bus (`org.freedesktop.Application`).
@@ -29,8 +32,8 @@ pub struct DesktopEntry {
     pub startup_wm_class: Option<String>,
     /// Packaged (Flatpak, Snap) or a classic desktop app.
     pub kind: AppKind,
-    /// The file.
-    pub path: PathBuf,
+    /// The file, which may be under the user's home folder.
+    pub path: Personal<PathBuf>,
 }
 
 /// What a file means for its desktop file ID.
@@ -77,12 +80,12 @@ pub(crate) fn interpret(
         name,
         generic_name: localized(lines, "GenericName", &session.locales).map(unescape),
         keywords: localized(lines, "Keywords", &session.locales).map(list).unwrap_or_default(),
-        exec,
+        exec: exec.map(Personal::new),
         terminal: flag("Terminal"),
         dbus_activatable,
         startup_wm_class: raw("StartupWMClass").map(|line| unescape(&line.raw)),
         kind: if packaged { AppKind::Packaged } else { AppKind::Desktop },
-        path: path.to_path_buf(),
+        path: Personal::new(path.to_path_buf()),
     }))
 }
 
@@ -99,13 +102,13 @@ fn shown_here(lines: &[Line], session: &Session) -> bool {
         && !names("NotShowIn").is_some_and(|names| current(&names))
 }
 
-/// Whether `TryExec`, when the entry has one, names an executable file: a path, or a name
-/// looked up in the session's `PATH`.
+/// Whether `TryExec`, when the entry has a non-empty one, names an executable file: a path, or
+/// a name looked up in the session's `PATH`.
 fn try_exec_found(line: Option<&Line>, session: &Session) -> bool {
-    let Some(line) = line else {
+    let program = line.map(|line| unescape(line.raw.trim())).unwrap_or_default();
+    if program.is_empty() {
         return true;
-    };
-    let program = unescape(line.raw.trim());
+    }
     let program = Path::new(&program);
     if program.is_absolute() {
         return is_executable(program);

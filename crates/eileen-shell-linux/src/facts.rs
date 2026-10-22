@@ -111,7 +111,8 @@ pub struct AdapterFacts {
     pub name: Untrusted<String>,
     /// What kind of adapter it is.
     pub kind: AdapterKind,
-    /// Dedicated memory, MB; 0 for an integrated GPU or an NPU, which have none.
+    /// Dedicated memory, MB: a discrete GPU's own, or the carve-out the firmware reserves for an
+    /// integrated one, as Windows reports it; 0 for an NPU, or where the driver does not say.
     pub dedicated_mb: u32,
     /// System memory it may use, MB, where the driver reports it.
     pub shared_mb: u32,

@@ -101,7 +101,8 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
   - Core classes come from Intel's hybrid PMU lists (`cpu_core`, `cpu_atom`), which give the same two classes Windows reports. Otherwise they come from distinct `cpu_capacity` values (Arm big.LITTLE), and otherwise there is one class.
 - **GPUs and NPUs.**
   - Adapters come from `/sys/class/drm/card*/device/uevent`: the driver, the PCI ids and the slot, with names from `pci.ids`. Display-only and virtual adapters are left out.
-  - NVIDIA GPUs are discrete. Intel's are integrated at slot `00:02.0`. An amdgpu GPU is integrated when its VRAM is an APU's carve-out (2 GB or less, with more GTT than VRAM); its VRAM and GTT are the dedicated and shared memory.
+  - NVIDIA GPUs are discrete, and NVIDIA's own driver also lists them under `/proc/driver/nvidia/gpus`, which finds them when `nvidia-drm` has made no DRM card. Intel's are integrated at slot `00:02.0`.
+  - An amdgpu GPU is integrated only beside an AMD processor. When the processor's name mentions Radeon, it is the AMD GPU with the least VRAM, whatever the carve-out (a Strix Halo's can be 96 GB). Otherwise it is one whose VRAM is a carve-out of 2 GB or less with more GTT than VRAM, as on desktop Ryzen 7000 parts. VRAM and GTT are the dedicated and shared memory; an integrated GPU's carve-out counts as dedicated, as Windows reports it.
   - An Arm chip's own GPU (panthor, panfrost, msm and others) is integrated and has no PCI id.
   - NVIDIA's own driver gives the model and the driver version from `/proc/driver/nvidia`. The GPU's UUID in the same file is never kept.
   - NPUs come from `/sys/class/accel`.
@@ -109,7 +110,7 @@ Every one of them is gated with `#![cfg(target_os = "linux")]`, so on Windows it
 - **Disk.**
   - `statvfs` on the data folder gives the space, or on its nearest existing parent before setup creates it.
   - The block device's `queue/rotational` gives the media. The device is found by its number in `/sys/block`, partitions, LVM and LUKS included, or through `/proc/self/mountinfo` for btrfs, whose device numbers match no device.
-  - WSL's and virtual machines' disks claim to rotate. They are reported as `Unknown` and degraded, never as hard disks.
+  - WSL's and virtual machines' disks claim to rotate, or claim to be solid-state for a network volume. They are reported as `Unknown` and degraded, never as hard disks. A guest is known by WSL's kernel release, the CPU's `hypervisor` flag or Xen's `/sys/hypervisor`, and otherwise (an Arm guest) by its disks' names and models.
 - **OS.** `/etc/os-release`, or `/usr/lib/os-release`, and the kernel release: `ubuntu 24.04, kernel 6.8.0-45-generic`. The build changes with each kernel update, as Windows' update revision does, so benchmarks that depend on it run again.
 - **Power.**
   - The battery comes from `/sys/class/power_supply`. A battery whose scope is `Device`, such as a mouse's, is not the PC's.
@@ -193,7 +194,7 @@ WSL2 is fine for the neutral crates and the D-Bus fakes. It is not a Linux deskt
 2. **L1, during W2 to W4.**
    - Builds: the D-Bus backends (`MediaSessions`, toasts, `keep_awake`, the lock state, the power facts, `SecretStore`, `Apps`, `RecentSources`) and the nightly Linux desktop lane.
    - Acceptance: each passes its trait's conformance suite against a fake service in CI and against the real service on Ubuntu 26.04.
-   - Status on 2026-10-21: `Apps::index` is built in `crates/eileen-apps-linux`. It reads the desktop entries with Eileen's own parser and follows the specification's precedence, masking (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`, `TryExec`) and locales; Flatpak and Snap apps count as packaged. It is tested over a fixture session. Launch waits for the supervisor's Linux process model.
+   - Status on 2026-10-21: `Apps::index` is built in `crates/eileen-apps-linux`. It reads the desktop entries with Eileen's own parser and follows the specification's precedence and masking (`Hidden`, `NoDisplay`, `OnlyShowIn`, `NotShowIn`, `TryExec`). Names follow `LANGUAGE` and the locale, as GNOME's menu does. Flatpak and Snap apps count as packaged. It is tested over a fixture session. Launch waits for the supervisor's Linux process model.
 3. **L2, toward v0.2.**
    - Builds:
      - audio on PipeWire;

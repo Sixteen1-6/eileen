@@ -15,7 +15,7 @@ use crate::facts::{DiskFacts, DiskMedia, MachineFacts, PowerState};
 use crate::load::{CpuTimes, busy_pct, parse_proc_stat};
 use crate::memory::{kb_to_mb, parse_meminfo};
 use crate::monitors::read_monitors;
-use crate::os::{is_wsl, read_os};
+use crate::os::{Guest, guest, read_os};
 use crate::power::read_power;
 use crate::{ReadError, SysRoot};
 
@@ -80,7 +80,8 @@ impl LinuxMachineProbe {
             .ok_or(ReadError::Missing { what: "/proc/meminfo", field: "MemTotal" })?;
         let mut degraded = Vec::new();
         let (os_build, kernel) = read_os(root, &mut degraded);
-        let wsl = is_wsl(&kernel);
+        let guest = guest(root, &kernel, &cpuinfo);
+        let wsl = guest == Guest::Wsl;
         let commit_limit_mb = totals.commit_limit_kb.map_or_else(
             || {
                 degraded.push("commit limit: /proc/meminfo has no CommitLimit line".to_owned());
@@ -89,12 +90,12 @@ impl LinuxMachineProbe {
             kb_to_mb,
         );
         let cpu = read_cpu(root, &cpuinfo, &mut degraded);
-        let adapters = read_adapters(root, &kernel, &mut degraded);
+        let adapters = read_adapters(root, &kernel, &cpu, &mut degraded);
         let disk = match volume {
             Ok(volume) => DiskFacts {
                 data_free_mb: volume.free_mb,
                 data_total_mb: volume.total_mb,
-                media: read_media(root, &volume, wsl, &mut degraded),
+                media: read_media(root, &volume, guest, &mut degraded),
             },
             Err(err) => {
                 degraded

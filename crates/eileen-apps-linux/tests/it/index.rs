@@ -16,6 +16,10 @@ fn fixture() -> PathBuf {
 /// The fixture session as `from_vars` reads it, held to the fixture's folders: the export
 /// folders `from_vars` adds are the real machine's, which a test must not read.
 fn session(lang: &str, desktop: &str, path: Option<&Path>) -> Session {
+    session_with(lang, None, desktop, path)
+}
+
+fn session_with(lang: &str, language: Option<&str>, desktop: &str, path: Option<&Path>) -> Session {
     let root = fixture();
     let dirs = ["usr/share", "var/lib/flatpak/exports/share", "var/lib/snapd/desktop"]
         .map(|dir| root.join(dir).to_string_lossy().into_owned())
@@ -25,6 +29,7 @@ fn session(lang: &str, desktop: &str, path: Option<&Path>) -> Session {
             "HOME" => Some(root.join("home/sam").into()),
             "XDG_DATA_DIRS" => Some(dirs.clone().into()),
             "LANG" => Some(lang.into()),
+            "LANGUAGE" => language.map(Into::into),
             "XDG_CURRENT_DESKTOP" => Some(desktop.into()),
             "PATH" => path.map(|path| path.as_os_str().to_owned()),
             _ => None,
@@ -61,8 +66,9 @@ fn the_menu_lists_what_gnome_shows_with_the_users_copies_first() {
          nm-applet (NoDisplay), the missing TryExec, a link, a broken file and one with no Exec"
     );
     let firefox = find(&apps, "firefox.desktop");
-    assert_eq!(firefox.exec.as_deref(), Some("firefox -P work %u"), "the user's copy");
-    assert!(firefox.path.starts_with(fixture().join("home")), "from the home folder");
+    let exec = firefox.exec.as_ref().map(|exec| exec.get().as_str());
+    assert_eq!(exec, Some("firefox -P work %u"), "the user's copy");
+    assert!(firefox.path.get().starts_with(fixture().join("home")), "from the home folder");
     assert_eq!(find(&apps, "kde4-kate.desktop").name, "Kate", "a subfolder's ID");
     let editor = find(&apps, "org.gnome.TextEditor.desktop");
     assert!(editor.dbus_activatable, "started over D-Bus");
@@ -165,4 +171,27 @@ fn the_session_the_tests_run_in_indexes_cleanly() {
         assert!(app.id.ends_with(".desktop"), "{} is a desktop file ID", app.id);
         assert!(app.exec.is_some() || app.dbus_activatable, "{} can be started", app.id);
     }
+}
+
+#[test]
+fn language_comes_before_the_locale_except_under_c() {
+    let apps = index(&session_with("en_US.UTF-8", Some("de:en"), "GNOME", None));
+    assert_eq!(find(&apps, "org.gnome.TextEditor.desktop").name, "Texteditor", "LANGUAGE first");
+    let apps = index(&session_with("C.UTF-8", Some("de"), "GNOME", None));
+    assert_eq!(find(&apps, "org.gnome.TextEditor.desktop").name, "Text Editor", "ignored under C");
+}
+
+#[test]
+fn an_empty_try_exec_is_no_condition() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("apps-linux-empty-tryexec");
+    let applications = root.join("share").join("applications");
+    fs::create_dir_all(&applications).unwrap();
+    fs::write(
+        applications.join("plain.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Plain\nExec=plain\nTryExec=\n",
+    )
+    .unwrap();
+    let mut session = session("en_US.UTF-8", "GNOME", None);
+    session.data_dirs = vec![root.join("share")];
+    assert_eq!(names(&index(&session)), ["Plain"], "listed");
 }

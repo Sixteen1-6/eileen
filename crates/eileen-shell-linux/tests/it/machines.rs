@@ -5,7 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use eileen_contracts::connectors::Platform;
-use eileen_contracts::ids::Untrusted;
+use eileen_contracts::ids::{Personal, Untrusted};
 use eileen_shell_linux::facts::{
     AdapterFacts, AdapterKind, CoreClass, CpuFacts, CpuFeature, CpuVendor, DiskFacts, DiskMedia,
     MachineFacts, PowerState,
@@ -18,7 +18,13 @@ use crate::tree;
 const DATA: &str = "/home/sam/.local/share/eileen";
 
 fn volume(at: &str, major: u32, minor: u32) -> Volume {
-    Volume { at: PathBuf::from(at), major, minor, free_mb: 200_000, total_mb: 950_000 }
+    Volume {
+        at: Personal::new(PathBuf::from(at)),
+        major,
+        minor,
+        free_mb: 200_000,
+        total_mb: 950_000,
+    }
 }
 
 fn facts(fixture: &str, test: &str, volume: Volume) -> MachineFacts {
@@ -150,7 +156,7 @@ fn an_amd_desktop_tells_its_apu_from_its_discrete_gpu_and_finds_btrfs_on_nvme() 
             adapter(
                 "Advanced Micro Devices, Inc. [AMD/ATI] Raphael",
                 AdapterKind::IntegratedGpu,
-                0,
+                512,
                 31_241,
                 driver,
             ),
@@ -324,4 +330,78 @@ fn the_load_is_the_busy_share_since_the_previous_call_with_the_power_state() {
     std::fs::write(root.join("proc/stat"), "cpu  5705 356 784 4699 23 0 23 0 0 0\n").unwrap();
     assert_eq!(probe.load().unwrap().0, 55, "1,200 busy of 2,200 ticks since the first call");
     assert_eq!(probe.load().unwrap().0, 55, "no tick since: the previous share");
+}
+
+#[test]
+fn an_apu_is_told_by_the_processor_as_well_as_by_its_carve_out() {
+    // A Strix Halo: the processor's name says Radeon, and its carve-out is 96 GB.
+    let root = tree::build("amd-desktop-btrfs", "apu_by_name");
+    let cpuinfo = std::fs::read_to_string(root.join("proc/cpuinfo")).unwrap();
+    let halo = cpuinfo
+        .replace("AMD Ryzen 7 7700X 8-Core Processor", "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S");
+    std::fs::write(root.join("proc/cpuinfo"), halo).unwrap();
+    std::fs::write(root.join("sys/class/drm/card0/device/mem_info_vram_total"), "103079215104\n")
+        .unwrap();
+    std::fs::remove_dir_all(root.join("sys/class/drm/card1")).unwrap();
+    let facts = LinuxMachineProbe::new(SysRoot::at(&root), "/unused")
+        .facts_on(Ok(volume(DATA, 0, 41)))
+        .unwrap();
+    let kinds: Vec<(AdapterKind, u32)> =
+        facts.adapters.iter().map(|a| (a.kind, a.dedicated_mb)).collect();
+    assert_eq!(
+        kinds,
+        [(AdapterKind::IntegratedGpu, 98_304)],
+        "integrated, with its carve-out as dedicated"
+    );
+
+    // The same two AMD GPUs beside an Intel processor are both discrete.
+    let root = tree::build("amd-desktop-btrfs", "apu_needs_amd");
+    let cpuinfo = std::fs::read_to_string(root.join("proc/cpuinfo")).unwrap();
+    std::fs::write(root.join("proc/cpuinfo"), cpuinfo.replace("AuthenticAMD", "GenuineIntel"))
+        .unwrap();
+    let facts = LinuxMachineProbe::new(SysRoot::at(&root), "/unused")
+        .facts_on(Ok(volume(DATA, 0, 41)))
+        .unwrap();
+    assert!(
+        facts.adapters.iter().all(|a| a.kind == AdapterKind::DiscreteGpu),
+        "{:?}",
+        facts.adapters
+    );
+}
+
+#[test]
+fn nvidia_gpus_without_a_drm_card_are_still_listed_and_framebuffers_are_not() {
+    let root = tree::build("nvidia-desktop-lvm", "nvidia_no_drm");
+    std::fs::remove_dir_all(root.join("sys/class/drm/card1")).unwrap();
+    std::fs::create_dir_all(root.join("sys/class/drm/card2/device")).unwrap();
+    std::fs::write(root.join("sys/class/drm/card2/device/uevent"), "DRIVER=simple-framebuffer\n")
+        .unwrap();
+    let facts = LinuxMachineProbe::new(SysRoot::at(&root), "/unused")
+        .facts_on(Ok(volume(DATA, 252, 0)))
+        .unwrap();
+    let names: Vec<&str> = facts.adapters.iter().map(|a| a.name.get().as_str()).collect();
+    assert_eq!(
+        names,
+        ["Intel Corporation CoffeeLake-S GT2 [UHD Graphics 630]", "NVIDIA GeForce RTX 4070"],
+        "from NVIDIA's listing"
+    );
+    assert_eq!(facts.adapters[1].driver, "nvidia 580.82.07", "the proprietary driver");
+    assert!(
+        !facts.degraded.iter().any(|note| note.contains("card2")),
+        "a firmware framebuffer is not a GPU: {:?}",
+        facts.degraded
+    );
+}
+
+#[test]
+fn a_disk_whose_model_names_a_hypervisor_is_not_a_hard_disk() {
+    // An Arm guest has no hypervisor flag; its disk under LVM still names QEMU.
+    let root = tree::build("nvidia-desktop-lvm", "vm_disk_model");
+    std::fs::write(root.join("sys/block/sda/device/vendor"), "QEMU\n").unwrap();
+    std::fs::write(root.join("sys/block/sda/device/model"), "QEMU HARDDISK\n").unwrap();
+    let facts = LinuxMachineProbe::new(SysRoot::at(&root), "/unused")
+        .facts_on(Ok(volume(DATA, 252, 0)))
+        .unwrap();
+    assert_eq!(facts.disk.media, DiskMedia::Unknown, "under dm-0, sda is QEMU's");
+    assert!(degraded(&facts).contains(&"disk media"), "named: {:?}", facts.degraded);
 }

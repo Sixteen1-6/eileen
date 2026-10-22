@@ -14,8 +14,11 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use eileen_contracts::ids::Personal;
+
 use crate::SysRoot;
 use crate::facts::DiskMedia;
+use crate::os::Guest;
 
 /// Bytes in a MB.
 const MB: u64 = 1024 * 1024;
@@ -30,8 +33,9 @@ const VIRTUAL_MODELS: [&str; 4] = ["virtual", "qemu", "vbox", "vmware"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Volume {
     /// The folder measured: the data folder, or its nearest existing parent before setup has
-    /// created it, with symbolic links resolved.
-    pub at: PathBuf,
+    /// created it, with symbolic links resolved. It is under the user's home folder, so it is
+    /// personal.
+    pub at: Personal<PathBuf>,
     /// The device number's major half (0 for a file system without a block device of its own).
     pub major: u32,
     /// Its minor half.
@@ -43,9 +47,11 @@ pub struct Volume {
 }
 
 /// Measures the volume `dir` is on. A folder that does not exist yet is measured at its nearest
-/// existing parent, so the facts can be read before setup creates the data folder.
+/// existing parent, so the facts can be read before setup creates the data folder; a relative
+/// `dir` is taken from the current folder.
 pub fn read_volume(dir: &Path) -> io::Result<Volume> {
-    let mut at = dir;
+    let dir = std::path::absolute(dir)?;
+    let mut at = dir.as_path();
     let meta = loop {
         match std::fs::metadata(at) {
             Ok(meta) => break meta,
@@ -60,7 +66,7 @@ pub fn read_volume(dir: &Path) -> io::Result<Volume> {
     let unit = if stat.f_frsize > 0 { stat.f_frsize } else { stat.f_bsize };
     let mb = |blocks: u64| blocks.saturating_mul(unit) / MB;
     Ok(Volume {
-        at: std::fs::canonicalize(at).unwrap_or_else(|_| at.to_path_buf()),
+        at: Personal::new(std::fs::canonicalize(at).unwrap_or_else(|_| at.to_path_buf())),
         major: rustix::fs::major(meta.dev()),
         minor: rustix::fs::minor(meta.dev()),
         free_mb: mb(stat.f_bavail),
@@ -139,18 +145,24 @@ fn mount_of<'m>(mounts: &'m [Mount], at: &Path) -> Option<&'m Mount> {
 pub(crate) fn read_media(
     root: &SysRoot,
     volume: &Volume,
-    wsl: bool,
+    guest: Guest,
     degraded: &mut Vec<String>,
 ) -> DiskMedia {
+    const VM_DISK: &str =
+        "the data folder is on a virtual machine's disk; the host's disk is unknown";
     let unknown = |degraded: &mut Vec<String>, reason: &str| {
         degraded.push(format!("disk media: {reason}"));
         DiskMedia::Unknown
     };
-    if wsl {
-        return unknown(
-            degraded,
-            "under WSL the data folder is on a virtual disk; the host's disk is unknown",
-        );
+    match guest {
+        Guest::Wsl => {
+            return unknown(
+                degraded,
+                "under WSL the data folder is on a virtual disk; the host's disk is unknown",
+            );
+        }
+        Guest::VirtualMachine => return unknown(degraded, VM_DISK),
+        Guest::BareMetal => {}
     }
     let block = match locate(root, volume) {
         Ok(block) => block,
@@ -159,11 +171,9 @@ pub(crate) fn read_media(
     if let Some(kind) = virtual_kind(&block.disk) {
         return unknown(degraded, &format!("the data folder is on {kind}"));
     }
+    // A guest the CPU flag does not reveal (an Arm virtual machine) still shows in its disks.
     if stack_disks(root, &block.disk, 0).iter().any(|disk| is_vm_disk(root, disk)) {
-        return unknown(
-            degraded,
-            "the data folder is on a virtual machine's disk; the host's disk is unknown",
-        );
+        return unknown(degraded, VM_DISK);
     }
     match root.read_trimmed(&format!("sys/block/{}/queue/rotational", block.disk)).as_deref() {
         Some("0") => DiskMedia::Ssd,
@@ -182,7 +192,7 @@ fn locate(root: &SysRoot, volume: &Volume) -> Result<Block, String> {
     let not_found = || "the data folder's block device was not found".to_owned();
     let text = root.read("proc/self/mountinfo").map_err(|_| not_found())?;
     let mounts = parse_mountinfo(&text);
-    let mount = mount_of(&mounts, &volume.at).ok_or_else(not_found)?;
+    let mount = mount_of(&mounts, volume.at.get()).ok_or_else(not_found)?;
     if mount.source.starts_with("/dev/") {
         find_by_source(root, &mount.source).ok_or_else(not_found)
     } else {

@@ -64,10 +64,15 @@
 //!
 //! - sysfs entries are symbolic links on a real machine and plain folders in the fixtures:
 //!   read through paths, never with `read_link`, and take a device's driver from its `uevent`.
-//! - Virtual disks call themselves rotational: WSL's, and a virtual machine's (virtio and Xen
-//!   disks, and disks whose model is `QEMU HARDDISK`, `VBOX HARDDISK`, `Virtual Disk` and the
-//!   like). Their media is `Unknown` and degraded, never `Hdd`. Under WSL the GPU is
-//!   `/dev/dxg` with no DRM card, which is degraded too, never "no GPU".
+//! - Virtual disks call themselves rotational, or solid-state for a network volume. A guest is
+//!   known by WSL's kernel release, the CPU's `hypervisor` flag or Xen's `/sys/hypervisor`,
+//!   and, where none says so (an Arm guest), by virtio and Xen disk names and models such as
+//!   `QEMU HARDDISK` and `Virtual Disk`. Its disk media is `Unknown` and degraded, never `Hdd`.
+//!   Under WSL the GPU is `/dev/dxg` with no DRM card, which is degraded too, never "no GPU".
+//! - An AMD GPU's VRAM size alone does not tell an APU: a Strix Halo's carve-out can be 96 GB
+//!   and a small discrete card has 2 GB. The processor decides first (module `adapters`).
+//! - `simpledrm` registers as the platform driver `simple-framebuffer`: a firmware framebuffer,
+//!   not a GPU.
 //! - A btrfs subvolume's device number matches no block device and not even its own line in
 //!   `mountinfo`: the data folder's disk is found through the mount that holds the folder.
 //! - Arm's `core_id` restarts in each cluster: physical cores are counted from

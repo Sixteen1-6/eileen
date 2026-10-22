@@ -52,7 +52,7 @@ impl From<&DesktopEntry> for AppEntry {
             id: entry.id.clone(),
             name: entry.name.clone(),
             kind: entry.kind,
-            path: Some(Personal::new(entry.path.to_string_lossy().into_owned())),
+            path: Some(Personal::new(entry.path.get().to_string_lossy().into_owned())),
         }
     }
 }
@@ -77,8 +77,9 @@ impl Session {
         Self::from_vars(|name| std::env::var_os(name))
     }
 
-    /// The session the variables describe: `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `HOME`, `LC_ALL`,
-    /// `LC_MESSAGES`, `LANG`, `XDG_CURRENT_DESKTOP` and `PATH`.
+    /// The session the variables describe: `XDG_DATA_HOME`, `XDG_DATA_DIRS`, `HOME`, `LANGUAGE`,
+    /// `LC_ALL`, `LC_MESSAGES`, `LANG`, `XDG_CURRENT_DESKTOP` and `PATH`. As gettext does,
+    /// `LANGUAGE`'s list comes before the messages locale, and is ignored under the C locale.
     #[must_use]
     pub fn from_vars(var: impl Fn(&str) -> Option<OsString>) -> Self {
         let text = |name: &str| var(name).and_then(|value| value.into_string().ok());
@@ -113,9 +114,19 @@ impl Session {
             text("LC_MESSAGES").as_deref(),
             text("LANG").as_deref(),
         );
+        let mut locales: Vec<String> = Vec::new();
+        if let Some(locale) = locale {
+            let preferred = text("LANGUAGE").unwrap_or_default();
+            let wanted = preferred.split(':').filter(|entry| !entry.is_empty()).map(str::to_owned);
+            for key in wanted.chain([locale]).flat_map(|entry| locale_keys(&entry)) {
+                if !locales.contains(&key) {
+                    locales.push(key);
+                }
+            }
+        }
         Self {
             data_dirs,
-            locales: locale.map(|locale| locale_keys(&locale)).unwrap_or_default(),
+            locales,
             desktops: text("XDG_CURRENT_DESKTOP")
                 .map(|names| {
                     names.split(':').filter(|name| !name.is_empty()).map(str::to_owned).collect()

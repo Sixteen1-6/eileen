@@ -6,7 +6,9 @@
 //! - The paging rate counts major faults (`pgmajfault`), 4 KB each, over the time since the
 //!   previous sample, the build guard's Linux formula, so the runtime's samples and the guard's
 //!   agree in the machine-wide files they share. A major fault reads at least one page; Windows'
-//!   `Pages Input/sec` counts every page the fault read, so this is a lower bound.
+//!   `Pages Input/sec` counts every page the fault read, so this is a lower bound. It also
+//!   assumes 4 KB pages: on a kernel with 16 KB or 64 KB pages (Asahi, Ubuntu's `arm64-64k`)
+//!   it understates the rate by that ratio, and so does the guard, so a fix changes both.
 //! - The largest process is the one with the most resident memory outside Eileen's own tree:
 //!   this process and everything it started.
 
