@@ -66,8 +66,8 @@
 //! - `GLib` refuses a whole bookmark file over a bad date or a repeated `href`; the reader skips
 //!   that bookmark, and lists a path once at its newest time, as it does when two URIs name it.
 //!   A `private` bookmark is hidden from every app that did not register it, Eileen included.
-//! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are
-//!   `eileen-dbus-linux`'s.
+//! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are `eileen-dbus-linux`'s.
+//!   An [`MprisWatch`] has them, so a `Subscription`'s release must drop it inside the runtime.
 //!
 //! # Logs and tracing
 //!
@@ -94,6 +94,6 @@ pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
 pub use error::FileError;
 pub use index::{AppEntry, AppKind, Session, entry_for, index};
-pub use mpris::MprisSessions;
+pub use mpris::{MprisEvent, MprisSessions, MprisWatch};
 pub use open::{OpenError, Opener};
 pub use recent::{RecentItem, RecentlyUsed};
