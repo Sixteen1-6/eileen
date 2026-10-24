@@ -215,14 +215,26 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   field first.
 - Base crates: tokio's `test-util` (paused time) is not in the tokio union, so the supervisor's
   heartbeat and backoff logic takes explicit instants and the deadline test waits 20 ms of real
-  time. WP2's concurrency tests will want `test-util`; adding it is a one-line amendment.
+  time. WP2's concurrency tests will want `test-util`; adding it is a one-line amendment. Since
+  pull request #35, `eileen-dbus-linux` turns `test-util` on in its Linux dev-dependencies, so on
+  Linux a workspace test build compiles tokio with it and a `-p` build of another crate without
+  it; that amendment would make the union say so.
 - Base crates: the first lock of the base crates' dependencies took `cc` 1.9.0 and
   `find-msvc-tools` 0.1.15 (2026-10-19, through `blake3`'s build script), `deranged` 0.5.9
   (2026-10-13, through `tracing-appender`'s `time`) and `smallvec` 1.16.3 (2026-10-10), all
   inside the 14-day window. They are held back with `cargo update --precise` to `cc` 1.6.0
   (2026-10-03), `find-msvc-tools` 0.1.14 (2026-09-25), `deranged` 0.5.8 (2026-02-21) and
-  `smallvec` 1.16.2 (2026-09-25). `tokio` 1.54.0 (2026-10-19) is young too, but section 4.1 pins
-  it, so it stays. The other 82 new entries were published on or before 2026-10-07.
+  `smallvec` 1.16.2 (2026-09-25). `tokio` 1.54.0 (2026-10-19) was young too but was then section
+  4.1's pin; it was yanked afterwards, and pull request #27 moved the pin to 1.53.2, which this
+  branch locks. The other 82 new entries were published on or before 2026-10-07.
+- Base crates: the Linux lane's first look at this branch came from WP10, not CI: an Ubuntu 24.04
+  run over `backup/wp0-base-crates` at `ca336be` (docs/LINUX.md section 10) passed 305 of 305
+  tests and found three things the Windows jobs cannot show. A test's `drop` of an `AudioBoost`,
+  which holds nothing off Windows, fails `clippy::drop_non_drop` there; the yanked `tokio` 1.54.0
+  fails `cargo deny`; and the guard read Linux commit headroom as `CommitLimit` minus
+  `Committed_AS`, which the kernel enforces only under strict overcommit, so on a default desktop
+  it can read 0 with gigabytes free and refuse every build. All three are fixed on the rebased
+  branch.
 - Base crates: clippy 1.99 wants `Duration::from_mins` and `from_hours` and the renamed
   `AtomicU64::try_update`, and rustfmt can leave a trailing comma in a macro call it joins onto
   one line, which clippy then refuses.
@@ -382,8 +394,10 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   refuses at once with exit 75. `procs::process_alive` waits on the process with a zero timeout
   rather than reading its exit code, because a process may exit with 259, which is
   `STILL_ACTIVE`. Off Windows the machine root falls back to
-  `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads `/proc`
-  (`MemAvailable`, `CommitLimit` minus `Committed_AS`, major faults times 4 KB).
+  `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads `/proc`:
+  `MemAvailable`, major faults times 4 KB, and commit headroom by `vm.overcommit_memory` as
+  `eileen-shell-linux` reads it (`CommitLimit` minus `Committed_AS` under strict overcommit,
+  else `MemAvailable` plus `SwapFree`), so the guard's samples and the runtime's agree.
 - Base crates, buildguard: `spawn_cargo` creates cargo suspended, puts it in a fresh
   kill-on-close Job Object, then resumes its threads (process-wrap's technique), so nothing it
   starts escapes the job; the guard's process holds the only handle. Its process tests run the
