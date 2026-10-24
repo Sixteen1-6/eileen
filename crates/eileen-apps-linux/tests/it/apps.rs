@@ -15,6 +15,7 @@ use eileen_contracts::ids::Personal;
 use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::PrivateBus;
 use eileen_platform::{AppEntry, AppKind, Apps, Deadline, PlatformError};
+use rustix::fs::{Mode, OFlags};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::index::session;
@@ -125,6 +126,28 @@ fn index_lists_the_menu_as_the_traits_entries() {
     assert_eq!(kind("org.videolan.VLC.desktop"), Some(AppKind::Packaged), "Flatpak");
     assert_eq!(kind("spotify_spotify.desktop"), Some(AppKind::Packaged), "Snap");
     assert_eq!(kind("htop.desktop"), Some(AppKind::Desktop), "a classic app");
+}
+
+#[test]
+fn an_index_that_a_read_holds_passes_its_deadline() {
+    // A FIFO named as a desktop entry: the index opens each entry without O_NONBLOCK, so its
+    // read waits for a writer, as one that a hung network mount holds would. A real wait: the
+    // deadline, the bridge's default, is real time.
+    let bus = PrivateBus::start();
+    let scratch = Scratch::new();
+    std::fs::create_dir_all(scratch.path().join("applications")).unwrap();
+    let held = scratch.fifo("applications/held.desktop");
+    let mut session = session("en_US.UTF-8", "ubuntu:GNOME", None);
+    session.data_dirs.insert(0, scratch.path().to_owned());
+    let apps = LinuxApps::new(Bridge::on_private_bus(&bus).unwrap(), session);
+    assert_eq!(
+        apps.index(),
+        Err(PlatformError::DeadlineExceeded { call: "app index" }),
+        "the read left to its thread"
+    );
+    // A writer, which a read that waits lets open at once, ends the held read.
+    let writer = rustix::fs::open(&held, OFlags::WRONLY | OFlags::NONBLOCK, Mode::empty());
+    assert!(writer.is_ok(), "the read still waited on the FIFO: {writer:?}");
 }
 
 #[test]

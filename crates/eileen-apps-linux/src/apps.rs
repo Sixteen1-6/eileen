@@ -1,5 +1,5 @@
 //! [`LinuxApps`]: `eileen-platform`'s `Apps` over the desktop entries and [`Opener`], through
-//! the D-Bus bridge. `index` reads the desktop entries with [`index`] on the caller's thread,
+//! the D-Bus bridge. `index` reads the desktop entries with [`index`] on a thread of its own,
 //! with std file reads and no bus; `launch` and the opening methods run [`Opener`] on the
 //! bridge's session bus. Which apps the menu shows, how an app starts and how each target
 //! opens are the `index` and `open` modules' to decide: this converts types and errors.
@@ -18,14 +18,17 @@
 //! # The deadlines
 //!
 //! No method takes a `Deadline`, so each bridge call waits at most [`DEFAULT_DEADLINE`], the
-//! connection's method timeout and half a second. An opening method's request gets
-//! [`REQUEST_BUDGET`] of it, counted from the trait call's start: the opener's wait for the
-//! portal's `Response` gets what connecting and the calls before it leave, so it ends before the
-//! bridge's deadline and closes the request, which dismisses any dialog the portal shows. Past the
-//! bridge's deadline the call is cancelled and leaves the request open, as a call slower than what
-//! is left still does, since each call keeps the method timeout. An app chooser the portal shows,
-//! as when no default app is set, is dismissed when the wait ends: the trait leaves the user no
-//! longer to choose.
+//! connection's method timeout and half a second. So does each read of the index, which a hung
+//! network mount can hold: past it the read is left to its thread, and the call answers
+//! `DeadlineExceeded` naming the app index.
+//!
+//! An opening method's request gets [`REQUEST_BUDGET`] of the bridge's deadline, counted from the
+//! trait call's start: the opener's wait for the portal's `Response` gets what connecting and the
+//! calls before it leave, so it ends before the bridge's deadline and closes the request, which
+//! dismisses any dialog the portal shows. Past the bridge's deadline the call is cancelled and
+//! leaves the request open, as a call slower than what is left still does, since each call keeps
+//! the method timeout. An app chooser the portal shows, as when no default app is set, is
+//! dismissed when the wait ends: the trait leaves the user no longer to choose.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
@@ -36,7 +39,8 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{self as platform, Apps, Deadline, PlatformError};
 use tokio::time::Instant;
 
-use crate::{AppEntry, AppKind, DesktopEntry, FileError, Opener, Session, entry_for, index};
+use crate::bounded;
+use crate::{AppEntry, AppKind, DesktopEntry, Opener, Session, entry_for, index};
 
 /// How long an opening method's request may take, counted from the trait call's start: the
 /// connecting, for `open_path` the checks of the path, the portal's calls and the wait for its
@@ -47,6 +51,9 @@ const REQUEST_BUDGET: Duration = DEFAULT_DEADLINE.budget().saturating_sub(CLOSE_
 /// wait, at most `eileen_dbus_linux::CLOSE_GRACE`, and for the answer to reach the caller.
 const CLOSE_MARGIN: Duration = Duration::from_millis(500);
 
+/// What `index` names when its read passes its deadline, as do `launch` and `open_path` with an
+/// app when they index again.
+const INDEX: &str = "app index";
 /// What `launch` names when it passes its deadline.
 const LAUNCH: &str = "app launch";
 /// What `open_url` names when it passes its deadline.
@@ -61,8 +68,8 @@ const MAIN_WINDOW: &str = "an app's main window";
 /// The apps of the user's session: `Apps` on Linux, from the desktop entries of a [`Session`],
 /// started and opened by [`Opener`] on a [`Bridge`]. The module's doc gives the rules.
 ///
-/// - `index` is [`index`] of the session. Each call reads the entries again, on the caller's
-///   thread with no deadline, as the trait gives none, and keeps them.
+/// - `index` is [`index`] of the session. Each call reads the entries again, on a thread of its
+///   own within [`DEFAULT_DEADLINE`], as the trait gives no deadline, and keeps them.
 /// - `launch` is [`Opener::launch`]: `Activate` on the app's `org.freedesktop.Application`,
 ///   which has the bus start the app. Its process ID is that of the connection that answered,
 ///   the app's own for an app on the host. A Flatpak app whose bus access is filtered answers
@@ -93,16 +100,22 @@ impl LinuxApps {
     }
 
     /// The indexed entry of `app`: from the last index, else from a new one, which is kept.
-    fn desktop_entry(&self, app: &platform::AppEntry) -> Result<DesktopEntry, FileError> {
+    fn desktop_entry(&self, app: &platform::AppEntry) -> Result<DesktopEntry, PlatformError> {
         let wanted = from_platform(app);
         let kept = entry_for(&self.indexed(), &wanted).ok().cloned();
         if let Some(entry) = kept {
             return Ok(entry);
         }
-        let entries = index(&self.session);
+        let entries = self.read_index()?;
         let found = entry_for(&entries, &wanted).cloned();
         *self.indexed() = entries;
-        found
+        Ok(found?)
+    }
+
+    /// A new index of the session, read on a thread of its own within [`DEFAULT_DEADLINE`].
+    fn read_index(&self) -> Result<Vec<DesktopEntry>, PlatformError> {
+        let session = self.session.clone();
+        bounded::read(INDEX, move || index(&session))
     }
 
     /// The kept entries. A thread that panicked while holding them left a whole list, so a
@@ -114,7 +127,7 @@ impl LinuxApps {
 
 impl Apps for LinuxApps {
     fn index(&self) -> Result<Vec<platform::AppEntry>, PlatformError> {
-        let entries = index(&self.session);
+        let entries = self.read_index()?;
         let listed = entries.iter().map(|entry| to_platform(AppEntry::from(entry))).collect();
         *self.indexed() = entries;
         Ok(listed)

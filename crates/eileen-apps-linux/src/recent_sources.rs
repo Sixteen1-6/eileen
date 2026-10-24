@@ -1,7 +1,8 @@
 //! [`LinuxRecent`]: `eileen-platform`'s `RecentSources` over `recently-used.xbel`. `recent` is
-//! [`RecentlyUsed::recent`], whose doc gives the rules, read with std file reads on the caller's
-//! thread: no bus, so no bridge. Its [`FileError`](crate::FileError) becomes its `PlatformError`
-//! twin, and each [`RecentItem`] the trait's.
+//! [`RecentlyUsed::recent`], whose doc gives the rules, read with std file reads on a thread of
+//! its own (the `bounded` module's rules): no bus, so no bridge. Its
+//! [`FileError`](crate::FileError) becomes its `PlatformError` twin, and each [`RecentItem`] the
+//! trait's.
 //!
 //! The trait's item keeps the app's name as a plain `String`, so the `Untrusted` mark the crate's
 //! item gives it, as another app wrote it, ends here. The name is sanitized first
@@ -15,11 +16,14 @@
 use eileen_contracts::desktop::sanitize;
 use eileen_platform::{self as platform, PlatformError, RecentSources, RgbaImage, Subscription};
 
+use crate::bounded;
 use crate::{RecentItem, RecentlyUsed};
 
 /// How many characters of an app's name are kept.
 const APP_NAME_CHARS: usize = 512;
 
+/// What `recent` names when its read passes its deadline.
+const RECENT: &str = "recent files";
 /// What `watch` names as unavailable.
 const WATCH: &str = "watching recent files";
 /// What `thumbnail` names as unavailable.
@@ -28,8 +32,10 @@ const THUMBNAIL: &str = "a recent file's thumbnail";
 /// The user's recent files: `RecentSources` on Linux, from one [`RecentlyUsed`] list.
 ///
 /// - `recent` is [`RecentlyUsed::recent`]: newest first, each path once, a missing file
-///   holding none. The read has no deadline, as the trait gives none and a file read cannot be
-///   cancelled: a data folder on a network mount whose server hangs holds the call.
+///   holding none. The trait gives no deadline, and a data folder on a network mount whose
+///   server hangs can hold the read, so it runs on a thread of its own: past
+///   `eileen_dbus_linux::DEFAULT_DEADLINE`, as a D-Bus call would be, the call answers
+///   `DeadlineExceeded` naming the recent files and leaves the read to its thread.
 /// - `watch` is `Unavailable` until phase L2 watches the file with `inotify` (docs/LINUX.md
 ///   section 4).
 /// - `thumbnail` is `Unavailable` until phase L2 reads the freedesktop thumbnail cache.
@@ -49,7 +55,9 @@ impl LinuxRecent {
 
 impl RecentSources for LinuxRecent {
     fn recent(&self, limit: usize) -> Result<Vec<platform::RecentItem>, PlatformError> {
-        Ok(self.list.recent(limit)?.into_iter().map(to_platform).collect())
+        let list = self.list.clone();
+        let items = bounded::read(RECENT, move || list.recent(limit))??;
+        Ok(items.into_iter().map(to_platform).collect())
     }
 
     /// `Unavailable` until phase L2 brings `inotify`.
