@@ -86,6 +86,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, Request};
+use eileen_platform::PlatformError;
 use rustix::fs::OFlags;
 use tokio::time::Instant;
 use zbus::names::WellKnownName;
@@ -153,6 +154,16 @@ impl From<FileError> for OpenError {
 impl From<DbusError> for OpenError {
     fn from(error: DbusError) -> Self {
         Self::Bus(error)
+    }
+}
+
+/// The `PlatformError` twin of the error it holds.
+impl From<OpenError> for PlatformError {
+    fn from(error: OpenError) -> Self {
+        match error {
+            OpenError::File(error) => error.into(),
+            OpenError::Bus(error) => error.into(),
+        }
     }
 }
 
@@ -479,6 +490,7 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
 
+    use eileen_platform::PlatformError;
     use rustix::fs::{CWD, Mode, mkfifoat};
 
     use super::{
@@ -569,6 +581,22 @@ mod tests {
         assert_eq!(OpenError::from(file.clone()).to_string(), file.to_string(), "a file's");
         let bus = DbusError::Unavailable { what: "OpenFile request" };
         assert_eq!(OpenError::from(bus.clone()).to_string(), bus.to_string(), "a request's");
+    }
+
+    #[test]
+    fn an_open_error_becomes_the_platform_twin_of_the_error_it_holds() {
+        let file = FileError::Refused { what: "file to open", reason: "not readable" };
+        assert_eq!(
+            PlatformError::from(OpenError::File(file.clone())),
+            PlatformError::from(file),
+            "a file's"
+        );
+        let bus = DbusError::Refused { what: "OpenFile request", reason: "not opened" };
+        assert_eq!(
+            PlatformError::from(OpenError::Bus(bus.clone())),
+            PlatformError::from(bus),
+            "a request's"
+        );
     }
 
     /// A FIFO with no writer, in a fresh folder of the temporary directory that goes when it

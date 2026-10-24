@@ -1,6 +1,6 @@
 //! The opener against fakes on the private bus: an `OpenURI` portal that records each call and
 //! answers on the request handle its `handle_token` names, as the real portal does, and
-//! D-Bus-activatable apps.
+//! D-Bus-activatable apps. The `apps` tests reuse the fakes through the trait.
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd};
@@ -28,7 +28,7 @@ const REQUEST: &str = "org.freedesktop.portal.Request";
 
 /// What the fake portal does with a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub(crate) enum Answer {
     /// Emits `Response` with this code before it replies, as a quick portal can.
     Now(u32),
     /// Replies and stays silent: the test answers, or lets the deadline pass.
@@ -39,7 +39,7 @@ enum Answer {
 
 /// What the fake portal saw.
 #[derive(Debug)]
-enum Event {
+pub(crate) enum Event {
     /// A call to the portal.
     Call(PortalCall),
     /// `Close` on a request.
@@ -48,11 +48,11 @@ enum Event {
 
 /// One call to the portal.
 #[derive(Debug)]
-struct PortalCall {
-    method: &'static str,
+pub(crate) struct PortalCall {
+    pub(crate) method: &'static str,
     parent_window: String,
     /// The URI, or the path the descriptor names.
-    target: String,
+    pub(crate) target: String,
     /// How the descriptor is open; `None` for a URI.
     mode: Option<Mode>,
     /// The options' names.
@@ -60,7 +60,7 @@ struct PortalCall {
     /// The `handle_token` option.
     token: Option<String>,
     /// The handle the fake answered.
-    handle: OwnedObjectPath,
+    pub(crate) handle: OwnedObjectPath,
 }
 
 /// The portal's errors the fake answers.
@@ -227,7 +227,10 @@ impl OddPortal {
 }
 
 /// The fake portal on `bus`, and what it sees. Hold the connection for the whole test.
-async fn portal(bus: &PrivateBus, answer: Answer) -> (zbus::Connection, mpsc::Receiver<Event>) {
+pub(crate) async fn portal(
+    bus: &PrivateBus,
+    answer: Answer,
+) -> (zbus::Connection, mpsc::Receiver<Event>) {
     let (events, seen) = mpsc::channel(16);
     (serve(bus, PORTAL, PORTAL_PATH, FakePortal { answer, events }).await, seen)
 }
@@ -255,12 +258,12 @@ async fn respond_to(
 }
 
 /// What the fake saw next. No timer: nextest's slow-timeout ends a test that waits for good.
-async fn next(seen: &mut mpsc::Receiver<Event>) -> Event {
+pub(crate) async fn next(seen: &mut mpsc::Receiver<Event>) -> Event {
     seen.recv().await.expect("the fake portal is still on the bus")
 }
 
 /// The next call the fake portal saw.
-async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
+pub(crate) async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
     match next(seen).await {
         Event::Call(call) => call,
         other @ Event::Closed(_) => panic!("not a call: {other:?}"),
@@ -287,9 +290,14 @@ impl Scratch {
     }
 
     /// A file in the folder.
-    fn file(&self, name: &str) -> PathBuf {
+    pub(crate) fn file(&self, name: &str) -> PathBuf {
+        self.write(name, "a fixture document")
+    }
+
+    /// A file in the folder that holds `contents`.
+    pub(crate) fn write(&self, name: &str, contents: &str) -> PathBuf {
         let path = self.0.join(name);
-        std::fs::write(&path, "a fixture document").unwrap();
+        std::fs::write(&path, contents).unwrap();
         path
     }
 
@@ -332,7 +340,7 @@ const APP_ID: &str = "org.eileen.TestApp.desktop";
 
 /// What a fake app does with `Activate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Behaviour {
+pub(crate) enum Behaviour {
     /// Answers at once.
     Answer,
     /// Records the call, then never answers.
@@ -343,9 +351,9 @@ enum Behaviour {
 
 /// One call to a fake app's `org.freedesktop.Application`.
 #[derive(Debug)]
-struct AppCall {
-    method: &'static str,
-    uris: Vec<String>,
+pub(crate) struct AppCall {
+    pub(crate) method: &'static str,
+    pub(crate) uris: Vec<String>,
     platform_data: Vec<String>,
 }
 
@@ -387,7 +395,7 @@ impl FakeApp {
 
 /// A fake app owning `name` on `bus` with its interface at `path`, and the calls it sees. Hold
 /// the connection for the whole test.
-async fn app(
+pub(crate) async fn app(
     bus: &PrivateBus,
     name: &str,
     path: &str,
@@ -398,7 +406,7 @@ async fn app(
 }
 
 /// The next call a fake app saw. No timer, as for the portal's.
-async fn app_seen(seen: &mut mpsc::Receiver<AppCall>) -> AppCall {
+pub(crate) async fn app_seen(seen: &mut mpsc::Receiver<AppCall>) -> AppCall {
     seen.recv().await.expect("the fake app is still on the bus")
 }
 

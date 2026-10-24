@@ -18,17 +18,17 @@ use crate::open::Scratch;
 type Row<'a> = (&'a str, Option<&'a str>, Option<FileKind>, WallTime);
 
 /// The fixtures' folder.
-fn fixtures() -> PathBuf {
+pub(crate) fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("recent")
 }
 
 /// The list in the fixture file `name`.
-fn list(name: &str) -> RecentlyUsed {
+pub(crate) fn list(name: &str) -> RecentlyUsed {
     RecentlyUsed::at(fixtures().join(name))
 }
 
 /// The fixture home folder's file, which `GLib` wrote.
-fn gtk() -> RecentlyUsed {
+pub(crate) fn gtk() -> RecentlyUsed {
     list("home/sam/.local/share/recently-used.xbel")
 }
 
