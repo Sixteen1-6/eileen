@@ -26,8 +26,8 @@ pub(super) const LOGIND: &str = "org.freedesktop.login1";
 pub(super) const MANAGER_PATH: &str = "/org/freedesktop/login1";
 pub(super) const GNOME: &str = "org.gnome.SessionManager";
 pub(super) const GNOME_PATH: &str = "/org/gnome/SessionManager";
-const PORTAL: &str = "org.freedesktop.portal.Desktop";
-const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+pub(super) const PORTAL: &str = "org.freedesktop.portal.Desktop";
+pub(super) const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const REQUEST: &str = "org.freedesktop.portal.Request";
 /// The request handle a portal before 0.9 names, whatever the token.
 const OLD_REQUEST_PATH: &str = "/org/freedesktop/portal/desktop/request/old/1";
@@ -170,7 +170,7 @@ enum PortalError {
 
 /// What the fake portal does with an `Inhibit` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub(super) enum Answer {
     /// Emits `Response` with this code before it replies, as a quick portal can.
     Now(u32),
     /// Replies and stays silent: the test answers after the reply, or lets the deadline pass.
@@ -204,10 +204,20 @@ struct PortalCall {
 /// caller's unique name and its `handle_token`, serves a [`FakeRequest`] there and answers as
 /// `answer` says.
 #[derive(Debug, Clone)]
-struct FakePortal {
+pub(super) struct FakePortal {
     answer: Answer,
     calls: mpsc::Sender<PortalCall>,
     on_close: mpsc::Sender<OwnedObjectPath>,
+}
+
+impl FakePortal {
+    /// A portal that answers as `answer` says and reports only the requests that are closed, for
+    /// a test that serves it itself.
+    pub(super) fn reporting_closes(answer: Answer) -> (Self, mpsc::Receiver<OwnedObjectPath>) {
+        let (calls, _unseen) = mpsc::channel(1);
+        let (on_close, closed) = mpsc::channel(1);
+        (Self { answer, calls, on_close }, closed)
+    }
 }
 
 #[zbus::interface(name = "org.freedesktop.portal.Inhibit")]
