@@ -4,7 +4,8 @@
 //! their own, whose workers serve them while the test's thread calls the trait and blocks, as its
 //! caller does. What the index lists and how each target opens is pinned by the `index` and
 //! `open` tests: these pin that the trait reaches them, and what it adds, the conversions, the
-//! kept index, and the portal's wait inside the bridge's deadline.
+//! kept index, the index's deadline, the portal's wait inside the bridge's deadline, and the
+//! checks of paths off the bridge's blocking threads.
 
 use std::future::Future;
 use std::path::Path;
