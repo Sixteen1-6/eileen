@@ -13,14 +13,15 @@ use std::time::Duration;
 
 use eileen_contracts::core_io::Toast;
 use eileen_dbus_linux::testing::{PrivateBus, serve};
-use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
+use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_changes};
 use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
 use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
 use tokio::sync::{Notify, mpsc};
 
 use crate::autostart::Scratch;
 use crate::keep_awake::{
-    COOKIE, FakeManager, GNOME, GNOME_PATH, LOGIND, MANAGER_PATH, still_held, watch_end,
+    COOKIE, FakeGnome, FakeManager, GNOME, GNOME_PATH, LOGIND, MANAGER_PATH, left, still_held,
+    watch_end,
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
@@ -292,6 +293,33 @@ fn a_keep_awake_past_its_deadline_releases_what_it_took_once_it_holds() {
         "the inhibitor GNOME granted after the call gave up is ended at once"
     );
     assert!(closed(watch_end(&manager)), "and logind's lock, taken before it");
+}
+
+#[test]
+fn a_hold_that_uninhibit_cannot_end_ends_as_the_holders_connection_leaves_the_bus() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let gnome = FakeGnome { forget: true, ..FakeGnome::default() };
+    fakes.serve(&bus, GNOME, GNOME_PATH, gnome.clone());
+    // The shell keeps the bridge, and the bridge's shared connections, past the drop.
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    let request = shell.keep_awake().unwrap();
+    let holder = gnome.calls.lock().unwrap()[0].sender.clone();
+    let left_the_bus = fakes.runtime.block_on(async {
+        let observer = bus.connect().await;
+        let mut leaving = owner_changes(&observer, Names::Name(&holder)).await.unwrap();
+        let owner = name_owner(&observer, &holder).await.unwrap();
+        assert!(owner.is_some(), "the holder's connection is on the bus while the request lives");
+        // This blocks the test's thread, not the fakes' workers, until the holder has released.
+        drop(request);
+        left(&mut leaving).await
+    });
+    assert_eq!(*gnome.uninhibits.lock().unwrap(), [COOKIE], "Uninhibit was asked, and failed");
+    assert!(
+        left_the_bus,
+        "the connection GNOME's inhibitor was taken on left the bus all the same, which ends it"
+    );
+    drop(shell);
 }
 
 #[test]

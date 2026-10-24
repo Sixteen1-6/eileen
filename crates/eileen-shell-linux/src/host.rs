@@ -23,21 +23,23 @@
 //! task, which needs no D-Bus call and so is bounded by [`DEFAULT_DEADLINE`] as any job is, and
 //! the second waits for its answer within the settings' deadline. Once it holds, the task answers
 //! with a channel and waits. When the `PowerRequest` drops, or at once when the wait has already
-//! given up, it ends the holds with [`LinuxPowerRequest::release`].
+//! given up, it ends the holds with [`LinuxPowerRequest::release`]. The desktop's hold is taken
+//! on a session connection of the task's own ([`Buses::unshared_session`]), as
+//! [`LinuxPowerRequest::keep_awake`] asks, which the task drops on the bridge's thread once
+//! `release` has run: should `Uninhibit` or the portal's `Close` fail, the desktop still ends its
+//! hold when that connection closes.
 //!
 //! Dropping the `PowerRequest` asks the task to release and waits at most [`RELEASE_WAIT`] for
 //! it; past that, the task finishes on its own. The `PowerRequest` keeps a handle to the bridge,
 //! so the hold outlives the [`LinuxShell`] that took it. When that handle is the bridge's last,
-//! the bridge ends after the wait and drops the task with it: logind's descriptor and the session
-//! connection close, which ends both holds.
+//! the bridge ends after the wait and drops the task with it: logind's descriptor and the task's
+//! own session connection close, which ends both holds.
 //!
 //! # Traps
 //!
-//! - The desktop's hold is taken on the bridge's shared session connection, not on one of its
-//!   own as [`LinuxPowerRequest::keep_awake`] asks, because [`Buses`](eileen_dbus_linux::Buses)
-//!   makes none for one job. So only `release` ends it: should `Uninhibit` or the portal's
-//!   `Close` fail, the desktop keeps the hold until that connection closes, at the latest when
-//!   the bridge ends.
+//! - The task's own session connection costs one more connect per `keep_awake`: a handshake
+//!   and a `Hello` call, which zbus bounds by no timeout. A session bus that accepts and never
+//!   answers delays only the task, never the call, which still answers within its deadline.
 //! - `keep_awake` fails only when nothing holds. A holder that missed
 //!   ([`LinuxPowerRequest::missed`]), such as the desktop's on a desktop with neither GNOME's
 //!   session manager nor the portal, goes unreported: the trait's `PowerRequest` has no place
@@ -215,9 +217,11 @@ async fn hold(
     portal: Duration,
     answer: oneshot::Sender<Result<Release, PlatformError>>,
 ) {
-    // A bus that cannot be reached is `None`, a holder that `keep_awake` names as missed.
+    // A bus that cannot be reached is `None`, a holder that `keep_awake` names as missed. The
+    // session connection is the holder's own: the request keeps it, and it closes once `release`
+    // has run, which ends the desktop's hold even when that call failed.
     let system = buses.system().await.ok();
-    let session = buses.session().await.ok();
+    let session = buses.unshared_session().await.ok();
     drop(buses);
     let taken =
         LinuxPowerRequest::keep_awake(system.as_ref(), session, KEEP_AWAKE_REASON, portal).await;

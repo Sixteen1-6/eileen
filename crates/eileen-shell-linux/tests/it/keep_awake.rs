@@ -102,9 +102,9 @@ impl NumberManager {
 
 /// One `Inhibit` call to the fake GNOME session manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GnomeCall {
+pub(super) struct GnomeCall {
     /// The caller's unique bus name.
-    sender: String,
+    pub(super) sender: String,
     app_id: String,
     toplevel_xid: u32,
     reason: String,
@@ -112,12 +112,14 @@ struct GnomeCall {
 }
 
 /// A fake GNOME session manager that records its inhibitors and their ends, or refuses as during
-/// a forced logout when `refuse` is set.
+/// a forced logout when `refuse` is set. With `forget` set, each `Uninhibit` fails, as GNOME's
+/// does for a cookie it does not know.
 #[derive(Debug, Default, Clone)]
-struct FakeGnome {
-    refuse: bool,
-    calls: Arc<Mutex<Vec<GnomeCall>>>,
-    uninhibits: Arc<Mutex<Vec<u32>>>,
+pub(super) struct FakeGnome {
+    pub(super) refuse: bool,
+    pub(super) forget: bool,
+    pub(super) calls: Arc<Mutex<Vec<GnomeCall>>>,
+    pub(super) uninhibits: Arc<Mutex<Vec<u32>>>,
 }
 
 #[zbus::interface(name = "org.gnome.SessionManager")]
@@ -146,8 +148,12 @@ impl FakeGnome {
         Ok(COOKIE)
     }
 
-    fn uninhibit(&self, inhibit_cookie: u32) {
+    fn uninhibit(&self, inhibit_cookie: u32) -> zbus::fdo::Result<()> {
         self.uninhibits.lock().unwrap().push(inhibit_cookie);
+        if self.forget {
+            return Err(zbus::fdo::Error::Failed("Unable to uninhibit: Invalid cookie".to_owned()));
+        }
+        Ok(())
     }
 }
 
@@ -353,7 +359,7 @@ async fn watch_leaving(observer: &zbus::Connection, connection: &zbus::Connectio
 }
 
 /// Waits until the watched connection has left the bus: its name has no owner any more.
-async fn left(changes: &mut OwnerChanges) -> bool {
+pub(super) async fn left(changes: &mut OwnerChanges) -> bool {
     changes.next().await.is_some_and(|change| change.new.is_none())
 }
 
