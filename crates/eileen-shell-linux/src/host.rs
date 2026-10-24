@@ -30,10 +30,12 @@
 //! hold when that connection closes.
 //!
 //! Dropping the `PowerRequest` asks the task to release and waits at most [`RELEASE_WAIT`] for
-//! it; past that, the task finishes on its own. The `PowerRequest` keeps a handle to the bridge,
-//! so the hold outlives the [`LinuxShell`] that took it. When that handle is the bridge's last,
-//! the bridge ends after the wait and drops the task with it: logind's descriptor and the task's
-//! own session connection close, which ends both holds.
+//! it; past that, the task finishes on its own. Dropped on the bridge's thread, in a job or a
+//! sink, it neither asks nor waits, since the bridge refuses a call made there: the task then
+//! releases on its own once the release channel closes. The `PowerRequest` keeps a handle to the
+//! bridge, so the hold outlives the [`LinuxShell`] that took it. When that handle is the bridge's
+//! last, the bridge ends after the wait and drops the task with it: logind's descriptor and the
+//! task's own session connection close, which ends both holds.
 //!
 //! # Traps
 //!
@@ -44,8 +46,9 @@
 //!   ([`LinuxPowerRequest::missed`]), such as the desktop's on a desktop with neither GNOME's
 //!   session manager nor the portal, goes unreported: the trait's `PowerRequest` has no place
 //!   for it, and nothing logs it yet.
-//! - A `PowerRequest` dropped inside a bridge job blocks the bridge's thread for
-//!   [`RELEASE_WAIT`], as any nested call does; the holds end after it all the same.
+//! - Dropped off the bridge's thread as the bridge's last handle, a `PowerRequest` joins that
+//!   thread, as a [`Subscription`] does ([`Bridge::watch`]). The join first ends a sink under
+//!   way, so a sink must not lock what the dropping thread holds.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 
