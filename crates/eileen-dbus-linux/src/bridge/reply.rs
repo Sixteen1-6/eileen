@@ -42,14 +42,17 @@ impl<T> Slot<T> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Settles the slot as `state` and wakes the caller, unless it is settled already.
-    fn settle(&self, state: State<T>) {
+    /// Settles the slot as `state` and wakes the caller, unless it is settled already; says
+    /// whether it settled it.
+    fn settle(&self, state: State<T>) -> bool {
         let mut current = self.lock();
-        if matches!(*current, State::Waiting) {
-            *current = state;
-            drop(current);
-            self.changed.notify_all();
+        if !matches!(*current, State::Waiting) {
+            return false;
         }
+        *current = state;
+        drop(current);
+        self.changed.notify_all();
+        true
     }
 }
 
@@ -68,15 +71,16 @@ pub(super) fn pair<T>() -> (Reply<T>, Answer<T>) {
 }
 
 impl<T> Reply<T> {
-    /// Answers with `value`; dropped if the caller has stopped waiting.
-    pub(super) fn send(self, value: T) {
-        self.0.settle(State::Answered(value));
+    /// Answers with `value`, and says whether the caller took it: one that has stopped waiting
+    /// never does, and `value` is dropped.
+    pub(super) fn send(self, value: T) -> bool {
+        self.0.settle(State::Answered(value))
     }
 }
 
 impl<T> Drop for Reply<T> {
     fn drop(&mut self) {
-        self.0.settle(State::Dropped);
+        let _settled = self.0.settle(State::Dropped);
     }
 }
 
@@ -107,7 +111,7 @@ mod tests {
     #[test]
     fn an_answer_sent_before_the_wait_is_taken() {
         let (reply, answer) = pair();
-        reply.send(7);
+        assert!(reply.send(7), "the caller is waiting");
         assert_eq!(answer.wait(Duration::ZERO), Outcome::Answered(7), "already there");
     }
 
@@ -115,7 +119,7 @@ mod tests {
     fn no_answer_within_the_budget_is_late_and_a_later_one_is_dropped() {
         let (reply, answer) = pair::<u32>();
         assert_eq!(answer.wait(Duration::ZERO), Outcome::Late, "nothing came");
-        reply.send(7);
+        assert!(!reply.send(7), "the caller has stopped waiting");
     }
 
     #[test]

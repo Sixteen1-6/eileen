@@ -20,6 +20,7 @@ use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -32,8 +33,10 @@ use crate::{DbusError, METHOD_TIMEOUT, Stream, drain};
 use reply::Outcome;
 
 /// The deadline of a trait method that takes none: [`METHOD_TIMEOUT`] plus half a second. A job
-/// that connects and makes one call then fails on its connection's own timeout, whose error
-/// names the D-Bus call, before the bridge gives up on the job as a whole.
+/// that makes one call then fails on its connection's own timeout, whose error names the D-Bus
+/// call, before the bridge gives up on the job as a whole, provided connecting was quick.
+/// Connecting has no timeout: zbus 5.19 bounds neither the SASL handshake nor the `Hello` reply
+/// it reads within it, so a bus that accepts and never answers holds the job to this deadline.
 pub const DEFAULT_DEADLINE: Deadline =
     Deadline::after(METHOD_TIMEOUT.saturating_add(Duration::from_millis(500)));
 
@@ -52,6 +55,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 const BRIDGE: &str = "the D-Bus bridge";
 /// The detail of a call whose job ended without answering.
 const DROPPED: &str = "the job ended without answering";
+/// Why a call made on the bridge's own thread is refused.
+const REENTERED: &str = "made on the D-Bus bridge's own thread, which its wait would stall";
 
 /// A job as the thread takes it: given the buses, the future it runs as a local task.
 type Job = Box<dyn FnOnce(Buses) -> LocalJob + Send>;
@@ -72,7 +77,7 @@ pub struct Bridge {
 #[derive(Debug)]
 struct Shared {
     jobs: mpsc::Sender<Job>,
-    _thread: Joiner,
+    thread: Joiner,
 }
 
 /// Joins the thread when dropped, unless dropped on the thread itself (by a job that held the
@@ -81,11 +86,19 @@ struct Shared {
 #[derive(Debug)]
 struct Joiner(Option<JoinHandle<()>>);
 
+impl Joiner {
+    /// Whether the caller runs on the bridge's thread.
+    fn is_current(&self) -> bool {
+        self.0.as_ref().is_some_and(|thread| thread.thread().id() == std::thread::current().id())
+    }
+}
+
 impl Drop for Joiner {
     fn drop(&mut self) {
-        if let Some(thread) = self.0.take()
-            && thread.thread().id() != std::thread::current().id()
-        {
+        if self.is_current() {
+            return;
+        }
+        if let Some(thread) = self.0.take() {
             let ended = thread.join();
             // Not while a panic unwinds: a second one would abort the process.
             if !std::thread::panicking() {
@@ -124,13 +137,20 @@ impl Bridge {
             runtime.shutdown_timeout(SHUTDOWN_GRACE);
         })
         .map_err(|error| PlatformError::io(BRIDGE, &error))?;
-        Ok(Self { shared: Arc::new(Shared { jobs, _thread: Joiner(Some(thread)) }) })
+        Ok(Self { shared: Arc::new(Shared { jobs, thread: Joiner(Some(thread)) }) })
     }
 
     /// Runs `job` on the bridge and answers what it answers, waiting at most `deadline`. Past
     /// it, the answer is [`PlatformError::DeadlineExceeded`] naming `call`, and the job is
-    /// cancelled: the bridge's thread drops it the next time it runs it. A job that ends without
-    /// answering (it panicked) answers [`PlatformError::Io`] at once.
+    /// cancelled: the bridge's thread drops it the next time it would run it, so a job still
+    /// queued then never begins. A job that ends without answering (it panicked) answers
+    /// [`PlatformError::Io`] at once. Made on the bridge's own thread (in a job or a sink), a
+    /// call answers [`PlatformError::Refused`] at once: its wait would stall the thread its job
+    /// needs until the deadline.
+    ///
+    /// A job answers plain data, never a zbus connection, proxy or stream, which are `Send` but
+    /// belong to the bridge's runtime: dropped by the caller, a stream or a proxy that subscribed
+    /// panics (zbus finds no reactor), and a connection stops working once the bridge has ended.
     pub fn call<T, F, Fut>(
         &self,
         call: &'static str,
@@ -147,7 +167,9 @@ impl Bridge {
         self.post(
             call,
             Box::new(move |buses| {
-                Box::pin(until_stopped(stopped, async move { reply.send(job(buses).await) }))
+                Box::pin(until_stopped(stopped, async move {
+                    reply.send(job(buses).await);
+                }))
             }),
         )?;
         let outcome = answer.wait(deadline.budget());
@@ -159,9 +181,16 @@ impl Bridge {
     /// Opens a stream with `open` on the bridge, waiting at most `deadline` for it, then hands
     /// each of its items to `each` there, until the stream ends or the [`Subscription`] drops.
     /// This returns once `open` has answered, so a stream that subscribes there, as
-    /// [`subscribe`](crate::subscribe) does, brings every change made after. Items are taken
-    /// through [`drain`], so a flood yields to the other jobs; `each` runs on the bridge's thread
-    /// and must not block it.
+    /// [`subscribe`](crate::subscribe) does, brings every change made after. Past the deadline
+    /// it answers [`PlatformError::DeadlineExceeded`], and a stream that opens later is dropped
+    /// unused. Items are taken through [`drain`], so a flood yields to the other jobs; `each`
+    /// runs on the bridge's thread and must not block it. Once the `Subscription`'s drop has
+    /// returned, `each` runs at most once more: the call already under way. As [`Bridge::call`]
+    /// does, this answers [`PlatformError::Refused`] on the bridge's own thread, and `each`
+    /// hands on plain data, never a zbus connection, proxy or stream.
+    ///
+    /// Dropping the `Subscription` that is the bridge's last handle joins its thread, which
+    /// first ends the `each` under way: a sink must not lock what the dropping thread holds.
     pub fn watch<S, F, Fut, E>(
         &self,
         call: &'static str,
@@ -177,34 +206,49 @@ impl Bridge {
     {
         let (reply, answer) = reply::pair();
         let (stop, stopped) = oneshot::channel::<Infallible>();
+        // Set by the subscription's drop, before the stop, and read before each item: after
+        // the drop, only an item already under way reaches `each`.
+        let dropped = Arc::new(AtomicBool::new(false));
+        let ended = Arc::clone(&dropped);
         let consume = move |buses: Buses| -> LocalJob {
             Box::pin(until_stopped(stopped, async move {
                 let mut stream = match open(buses).await {
                     Ok(stream) => stream,
-                    Err(error) => return reply.send(Err(error)),
+                    Err(error) => {
+                        reply.send(Err(error));
+                        return;
+                    }
                 };
-                reply.send(Ok(()));
-                let mut take = |item: S::Item| -> Option<Infallible> {
+                // The caller has given up on a stream that opened too late: it drops here.
+                if !reply.send(Ok(())) {
+                    return;
+                }
+                let mut take = |item: S::Item| {
+                    if ended.load(Ordering::Acquire) {
+                        return Some(());
+                    }
                     each(item);
                     None
                 };
-                if let Some(never) = poll_fn(|cx| drain(&mut stream, cx, &mut take)).await {
-                    match never {}
-                }
+                poll_fn(|cx| drain(&mut stream, cx, &mut take)).await;
             }))
         };
         self.post(call, Box::new(consume))?;
-        // On an error `stop` drops here, so a stream that opened too late stops at once.
+        // On an error `stop` drops here, so a job still opening its stream stops at once.
         answer_of(call, answer.wait(deadline.budget()))?;
         let shared = Arc::clone(&self.shared);
         Ok(Subscription::new(move || {
+            dropped.store(true, Ordering::Release);
             drop(stop);
             drop(shared);
         }))
     }
 
-    /// Puts `job` on the thread's queue.
+    /// Puts `job` on the thread's queue, unless the caller is that thread.
     fn post(&self, call: &'static str, job: Job) -> Result<(), PlatformError> {
+        if self.shared.thread.is_current() {
+            return Err(PlatformError::Refused { what: call, reason: REENTERED });
+        }
         self.shared.jobs.try_send(job).map_err(|error| match error {
             // Only a stuck thread leaves the queue full: the call would pass its deadline.
             mpsc::error::TrySendError::Full(_) => PlatformError::DeadlineExceeded { call },
@@ -225,11 +269,13 @@ fn answer_of<T>(
     }
 }
 
-/// Runs `work` until it ends or the sender of `stopped` drops, whichever comes first.
+/// Runs `work` until it ends or the sender of `stopped` drops, whichever comes first. The stop
+/// is polled first, so `work` takes no step once its caller has stopped waiting.
 async fn until_stopped(stopped: oneshot::Receiver<Infallible>, work: impl Future<Output = ()>) {
     tokio::select! {
-        () = work => {}
+        biased;
         _stopped = stopped => {}
+        () = work => {}
     }
 }
 
@@ -276,6 +322,15 @@ impl Buses {
     /// The system bus, connected now if it is not, or no longer.
     pub async fn system(&self) -> Result<zbus::Connection, DbusError> {
         self.0.system.get().await
+    }
+
+    /// A new connection to the session bus for this job alone, unlike [`Buses::session`]: it
+    /// is not kept, nor shared with any other job. The job owns it, and it closes once the job
+    /// drops it on the bridge's thread, which ends what the bus holds for it while it is on the
+    /// bus (the desktop's hold that `LinuxPowerRequest::keep_awake` takes, for one). A bridge on
+    /// a test's private bus connects it there.
+    pub async fn unshared_session(&self) -> Result<zbus::Connection, DbusError> {
+        self.0.session.source.connect().await
     }
 }
 
@@ -329,5 +384,33 @@ impl Source {
                 crate::bus::build_within(builder, WHAT, METHOD_TIMEOUT).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use eileen_platform::PlatformError;
+    use tokio::sync::mpsc;
+
+    use super::{BRIDGE, Bridge, Job, Joiner, Shared};
+
+    /// A job that does nothing.
+    fn idle() -> Job {
+        Box::new(|_buses| Box::pin(async {}))
+    }
+
+    #[test]
+    fn a_full_queue_answers_deadline_exceeded_and_a_closed_one_unavailable() {
+        // No thread: the test holds the queue's other end, and takes nothing from it.
+        let (jobs, queue) = mpsc::channel(1);
+        let bridge = Bridge { shared: Arc::new(Shared { jobs, thread: Joiner(None) }) };
+        assert_eq!(bridge.post("first", idle()), Ok(()), "a free place");
+        let full = PlatformError::DeadlineExceeded { call: "second" };
+        assert_eq!(bridge.post("second", idle()), Err(full), "as a stuck thread leaves it");
+        drop(queue);
+        let gone = PlatformError::Unavailable { what: BRIDGE };
+        assert_eq!(bridge.post("third", idle()), Err(gone), "as a thread that has gone leaves it");
     }
 }

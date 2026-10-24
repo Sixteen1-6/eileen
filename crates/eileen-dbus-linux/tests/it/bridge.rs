@@ -1,17 +1,25 @@
 //! The bridge from the synchronous traits to the async clients, against a fake service on the
 //! private bus. The test's own thread calls the bridge as a trait's caller does, blocking; the
-//! fake runs on a runtime of its own, whose workers serve it meanwhile.
+//! fake runs on a runtime of its own, whose workers serve it meanwhile. Where a test needs the
+//! bridge's steps in an order, a job or a sink blocks its thread on a `std::sync::Barrier`, as
+//! product jobs must not, and the test lets it go.
 
 use std::cell::RefCell;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
+use std::task::{Context, Poll};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use eileen_dbus_linux::{
-    Bridge, Buses, DEFAULT_DEADLINE, DbusError, METHOD_TIMEOUT, Signals, subscribe,
+    Bridge, Buses, DEFAULT_DEADLINE, DbusError, METHOD_TIMEOUT, Names, Signals, Stream,
+    owner_changes, subscribe,
 };
-use eileen_platform::{Deadline, PlatformError};
+use eileen_platform::{Deadline, PlatformError, Subscription};
 use eileen_stdx::clock::{self, Clock};
-use tokio::sync::{Barrier, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use zbus::MatchRule;
 use zbus::match_rule::Builder;
 use zbus::message::Type;
@@ -28,7 +36,7 @@ const FAKE_CALL: &str = "the fake's method";
 /// A fake service: an echo, a method that never answers, and a meeting that answers only once
 /// two calls wait in it. The tests send its `Tick` signals from its connection.
 struct Fake {
-    meeting: Barrier,
+    meeting: tokio::sync::Barrier,
 }
 
 #[zbus::interface(name = "org.eileen.Test.Bridge")]
@@ -58,7 +66,7 @@ impl Fakes {
         let runtime =
             tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build();
         let runtime = runtime.unwrap();
-        let fake = Fake { meeting: Barrier::new(2) };
+        let fake = Fake { meeting: tokio::sync::Barrier::new(2) };
         let service = runtime.block_on(serve(bus, NAME, PATH, fake));
         Self { runtime, service: Some(service) }
     }
@@ -99,7 +107,7 @@ fn echo(bridge: &Bridge, word: &'static str) -> Result<String, PlatformError> {
 }
 
 /// A watch of the fake's ticks through `bridge`, each tick's number sent to the receiver.
-fn watch_ticks(bridge: &Bridge) -> (eileen_platform::Subscription, mpsc::Receiver<u32>) {
+fn watch_ticks(bridge: &Bridge) -> (Subscription, mpsc::Receiver<u32>) {
     let (sink, ticks) = mpsc::channel(8);
     let open = |buses: Buses| async move {
         let rule = MatchRule::builder()
@@ -119,6 +127,8 @@ fn watch_ticks(bridge: &Bridge) -> (eileen_platform::Subscription, mpsc::Receive
 thread_local! {
     /// Dropped when the thread that set it exits.
     static ON_EXIT: RefCell<Option<oneshot::Sender<()>>> = const { RefCell::new(None) };
+    /// A connection one job keeps on the bridge's thread for a later one to drop.
+    static KEPT: RefCell<Option<zbus::Connection>> = const { RefCell::new(None) };
 }
 
 /// A receiver that closes once the bridge's thread has exited.
@@ -135,6 +145,60 @@ fn thread_exit(bridge: &Bridge) -> oneshot::Receiver<()> {
 /// A job that panics.
 fn panics() -> Result<(), PlatformError> {
     panic!("the job fails")
+}
+
+/// A stream of what a channel brings, so a test makes a watch's items itself.
+struct Items<T>(mpsc::Receiver<T>);
+
+impl<T> Stream for Items<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        self.0.poll_recv(cx)
+    }
+}
+
+/// A job holding the bridge's one thread, blocked, until released.
+struct Hold {
+    release: Arc<Barrier>,
+    caller: JoinHandle<Result<(), PlatformError>>,
+}
+
+/// Holds `bridge`'s thread with a job that blocks it, returning once the job has begun.
+fn hold(bridge: &Bridge) -> Hold {
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let job = {
+        let (entered, release) = (Arc::clone(&entered), Arc::clone(&release));
+        move |_buses: Buses| async move {
+            entered.wait();
+            release.wait();
+            Ok(())
+        }
+    };
+    let bridge = bridge.clone();
+    let caller = eileen_stdx::thread::spawn_named("eileen-test-holder", move || {
+        bridge.call("hold", Deadline::after(Duration::from_secs(60)), job)
+    });
+    let caller = caller.unwrap();
+    entered.wait();
+    Hold { release, caller }
+}
+
+impl Hold {
+    /// Lets the job end, then waits until every job posted to `bridge` before has begun.
+    fn release(self, bridge: &Bridge) {
+        self.release.wait();
+        assert_eq!(self.caller.join().unwrap(), Ok(()), "the holding job answers");
+        flush(bridge);
+    }
+}
+
+/// Returns once every job posted to `bridge` before has taken its first step: jobs begin in
+/// the order they were posted, and this one answers in its first.
+fn flush(bridge: &Bridge) {
+    let flushed = bridge.call("flush", DEFAULT_DEADLINE, |_buses| async move { Ok(()) });
+    assert_eq!(flushed, Ok(()), "the bridge serves");
 }
 
 #[test]
@@ -250,6 +314,38 @@ fn the_buses_are_kept_and_connected_again_once_closed() {
 }
 
 #[test]
+fn an_unshared_session_is_a_connection_of_its_own_that_closes_once_dropped() {
+    let bus = PrivateBus::start();
+    let fakes = Fakes::start(&bus);
+    // The watcher's stream drops inside its runtime's context, a panicking test's included.
+    let _context = fakes.runtime.enter();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let names = bridge.call("open", DEFAULT_DEADLINE, |buses| async move {
+        let name = |bus: &zbus::Connection| bus.unique_name().unwrap().to_string();
+        let unshared = buses.unshared_session().await?;
+        let names = [name(&buses.session().await?), name(&unshared), name(&buses.session().await?)];
+        KEPT.with(|kept| *kept.borrow_mut() = Some(unshared));
+        Ok(names)
+    });
+    let [shared, unshared, again] = names.unwrap();
+    assert_ne!(shared, unshared, "a connection of its own");
+    assert_eq!(shared, again, "the shared one, kept as it was");
+    let fake = fakes.service.as_ref().unwrap();
+    let subscribed = fakes.runtime.block_on(owner_changes(fake, Names::Name(&unshared)));
+    let mut changes = subscribed.unwrap();
+    let dropped = bridge.call("drop", DEFAULT_DEADLINE, |_buses| async move {
+        drop(KEPT.with(|kept| kept.borrow_mut().take()));
+        Ok(())
+    });
+    assert_eq!(dropped, Ok(()), "the job dropped it");
+    let left = fakes.runtime.block_on(tokio::time::timeout(METHOD_TIMEOUT, changes.next()));
+    let change = left.expect("the bus saw it leave").unwrap();
+    let owners = (change.old.map(|old| old.to_string()), change.new);
+    assert_eq!(owners, (Some(unshared), None), "the unshared connection closed");
+    assert_eq!(echo(&bridge, "after").unwrap(), "after", "the shared one still serves");
+}
+
+#[test]
 fn a_job_that_panics_answers_at_once_and_the_bridge_goes_on() {
     let bus = PrivateBus::start();
     let _fakes = Fakes::start(&bus);
@@ -291,4 +387,124 @@ fn a_subscription_holds_the_thread_until_it_drops() {
     assert_eq!(exited.try_recv(), Err(oneshot::error::TryRecvError::Empty), "held");
     drop(subscription);
     assert_eq!(exited.try_recv(), Err(oneshot::error::TryRecvError::Closed), "exited");
+}
+
+#[test]
+fn a_job_whose_caller_has_stopped_waiting_never_begins() {
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let begun = Arc::new(AtomicBool::new(false));
+    // A job that met its dropped stop on its first step once ran its body half the time:
+    // twenty rounds miss that one time in a million.
+    for round in 0..20 {
+        let holding = hold(&bridge);
+        let job = {
+            let begun = Arc::clone(&begun);
+            move |_buses: Buses| async move {
+                begun.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+        };
+        let late = bridge.call("the late call", Deadline::after(Duration::from_millis(1)), job);
+        let expected = Err(PlatformError::DeadlineExceeded { call: "the late call" });
+        assert_eq!(late, expected, "round {round}: queued behind the hold");
+        holding.release(&bridge);
+        assert!(!begun.load(Ordering::SeqCst), "round {round}: the job ran after its answer");
+    }
+}
+
+#[test]
+fn a_sink_takes_nothing_once_its_subscription_drop_has_returned() {
+    const BURST: usize = 8;
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let (items, queue) = mpsc::channel(BURST);
+    for item in 0..BURST {
+        items.try_send(item).unwrap();
+    }
+    let (inside, release) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+    let taken = Arc::new(AtomicUsize::new(0));
+    let each = {
+        let (inside, release) = (Arc::clone(&inside), Arc::clone(&release));
+        let taken = Arc::clone(&taken);
+        move |_item: usize| {
+            if taken.fetch_add(1, Ordering::SeqCst) == 0 {
+                inside.wait();
+                release.wait();
+            }
+        }
+    };
+    let open = move |_buses: Buses| async move { Ok(Items(queue)) };
+    let subscription = bridge.watch("the burst", DEFAULT_DEADLINE, open, each).unwrap();
+    inside.wait();
+    drop(subscription);
+    release.wait();
+    flush(&bridge);
+    assert_eq!(taken.load(Ordering::SeqCst), 1, "only the item under way when the drop came");
+    assert!(items.is_closed(), "the stream was dropped then and there");
+}
+
+#[test]
+fn the_last_handle_dropped_on_the_bridge_thread_ends_it_without_a_join() {
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let exited = thread_exit(&bridge);
+    let (handles, queue) = mpsc::channel(1);
+    let (returned, mut returns) = mpsc::channel(1);
+    let each = move |subscription: Subscription| {
+        drop(subscription);
+        // Reached only if the drop returned: the thread cannot join itself.
+        returned.try_send(()).unwrap();
+    };
+    let open = move |_buses: Buses| async move { Ok(Items(queue)) };
+    let subscription = bridge.watch("the last handle", DEFAULT_DEADLINE, open, each).unwrap();
+    drop(bridge);
+    handles.try_send(subscription).unwrap();
+    assert_eq!(returns.blocking_recv(), Some(()), "the sink dropped the last handle and went on");
+    assert!(exited.blocking_recv().is_err(), "the thread exited on its own");
+}
+
+#[test]
+fn a_watch_whose_stream_opens_past_its_deadline_answers_so_and_drops_it() {
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let (items, queue) = mpsc::channel(1);
+    items.try_send(1).unwrap();
+    let (go, gone) = oneshot::channel::<()>();
+    let open = move |_buses: Buses| async move {
+        let _released = gone.await;
+        Ok(Items(queue))
+    };
+    let (sink, mut taken) = mpsc::channel(1);
+    let each = move |item: u32| sink.try_send(item).unwrap();
+    let budget = Deadline::after(Duration::from_millis(1));
+    let late = bridge.watch("the late watch", budget, open, each);
+    let expected = PlatformError::DeadlineExceeded { call: "the late watch" };
+    assert_eq!(late.unwrap_err(), expected, "open had not answered");
+    let _ignored = go.send(());
+    assert_eq!(taken.blocking_recv(), None, "the job ended, its sink with it, given no item");
+    assert!(items.is_closed(), "the stream did not outlive the job");
+}
+
+#[test]
+fn a_call_or_watch_made_on_the_bridge_thread_is_refused_at_once() {
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let inner = bridge.clone();
+    let outer = move |_buses: Buses| async move {
+        let call = inner.call("the nested call", DEFAULT_DEADLINE, |_buses| async move { Ok(()) });
+        let open = |_buses: Buses| async move { Ok(Items(mpsc::channel::<u32>(1).1)) };
+        let watch = inner.watch("the nested watch", DEFAULT_DEADLINE, open, |_item: u32| {});
+        Ok((call.err(), watch.err()))
+    };
+    let nested = bridge.call("the outer call", Deadline::after(Duration::from_secs(20)), outer);
+    let (call, watch) = nested.unwrap();
+    assert!(
+        matches!(call, Some(PlatformError::Refused { what: "the nested call", .. })),
+        "not waited out: {call:?}"
+    );
+    assert!(
+        matches!(watch, Some(PlatformError::Refused { what: "the nested watch", .. })),
+        "not waited out: {watch:?}"
+    );
 }

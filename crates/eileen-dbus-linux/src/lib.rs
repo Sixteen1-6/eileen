@@ -14,9 +14,9 @@
 //!   [`close_request`], which ends one and waits for the portal's answer.
 //! - The signal streams: [`subscribe`] and its [`Signals`], and [`drain`], which keep the
 //!   conventions of `src/stream.rs` ([`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`]).
-//! - [`Bridge`]: the one thread where trait calls run their async jobs on [`Buses`], within a
-//!   `Deadline` ([`Bridge::call`]) or as a stream behind a `Subscription` ([`Bridge::watch`]),
-//!   and [`DEFAULT_DEADLINE`] for a trait method that takes none.
+//! - [`Bridge`]: the one thread where trait calls run their async jobs on [`Buses`] (the shared
+//!   buses, or a session connection of the job's own), within a `Deadline` ([`Bridge::call`])
+//!   or behind a `Subscription` ([`Bridge::watch`]); [`DEFAULT_DEADLINE`] for a call with none.
 //! - `testing`, behind the `private-bus` feature: the private bus and fake services for tests.
 //!
 //! # Does not own
@@ -40,7 +40,8 @@
 //!   crates that use these helpers, so the caller (or a test, with a private bus) picks the bus.
 //!   The one exception takes one by value because dropping it ends a hold: the session connection
 //!   of `LinuxPowerRequest::keep_awake`, whose close ends the desktop's hold.
-//! - The bridge's connections and streams are made, used and dropped on its thread only.
+//! - Bridge jobs answer plain data, never a zbus connection, proxy or stream (all are `Send`),
+//!   so those stay on the bridge's thread: a rule each job keeps, which no type checks.
 //! - It never starts a process, except `dbus-daemon` for a test through `testing`.
 //!
 //! # Boundaries
@@ -66,8 +67,8 @@
 //!   context panics. They are written once, in the doc of `src/stream.rs`.
 //! - The bus delivers a signal addressed to a connection whatever its match rules say: check
 //!   the sender of every signal that must come from a service.
-//! - A bridge job and a watch's sink run on the bridge's one thread: one that blocks it (a
-//!   synchronous wait, a nested `Bridge::call` included) stalls every call until its deadline.
+//! - A bridge job and a watch's sink run on the bridge's one thread: one that blocks it stalls
+//!   every call until its deadline. A `Bridge::call` or `watch` made there is refused at once.
 //!
 //! # Logs and tracing
 //!
