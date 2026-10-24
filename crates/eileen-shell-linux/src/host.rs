@@ -216,8 +216,9 @@ async fn hold(
     answer: oneshot::Sender<Result<Release, PlatformError>>,
 ) {
     // A bus that cannot be reached is `None`, a holder that `keep_awake` names as missed. The
-    // session connection is the holder's own: the request keeps it, and it closes once `release`
-    // has run, which ends the desktop's hold even when that call failed.
+    // session connection is the holder's own: the request keeps it, and it closes here once
+    // `release` has run, or with the task when the bridge ends first, which ends the desktop's
+    // hold even when `release` failed.
     let system = buses.system().await.ok();
     let session = buses.unshared_session().await.ok();
     drop(buses);
