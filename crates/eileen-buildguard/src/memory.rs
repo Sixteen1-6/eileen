@@ -5,7 +5,9 @@
 //! On Windows the paging counter is `\Memory\Pages Input/sec`, which counts pages read by hard
 //! faults (memory-mapped file reads included); [`pages_to_kb_s`] converts it with the
 //! system's page size. Off Windows, `/proc/meminfo` and the major-fault count in
-//! `/proc/vmstat` give the same three figures, for CI and contributors.
+//! `/proc/vmstat` give the same three figures, for CI and contributors. Linux enforces its
+//! commit limit only under strict overcommit, so there commit headroom follows
+//! `vm.overcommit_memory` as `eileen-shell-linux` reads it (docs/LINUX.md section 10).
 
 use std::collections::VecDeque;
 use std::io;
@@ -203,16 +205,13 @@ impl MemorySource for SystemMemory {
         self.settle();
         let interval_ms = millis(self.last_interval).max(1);
         let meminfo = std::fs::read_to_string("/proc/meminfo")?;
-        let field = |name: &str| -> Option<u64> {
-            meminfo.lines().find_map(|line| {
-                let rest = line.strip_prefix(name)?.strip_prefix(':')?;
-                rest.split_whitespace().next()?.parse().ok()
-            })
-        };
-        let kb =
-            |name: &str| field(name).ok_or_else(|| io::Error::other(format!("{name} missing")));
-        let avail_kb = kb("MemAvailable")?;
-        let headroom_kb = kb("CommitLimit")?.saturating_sub(kb("Committed_AS")?);
+        let missing = |what: &str| io::Error::other(format!("{what} missing from /proc/meminfo"));
+        let avail_kb =
+            meminfo_kb(&meminfo, "MemAvailable").ok_or_else(|| missing("MemAvailable"))?;
+        // Unreadable, it counts as the kernel's default policy.
+        let overcommit = std::fs::read_to_string("/proc/sys/vm/overcommit_memory").ok();
+        let headroom_kb = linux_headroom_kb(&meminfo, overcommit.as_deref())
+            .ok_or_else(|| missing("CommitLimit, Committed_AS or SwapFree"))?;
         let majfaults = read_majfaults()?;
         let pages = majfaults.saturating_sub(self.majfaults);
         self.majfaults = majfaults;
@@ -231,11 +230,69 @@ impl MemorySource for SystemMemory {
     }
 }
 
+/// One `/proc/meminfo` field, KB.
+#[cfg(any(test, not(windows)))]
+fn meminfo_kb(meminfo: &str, name: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let rest = line.strip_prefix(name)?.strip_prefix(':')?;
+        rest.split_whitespace().next()?.parse().ok()
+    })
+}
+
+/// Commit headroom on Linux, KB, as `vm.overcommit_memory` (`overcommit`, the file's text)
+/// defines it: `CommitLimit` minus `Committed_AS` under strict overcommit (2), the only mode in
+/// which the kernel enforces that limit; otherwise `MemAvailable` plus `SwapFree`, the memory
+/// that can still be backed before the OOM killer acts. In the default mode `Committed_AS`
+/// passes `CommitLimit` on a busy desktop while gigabytes are free, and the first form would
+/// refuse every build. An unreadable or unknown mode counts as the default. This is
+/// `eileen-shell-linux`'s rule, so the guard's samples and the runtime's agree in the files they
+/// share. `None` when a field it needs is missing.
+#[cfg(any(test, not(windows)))]
+fn linux_headroom_kb(meminfo: &str, overcommit: Option<&str>) -> Option<u64> {
+    let kb = |name: &str| meminfo_kb(meminfo, name);
+    if overcommit.map(str::trim) == Some("2") {
+        Some(kb("CommitLimit")?.saturating_sub(kb("Committed_AS")?))
+    } else {
+        Some(kb("MemAvailable")?.saturating_add(kb("SwapFree")?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FakeMemory, MIN_RATE_INTERVAL, MemorySample, MemorySource, SystemMemory, pages_to_kb_s,
+        FakeMemory, MIN_RATE_INTERVAL, MemorySample, MemorySource, SystemMemory, linux_headroom_kb,
+        pages_to_kb_s,
     };
+
+    /// A busy Linux desktop in the default mode: `Committed_AS` past `CommitLimit` while
+    /// 13.7 GB is available, the shape docs/LINUX.md section 10 describes.
+    const MEMINFO: &str = "MemTotal:       16337548 kB\nMemFree:        13000000 kB\n\
+                           MemAvailable:   14404764 kB\nSwapTotal:       4194304 kB\n\
+                           SwapFree:        4194304 kB\nCommitLimit:    12363076 kB\n\
+                           Committed_AS:   14883076 kB\n";
+
+    #[test]
+    fn linux_headroom_follows_the_overcommit_policy() {
+        assert_eq!(
+            linux_headroom_kb(MEMINFO, Some("2\n")),
+            Some(0),
+            "strict: the limit the kernel enforces, as on Windows"
+        );
+        assert_eq!(
+            linux_headroom_kb(MEMINFO, Some("0\n")),
+            Some(14_404_764 + 4_194_304),
+            "the default heuristic: what can still be backed, not the unenforced limit"
+        );
+        let default = linux_headroom_kb(MEMINFO, Some("0"));
+        assert_eq!(linux_headroom_kb(MEMINFO, Some("1")), default, "mode 1 enforces nothing");
+        assert_eq!(linux_headroom_kb(MEMINFO, None), default, "unreadable: the default");
+        assert_eq!(linux_headroom_kb(MEMINFO, Some("7")), default, "unknown: the default");
+        assert_eq!(
+            linux_headroom_kb("MemAvailable: 1 kB\n", Some("0")),
+            None,
+            "a missing line is not a zero"
+        );
+    }
 
     #[test]
     fn pages_convert_with_the_page_size() {
