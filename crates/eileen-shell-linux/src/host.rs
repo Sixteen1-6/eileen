@@ -19,15 +19,14 @@
 //!
 //! A holder task on the bridge's thread takes the [`LinuxPowerRequest`] and keeps it. No deadline
 //! cancels the task, since a call cut short could leave a hold that nothing ends, such as a GNOME
-//! inhibitor whose cookie never came back. `keep_awake` makes two calls: the first starts the
-//! task, which needs no D-Bus call and so is bounded by [`DEFAULT_DEADLINE`] as any job is, and
-//! the second waits for its answer within the settings' deadline. Once it holds, the task answers
-//! with a channel and waits. When the `PowerRequest` drops, or at once when the wait has already
-//! given up, it ends the holds with [`LinuxPowerRequest::release`]. The desktop's hold is taken
-//! on a session connection of the task's own ([`Buses::unshared_session`]), as
-//! [`LinuxPowerRequest::keep_awake`] asks, which the task drops on the bridge's thread once
-//! `release` has run: should `Uninhibit` or the portal's `Close` fail, the desktop still ends its
-//! hold when that connection closes.
+//! inhibitor whose cookie never came back: `keep_awake`'s one call starts it and waits for its
+//! answer within the settings' deadline, and past it the bridge cancels only that wait. Once it
+//! holds, the task answers with a channel and waits. When the `PowerRequest` drops, or at once
+//! when the wait has already given up, it ends the holds with [`LinuxPowerRequest::release`].
+//! The desktop's hold is taken on a session connection of the task's own
+//! ([`Buses::unshared_session`]), as [`LinuxPowerRequest::keep_awake`] asks, which the task drops
+//! on the bridge's thread once `release` has run: should `Uninhibit` or the portal's `Close`
+//! fail, the desktop still ends its hold when that connection closes.
 //!
 //! Dropping the `PowerRequest` asks the task to release and waits at most [`RELEASE_WAIT`] for
 //! it; past that, the task finishes on its own. Dropped on the bridge's thread, in a job or a
@@ -56,7 +55,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use eileen_contracts::core_io::Toast;
-use eileen_dbus_linux::{Bridge, Buses, DEFAULT_DEADLINE};
+use eileen_dbus_linux::{Bridge, Buses};
 use eileen_platform::{
     Deadline, PlatformError, PowerRequest, ShellHost, ShellInputEvent, Subscription, TrayState,
     VirtualKey,
@@ -95,8 +94,6 @@ const HOLDER_GONE: &str = "the holder ended without answering";
 type Released = oneshot::Sender<Result<(), DbusError>>;
 /// The channel through which a `PowerRequest` asks its holder task to release.
 type Release = oneshot::Sender<Released>;
-/// The holder task's answer: the channel to release through once it holds.
-type Answer = oneshot::Receiver<Result<Release, PlatformError>>;
 
 /// What a [`LinuxShell`] needs besides its bridge, each given by the composition root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,17 +173,15 @@ impl ShellHost for LinuxShell {
     /// returned request drops; the module's doc says how.
     fn keep_awake(&self) -> Result<PowerRequest, PlatformError> {
         let portal = portal_budget(self.settings.deadline);
-        let answer: Answer = self.bridge.call(KEEP_AWAKE, DEFAULT_DEADLINE, move |buses| {
+        let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
             drop(tokio::task::spawn_local(hold(buses, portal, answer)));
-            async move { Ok(answered) }
-        })?;
-        let release =
-            self.bridge.call(KEEP_AWAKE, self.settings.deadline, |_buses| async move {
-                answer.await.unwrap_or_else(|_gone| {
-                    Err(PlatformError::Io { what: KEEP_AWAKE, detail: HOLDER_GONE.to_owned() })
-                })
-            })?;
+            // Cancelled, the job drops `answered`, which makes the holder release what it took.
+            answered.await.unwrap_or_else(|_gone| {
+                Err(PlatformError::Io { what: KEEP_AWAKE, detail: HOLDER_GONE.to_owned() })
+            })
+        };
+        let release = self.bridge.call(KEEP_AWAKE, self.settings.deadline, job)?;
         Ok(released_on_drop(self.bridge.clone(), release))
     }
 
