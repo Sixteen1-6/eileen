@@ -13,6 +13,7 @@ use eileen_apps_linux::{
     index,
 };
 use eileen_contracts::ids::Personal;
+use eileen_dbus_linux::CLOSE_GRACE;
 use eileen_dbus_linux::testing::{PrivateBus, round_trip, serve};
 use rustix::fs::{CWD, Mode as Permissions, OFlags, fcntl_getfl, mkfifoat};
 use tokio::sync::mpsc;
@@ -33,6 +34,9 @@ pub(crate) enum Answer {
     Now(u32),
     /// Replies and stays silent: the test answers, or lets the deadline pass.
     Later,
+    /// Replies after this long and stays silent, as a portal that the bus starts on its first
+    /// use replies late.
+    Slow(Duration),
     /// Refuses, as the portal does when the desktop's lockdown turns handlers off.
     NotAllowed,
 }
@@ -105,8 +109,10 @@ impl FakePortal {
         connection.object_server().at(&handle, FakeRequest { events: self.events.clone() }).await?;
         call.handle = handle.clone();
         self.events.send(Event::Call(call)).await.unwrap();
-        if let Answer::Now(code) = self.answer {
-            respond(connection, handle.as_str(), code).await;
+        match self.answer {
+            Answer::Now(code) => respond(connection, handle.as_str(), code).await,
+            Answer::Slow(delay) => tokio::time::sleep(delay).await,
+            Answer::Later | Answer::NotAllowed => {}
         }
         Ok(handle)
     }
@@ -504,6 +510,32 @@ async fn a_silent_portal_passes_the_deadline_and_the_request_is_closed() {
         opener.open_url("https://example.com", DEADLINE).await,
         Err(DbusError::DeadlineExceeded { call: "portal response" }),
         "no Response within the deadline"
+    );
+    let call = call_seen(&mut seen).await;
+    match next(&mut seen).await {
+        Event::Closed(path) => assert_eq!(path, call.handle, "the pending request closed"),
+        other @ Event::Call(_) => panic!("not a Close: {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_response_waits_only_for_what_a_slow_reply_leaves_of_the_deadline() {
+    // Paused time: the fake's delay and then the opener's wait are the only timers, and tokio
+    // fires each once the runtime is idle, so the clock moves by them alone.
+    let bus = PrivateBus::start();
+    let slow = DEADLINE / 3;
+    let (_service, mut seen) = portal(&bus, Answer::Slow(slow)).await;
+    let opener = Opener::new(&bus.connect().await);
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        opener.open_url("https://example.com", DEADLINE).await,
+        Err(DbusError::DeadlineExceeded { call: "portal response" }),
+        "the reply came late, and no Response after it"
+    );
+    let took = started.elapsed();
+    assert!(
+        took >= DEADLINE && took <= DEADLINE + CLOSE_GRACE,
+        "one deadline for the reply and the wait together, not {slow:?} more: {took:?}"
     );
     let call = call_seen(&mut seen).await;
     match next(&mut seen).await {

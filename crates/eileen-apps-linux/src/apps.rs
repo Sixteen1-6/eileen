@@ -18,29 +18,34 @@
 //! # The deadlines
 //!
 //! No method takes a `Deadline`, so each bridge call waits at most [`DEFAULT_DEADLINE`], the
-//! connection's method timeout and half a second. The portal's `Response` gets [`RESPONSE_WAIT`]
-//! of it, so that the opener's own wait ends first and closes the request, which dismisses any
-//! dialog the portal shows; past the bridge's deadline the call would be cancelled and leave the
-//! request open. An app chooser the portal shows, as when no default app is set, is dismissed when
-//! that wait ends: the trait leaves the user no longer to choose.
+//! connection's method timeout and half a second. An opening method's request gets
+//! [`REQUEST_BUDGET`] of it, counted from the trait call's start: the opener's wait for the
+//! portal's `Response` gets what connecting and the calls before it leave, so it ends before the
+//! bridge's deadline and closes the request, which dismisses any dialog the portal shows. Past the
+//! bridge's deadline the call is cancelled and leaves the request open, as a call slower than what
+//! is left still does, since each call keeps the method timeout. An app chooser the portal shows,
+//! as when no default app is set, is dismissed when the wait ends: the trait leaves the user no
+//! longer to choose.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use eileen_contracts::desktop::WindowRef;
-use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, METHOD_TIMEOUT};
+use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{self as platform, Apps, Deadline, PlatformError};
+use tokio::time::Instant;
 
 use crate::{AppEntry, AppKind, DesktopEntry, FileError, Opener, Session, entry_for, index};
 
-/// How long the opener waits for the portal's `Response`, and for `open_path` the checks of the
-/// path with it: half the connection's method timeout. The calls before the wait have the other
-/// half and the bridge's half second, far more than they take on a working bus.
-const RESPONSE_WAIT: Duration = match METHOD_TIMEOUT.checked_div(2) {
-    Some(half) => half,
-    None => METHOD_TIMEOUT,
-};
+/// How long an opening method's request may take, counted from the trait call's start: the
+/// connecting, for `open_path` the checks of the path, the portal's calls and the wait for its
+/// `Response`. It is the bridge's deadline less [`CLOSE_MARGIN`]; the module's doc says why.
+const REQUEST_BUDGET: Duration = DEFAULT_DEADLINE.budget().saturating_sub(CLOSE_MARGIN);
+
+/// What the bridge's deadline keeps beyond [`REQUEST_BUDGET`]: time for the `Close` that ends a
+/// wait, at most `eileen_dbus_linux::CLOSE_GRACE`, and for the answer to reach the caller.
+const CLOSE_MARGIN: Duration = Duration::from_millis(500);
 
 /// What `launch` names when it passes its deadline.
 const LAUNCH: &str = "app launch";
@@ -132,16 +137,18 @@ impl Apps for LinuxApps {
     }
 
     fn open_url(&self, url: &str) -> Result<(), PlatformError> {
-        let url = url.to_owned();
+        let (url, called) = (url.to_owned(), Instant::now());
         self.bridge.call(OPEN_URL, DEFAULT_DEADLINE, move |buses| async move {
-            Ok(Opener::new(&buses.session().await?).open_url(&url, RESPONSE_WAIT).await?)
+            let opener = Opener::new(&buses.session().await?);
+            Ok(opener.open_url(&url, left(called)).await?)
         })
     }
 
     fn open_uri(&self, uri: &str) -> Result<(), PlatformError> {
-        let uri = uri.to_owned();
+        let (uri, called) = (uri.to_owned(), Instant::now());
         self.bridge.call(OPEN_URI, DEFAULT_DEADLINE, move |buses| async move {
-            Ok(Opener::new(&buses.session().await?).open_uri(&uri, RESPONSE_WAIT).await?)
+            let opener = Opener::new(&buses.session().await?);
+            Ok(opener.open_uri(&uri, left(called)).await?)
         })
     }
 
@@ -152,15 +159,21 @@ impl Apps for LinuxApps {
     ) -> Result<(), PlatformError> {
         let path = PathBuf::from(path);
         let app = with_app.map(|app| self.desktop_entry(app)).transpose()?;
+        let called = Instant::now();
         self.bridge.call(OPEN_PATH, DEFAULT_DEADLINE, move |buses| async move {
             let opener = Opener::new(&buses.session().await?);
             match app {
                 Some(app) => opener.open_path_with(&path, &app).await?,
-                None => opener.open_path(&path, RESPONSE_WAIT).await?,
+                None => opener.open_path(&path, left(called)).await?,
             }
             Ok(())
         })
     }
+}
+
+/// What is left of [`REQUEST_BUDGET`] for the request of a trait call made at `called`.
+fn left(called: Instant) -> Duration {
+    REQUEST_BUDGET.saturating_sub(called.elapsed())
 }
 
 /// The trait's entry for an indexed app, field for field.

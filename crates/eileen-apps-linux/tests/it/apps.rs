@@ -26,6 +26,10 @@ use crate::open::{
 const EDITOR: &str = "org.gnome.TextEditor";
 const EDITOR_PATH: &str = "/org/gnome/TextEditor";
 
+/// How late the slow portal replies: inside the opener's 5 s budget, but late enough that a
+/// wait of half the method timeout begun after the reply would pass the bridge's 5.5 s deadline.
+const SLOW_REPLY: Duration = Duration::from_millis(3200);
+
 /// Fake services on a multi-thread runtime of their own.
 struct Fakes {
     runtime: tokio::runtime::Runtime,
@@ -217,7 +221,7 @@ fn the_portals_answers_are_platform_errors() {
 
 #[test]
 fn a_portal_that_never_answers_passes_its_wait_and_the_request_is_closed() {
-    // A real wait, of half the method timeout: the bridge's deadline is real time too.
+    // A real wait, to the end of the request's budget: the bridge's deadline is real time too.
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
     let mut seen = fakes.portal(&bus, Answer::Later);
@@ -225,6 +229,25 @@ fn a_portal_that_never_answers_passes_its_wait_and_the_request_is_closed() {
         apps(&bus).open_url("https://example.com"),
         Err(PlatformError::DeadlineExceeded { call: "portal response" }),
         "the opener's wait ended first, not the bridge's deadline for opening a web address"
+    );
+    let call = fakes.run(call_seen(&mut seen));
+    match fakes.run(next(&mut seen)) {
+        Event::Closed(path) => assert_eq!(path, call.handle, "closed, which dismisses its dialog"),
+        other @ Event::Call(_) => panic!("not a Close: {other:?}"),
+    }
+}
+
+#[test]
+fn a_portal_slow_to_reply_still_has_its_request_closed_inside_the_deadline() {
+    // A real delay of the fake's reply, and real waits after it: the bridge's deadline is real
+    // time.
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut seen = fakes.portal(&bus, Answer::Slow(SLOW_REPLY));
+    assert_eq!(
+        apps(&bus).open_uri("mailto:sam@example.com"),
+        Err(PlatformError::DeadlineExceeded { call: "portal response" }),
+        "the wait got what the late reply left of the budget, and ended first"
     );
     let call = fakes.run(call_seen(&mut seen));
     match fakes.run(next(&mut seen)) {

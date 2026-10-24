@@ -29,16 +29,18 @@
 //!
 //! Each call is a portal request, made with `eileen-dbus-linux`'s [`Request`]: subscribed to its
 //! `Response` before the call, its handle followed when an older portal names another, and its
-//! `Response` taken only from the connection that answered the call. The calls are bounded by
-//! the connection's method timeout. The `Response`, which may wait on the user's choice in a
-//! dialog, is bounded by the caller's `deadline`; past it the request is closed, which dismisses
-//! that dialog. Its codes ([the Request documentation][request]): 0 opened, 1 cancelled by the
-//! user, 2 not opened (no handler, an invalid target, or an app that failed to start). A call
-//! dropped before its answer leaves the request open, since a future cannot send `Close` as it
-//! drops: bound the wait with `deadline`, not by dropping the call.
+//! `Response` taken only from the connection that answered the call. The caller's `deadline` is
+//! one budget for the request and its `Response`, which may wait on the user's choice in a
+//! dialog: the wait gets what the calls before it leave, and past it the request is closed,
+//! which dismisses that dialog. Each call keeps the connection's method timeout, as
+//! `eileen-dbus-linux`'s deadline model has it, so a call slower than what is left runs past the
+//! budget, by up to that timeout. The `Response`'s codes ([the Request documentation][request]):
+//! 0 opened, 1 cancelled by the user, 2 not opened (no handler, an invalid target, or an app that
+//! failed to start). A call dropped before its answer leaves the request open, since a future
+//! cannot send `Close` as it drops: bound the wait with `deadline`, not by dropping the call.
 //!
 //! [`Opener::open_path`]'s `deadline` bounds the checks of the path and the file too, and the
-//! `Response` wait gets what they leave of it. [`Opener::open_path_with`], which waits for no
+//! request gets what they leave of it. [`Opener::open_path_with`], which waits for no
 //! signal, bounds its check of the path as it bounds its call: by the connection's method
 //! timeout, or [`METHOD_TIMEOUT`] on a connection without one. The checks (a stat, and for the
 //! portal the open and a stat of the descriptor, on tokio's blocking pool) wait on another
@@ -181,26 +183,26 @@ impl Opener {
         Self { conn: conn.clone() }
     }
 
-    /// Opens a web address in the default browser (`Apps::open_url`), waiting up to `deadline`
-    /// for the portal's answer. Only `http` and `https` addresses with a host are taken; anything
-    /// else is [`DbusError::Invalid`] before the portal is asked.
+    /// Opens a web address in the default browser (`Apps::open_url`), within `deadline` for the
+    /// request and the portal's answer together. Only `http` and `https` addresses with a host
+    /// are taken; anything else is [`DbusError::Invalid`] before the portal is asked.
     pub async fn open_url(&self, url: &str, deadline: Duration) -> Result<(), DbusError> {
         check_url(url)?;
         self.ask_portal(Target::Uri(url), deadline).await
     }
 
     /// Opens a URI, such as a `mailto:` link or an app's deep link, with its registered handler
-    /// (`Apps::open_uri`), waiting up to `deadline` for the portal's answer. A web address
-    /// belongs to [`Self::open_url`] and a `file:` URI to [`Self::open_path`]: both are
-    /// [`DbusError::Invalid`] here, before the portal is asked.
+    /// (`Apps::open_uri`), within `deadline` for the request and the portal's answer together. A
+    /// web address belongs to [`Self::open_url`] and a `file:` URI to [`Self::open_path`]: both
+    /// are [`DbusError::Invalid`] here, before the portal is asked.
     pub async fn open_uri(&self, uri: &str, deadline: Duration) -> Result<(), DbusError> {
         check_uri(uri)?;
         self.ask_portal(Target::Uri(uri), deadline).await
     }
 
     /// Opens a file or folder with its default app (`Apps::open_path` without an app), within
-    /// `deadline` for the checks of the path and the file and the portal's answer together. A
-    /// path that is not absolute, or that names neither a file nor a folder, is
+    /// `deadline` for the checks of the path and the file, the request and the portal's answer
+    /// together. A path that is not absolute, or that names neither a file nor a folder, is
     /// [`FileError::Invalid`], one that cannot be opened is the [`FileError`] its I/O error
     /// gives, and checks past the deadline are a [`FileError::Io`] that says they timed out,
     /// before the portal is asked.
@@ -278,8 +280,10 @@ impl Opener {
         reply.body().deserialize().map_err(fail)
     }
 
-    /// One portal request for `target`, and what its `Response` says.
+    /// One portal request for `target`, and what its `Response` says, within `deadline` for
+    /// both: the wait for the `Response` gets what the calls before it leave.
     async fn ask_portal(&self, target: Target<'_>, deadline: Duration) -> Result<(), DbusError> {
+        let started = Instant::now();
         let what = target.what();
         let mut request = Request::new(&self.conn)?;
         request.responses().await?;
@@ -297,7 +301,8 @@ impl Opener {
         }
         .map_err(|error| DbusError::from_zbus(what, &error))?;
         let portal = request.follow(&reply).await?;
-        outcome(what, request.wait(&portal, deadline).await?)
+        let left = deadline.saturating_sub(started.elapsed());
+        outcome(what, request.wait(&portal, left).await?)
     }
 }
 
