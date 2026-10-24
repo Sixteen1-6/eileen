@@ -103,7 +103,8 @@ mod tests {
         match boost_audio_thread() {
             Ok(boost) => {
                 assert_eq!(boost.task(), "Pro Audio", "task");
-                drop(boost);
+                // The boost reverts as this arm ends. Off Windows it holds nothing to drop, so
+                // an explicit `drop` would fail `clippy::drop_non_drop` on the Linux lane.
             }
             Err(e) => assert_eq!(e.call, "AvSetMmThreadCharacteristicsW", "typed error: {e}"),
         }
