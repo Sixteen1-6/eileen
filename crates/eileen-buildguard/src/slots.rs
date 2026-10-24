@@ -131,8 +131,13 @@ pub fn try_take(root: &Path, name: &str, holder: &Holder) -> io::Result<Option<H
         Err(TryLockError::Error(e)) => return Err(e),
     }
     let temp = root.join(format!("{name}.holder.tmp"));
-    fs::write(&temp, holder.to_text())?;
-    fs::rename(&temp, &holder_path)?;
+    let recorded =
+        fs::write(&temp, holder.to_text()).and_then(|()| fs::rename(&temp, &holder_path));
+    if let Err(e) = recorded {
+        // Let go before the handle closes, as `Held`'s drop does, on this path too.
+        let _unlocked: io::Result<()> = file.unlock();
+        return Err(e);
+    }
     Ok(Some(Held { holder_path, holder: holder.clone(), file }))
 }
 
@@ -239,14 +244,19 @@ pub fn kill_stale(root: &Path) -> io::Result<Vec<Freed>> {
             Err(TryLockError::Error(e)) => return Err(e),
         }
         // Read again under the lock: this is the record of a holder that is gone.
-        if let Some(holder) = slot_holder(root, slot) {
+        let removed = slot_holder(root, slot).map_or(Ok(None), |holder| {
             match fs::remove_file(&holder_path) {
-                Ok(()) => freed.push(Freed { slot, holder }),
-                Err(e) if e.kind() == ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
+                Ok(()) => Ok(Some(holder)),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
             }
+        });
+        // Unlocked before the handle closes, whether or not the removal failed.
+        let unlocked = lock.unlock();
+        if let Some(holder) = removed? {
+            freed.push(Freed { slot, holder });
         }
-        lock.unlock()?;
+        unlocked?;
     }
     Ok(freed)
 }
