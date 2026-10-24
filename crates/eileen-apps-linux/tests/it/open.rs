@@ -16,6 +16,7 @@ use eileen_contracts::ids::Personal;
 use eileen_dbus_linux::CLOSE_GRACE;
 use eileen_dbus_linux::testing::{PrivateBus, round_trip, serve};
 use rustix::fs::{CWD, Mode as Permissions, OFlags, fcntl_getfl, mkfifoat};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue};
@@ -321,7 +322,8 @@ impl Drop for Scratch {
     }
 }
 
-/// A runtime whose blocking pool has one thread. tokio runs the opener's file checks there.
+/// A runtime whose blocking pool has one thread, for an opener that checks files there
+/// (`Opener::checking_files_on`), which a test can stall as no unprivileged test can stall a stat.
 fn one_blocking_thread() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -335,7 +337,7 @@ fn one_blocking_thread() -> tokio::runtime::Runtime {
 /// runtime from [`one_blocking_thread`]; a test that panics drops the sender as it unwinds.
 fn stall_file_checks() -> tokio::sync::oneshot::Sender<()> {
     let (release, released) = tokio::sync::oneshot::channel();
-    let _stall = tokio::runtime::Handle::current().spawn_blocking(move || released.blocking_recv());
+    let _stall = Handle::current().spawn_blocking(move || released.blocking_recv());
     release
 }
 
@@ -680,12 +682,13 @@ async fn paths_are_checked_before_the_portal_is_asked() {
 
 #[test]
 fn a_file_check_that_stalls_passes_the_deadline() {
-    // A real timer: tokio's paused time stands still while a blocking task runs, and the checks
-    // run on the blocking pool. Nothing is asserted about how long anything took.
+    // A real timer: tokio's paused time stands still while a blocking task runs, and these
+    // checks run on the test runtime's blocking pool. Nothing is asserted about how long
+    // anything took.
     one_blocking_thread().block_on(async {
         let bus = PrivateBus::start();
         let (_service, mut seen) = portal(&bus, Answer::Now(0)).await;
-        let opener = Opener::new(&bus.connect().await);
+        let opener = Opener::new(&bus.connect().await).checking_files_on(Handle::current());
         let scratch = Scratch::new();
         let file = scratch.file("notes.txt");
         let release = stall_file_checks();
@@ -906,7 +909,8 @@ fn a_file_check_that_stalls_passes_the_method_timeout() {
     one_blocking_thread().block_on(async {
         let bus = PrivateBus::start();
         let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
-        let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await);
+        let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await)
+            .checking_files_on(Handle::current());
         let scratch = Scratch::new();
         let file = scratch.file("notes.txt");
         let with = entry(APP_ID, true, AppKind::Desktop);
@@ -923,7 +927,7 @@ fn a_file_check_that_stalls_passes_the_method_timeout() {
         assert!(seen.try_recv().is_err(), "the app was not called");
         drop(release);
         // A connection without a method timeout, whose checks take METHOD_TIMEOUT.
-        let unstalled = Opener::new(&bus.connect().await);
+        let unstalled = Opener::new(&bus.connect().await).checking_files_on(Handle::current());
         assert_eq!(
             unstalled.open_path_with(&file, &with).await,
             Ok(()),

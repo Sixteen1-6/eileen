@@ -43,11 +43,13 @@
 //! request gets what they leave of it. [`Opener::open_path_with`], which waits for no
 //! signal, bounds its check of the path as it bounds its call: by the connection's method
 //! timeout, or [`METHOD_TIMEOUT`] on a connection without one. The checks (a stat, and for the
-//! portal the open and a stat of the descriptor, on tokio's blocking pool) wait on another
-//! process when a FUSE daemon or a network file server holds the file, and either can hang:
-//! BUILD.md section 2.1 (rule 2) gives every call to another process a deadline. Checks past
-//! their bound are left to their thread, and the answer is a [`FileError::Io`] that says they
-//! timed out.
+//! portal the open and a stat of the descriptor) wait on another process when a FUSE daemon or a
+//! network file server holds the file, and either can hang: BUILD.md section 2.1 (rule 2) gives
+//! every call to another process a deadline. Checks past their bound are left to their thread,
+//! and the answer is a [`FileError::Io`] that says they timed out. Each runs on a thread of its
+//! own, not on the runtime's blocking pool, which a hung check would hold for good: on
+//! `eileen-dbus-linux`'s bridge, whose two blocking threads zbus connects a bus with, two such
+//! checks would leave no bus able to connect. [`Opener::checking_files_on`] gives them a pool.
 //!
 //! # D-Bus activation
 //!
@@ -82,14 +84,18 @@
 
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
+use std::fs::File;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 
 use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, Request};
 use eileen_platform::PlatformError;
 use rustix::fs::OFlags;
+use tokio::runtime::Handle;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 use zbus::names::WellKnownName;
 use zbus::zvariant::{Fd, OwnedObjectPath, Value};
@@ -118,6 +124,10 @@ const OPEN_CALL: &str = "app Open call";
 const PROCESS_ID_LOOKUP: &str = "process ID lookup";
 /// The file or folder being opened, as errors name it.
 const FILE: &str = "file to open";
+/// The name of the threads the checks of paths and files run on.
+const CHECK_THREAD: &str = "eileen-file-chk";
+/// What a check that ended without answering (it panicked) says.
+const CHECK_ENDED: &str = "the check ended without answering";
 
 /// The flags the file to open, `recently-used.xbel` and the desktop entries are opened with
 /// beside read-only: `O_NONBLOCK`, so the open returns at once where it would wait for a FIFO's
@@ -174,13 +184,27 @@ impl From<OpenError> for PlatformError {
 #[derive(Debug, Clone)]
 pub struct Opener {
     conn: zbus::Connection,
+    /// The runtime whose blocking pool checks paths and files, if not a thread for each.
+    pool: Option<Handle>,
 }
 
 impl Opener {
-    /// An opener on `conn`, the user's session bus.
+    /// An opener on `conn`, the user's session bus, whose checks of paths and files each run on
+    /// a thread of their own.
     #[must_use]
     pub fn new(conn: &zbus::Connection) -> Self {
-        Self { conn: conn.clone() }
+        Self { conn: conn.clone(), pool: None }
+    }
+
+    /// The same opener, its checks of paths and files run on `pool`'s blocking pool instead: it
+    /// caps the threads that checks hung on a file system hold, at the cost of every later check
+    /// waiting once they hold them all, and tokio's paused time stands still while a check runs
+    /// there, as it does not for a thread of its own. Never the D-Bus bridge's runtime, whose
+    /// blocking threads zbus needs to connect a bus.
+    #[must_use]
+    pub fn checking_files_on(mut self, pool: Handle) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// Opens a web address in the default browser (`Apps::open_url`), within `deadline` for the
@@ -207,9 +231,10 @@ impl Opener {
     /// gives, and checks past the deadline are a [`FileError::Io`] that says they timed out,
     /// before the portal is asked.
     pub async fn open_path(&self, path: &Path, deadline: Duration) -> Result<(), OpenError> {
-        let until = Instant::now().checked_add(deadline);
-        let file = within(deadline, open_read_only(path)).await?;
-        let left = until.map_or(deadline, |until| until.saturating_duration_since(Instant::now()));
+        let started = Instant::now();
+        let path = path.to_owned();
+        let file = self.checked(deadline, move || open_read_only(&path)).await?;
+        let left = deadline.saturating_sub(started.elapsed());
         Ok(self.ask_portal(Target::File(&file), left).await?)
     }
 
@@ -226,7 +251,8 @@ impl Opener {
             return Err(DbusError::Unavailable { what }.into());
         }
         let bound = self.conn.method_timeout().unwrap_or(METHOD_TIMEOUT);
-        within(bound, check_path(path)).await?;
+        let checked = path.to_owned();
+        self.checked(bound, move || check_path(&checked)).await?;
         let uris = [file_uri(path)];
         let body = (uris.as_slice(), platform_data());
         self.conn
@@ -304,6 +330,35 @@ impl Opener {
         let left = deadline.saturating_sub(started.elapsed());
         outcome(what, request.wait(&portal, left).await?)
     }
+
+    /// Runs `check`, of a path and the file it names, on a thread of its own, or on the pool
+    /// that [`Self::checking_files_on`] gave, and waits at most `bound` for its answer. Past it
+    /// the check is left to finish there, and the answer is a [`FileError::Io`] that says it
+    /// timed out.
+    async fn checked<T: Send + 'static>(
+        &self,
+        bound: Duration,
+        check: impl FnOnce() -> Result<T, FileError> + Send + 'static,
+    ) -> Result<T, FileError> {
+        let (answer, answered) = oneshot::channel();
+        let job = move || {
+            let _ignored = answer.send(check());
+        };
+        // Detached either way: the check answers through `answered`, or no one waits for it.
+        match &self.pool {
+            Some(pool) => drop(pool.spawn_blocking(job)),
+            None => drop(
+                eileen_stdx::thread::spawn_named(CHECK_THREAD, job)
+                    .map_err(|error| FileError::io(FILE, &error))?,
+            ),
+        }
+        match tokio::time::timeout(bound, answered).await {
+            Ok(answer) => answer.unwrap_or_else(|_ended| {
+                Err(FileError::Io { what: FILE, detail: CHECK_ENDED.to_owned() })
+            }),
+            Err(_elapsed) => Err(FileError::io(FILE, &io::Error::from(io::ErrorKind::TimedOut))),
+        }
+    }
 }
 
 /// What the portal is asked to open.
@@ -312,7 +367,7 @@ enum Target<'a> {
     /// A URI, through `OpenURI`.
     Uri(&'a str),
     /// A file or folder opened read-only, through `OpenFile`.
-    File(&'a tokio::fs::File),
+    File(&'a File),
 }
 
 impl Target<'_> {
@@ -382,43 +437,32 @@ fn invalid(what: &'static str, detail: &str) -> DbusError {
     DbusError::Invalid { what, detail: detail.to_owned() }
 }
 
-/// Runs `checks`, the checks of a path and the file it names, within `bound`; past it they are
-/// left to tokio's blocking pool, and the answer is a [`FileError::Io`] that says they timed out.
-async fn within<T>(
-    bound: Duration,
-    checks: impl Future<Output = Result<T, FileError>>,
-) -> Result<T, FileError> {
-    let timed_out = || FileError::io(FILE, &io::Error::from(io::ErrorKind::TimedOut));
-    tokio::time::timeout(bound, checks).await.unwrap_or_else(|_elapsed| Err(timed_out()))
-}
-
 /// Opens `path` read-only for the portal, when it is absolute and names a file or a folder. The
 /// path is checked first, so a device is refused without being opened (opening one can act on
 /// it, as a serial port raises its modem lines); then [`open_checked`] opens it.
-async fn open_read_only(path: &Path) -> Result<tokio::fs::File, FileError> {
-    check_path(path).await?;
-    open_checked(path).await
+fn open_read_only(path: &Path) -> Result<File, FileError> {
+    check_path(path)?;
+    open_checked(path)
 }
 
 /// Refuses `path` unless it is absolute and names a file or a folder, without opening it.
-async fn check_path(path: &Path) -> Result<(), FileError> {
+fn check_path(path: &Path) -> Result<(), FileError> {
     if !path.is_absolute() {
         return Err(not_a_target("not absolute"));
     }
-    let meta = tokio::fs::metadata(path).await.map_err(|error| FileError::io(FILE, &error))?;
+    let meta = std::fs::metadata(path).map_err(|error| FileError::io(FILE, &error))?;
     file_or_folder(&meta)
 }
 
 /// Opens `path` read-only without waiting (see [`OPEN_FLAGS`]), and refuses the descriptor
 /// unless it is a file or a folder: the path may name something else by now.
-async fn open_checked(path: &Path) -> Result<tokio::fs::File, FileError> {
-    let file = tokio::fs::OpenOptions::new()
+fn open_checked(path: &Path) -> Result<File, FileError> {
+    let file = File::options()
         .read(true)
         .custom_flags(OPEN_FLAGS)
         .open(path)
-        .await
         .map_err(|error| FileError::io(FILE, &error))?;
-    let meta = file.metadata().await.map_err(|error| FileError::io(FILE, &error))?;
+    let meta = file.metadata().map_err(|error| FileError::io(FILE, &error))?;
     file_or_folder(&meta)?;
     Ok(file)
 }
@@ -629,13 +673,13 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_path_swapped_for_a_fifo_after_the_check_is_refused_without_waiting() {
+    #[test]
+    fn a_path_swapped_for_a_fifo_after_the_check_is_refused_without_waiting() {
         // `open_checked` opens what the path names after the check, which a swap can make a
         // FIFO. It has no writer, so an open that waited for one would never return.
         let fifo = Fifo::new();
         assert_eq!(
-            open_checked(&fifo.path()).await.map(|_file| ()),
+            open_checked(&fifo.path()).map(|_file| ()),
             Err(FileError::Invalid { what: "path", detail: "not a file or folder".to_owned() }),
             "opened without waiting, then refused for what the descriptor is"
         );

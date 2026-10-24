@@ -44,8 +44,8 @@
 //! # Boundaries
 //!
 //! - May depend on `eileen-platform` (the traits), `eileen-contracts` (the `ids` types, `FileKind`
-//!   and the media types), `eileen-dbus-linux` (the D-Bus helpers and the bridge), `zbus`, `tokio`
-//!   (files open on its blocking pool), `rustix` (open flags) and `quick-xml` (the bookmark file).
+//!   and the media types), `eileen-dbus-linux` (the D-Bus helpers and the bridge), `eileen-stdx`
+//!   (file work's threads), `zbus`, `tokio`, `rustix` (open flags) and `quick-xml` (the bookmarks).
 //!   Nothing in the workspace may depend on it except the apps process's composition root on Linux.
 //!
 //! # Testing

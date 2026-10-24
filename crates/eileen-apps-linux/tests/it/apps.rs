@@ -15,7 +15,7 @@ use eileen_contracts::ids::Personal;
 use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::PrivateBus;
 use eileen_platform::{AppEntry, AppKind, Apps, Deadline, PlatformError};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::index::session;
 use crate::open::{
@@ -25,6 +25,9 @@ use crate::open::{
 /// The fixture's D-Bus-activatable Text Editor: its well-known name and its object path.
 const EDITOR: &str = "org.gnome.TextEditor";
 const EDITOR_PATH: &str = "/org/gnome/TextEditor";
+
+/// What the jobs that take the bridge's blocking threads name.
+const TAKE: &str = "taking a blocking thread";
 
 /// How late the slow portal replies: inside the opener's 5 s budget, but late enough that a
 /// wait of half the method timeout begun after the reply would pass the bridge's 5.5 s deadline.
@@ -274,6 +277,49 @@ fn a_path_opens_through_the_portal_or_with_an_activatable_app() {
     assert_eq!(call.method, "Open", "the app's own Open");
     let uri = format!("file://{}", path.replace(' ', "%20").replace('#', "%23"));
     assert_eq!(call.uris, [uri], "the file's URI");
+}
+
+#[test]
+fn paths_are_checked_while_the_bridges_blocking_threads_are_taken() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut opened = fakes.portal(&bus, Answer::Now(0));
+    let mut seen = fakes.editor(&bus);
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let apps = LinuxApps::new(bridge.clone(), session("en_US.UTF-8", "ubuntu:GNOME", None));
+    // The session bus first: zbus connects on a blocking thread, so none could connect after.
+    assert_eq!(apps.open_url("https://example.com"), Ok(()), "connected");
+    assert_eq!(fakes.run(call_seen(&mut opened)).method, "OpenURI", "the web address");
+    let editor = listed(&apps, "Text Editor");
+    let _taken = take_blocking_threads(&bridge);
+    let scratch = Scratch::new();
+    let file = scratch.file("notes.txt");
+    let path = file.to_str().unwrap();
+    assert_eq!(apps.open_path(path, None), Ok(()), "checked off the bridge's blocking threads");
+    assert_eq!(fakes.run(call_seen(&mut opened)).method, "OpenFile", "then opened by the portal");
+    assert_eq!(apps.open_path(path, Some(&editor)), Ok(()), "and checked for an app");
+    assert_eq!(fakes.run(app_seen(&mut seen)).method, "Open", "then opened by the app");
+}
+
+/// Takes the bridge's two blocking threads (`eileen-dbus-linux`'s `BLOCKING_THREADS`), as two
+/// checks hung on a file system would, until the returned senders drop: each job starts a
+/// blocking task that holds its thread until released, and answers once it runs.
+fn take_blocking_threads(bridge: &Bridge) -> Vec<oneshot::Sender<()>> {
+    let take = |_n| {
+        let (release, released) = oneshot::channel::<()>();
+        let held =
+            bridge.call(TAKE, Deadline::after(Duration::from_secs(30)), move |_buses| async move {
+                let (running, runs) = oneshot::channel();
+                let _held = tokio::runtime::Handle::current().spawn_blocking(move || {
+                    let _ignored = running.send(());
+                    released.blocking_recv()
+                });
+                runs.await.map_err(|_ended| PlatformError::Io { what: TAKE, detail: String::new() })
+            });
+        assert_eq!(held, Ok(()), "a blocking thread taken");
+        release
+    };
+    (0..2).map(take).collect()
 }
 
 #[test]
