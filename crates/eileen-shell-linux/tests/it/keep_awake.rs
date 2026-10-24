@@ -22,17 +22,17 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 /// The reason the tests give.
 const WHY: &str = "An armed test run is in progress";
 
-const LOGIND: &str = "org.freedesktop.login1";
-const MANAGER_PATH: &str = "/org/freedesktop/login1";
-const GNOME: &str = "org.gnome.SessionManager";
-const GNOME_PATH: &str = "/org/gnome/SessionManager";
+pub(super) const LOGIND: &str = "org.freedesktop.login1";
+pub(super) const MANAGER_PATH: &str = "/org/freedesktop/login1";
+pub(super) const GNOME: &str = "org.gnome.SessionManager";
+pub(super) const GNOME_PATH: &str = "/org/gnome/SessionManager";
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const REQUEST: &str = "org.freedesktop.portal.Request";
 /// The request handle a portal before 0.9 names, whatever the token.
 const OLD_REQUEST_PATH: &str = "/org/freedesktop/portal/desktop/request/old/1";
 /// The cookie the fake GNOME session manager hands out.
-const COOKIE: u32 = 7;
+pub(super) const COOKIE: u32 = 7;
 /// The deadline for a portal that answers: far longer than a private bus needs.
 const WAIT: Duration = Duration::from_secs(30);
 /// The deadline a silent portal passes, in tokio's paused time.
@@ -52,16 +52,16 @@ fn sender_part(connection: &zbus::Connection) -> String {
 }
 
 /// One `Inhibit` call to the fake logind: what, who, why and mode.
-type InhibitCall = (String, String, String, String);
+pub(super) type InhibitCall = (String, String, String, String);
 
 /// A fake logind manager that records each `Inhibit` call and keeps logind's end of each lock,
 /// or refuses as polkit does when `refuse` is set.
 #[derive(Debug, Default, Clone)]
-struct FakeManager {
+pub(super) struct FakeManager {
     refuse: bool,
-    calls: Arc<Mutex<Vec<InhibitCall>>>,
+    pub(super) calls: Arc<Mutex<Vec<InhibitCall>>>,
     /// logind's ends: each reads end of file once every copy of the caller's end has closed.
-    watches: Arc<Mutex<Vec<UnixStream>>>,
+    pub(super) watches: Arc<Mutex<Vec<UnixStream>>>,
 }
 
 #[zbus::interface(name = "org.freedesktop.login1.Manager")]
@@ -365,14 +365,14 @@ async fn still_on_the_bus(observer: &zbus::Connection, changes: &mut OwnerChange
 }
 
 /// logind's end of the fake's latest lock, which reads without waiting.
-fn watch_end(manager: &FakeManager) -> UnixStream {
+pub(super) fn watch_end(manager: &FakeManager) -> UnixStream {
     let watch = manager.watches.lock().unwrap().pop().unwrap();
     watch.set_nonblocking(true).unwrap();
     watch
 }
 
 /// Whether the caller holds the lock now: logind's end has nothing to read, not even its end.
-fn still_held(watch: &mut UnixStream) -> bool {
+pub(super) fn still_held(watch: &mut UnixStream) -> bool {
     let mut byte = [0_u8; 1];
     matches!(watch.read(&mut byte), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
 }

@@ -1,18 +1,18 @@
-//! The core process's platform implementations on Linux: what `eileen-shell-win` does on
-//! Windows (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L0 starts with the machine
-//! profile's facts (BUILD.md section 2.16), which [`LinuxMachineProbe`] reads from `/proc`,
-//! `/sys` and `/etc`, and the memory sample of section 2.5, which [`LinuxSystemMemory`] takes.
-//! Phase L1 adds `ShellHost`'s toasts and session calls, and the power facts over D-Bus.
+//! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
+//! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
+//! memory sample (2.5), `ShellHost`'s toasts and session calls, and the power facts over D-Bus.
 //!
 //! # Owns
 //!
+//! - The trait implementations: `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], and
+//!   `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`.
 //! - The machine's facts and load on Linux: the processor and its core classes, memory totals,
 //!   GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors,
 //!   read under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists.
 //! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
 //!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
 //!   process outside Eileen's tree.
-//! - `ShellHost` on Linux: Eileen's XDG autostart entry ([`set_run_at_sign_in`]), the lock state
+//! - `ShellHost`'s clients: Eileen's XDG autostart entry ([`set_run_at_sign_in`]), the lock state
 //!   over logind ([`SessionLock`]), keeping the session awake with logind's lock and the desktop's
 //!   idle hold ([`LinuxPowerRequest`]), and toasts through the notification server ([`Notifier`]),
 //!   each id bound to the server that showed it, with its events ([`NotificationEvents`]).
@@ -21,13 +21,12 @@
 //!
 //! # Does not own
 //!
-//! - The `MachineProbe`, `SystemMemory` and `ShellHost` traits (`eileen-platform`, WP0) and the
-//!   fact types' final home (`eileen-contracts::machine`). When those land, this crate's readers
-//!   and `ShellHost` calls implement the traits and [`facts`] becomes re-exports.
+//! - The traits (`eileen-platform`, WP0) and the facts' final home, `eileen-contracts::machine`,
+//!   for which `MachineProbe`'s implementation waits and which [`facts`] will then re-export.
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
-//! - D-Bus plumbing: [`DbusError`] (re-exported), the buses, name owners, the portal `Request` and
-//!   its answered `Close`, and the stream helpers and conventions are `eileen-dbus-linux`'s.
+//! - D-Bus plumbing: [`DbusError`] (re-exported), the buses and the bridge, name owners, the
+//!   portal `Request` and its answered `Close`, and the stream helpers are `eileen-dbus-linux`'s.
 //!
 //! # Invariants
 //!
@@ -47,10 +46,10 @@
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (text wrappers, `Platform`, `Toast`), `eileen-dbus-linux`
-//!   (the D-Bus helpers), `zbus` (its clients' proxies), `tokio` (the portal's one deadline),
-//!   `rustix` (`statvfs`) and `thiserror`. Only the composition root on Linux may depend on it.
-//! - Wire types: none of its own; the facts become contract types.
+//! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
+//!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
+//!   `tokio` (the portal's deadline, the keep-awake holder), `rustix` (`statvfs`) and `thiserror`.
+//!   Only the composition root on Linux may depend on it. Wire types: none of its own.
 //!
 //! # Testing
 //!
@@ -60,19 +59,20 @@
 //!   `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in `tests/fixtures/`
 //!   (one recorded under WSL2, five synthetic), one live test of this machine, and the autostart
 //!   entry in folders a guard removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s
-//!   private bus (its `private-bus` feature, tests only), their deadlines in tokio's paused time.
+//!   private bus (its `private-bus` feature, tests only), their deadlines in tokio's paused time,
+//!   and [`LinuxShell`] against the same fakes through `Bridge::on_private_bus`.
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
 //! # Traps
 //!
 //! - Each source's traps are in its own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`,
-//!   `session_lock`, `keep_awake`, `notifications`, `upower` and, for D-Bus, `eileen-dbus-linux`.
+//!   `session_lock`, `keep_awake`, `notifications`, `upower`, `host`; D-Bus's in its crate.
 //!
 //! # Logs and tracing
 //!
-//! - None yet: the file reads are short and synchronous, and the D-Bus clients log nothing of
-//!   their own. Spans from `eileen_trace::names` join with the trait implementations.
+//! - None yet: the file reads are short, and neither the clients nor the trait implementations
+//!   log. A keep-awake holder that missed is the first thing a span should carry (`host`).
 //!
 //! # Do not change without a decision record
 //!
@@ -90,6 +90,7 @@ mod error;
 pub mod facts;
 #[doc(hidden)]
 pub mod fuzz_entry;
+mod host;
 mod keep_awake;
 mod load;
 mod memory;
@@ -108,6 +109,7 @@ pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
 pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
+pub use host::{LinuxShell, LinuxShellSettings, RELEASE_WAIT};
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use notifications::{
     NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,

@@ -10,11 +10,11 @@ use eileen_shell_linux::{AutostartError, set_run_at_sign_in};
 
 /// A folder of one test's own under Cargo's temporary folder, removed with everything in it when
 /// the guard drops, a failing test included.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(PathBuf);
 
 impl Scratch {
     /// A fresh, empty folder for the test `test`.
-    fn new(test: &str) -> Self {
+    pub(super) fn new(test: &str) -> Self {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("autostart").join(test);
         // A run killed while its autostart folder was read-only left it so, and nothing in it
         // could be removed.
@@ -26,7 +26,7 @@ impl Scratch {
     }
 
     /// The autostart folder the test uses, inside the scratch folder and not yet made.
-    fn autostart(&self) -> PathBuf {
+    pub(super) fn autostart(&self) -> PathBuf {
         self.0.join("autostart")
     }
 }

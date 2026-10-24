@@ -20,9 +20,9 @@ use zbus::object_server::{Interface, SignalEmitter};
 use zbus::zvariant::{OwnedValue, Value};
 
 /// The server's well-known name.
-const NAME: &str = "org.freedesktop.Notifications";
+pub(super) const NAME: &str = "org.freedesktop.Notifications";
 /// Its object.
-const PATH: &str = "/org/freedesktop/Notifications";
+pub(super) const PATH: &str = "/org/freedesktop/Notifications";
 /// Its interface.
 const INTERFACE: &str = "org.freedesktop.Notifications";
 
@@ -44,7 +44,7 @@ macro_rules! emit {
 
 /// A hint's value as the fake received it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Hint {
+pub(super) enum Hint {
     /// A `BYTE`.
     Byte(u8),
     /// A `STRING`.
@@ -67,14 +67,14 @@ impl Hint {
 
 /// One `Notify` call as the fake received it.
 #[derive(Debug, Clone)]
-struct NotifyCall {
-    app_name: String,
+pub(super) struct NotifyCall {
+    pub(super) app_name: String,
     replaces_id: u32,
-    app_icon: String,
-    summary: String,
-    body: String,
+    pub(super) app_icon: String,
+    pub(super) summary: String,
+    pub(super) body: String,
     actions: Vec<String>,
-    hints: BTreeMap<String, Hint>,
+    pub(super) hints: BTreeMap<String, Hint>,
     expire_timeout: i32,
 }
 
@@ -88,14 +88,14 @@ struct Log {
 
 /// A fake server's log, shared with the test.
 #[derive(Debug, Clone, Default)]
-struct Recorder(Arc<Mutex<Log>>);
+pub(super) struct Recorder(Arc<Mutex<Log>>);
 
 impl Recorder {
     fn record(&self, entry: impl FnOnce(&mut Log)) {
         entry(&mut self.0.lock().unwrap());
     }
 
-    fn notifies(&self) -> Vec<NotifyCall> {
+    pub(super) fn notifies(&self) -> Vec<NotifyCall> {
         self.0.lock().unwrap().notifies.clone()
     }
 
@@ -123,7 +123,7 @@ enum FakeError {
 
 /// A notification server that records every call. Ids count up from `next_id`, and
 /// `CloseNotification` sends `NotificationClosed` with reason 3, as the specification asks.
-struct FakeServer {
+pub(super) struct FakeServer {
     capabilities: Vec<String>,
     log: Recorder,
     next_id: u32,
@@ -133,7 +133,7 @@ struct FakeServer {
 }
 
 impl FakeServer {
-    fn new(capabilities: &[&str]) -> (Self, Recorder) {
+    pub(super) fn new(capabilities: &[&str]) -> (Self, Recorder) {
         let log = Recorder::default();
         let server = Self {
             capabilities: capabilities.iter().map(|name| (*name).to_owned()).collect(),
