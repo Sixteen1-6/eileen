@@ -1,6 +1,6 @@
 [package]
 name = "eileen-dbus-linux"
-description = "The D-Bus helpers every Linux crate shares: the error type, the buses, name owners and signal streams"
+description = "The D-Bus helpers every Linux crate shares: the error type, the buses, name owners, signal streams and the bridge from the platform traits"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,6 +21,8 @@ private-bus = []
 # Linux only, as the -win crates are Windows only: off Linux the crate is empty and has no
 # dependencies (docs/LINUX.md section 4).
 [target.'cfg(target_os = "linux")'.dependencies]
+eileen-platform.workspace = true
+eileen-stdx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 zbus.workspace = true

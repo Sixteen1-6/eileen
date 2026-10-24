@@ -4,6 +4,8 @@
 //! systemd's and dbus-daemon's activation errors, the portal's `org.freedesktop.portal.Error`
 //! names and logind's `NoSessionForPID`.
 
+use eileen_platform::PlatformError;
+
 /// How the error names begin that the bus answers a call with when it could not start the
 /// service for it: systemd's, when it would not or could not start the service's unit (such as
 /// `org.freedesktop.systemd1.UnitMasked`), and those of dbus-daemon's own launcher (such as
@@ -19,9 +21,8 @@ const PORTAL_NOT_ALLOWED: &str = "org.freedesktop.portal.Error.NotAllowed";
 /// to find.
 const LOGIND_NO_SESSION: &str = "org.freedesktop.login1.NoSessionForPID";
 
-/// What went wrong talking to a D-Bus service. The variants are `eileen-platform`'s
-/// `PlatformError` (on the unmerged base crates) field for field, so each maps one to one when
-/// the traits land.
+/// What went wrong talking to a D-Bus service. The variants are [`PlatformError`]'s field for
+/// field, and `From` maps each to its twin, so a trait implementation answers with `?`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DbusError {
     /// The bus or the service is not there: no session bus, nothing owns the name, or the bus
@@ -137,12 +138,57 @@ impl DbusError {
     }
 }
 
+impl From<DbusError> for PlatformError {
+    fn from(error: DbusError) -> Self {
+        match error {
+            DbusError::Unavailable { what } => Self::Unavailable { what },
+            DbusError::DeadlineExceeded { call } => Self::DeadlineExceeded { call },
+            DbusError::Refused { what, reason } => Self::Refused { what, reason },
+            DbusError::NotFound { what } => Self::NotFound { what },
+            DbusError::Invalid { what, detail } => Self::Invalid { what, detail },
+            DbusError::Io { what, detail } => Self::Io { what, detail },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
     use std::sync::Arc;
 
+    use eileen_platform::PlatformError;
+
     use super::DbusError;
+
+    #[test]
+    fn each_error_becomes_its_platform_twin_with_the_same_text() {
+        let pairs = [
+            (DbusError::Unavailable { what: "a" }, PlatformError::Unavailable { what: "a" }),
+            (
+                DbusError::DeadlineExceeded { call: "a" },
+                PlatformError::DeadlineExceeded { call: "a" },
+            ),
+            (
+                DbusError::Refused { what: "a", reason: "b" },
+                PlatformError::Refused { what: "a", reason: "b" },
+            ),
+            (DbusError::NotFound { what: "a" }, PlatformError::NotFound { what: "a" }),
+            (
+                DbusError::Invalid { what: "a", detail: "b".to_owned() },
+                PlatformError::Invalid { what: "a", detail: "b".to_owned() },
+            ),
+            (
+                DbusError::Io { what: "a", detail: "b".to_owned() },
+                PlatformError::Io { what: "a", detail: "b".to_owned() },
+            ),
+        ];
+        for (dbus, platform) in pairs {
+            let text = dbus.to_string();
+            let mapped = PlatformError::from(dbus);
+            assert_eq!(mapped, platform, "{text}");
+            assert_eq!(mapped.to_string(), text, "the same message");
+        }
+    }
 
     /// What `name` means for a call named "the call".
     fn of(name: &str) -> DbusError {
