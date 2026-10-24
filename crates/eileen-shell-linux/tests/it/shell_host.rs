@@ -415,6 +415,6 @@ fn hotkeys_the_tray_and_input_wait_for_phase_l2() {
     assert_eq!(
         watch.unwrap_err(),
         PlatformError::Unavailable { what: "input watch" },
-        "the input portals"
+        "the GlobalShortcuts portal, and a source of physical activity not chosen yet"
     );
 }

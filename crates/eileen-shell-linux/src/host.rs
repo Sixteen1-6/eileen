@@ -152,8 +152,8 @@ impl ShellHost for LinuxShell {
         })
     }
 
-    /// `Unavailable` until phase L2 brings the dictation key through the `GlobalShortcuts`
-    /// portal and physical activity through the input portals.
+    /// `Unavailable` until phase L2, for which docs/LINUX.md section 4 plans the dictation key
+    /// through the `GlobalShortcuts` portal; the source of physical activity is not chosen yet.
     fn watch_input(
         &self,
         _dictation_key: VirtualKey,
