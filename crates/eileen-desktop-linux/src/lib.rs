@@ -33,9 +33,9 @@
 //! - Every call is bounded by its connection's call timeout, and a walk by its `TreeLimits` and
 //!   its budget, checked between reads: `eileen-dbus-linux`'s deadline model, with no timer of
 //!   its own around a call (tests `each_call_is_bounded_by_the_call_timeout` and the walk's).
-//! - Unix sockets only: an accessibility bus address that is not `unix:path=` or
-//!   `unix:abstract=` is refused before any connect, so the launcher's answer never makes zbus
-//!   start a program or reach the network (test `an_address_that_is_not_a_unix_socket_is_refused`).
+//! - Unix sockets only: `eileen_dbus_linux::bus_at_within` refuses any other accessibility bus
+//!   address before connecting, so the launcher's answer never makes zbus start a program or
+//!   reach the network (test `an_address_that_is_not_a_unix_socket_is_refused`).
 //!
 //! # Boundaries
 //!
@@ -47,10 +47,10 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-desktop-linux`.
-//! - Layers: unit tests of the state words and the address check; integration tests in
-//!   `tests/it/` against a fake launcher on one private bus and a fake registry and apps on a
-//!   second, each object a `#[zbus::interface]` that counts its calls. No sleeps and no paused
-//!   time: the one wait in real time is a 100 ms call timeout's own.
+//! - Layers: a unit test of the state words; integration tests in `tests/it/` against a fake
+//!   launcher on one private bus and a fake registry and apps on a second, each object a
+//!   `#[zbus::interface]` that counts its calls. No sleeps and no paused time: the one wait in
+//!   real time is a 100 ms call timeout's own.
 //! - A bug here starts as a tree that misses what is on screen, a walk that runs long, or a
 //!   read of a field Eileen must not read.
 //!

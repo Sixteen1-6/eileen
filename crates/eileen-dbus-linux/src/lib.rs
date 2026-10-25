@@ -8,7 +8,7 @@
 //! - [`DbusError`], its mappings from zbus errors and D-Bus error names, and its `From` into
 //!   `PlatformError`, variant for variant.
 //! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms;
-//!   [`bus_at_within`] for a bus at an address, such as the accessibility bus.
+//!   [`bus_at_within`] for a bus at a Unix socket's address, such as the accessibility bus.
 //! - [`name_owner`] and [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
 //! - [`Request`]: an xdg-desktop-portal request, from its token to its `Response`, and
 //!   [`close_request`], which ends one and waits for the portal's answer.
@@ -34,15 +34,15 @@
 //!   which [`DbusError::from_zbus`] maps to [`DbusError::DeadlineExceeded`]. Only a wait that a
 //!   signal answers takes an explicit `Duration`, enforced with `tokio::time::timeout`. A trait
 //!   call through the bridge waits at most its `Deadline`, past which its job is cancelled.
-//! - Errors keep only error names and kinds, never a service's message text, a path or a user
-//!   name.
+//! - Errors keep only error names and kinds: never a service's message, a path or a user name.
 //! - Constructors and calls take `&zbus::Connection` and clone it to keep, here and in the
 //!   crates that use these helpers, so the caller (or a test, with a private bus) picks the bus.
 //!   The one exception takes one by value because dropping it ends a hold: the session connection
 //!   of `LinuxPowerRequest::keep_awake`, whose close ends the desktop's hold.
 //! - Bridge jobs answer plain data, never a zbus connection, proxy or stream (all are `Send`),
 //!   so those stay on the bridge's thread: a rule each job keeps, which no type checks.
-//! - It never starts a process, except `dbus-daemon` for a test through `testing`.
+//! - It never starts a process, except `dbus-daemon` for a test through `testing`, not even for
+//!   an address: [`bus_at_within`] follows a Unix socket's only and refuses `unixexec:`.
 //!
 //! # Boundaries
 //!

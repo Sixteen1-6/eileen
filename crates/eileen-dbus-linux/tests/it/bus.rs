@@ -1,5 +1,5 @@
-//! The private bus, the method timeout (a private bus's, and a bus's at an address) and the
-//! round-trip barrier.
+//! The private bus, the method timeout (a private bus's, and a bus's at an address), the
+//! addresses a bus at an address refuses, and the round-trip barrier.
 
 use std::time::Duration;
 
@@ -102,6 +102,34 @@ async fn a_bus_at_an_address_bounds_each_call_by_its_timeout() {
         waited >= timeout && waited < METHOD_TIMEOUT,
         "the timeout the caller gave, not the default: {waited:?}"
     );
+}
+
+#[tokio::test]
+async fn an_address_that_is_not_a_unix_socket_is_refused_and_starts_nothing() {
+    let bus = PrivateBus::start();
+    let refused = DbusError::Invalid {
+        what: "the test bus",
+        detail: "not a unix socket's address".to_owned(),
+    };
+    // zbus would run `touch` for this address, and `touch` would leave the file behind.
+    let started = bus.dir().join("started");
+    let program = format!("unixexec:path=touch,argv1={}", started.display());
+    let answer = bus_at_within(&program, "the test bus", METHOD_TIMEOUT).await;
+    assert!(!started.exists(), "the unixexec: address started no program");
+    assert_eq!(answer.unwrap_err(), refused, "unixexec: is refused");
+    for address in [
+        "ibus:",
+        "tcp:host=127.0.0.1,port=9",
+        "nonce-tcp:host=127.0.0.1,port=9,noncefile=/nonexistent",
+        "unix:dir=/tmp",
+        "not an address",
+    ] {
+        assert_eq!(
+            bus_at_within(address, "the test bus", METHOD_TIMEOUT).await.unwrap_err(),
+            refused,
+            "{address} is refused before any connect"
+        );
+    }
 }
 
 #[tokio::test]
