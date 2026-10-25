@@ -26,6 +26,11 @@ use crate::open::OPEN_FLAGS;
 /// How deep the index looks below an `applications/` folder (`kde4/kate.desktop` is one deep).
 const MAX_DEPTH: usize = 8;
 
+/// The most folders the index reads under one `applications/` folder, links followed: far more
+/// than real trees take (a Wine prefix's menu takes tens), so a link to a big tree, such as `/`,
+/// costs a bounded walk where a whole one could take hours.
+const MAX_FOLDERS: usize = 1024;
+
 /// The most of one desktop entry the index reads: 1 MiB, far more than real entries take, so a
 /// huge file, such as a sparse one that takes no disk space, cannot fill memory. A longer file
 /// is skipped whole, as a cut could change its `Exec` line.
@@ -166,7 +171,8 @@ impl Session {
 ///
 /// Links to folders are followed, but a data folder's walk reads each folder once, however many
 /// paths lead to it, such as links to `.` or to a folder above: its entries take their IDs from
-/// the first of those paths in the walk's order.
+/// the first of those paths in the walk's order. The walk reads at most 1024 folders, so a link
+/// to a big tree, such as `/`, cannot keep it going: folders past the 1024th are not read.
 #[must_use]
 pub fn index(session: &Session) -> Vec<DesktopEntry> {
     let mut decided: BTreeSet<String> = BTreeSet::new();
@@ -239,7 +245,8 @@ fn is_export(dir: &Path) -> bool {
 ///
 /// `walked` holds the folders this walk has read, by the device and inode that every path to a
 /// folder shares. A folder in it is not read again, so a link back to it leads nowhere and its
-/// files keep the IDs of the path that reached it first.
+/// files keep the IDs of the path that reached it first. Once it holds [`MAX_FOLDERS`], the walk
+/// reads no more folders, but keeps the files it has listed.
 fn collect(
     dir: &Path,
     prefix: &str,
@@ -247,6 +254,9 @@ fn collect(
     walked: &mut BTreeSet<(u64, u64)>,
     out: &mut Vec<(String, PathBuf)>,
 ) {
+    if walked.len() >= MAX_FOLDERS {
+        return;
+    }
     let Ok(folder) = std::fs::metadata(dir) else {
         return;
     };

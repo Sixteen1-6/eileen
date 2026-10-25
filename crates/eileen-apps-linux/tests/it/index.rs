@@ -358,3 +358,27 @@ fn a_link_into_a_lower_data_folder_leaves_it_its_ids() {
         "the link's path in the user's folder, and the system's own"
     );
 }
+
+#[test]
+fn a_link_to_a_big_tree_leads_the_walk_through_at_most_1024_folders() {
+    // Through a link to `/`, a walk that read each folder once would still read every folder of
+    // the machine down to its depth limit, `/proc` and the mounts included: minutes or more where
+    // a mount is slow. Here the link leads to 1100 folders that each hold an entry. With
+    // `applications/` and the link's own folder, the walk reads 1024 folders: the first 1022.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let tree = scratch.path().join("tree");
+    let app = "[Desktop Entry]\nType=Application\nName=App\nExec=app\n";
+    for n in 0..1100 {
+        let folder = tree.join(format!("{n:04}"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("app.desktop"), app).unwrap();
+    }
+    symlink(&tree, applications.join("big")).unwrap();
+    let apps = index(&session);
+    let listed = ids(&apps);
+    assert_eq!(listed.len(), 1022 + 1, "the first 1022 folders' entries, and the plain one");
+    assert!(listed.contains(&"big-1021-app.desktop"), "the last folder read");
+    assert!(!listed.contains(&"big-1022-app.desktop"), "the first folder not read");
+    assert!(listed.contains(&"plain.desktop"), "a file listed before the cap is kept");
+}
