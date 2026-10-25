@@ -135,7 +135,7 @@ base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive"] }
 # syn: the newest 2.x release at least 14 days old on 2026-10-21 (2.0.119, released 2026-07-15;
 # tools/repo-tools only)
-syn = "2.0.119"
+syn = "3.0.6"
 
 # Tests
 insta = { version = "1.49.0", features = ["json", "redactions", "glob"] }
