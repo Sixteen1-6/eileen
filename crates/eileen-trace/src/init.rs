@@ -700,12 +700,27 @@ mod tests {
         }
     }
 
+    /// Whether libtest's output capture is off: nextest runs each test with `--nocapture`, and
+    /// `cargo test` needs `-- --no-capture` (or its older spelling `--nocapture`), or
+    /// `RUST_TEST_NOCAPTURE` set to anything but `0`, as libtest reads it.
+    fn output_capture_is_off() -> bool {
+        std::env::args_os().any(|arg| arg == "--nocapture" || arg == "--no-capture")
+            || std::env::var("RUST_TEST_NOCAPTURE").is_ok_and(|value| value != "0")
+    }
+
     #[test]
     fn dropping_the_guard_never_waits_for_a_stopped_terminal() {
+        // Every thread a test starts inherits libtest's output capture, which takes
+        // tracing-appender's print into its buffer: the print never waits for stdout, and the
+        // test would pass whatever the drop does.
+        assert!(
+            output_capture_is_off(),
+            "needs nextest or `cargo test -- --no-capture`: libtest's output capture keeps \
+             tracing-appender's print off stdout, so this test cannot see a drop that waits for it"
+        );
         let console = stopped_console();
         // tracing-appender's guard finds the console's buffer full and prints that on stdout,
-        // whose lock this holds. nextest runs a test without libtest's output capture, so the
-        // print goes to the process's stdout, as it does in Eileen.
+        // whose lock this holds, as a print to a terminal that stopped reading holds it.
         let stdout = HeldStdout::hold();
         let guard = console.guard;
         let (returned_tx, returned_rx) = sync_channel(1);
