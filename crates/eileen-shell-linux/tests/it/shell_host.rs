@@ -339,6 +339,23 @@ fn a_system_bus_that_never_answers_leaves_the_desktops_hold() {
 }
 
 #[test]
+fn a_system_bus_that_never_answers_leaves_the_portal_no_time_to_answer() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    // No GNOME session manager, and a portal that replies to Inhibit and never answers it.
+    let (portal, mut closes) = FakePortal::reporting_closes(Answer::Later);
+    fakes.serve(&bus, PORTAL, PORTAL_PATH, portal);
+    let shell = shell_at(bus.address(), silent.address());
+    assert_eq!(
+        shell.keep_awake().unwrap_err(),
+        PlatformError::DeadlineExceeded { call: "portal response" },
+        "the connect spent the half, so the portal's own wait passed at once, before the call's"
+    );
+    assert!(closes.blocking_recv().is_some(), "the portal's unconfirmed request was closed");
+}
+
+#[test]
 fn keep_awake_on_an_empty_bus_is_unavailable() {
     let bus = PrivateBus::start();
     assert_eq!(

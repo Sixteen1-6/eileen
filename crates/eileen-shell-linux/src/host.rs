@@ -47,8 +47,8 @@
 //! - zbus bounds no connect, neither its handshake nor its `Hello` call, and the task's own
 //!   session connection costs one more connect per `keep_awake`. The task bounds both of its
 //!   connects by the portal's half, counted from the call's start, not from the job's. A system
-//!   bus that hangs while connecting spends the whole half, which leaves the portal no time for
-//!   its answer: on a desktop without GNOME's session manager, nothing then holds.
+//!   bus that hangs while connecting spends the whole half and leaves the portal no time to wait
+//!   for its `Response`: on a desktop without GNOME's session manager, nothing then holds.
 //! - `keep_awake` fails only when nothing holds. A holder that missed
 //!   ([`LinuxPowerRequest::missed`]), such as the desktop's on a desktop with neither GNOME's
 //!   session manager nor the portal, goes unreported: the trait's `PowerRequest` has no place
