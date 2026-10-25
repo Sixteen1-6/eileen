@@ -1,10 +1,10 @@
 //! Which daily log files a process keeps ([`TraceConfig::max_log_files`]): its own
 //! `<process>.<YYYY-MM-DD>.jsonl` files, the newest by the date in the name with today's
-//! counted, pruned when the stack is built and again on the first line written after each UTC
-//! midnight. Names match exactly, never by prefix: the core's `eileen` begins every other
-//! process's file name. Nothing here logs or prints, since it runs before the subscriber exists
-//! and on the log writer's thread; a file it cannot delete stays for the next prune, and the
-//! core's janitor still caps the whole folder (BUILD.md section 2.15).
+//! counted, pruned when the stack is built and again at the first line after each UTC midnight,
+//! whether or not its write succeeds. Names match exactly, never by prefix: the core's `eileen`
+//! begins every other process's file name. Nothing here logs or prints, since it runs before
+//! the subscriber exists and on the log writer's thread; a file it cannot delete stays for the
+//! next prune, and the core's janitor still caps the whole folder (BUILD.md section 2.15).
 //!
 //! [`TraceConfig::max_log_files`]: crate::TraceConfig::max_log_files
 
@@ -63,7 +63,9 @@ impl Retention {
 }
 
 /// The process's daily file with its retention: it prunes when made, then on the first write
-/// of each new UTC day, after the inner writer has moved to that day's file.
+/// of each new UTC day before the line reaches the inner writer, as tracing-appender's own
+/// prune did. So a write that fails, on a full disk say, never puts the day's prune off, and
+/// the space the prune frees can take the line.
 pub(crate) struct Retained<W> {
     inner: W,
     rule: Retention,
@@ -82,13 +84,12 @@ impl<W> Retained<W> {
 
 impl<W: Write> Write for Retained<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self.inner.write(buf)?;
         let today = self.clock.wall().date();
         if today != self.pruned_on {
             self.pruned_on = today;
             let _ignored: io::Result<usize> = self.rule.prune(today);
         }
-        Ok(written)
+        self.inner.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -230,8 +231,8 @@ mod tests {
 
         CLOCK.advance(Duration::from_secs(1));
         writer.write_all(b"after midnight\n").unwrap();
-        // The appender opens the new day's file by its own clock, which may not have reached
-        // midnight yet, so today's place counts whether or not its file exists.
+        // The prune runs before the appender opens the new day's file (by its own clock), so
+        // today's place counts whether or not its file exists.
         assert_eq!(
             own(&dir.0),
             BTreeSet::from([daily("eileen", day, 0)]),
@@ -246,5 +247,37 @@ mod tests {
             "another process's files stay"
         );
         assert_eq!(writer.inner, b"before midnight\nafter midnight\n", "every line written");
+    }
+
+    /// A writer on a full disk: every write fails.
+    struct FullDisk;
+
+    impl std::io::Write for FullDisk {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::StorageFull.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_write_that_fails_still_prunes_for_the_new_day() {
+        // 2026-10-25T23:59:59Z, a second before midnight.
+        static CLOCK: ManualClock = ManualClock::new(WallTime(1_792_972_799_000_000));
+        let day = CLOCK.wall().date();
+        let dir = TempDir::new("full-disk");
+        let (today, yesterday) = (daily("eileen", day, 0), daily("eileen", day, 1));
+        touch(&dir.0, &today);
+        touch(&dir.0, &yesterday);
+        let mut writer = Retained::new(FullDisk, rule(&dir.0, 2), &CLOCK);
+        let both = BTreeSet::from([today.clone(), yesterday]);
+        assert_eq!(names(&dir.0), both, "made: both days stay");
+
+        CLOCK.advance(Duration::from_secs(1));
+        let error = writer.write_all(b"after midnight\n").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::StorageFull, "the write's own error");
+        assert_eq!(names(&dir.0), BTreeSet::from([today]), "pruned for the new day all the same");
     }
 }
