@@ -1,6 +1,6 @@
-//! The AT-SPI2 client: what the desktop's apps put on the accessibility bus
-//! (<https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/>), as UI Automation gives it on
-//! Windows (docs/LINUX.md sections 3 and 4).
+//! The AT-SPI2 client: what the desktop's apps put on the accessibility bus, as UI Automation
+//! gives it on Windows (docs/LINUX.md sections 3 and 4). The interfaces are at-spi2-core 2.52's,
+//! as the introspection data of its launcher and registry and of the ATK bridge give them.
 //!
 //! - The bus: [`accessibility_bus`] asks the session bus's `org.a11y.Bus` for its address and
 //!   connects with a call timeout, [`CALL_TIMEOUT`] in the product.

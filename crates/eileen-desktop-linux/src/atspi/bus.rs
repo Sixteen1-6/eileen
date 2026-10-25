@@ -52,8 +52,8 @@ pub async fn accessibility_bus(
 
 /// Whether toolkits are asked to put their trees on the accessibility bus: `IsEnabled` of
 /// `session`'s `org.a11y.Status`, read, never written. Qt, Chromium and Electron, and Firefox
-/// serve their trees only while it is on; turning it on would switch every one of them into
-/// accessibility mode, which only the user decides.
+/// serve their trees only while it is on or a screen reader runs; turning it on would switch
+/// every one of them into accessibility mode, which only the user decides.
 pub async fn toolkit_accessibility(session: &Connection) -> Result<bool, DbusError> {
     let failed = |error: zbus::Error| DbusError::from_zbus(STATUS, &error);
     let status = StatusProxy::builder(session)

@@ -57,7 +57,7 @@
 //! # Traps
 //!
 //! - Qt, Chromium and Electron, and Firefox put their trees on the bus only while `IsEnabled` is
-//!   on; GTK apps always do. A listing without them, on a desktop that runs them, means it is off.
+//!   on or a screen reader runs; GTK apps always do. A listing without them means both are off.
 //! - `ChildCount` can be wrong, and `GetChildren` on a big table makes the app build every
 //!   child: an object that manages its descendants, or has more children than there is room
 //!   for, is read child by child by index, and only as far as the room goes.
