@@ -43,8 +43,6 @@
 //! - [`machine::machine_hash`] normalises its OS id itself: pass the raw value, and anything
 //!   unusable counts as no id at all.
 //! - [`HudSurface`] is the only trait that is not `Send + Sync`: it lives on the HUD's thread.
-//! - Fakes call subscribers while holding their lock; a subscriber must not unsubscribe from
-//!   inside its own callback.
 //!
 //! # Logs and tracing
 //!
