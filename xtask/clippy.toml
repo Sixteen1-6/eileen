@@ -37,6 +37,6 @@ disallowed-methods = [
 ]
 disallowed-types = [
   { path = "std::sync::mpsc::Sender", reason = "use bounded tokio::sync channels" },
-  { path = "tokio::task::JoinSet", reason = "its spawn methods, collect and extend each start a bare tokio task; use eileen_rt::task::spawn and keep the JoinHandles; in a -linux crate, local tasks on the bridge's LocalSet (tokio::task::spawn_local inside a job)", allow-invalid = true },
+  { path = "tokio::task::JoinSet", reason = "its spawn methods, collect and extend each start a bare tokio task; use eileen_rt::task::spawn, or spawn_blocking for blocking work, and keep the JoinHandles; in a -linux crate, local tasks on the bridge's LocalSet (tokio::task::spawn_local inside a job), and blocking work on a thread of its own (eileen_stdx::thread::spawn_named)", allow-invalid = true },
 ]
 disallowed-names = ["foo", "bar", "baz", "tmp", "data2"]
