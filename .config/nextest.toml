@@ -1,14 +1,17 @@
+# Tests in owner_pc::, real_claude:: and linux_session:: modules run only in the profile made for
+# them (BUILD.md section 4.7). nextest names an integration test by its path inside its binary, so
+# a module at the top of a binary has no "::" before it: the filters match "^" as well.
 [profile.default]
 slow-timeout = { period = "10s", terminate-after = 3 }
 leak-timeout = { period = "500ms", result = "fail" }   # a test that leaves a child process running fails
-default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+default-filter = "not test(/(^|::)(owner_pc|real_claude|linux_session)::/)"
 
 [profile.ci]
 fail-fast = false
 retries = 0
 failure-output = "immediate-final"
 slow-timeout = { period = "15s", terminate-after = 4 }
-default-filter = "not (test(/::owner_pc::/) | test(/::real_claude::/))"
+default-filter = "not test(/(^|::)(owner_pc|real_claude|linux_session)::/)"
 
 [profile.ci.junit]
 path = "junit.xml"
@@ -21,6 +24,19 @@ fail-fast = false
 [profile.owner]                     # cargo xtask nightly-local and cargo xtask test --owner
 default-filter = "all()"
 fail-fast = false
+
+# The Linux desktop lane's session tests (.github/workflows/linux-desktop.yml, BUILD.md section
+# 4.6), inside its headless session. One at a time: they share the session's services.
+[profile.linux-session]
+default-filter = "test(/(^|::)linux_session::/)"
+test-threads = 1
+fail-fast = false
+retries = 0
+failure-output = "immediate-final"
+slow-timeout = { period = "15s", terminate-after = 4 }
+
+[profile.linux-session.junit]
+path = "junit.xml"
 
 [test-groups]
 desktop = { max-threads = 1 }
