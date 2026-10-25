@@ -267,8 +267,8 @@ async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
     }
 }
 
-/// A fresh folder of the temporary directory, removed on drop. The recent files' tests use it
-/// too.
+/// A fresh folder of the temporary directory, removed on drop. The recent files' tests and the
+/// index's use it too.
 pub(crate) struct Scratch(PathBuf);
 
 impl Scratch {
@@ -279,6 +279,11 @@ impl Scratch {
         let _ignored = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir.canonicalize().unwrap())
+    }
+
+    /// The folder.
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
     }
 
     /// A file in the folder.

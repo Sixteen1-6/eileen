@@ -1,12 +1,17 @@
 //! The app index over the fixture session: precedence, masking, the desktop's filters,
-//! `TryExec`, locales and packaged apps, and finding the entry of a trait's `AppEntry`.
+//! `TryExec`, locales and packaged apps, and finding the entry of a trait's `AppEntry`; and over
+//! a scratch folder, what it skips (a FIFO, a device and an entry over a mebibyte) and how it
+//! walks links to folders.
 
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write as _;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use eileen_apps_linux::{AppEntry, AppKind, DesktopEntry, FileError, Session, entry_for, index};
+
+use crate::open::Scratch;
 
 /// The fixture session's root.
 fn fixture() -> PathBuf {
@@ -42,6 +47,10 @@ fn session_with(lang: &str, language: Option<&str>, desktop: &str, path: Option<
 
 fn names(apps: &[DesktopEntry]) -> Vec<&str> {
     apps.iter().map(|app| app.name.as_str()).collect()
+}
+
+fn ids(apps: &[DesktopEntry]) -> Vec<&str> {
+    apps.iter().map(|app| app.id.as_str()).collect()
 }
 
 fn find<'a>(apps: &'a [DesktopEntry], id: &str) -> &'a DesktopEntry {
@@ -237,4 +246,139 @@ fn an_app_entry_finds_its_indexed_entry_by_its_desktop_file_id() {
         Err(FileError::NotFound { what: "desktop entry" }),
         "an app the user removed has no entry, as one uninstalled since the caller listed it"
     );
+}
+
+/// The fixture session with one data folder, `scratch`, whose `applications/` holds one entry,
+/// "Plain"; and that `applications/` folder, for the test's other files.
+fn beside_a_plain_entry(scratch: &Scratch) -> (Session, PathBuf) {
+    let applications = scratch.path().join("applications");
+    fs::create_dir_all(&applications).unwrap();
+    let plain = "[Desktop Entry]\nType=Application\nName=Plain\nExec=plain\n";
+    fs::write(applications.join("plain.desktop"), plain).unwrap();
+    let mut session = session("en_US.UTF-8", "GNOME", None);
+    session.data_dirs = vec![scratch.path().to_owned()];
+    (session, applications)
+}
+
+#[test]
+fn a_fifo_or_a_device_named_as_an_entry_is_skipped_at_once() {
+    // Nothing writes to the FIFO, so an open that waited for a writer would never return, and
+    // /dev/zero never ends. The FIFO sorts first, so an index that waits hangs before it reads.
+    // Both would be skipped even if they were read, the FIFO as empty and /dev/zero as over the
+    // size limit, so the next test checks that a FIFO is not read.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    scratch.fifo("applications/pipe.desktop");
+    symlink("/dev/zero", applications.join("zero.desktop")).unwrap();
+    assert_eq!(names(&index(&session)), ["Plain"], "only the entry beside them, without waiting");
+}
+
+#[test]
+fn a_fifo_that_holds_an_entry_is_skipped_unread() {
+    // On Linux a read-write open of a FIFO never waits, and the read-only open after it finds
+    // that writer. The reader held here keeps what was written once the writer closes, and with
+    // no writer a read returns the entry and then the end: only the check that the descriptor
+    // is a regular file keeps it out.
+    let scratch = Scratch::new();
+    let (session, _) = beside_a_plain_entry(&scratch);
+    let fifo = scratch.fifo("applications/piped.desktop");
+    let mut writer = fs::OpenOptions::new().read(true).write(true).open(&fifo).unwrap();
+    let _reader = fs::File::open(&fifo).unwrap();
+    writer.write_all(b"[Desktop Entry]\nType=Application\nName=Piped\nExec=piped\n").unwrap();
+    drop(writer);
+    assert_eq!(names(&index(&session)), ["Plain"], "what the FIFO holds is not read");
+}
+
+#[test]
+fn an_entry_over_a_mebibyte_is_skipped() {
+    // The index reads at most 1 MiB of an entry, and skips a longer one whole.
+    const CAP: usize = 1 << 20;
+    let entry = |name: &str, size: usize| {
+        let mut text = format!("[Desktop Entry]\nType=Application\nName={name}\nExec=big\n#");
+        text.push_str(&"x".repeat(size - text.len() - 1));
+        text + "\n"
+    };
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    fs::write(applications.join("at.desktop"), entry("At the cap", CAP)).unwrap();
+    fs::write(applications.join("over.desktop"), entry("Over the cap", CAP + 1)).unwrap();
+    assert_eq!(names(&index(&session)), ["At the cap", "Plain"], "one byte over is skipped");
+}
+
+#[test]
+fn a_folder_that_links_lead_back_to_is_walked_once() {
+    // Ten links to `.`, and one to the data folder above, which holds only `applications/`. A
+    // walk that followed each of them again at every level, down to its depth limit of 8, would
+    // read the folder about 1.3e8 times and not return for hours.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    for n in 0..10 {
+        symlink(".", applications.join(format!("here-{n}"))).unwrap();
+    }
+    symlink("..", applications.join("up")).unwrap();
+    assert_eq!(ids(&index(&session)), ["plain.desktop"], "once, under its own path");
+}
+
+#[test]
+fn a_folder_two_links_lead_to_is_walked_once_under_the_first() {
+    // Some installs link their own folder into `applications/`. Here two links name one folder:
+    // the walk follows `tools`, the first in its sorted order, and `tools-old` leads nowhere new,
+    // so the folder's entry is listed once, with the first path's desktop file ID.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let install = scratch.path().join("install");
+    fs::create_dir_all(&install).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(install.join("tool.desktop"), tool).unwrap();
+    symlink(&install, applications.join("tools")).unwrap();
+    symlink(&install, applications.join("tools-old")).unwrap();
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "tools-tool.desktop"],
+        "a link to a new folder is followed, and a second path to it is not"
+    );
+}
+
+#[test]
+fn a_link_into_a_lower_data_folder_leaves_it_its_ids() {
+    // The user's folder links to the system's `applications/`, so the user's walk reads it
+    // first. Each data folder's walk keeps its own record of what it read, so the system's walk
+    // reads it too, and its entry keeps the ID it has there.
+    let scratch = Scratch::new();
+    let (mut session, applications) = beside_a_plain_entry(&scratch);
+    let system = scratch.path().join("system");
+    fs::create_dir_all(system.join("applications")).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(system.join("applications").join("tool.desktop"), tool).unwrap();
+    symlink(system.join("applications"), applications.join("system")).unwrap();
+    session.data_dirs.push(system);
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "system-tool.desktop", "tool.desktop"],
+        "the link's path in the user's folder, and the system's own"
+    );
+}
+
+#[test]
+fn a_link_to_a_big_tree_leads_the_walk_through_at_most_1024_folders() {
+    // Through a link to `/`, a walk that read each folder once would still read every folder of
+    // the machine down to its depth limit, `/proc` and the mounts included: minutes or more where
+    // a mount is slow. Here the link leads to 1100 folders that each hold an entry. With
+    // `applications/` and the link's own folder, the walk reads 1024 folders: the first 1022.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let tree = scratch.path().join("tree");
+    let app = "[Desktop Entry]\nType=Application\nName=App\nExec=app\n";
+    for n in 0..1100 {
+        let folder = tree.join(format!("{n:04}"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("app.desktop"), app).unwrap();
+    }
+    symlink(&tree, applications.join("big")).unwrap();
+    let apps = index(&session);
+    let listed = ids(&apps);
+    assert_eq!(listed.len(), 1022 + 1, "the first 1022 folders' entries, and the plain one");
+    assert!(listed.contains(&"big-1021-app.desktop"), "the last folder read");
+    assert!(!listed.contains(&"big-1022-app.desktop"), "the first folder not read");
+    assert!(listed.contains(&"plain.desktop"), "a file listed before the cap is kept");
 }
