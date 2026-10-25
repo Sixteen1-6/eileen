@@ -27,12 +27,11 @@
 //!   tests `password_text_is_refused_without_asking_for_it` and the grounding password test).
 //! - It writes nothing: not `IsEnabled`, which would turn on every Qt, Chromium and Firefox tree
 //!   (2.6), nor any app's state (test `toolkit_accessibility_is_read_and_never_written`).
-//! - Every app text is sanitized (`eileen_contracts::desktop::sanitize`) and bounded, and errors
-//!   never carry it, nor an error name an app chose. A role, a state or an interface means only
-//!   what this crate's tables say: a window's class is its role's name, never the app's text.
-//! - A window's pid is the one the bus's daemon gives for its app's connection, never what the
-//!   app says, and its process is named from that pid (test `a_window_names_its_apps_own_process`).
-//!   Its id is the same in every process (`window_id`'s golden vector).
+//! - Every app text is sanitized and bounded, and no error carries it or an error name an app
+//!   chose. Roles, states and interfaces mean what this crate's tables say; a class is a role name.
+//! - A window's pid is the one the bus's daemon gives for its app's connection. Its process name
+//!   is kept only when clean, and marks it Eileen's only when read from the executable (test
+//!   `a_window_names_its_apps_own_process`).
 //! - Every call is bounded: on the accessibility bus by its connection's call timeout, a walk by
 //!   its `TreeLimits` and its budget, checked between reads, and a trait call by its deadline on
 //!   the bridge, with no timer of its own around a call (`eileen-dbus-linux`'s deadline model).
@@ -50,8 +49,7 @@
 //!   fake launcher on one private bus and a fake registry and apps on a second, one app in a
 //!   process of its own, and `Grounding` through `Bridge::on_private_bus`.
 //!   A walk's budget passes in paused time; real time only waits a 100 ms timeout or deadline.
-//! - A bug here starts as a window list or a tree that misses what is on screen, a call that runs
-//!   long, or a read of a field Eileen must not read.
+//! - A bug starts as a list or tree that misses what is on screen, a slow call or a forbidden read.
 //!
 //! # Traps
 //!
@@ -64,6 +62,8 @@
 //!   each that does not answer spends a call timeout and leaves the front window unknown.
 //! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
+//! - A process name is a hint: `comm`, the fallback, is the process's own choice, and a Flatpak
+//!   app reaches the bus through an `xdg-dbus-proxy` of its own, whose pid and name it gets.
 //! - Wayland tells a GTK window nothing of being minimized: only a toolkit's `ICONIFIED` says so.
 //! - Only Firefox's and Chromium's English names mark a private window, and a class is `frame` or
 //!   `dialog`: BUILD.md 2.6's and 2.10's private-window rules and 2.6's terminal tier need more.
