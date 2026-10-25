@@ -283,7 +283,7 @@ mod tests {
     use serde_json::{Value, json};
     use tracing_subscriber::layer::SubscriberExt as _;
 
-    use super::{TRACE_FIELDS, Violation, check};
+    use super::{Parents, TRACE_FIELDS, Violation, check};
     use crate::names;
     use crate::record::{SpanRecord, remote_parent, sorted};
     use crate::redact::Redactor;
@@ -454,6 +454,12 @@ mod tests {
                 .chain([capture.clone()])
                 .collect();
             assert_eq!(check(&spans), Vec::new(), "{case}");
+            let parent = Parents::new(&spans).remote(&capture);
+            assert_eq!(
+                parent.map(|p| (p.process.as_str(), p.name.as_str())),
+                Some(("eileen", names::MCP_CALL)),
+                "{case}: the capture sits under the core's mcp.call"
+            );
         }
     }
 
