@@ -48,8 +48,8 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-desktop-linux`.
-//! - Layers: a unit test of the state words; integration tests in `tests/it/` against a fake
-//!   launcher on one private bus and a fake registry and apps on a second, each object a
+//! - Layers: unit tests of the state and interface sets; integration tests in `tests/it/` with
+//!   a fake launcher on one private bus and a fake registry and apps on a second, each object a
 //!   `#[zbus::interface]` that counts its calls. A walk's budget passes in tokio's paused time,
 //!   a slow fake's wait the one timer; the one wait in real time is a 100 ms call timeout's own.
 //! - A bug here starts as a tree that misses what is on screen, a walk that runs long, or a

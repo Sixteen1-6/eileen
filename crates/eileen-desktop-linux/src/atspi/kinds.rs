@@ -151,7 +151,17 @@ const NAMES: [(&str, Interfaces); 15] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{State, StateSet};
+    use super::{Interfaces, State, StateSet};
+
+    #[test]
+    fn a_set_of_interfaces_contains_another_when_it_holds_each_of_them() {
+        let both = Interfaces::ACTION | Interfaces::TEXT;
+        assert!(both.contains(Interfaces::ACTION), "one of the two");
+        assert!(both.contains(both), "both");
+        assert!(!Interfaces::ACTION.contains(both), "one is not both");
+        assert!(!both.contains(Interfaces::ACTION | Interfaces::VALUE), "one of two is not enough");
+        assert!(both.contains(Interfaces::default()), "every set holds the empty one");
+    }
 
     #[test]
     fn states_read_both_words() {
