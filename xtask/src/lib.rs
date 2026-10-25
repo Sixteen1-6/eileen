@@ -38,7 +38,8 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo nextest run -p xtask` (it cannot guard its own build).
+//! - Fast command: `cargo xtask test -p xtask` (the guard admits the build of the tests; xtask
+//!   itself compiles before the guard can run).
 //! - Layers: unit tests over in-memory trees and repositories for every check, the guard with
 //!   fake memory and a manual clock, and scratch git repositories (they need `git` on `PATH`).
 //! - A bug here starts as a fixture test: a tree, description or memory reading misjudged.
@@ -81,6 +82,11 @@ use std::process::ExitCode;
 pub(crate) const EXIT_FINDINGS: u8 = 1;
 /// Exit code for a usage, IO or git error: the check could not run.
 pub(crate) const EXIT_ERROR: u8 = 2;
+
+/// `n` with the noun's singular or plural form: "1 problem", "7 problems".
+pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
 
 /// The repository root: xtask lives one folder below it.
 fn repo_root() -> std::path::PathBuf {

@@ -178,7 +178,7 @@ mod tests {
             checked_in.replace("\r\n", "\n"),
             schema_json(),
             "profiles/profile.schema.json is stale; regenerate it with \
-             `cargo run -p eileen-sim -- --print-schema > crates/eileen-sim/profiles/profile.schema.json`"
+             `cargo xtask sim --print-schema` and put the JSON it prints in that file"
         );
     }
 }

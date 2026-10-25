@@ -65,12 +65,17 @@ impl RunReport {
         self.failure.is_none()
     }
 
-    /// The command that runs this seed again.
+    /// The command that runs this seed again, with the step count it ran.
     #[must_use]
     pub fn replay_command(&self) -> String {
+        let (profile, steps) = (&self.profile, self.steps);
         match self.seed {
-            Some(seed) => format!("cargo xtask sim --seed {seed} --profile {}", self.profile),
-            None => format!("cargo xtask sim --profile {} (from the same bytes)", self.profile),
+            Some(seed) => {
+                format!("cargo xtask sim --seed {seed} --profile {profile} --steps {steps}")
+            }
+            None => {
+                format!("cargo xtask sim --profile {profile} --steps {steps} (from the same bytes)")
+            }
         }
     }
 }

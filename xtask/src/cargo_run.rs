@@ -36,7 +36,16 @@ pub(crate) fn cargo(command: &CargoCommand, out: &mut dyn Write) -> io::Result<E
     }
     let steps = cargo_steps(command.tool, &command.args, cfg!(windows));
     let name = format!("cargo xtask {}", command_name(command.tool));
-    finish(&guard::run(&command_line(&name, &command.args), options, steps, false, out)?, out)
+    let ran = guard::run(&command_line(&name, &command.args), options, steps, false, out)?;
+    if command.tool == (CargoTool::Test { owner: false }) && ran != Ran::NoSlot {
+        // Section 4.7: say what the profile's filter left out; nextest counts those as skipped.
+        writeln!(
+            out,
+            "xtask: the profile's filter leaves out the `owner_pc::` and `real_claude::` tests, \
+             counted as skipped above; `cargo xtask test --owner` runs them"
+        )?;
+    }
+    finish(&ran, out)
 }
 
 /// The steps one cargo tool runs, with `args` from the command line; `windows` splits the
@@ -62,7 +71,12 @@ pub(crate) fn cargo_steps(tool: CargoTool, args: &[String], windows: bool) -> Ve
         )],
         CargoTool::Build => vec![Step::cargo("build", with(&["build"], args))],
         CargoTool::Insta => {
-            vec![Step::cargo("insta", with(&["insta", "test", "--unreferenced", "reject"], args))]
+            // `cargo insta test` runs every test, the desktop group's included, so on Windows it
+            // holds `desktop.lock` throughout (section 6.1 rule 12).
+            let mut step =
+                Step::cargo("insta", with(&["insta", "test", "--unreferenced", "reject"], args));
+            step.desktop = windows;
+            vec![step]
         }
         CargoTool::Test { owner } => {
             let mut base = vec!["nextest".to_owned(), "run".to_owned()];
@@ -120,7 +134,7 @@ fn command_line(name: &str, args: &[String]) -> String {
 /// passed, 1 when one failed, 75 without a slot.
 fn finish(ran: &Ran, out: &mut dyn Write) -> io::Result<ExitCode> {
     match ran {
-        Ran::NoSlot => Ok(ExitCode::from(75)),
+        Ran::NoSlot => Ok(crate::machine::exit_code(eileen_buildguard::EXIT_NO_SLOT)),
         Ran::Steps(steps) => {
             if steps.len() > 1 {
                 for (label, passed) in steps {
@@ -287,19 +301,45 @@ pub(crate) fn pre_push(options: &PrePushOptions, out: &mut dyn Write) -> io::Res
     if !ran.passed() {
         return finish(&ran, out);
     }
-    let lint = crate::lint_repo::main(&crate::repo_root(), out)?;
-    if lint != ExitCode::SUCCESS {
-        return Ok(lint);
+    // Phase A: CI does not run `lint-repo` yet and `main` still has findings in WP10's crates
+    // (docs/wp/WP0-foundation.md), so the hook reports them without blocking the push. It blocks
+    // once phase B adds `lint-repo` to CI.
+    if crate::lint_repo::main(&crate::repo_root(), out)? != ExitCode::SUCCESS {
+        writeln!(
+            out,
+            "xtask: lint-repo found problems (above); the push goes on, since CI does not run \
+             lint-repo until WP0 phase B"
+        )?;
     }
     finish(&ran, out)
+}
+
+/// The commit `HEAD` names, when git can say.
+fn head_commit() -> Option<String> {
+    let output =
+        Command::new("git").args(["rev-parse", "HEAD"]).current_dir(crate::repo_root()).output();
+    output
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
 
 /// `cargo xtask sim`: the simulator's binary through the guard. No arguments runs the pull
 /// request seed set.
 pub(crate) fn sim(options: &SimOptions, out: &mut dyn Write) -> io::Result<ExitCode> {
-    let args =
-        with(&["run", "--locked", "-p", "eileen-sim", "--bin", "eileen-sim", "--"], &options.args);
-    let steps = vec![Step::cargo("eileen-sim", args)];
+    // `cargo run` already ends its own arguments with `--`, so a `--` typed after `sim` is not
+    // passed on as a simulator argument.
+    let mut rest = options.args.clone();
+    if let Some(at) = rest.iter().position(|a| a == "--") {
+        rest.remove(at);
+    }
+    let args = with(&["run", "--locked", "-p", "eileen-sim", "--bin", "eileen-sim", "--"], &rest);
+    let mut step = Step::cargo("eileen-sim", args);
+    if let Some(commit) = head_commit() {
+        // A failure prints its replay command with this commit (section 4.7).
+        step.invocation = step.invocation.with_env([("EILEEN_SIM_COMMIT", commit)]);
+    }
+    let steps = vec![step];
     finish(
         &guard::run(
             &command_line("cargo xtask sim", &options.args),

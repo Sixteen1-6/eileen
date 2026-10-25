@@ -3,10 +3,12 @@
 //! reason and holders printed every 30 s while a slot is refused, exit code 75 after
 //! `--wait-max`, and the guard's log.
 //!
-//! The log is one JSON object per line in `<machine root>/buildguard-log.jsonl`, one line per
-//! admission and per refusal: the time, the event, the command, the slots, the job count, the
-//! reason, and the last 30 s of shared samples (the paging average, the lowest headroom and the
-//! newest available memory). Acceptance 4's owner's-PC half is read from it.
+//! The log is one JSON object per line in `<machine root>/buildguard-log.jsonl`: one line per
+//! admission (with how long the command waited), per report while it waits (every 30 s, with the
+//! reason) and per refusal. Each line has the time, the event, the command, the slots, the job
+//! count, the reason, and the last 30 s of shared samples (the paging average, the lowest
+//! headroom and the newest available memory). Acceptance 4's owner's-PC half is read from it:
+//! the admissions within two minutes, and the waits during a minute of high paging.
 
 use std::fmt::Write as _;
 use std::fs::OpenOptions;
@@ -14,7 +16,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use eileen_buildguard::clock::RealClock;
+use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::guard::RECHECK_EVERY;
 use eileen_buildguard::slots::Holder;
 use eileen_buildguard::{
@@ -111,21 +113,61 @@ fn run_in(
     keep_going: bool,
     out: &mut dyn Write,
 ) -> io::Result<Ran> {
-    let mut ticket = match acquire(request, env) {
+    let started_ms = env.clock.now_ms();
+    let acquired = {
+        let (store, clock) = (env.store, env.clock);
+        let report = &mut *env.report;
+        // Every report while waiting is also a log line, so a refusal that ends in an admission
+        // still shows in the log.
+        let mut logged = |reason: &Reason, holders: &[Holder]| {
+            let waited_ms = Some(clock.now_ms().saturating_sub(started_ms));
+            let entry =
+                Entry { event: "waiting", reason: Some(reason), waited_ms, ..Entry::new("") };
+            log_to(store, clock, &Entry { command: &request.command, ..entry });
+            report(reason, holders);
+        };
+        let mut waiting = Env {
+            store,
+            memory: &mut *env.memory,
+            clock,
+            free_disk_gb: env.free_disk_gb,
+            slot_held: env.slot_held.clone(),
+            pid: env.pid,
+            report: &mut logged,
+        };
+        acquire(request, &mut waiting)
+    };
+    let waited_ms = Some(env.clock.now_ms().saturating_sub(started_ms));
+    let mut ticket = match acquired {
         Ok(ticket) => ticket,
         Err(refusal) => {
-            log_event(env, "refused", &request.command, None, Some(&refusal.reason));
+            let reason = Some(&refusal.reason);
+            let entry =
+                Entry { event: "refused", reason, waited_ms, ..Entry::new(&request.command) };
+            log_to(env.store, env.clock, &entry);
             writeln!(out, "xtask: {}", refusal_text(&refusal))?;
             return Ok(Ran::NoSlot);
         }
     };
-    log_event(env, "admitted", &request.command, Some(&ticket), None);
+    let ticket_field = Some((ticket.slots(), ticket.jobs()));
+    let entry = Entry {
+        event: "admitted",
+        ticket: ticket_field,
+        waited_ms,
+        ..Entry::new(&request.command)
+    };
+    log_to(env.store, env.clock, &entry);
     writeln!(out, "xtask: {} with {} compile jobs", slots_text(ticket.slots()), ticket.jobs())?;
     let mut ran = Vec::new();
     for step in steps {
         if let Err(refusal) = ticket.recheck(env) {
-            let reason = Some(&refusal.reason);
-            log_event(env, "recheck_refused", &request.command, Some(&ticket), reason);
+            let entry = Entry {
+                event: "recheck_refused",
+                ticket: Some((ticket.slots(), ticket.jobs())),
+                reason: Some(&refusal.reason),
+                ..Entry::new(&request.command)
+            };
+            log_to(env.store, env.clock, &entry);
             writeln!(out, "xtask: {}", refusal_text(&refusal))?;
             return Ok(Ran::NoSlot);
         }
@@ -246,22 +288,38 @@ pub(crate) struct Window {
     pub(crate) avail_mb: Option<u32>,
 }
 
+/// What one line of the guard's log records, besides its time and window.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Entry<'a> {
+    /// `admitted`, `waiting`, `refused` or `recheck_refused`.
+    pub(crate) event: &'a str,
+    /// The command as its holder record names it.
+    pub(crate) command: &'a str,
+    /// The slots and the job count, once admitted.
+    pub(crate) ticket: Option<(Slots, u32)>,
+    /// Why the slot was refused.
+    pub(crate) reason: Option<&'a Reason>,
+    /// How long the command had waited for its slot.
+    pub(crate) waited_ms: Option<u64>,
+}
+
+impl<'a> Entry<'a> {
+    /// An `admitted` entry for `command` with nothing else known yet.
+    pub(crate) const fn new(command: &'a str) -> Self {
+        Self { event: "admitted", command, ticket: None, reason: None, waited_ms: None }
+    }
+}
+
 /// One line of the guard's log.
-pub(crate) fn log_line(
-    at_ms: u64,
-    event: &str,
-    command: &str,
-    ticket: Option<(Slots, u32)>,
-    reason: Option<&Reason>,
-    window: Window,
-) -> String {
+pub(crate) fn log_line(at_ms: u64, entry: &Entry<'_>, window: Window) -> String {
     serde_json::json!({
         "at_ms": at_ms,
-        "event": event,
-        "command": command,
-        "slots": ticket.map(|(slots, _)| slots_field(slots)),
-        "jobs": ticket.map(|(_, jobs)| jobs),
-        "reason": reason.map(ToString::to_string),
+        "event": entry.event,
+        "command": entry.command,
+        "slots": entry.ticket.map(|(slots, _)| slots_field(slots)),
+        "jobs": entry.ticket.map(|(_, jobs)| jobs),
+        "reason": entry.reason.map(ToString::to_string),
+        "waited_ms": entry.waited_ms,
         "paging_kb_s_30s": window.paging_kb_s,
         "headroom_min_mb_30s": window.headroom_min_mb,
         "avail_mb": window.avail_mb,
@@ -282,20 +340,13 @@ fn window(store: &Store, now_ms: u64) -> Window {
 }
 
 /// Appends one line to the guard's log. A log that cannot be written never stops a build.
-fn log_event(
-    env: &Env<'_>,
-    event: &str,
-    command: &str,
-    ticket: Option<&Ticket>,
-    reason: Option<&Reason>,
-) {
-    let now = env.clock.now_ms();
-    let ticket = ticket.map(|t| (t.slots(), t.jobs()));
-    let line = log_line(now, event, command, ticket, reason, window(env.store, now));
+fn log_to(store: &Store, clock: &dyn Clock, entry: &Entry<'_>) {
+    let now = clock.now_ms();
+    let line = log_line(now, entry, window(store, now));
     let appended = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(env.store.root().join(LOG_FILE))
+        .open(store.root().join(LOG_FILE))
         .and_then(|mut file| file.write_all(format!("{line}\n").as_bytes()));
     if let Err(error) = appended {
         let _reported: io::Result<()> =
@@ -350,8 +401,12 @@ mod tests {
             headroom_min_mb: Some(4_000),
             avail_mb: Some(1_300),
         };
-        let line =
-            log_line(1_000, "admitted", "cargo xtask test", Some((Slots::Zero, 2)), None, window);
+        let entry = Entry {
+            ticket: Some((Slots::Zero, 2)),
+            waited_ms: Some(1_500),
+            ..Entry::new("cargo xtask test")
+        };
+        let line = log_line(1_000, &entry, window);
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(value["event"], "admitted", "the event");
         assert_eq!(value["slots"], "0", "slot 0");
@@ -359,6 +414,7 @@ mod tests {
         assert_eq!(value["paging_kb_s_30s"], 1_200, "the window's paging average");
         assert_eq!(value["headroom_min_mb_30s"], 4_000, "the window's lowest headroom");
         assert_eq!(value["avail_mb"], 1_300, "the newest available memory");
+        assert_eq!(value["waited_ms"], 1_500, "how long it waited");
         assert!(value["reason"].is_null(), "an admission has no reason");
         assert!(!line.contains('\n'), "one line");
     }
@@ -373,6 +429,10 @@ mod tests {
         assert!(ran.passed(), "every step passed");
         assert!(out.contains("compile jobs"), "it says what it was admitted with: {out}");
         assert!(log.contains("\"event\":\"admitted\""), "the admission is logged: {log}");
+        assert!(
+            log.contains("\"waited_ms\":") && !log.contains("\"waited_ms\":null"),
+            "with how long it waited: {log}"
+        );
     }
 
     #[test]
@@ -389,6 +449,7 @@ mod tests {
         assert!(!ran.passed(), "a refusal is not a pass");
         assert!(out.contains("exit code 75"), "it says why it stops: {out}");
         assert!(log.contains("\"event\":\"refused\""), "the refusal is logged: {log}");
+        assert!(log.contains("\"event\":\"waiting\""), "and the waits before it: {log}");
     }
 
     #[test]

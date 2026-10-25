@@ -103,7 +103,7 @@ fn invariant_6_fails_on_silent_loss_and_passes_an_explicit_lagged() {
     let events = vec![started(1, turn(1)), started(2, turn(2)), started(3, turn(3))];
     let silent = [Delivery::Event(1), Delivery::Event(3)];
     let error = bus_events_are_attributed(&events, &silent).unwrap_err();
-    assert!(error.detail.contains("missed 1 events before seq 3 and was told 0"), "{error}");
+    assert!(error.detail.contains("missed events before seq 3: 1, and was told 0"), "{error}");
     let told = [Delivery::Event(1), Delivery::Lagged(1), Delivery::Event(3)];
     assert_eq!(bus_events_are_attributed(&events, &told), Ok(()), "a Lagged notice counts");
 }

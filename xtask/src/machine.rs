@@ -77,7 +77,13 @@ pub(crate) fn setup(out: &mut dyn Write) -> io::Result<ExitCode> {
     writeln!(out, "setup: the prebuilt tools, with cargo-binstall")?;
     if run_quiet(Command::new("cargo").args(["binstall", "-V"])) {
         let mut binstall = Command::new("cargo");
-        binstall.args(["binstall", "--no-confirm", "--disable-strategies", "compile"]).args(TOOLS);
+        // Never a credential file (binstall otherwise looks for a GitHub token in git's and gh's
+        // files), no telemetry, and only the projects' own release binaries: no third-party
+        // builds, no compiling from source (section 6.1 rule 10).
+        binstall
+            .args(["binstall", "--no-confirm", "--no-discover-github-token", "--disable-telemetry"])
+            .args(["--disable-strategies", "quick-install,compile"])
+            .args(TOOLS);
         if !run_tool(&mut binstall) {
             failed.push("the prebuilt tools (cargo binstall)");
         }
@@ -269,8 +275,8 @@ fn write_baseline(store: &Store, out: &mut dyn Write) -> io::Result<()> {
     if hours < 4 {
         writeln!(
             out,
-            "slots --baseline: only {hours} separate hours so far; a typical working day needs \
-             at least four"
+            "slots --baseline: only {} so far; a typical working day needs at least four",
+            crate::count(hours, "separate hour", "separate hours")
         )?;
     }
     Ok(())
@@ -309,9 +315,9 @@ pub(crate) fn baseline_report(samples: &[Sample], hours: usize) -> String {
     let last = kept.iter().map(|s| s.at_ms).max().map_or_else(String::new, utc_date);
     [
         format!(
-            "Measured {first} to {last}: {} samples in {hours} separate hours, {} left out because \
-             a build slot was held.",
-            kept.len(),
+            "Measured {first} to {last}: {} in {}, {} left out because a build slot was held.",
+            crate::count(kept.len(), "sample", "samples"),
+            crate::count(hours, "separate hour", "separate hours"),
             samples.len() - kept.len()
         ),
         String::new(),
@@ -358,7 +364,11 @@ pub(crate) fn desktop_lock(
             writeln!(out, "desktop-lock: holding desktop.lock; press Enter to release it")?;
             out.flush()?;
             let mut line = String::new();
-            io::stdin().lock().read_line(&mut line)?;
+            if io::stdin().lock().read_line(&mut line)? == 0 {
+                // No terminal to press Enter in (standard input closed, as in an agent's
+                // background run): hold until the process is stopped, as section 4b.5 says.
+                hold_until_stopped();
+            }
             drop(held);
             writeln!(out, "desktop-lock: released")?;
             Ok(ExitCode::SUCCESS)
@@ -370,8 +380,15 @@ pub(crate) fn desktop_lock(
     }
 }
 
+/// Parks this thread until the process is stopped; the OS then releases what it held.
+fn hold_until_stopped() -> ! {
+    loop {
+        std::thread::park();
+    }
+}
+
 /// An exit code from an `i32`, 2 when it does not fit.
-fn exit_code(code: i32) -> ExitCode {
+pub(crate) fn exit_code(code: i32) -> ExitCode {
     ExitCode::from(u8::try_from(code).unwrap_or(crate::EXIT_ERROR))
 }
 
@@ -435,6 +452,30 @@ pub(crate) fn stale_entries(root: &Path, archive: &NativeArchive) -> io::Result<
     Ok(stale)
 }
 
+/// Unpacks the verified `archive` in `root` and writes its marker; false when tar fails. The
+/// marker is written only after a whole unpack, so a folder without it is what an interrupted
+/// unpack left: it is removed, and the archive unpacks beside it and is renamed into place, so
+/// no half folder is ever trusted.
+fn unpack(root: &Path, archive: &NativeArchive) -> io::Result<bool> {
+    let folder = root.join(archive.folder);
+    let unpacking = root.join(format!("{}.unpacking", archive.folder));
+    for leftover in [&folder, &unpacking] {
+        if leftover.exists() {
+            fs::remove_dir_all(leftover)?;
+        }
+    }
+    fs::create_dir_all(&unpacking)?;
+    let mut tar = Command::new("tar");
+    tar.arg("-xjf").arg(root.join(archive.file)).arg("-C").arg(&unpacking);
+    if !run_tool(&mut tar) {
+        return Ok(false);
+    }
+    fs::rename(unpacking.join(archive.folder), &folder)?;
+    fs::remove_dir_all(&unpacking)?;
+    fs::write(root.join(format!("{}{VERIFIED_SUFFIX}", archive.file)), archive.sha256)?;
+    Ok(true)
+}
+
 /// `cargo xtask fetch-native`: on Windows, downloads the pinned archive with curl when it is
 /// missing or wrong, checks its size and hash, unpacks it with tar, removes what older pins
 /// left, and says (or with `--print-env` prints) the variables cargo gets. Off Windows there is
@@ -461,7 +502,8 @@ pub(crate) fn fetch_native(
         note(options.print_env, out, &format!("fetch-native: downloading {}", archive.url))?;
         let partial = root.join(format!("{}.partial", archive.file));
         let mut curl = Command::new("curl");
-        curl.args(["--fail", "--location", "--retry", "5", "--silent", "--show-error", "--output"])
+        curl.args(["--fail", "--location", "--retry", "5", "--retry-all-errors"])
+            .args(["--silent", "--show-error", "--output"])
             .arg(&partial)
             .arg(archive.url);
         if !run_tool(&mut curl) {
@@ -479,18 +521,9 @@ pub(crate) fn fetch_native(
         }
         fs::rename(&partial, &path)?;
     }
-    fs::write(root.join(format!("{}{VERIFIED_SUFFIX}", archive.file)), archive.sha256)?;
-    if !root.join(archive.folder).join("lib").is_dir() {
-        let mut tar = Command::new("tar");
-        tar.arg("-xjf").arg(&path).arg("-C").arg(&root);
-        if !run_tool(&mut tar) {
-            note(
-                options.print_env,
-                out,
-                &format!("fetch-native: unpacking {} failed", archive.file),
-            )?;
-            return Ok(ExitCode::from(crate::EXIT_ERROR));
-        }
+    if env_for(&root, &archive).is_none() && !unpack(&root, &archive)? {
+        note(options.print_env, out, &format!("fetch-native: unpacking {} failed", archive.file))?;
+        return Ok(ExitCode::from(crate::EXIT_ERROR));
     }
     for stale in stale_entries(&root, &archive)? {
         note(
@@ -606,7 +639,7 @@ mod tests {
             .chain((0..10).map(|i| sample(1_793_000_700_000 + i * 5_000, 90_000, true)))
             .collect();
         let report = baseline_report(&samples, 1);
-        assert!(report.contains("120 samples in 1 separate hours"), "{report}");
+        assert!(report.contains("120 samples in 1 separate hour,"), "{report}");
         assert!(report.contains("10 left out"), "{report}");
         assert!(
             report.contains("| Paging, 30 s average (KB/s) | 1000 | 1000 | 1000 | 1000 | 1000 |"),

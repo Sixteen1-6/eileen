@@ -16,8 +16,9 @@
 //!
 //! # Invariants
 //!
-//! - One seed gives one trace on every OS (`--doublecheck`, WP0 acceptance 7; test
-//!   `run::tests::one_seed_gives_one_hash_and_two_seeds_two`).
+//! - One seed gives one trace, run after run (`--doublecheck` on every pull request seed, WP0
+//!   acceptance 7; test `run::tests::one_seed_gives_one_hash_and_two_seeds_two`). Pinning one
+//!   trace across OSes waits for WP1's core, whose changes would move any pinned hash.
 //! - Every run uses the large stack of [`run::SIM_STACK_BYTES`] ([`run::on_sim_thread`]).
 //! - Each invariant can fail: a hand-built violating trace per rule (`invariants::tests`);
 //!   WP1 acceptance 1 extends this to every invariant of section 4.7.

@@ -140,7 +140,7 @@ fn subscriber_lost_nothing(
                 let skipped = u64::try_from(index - next).unwrap_or(u64::MAX);
                 if skipped != owed {
                     return Err(format!(
-                        "the subscriber missed {skipped} events before seq {seq} and was told {owed}"
+                        "the subscriber missed events before seq {seq}: {skipped}, and was told {owed}"
                     ));
                 }
                 owed = 0;

@@ -347,7 +347,8 @@ fn parse_pr_meta(rest: Vec<String>) -> Result<PrMetaOptions, String> {
 }
 
 /// Takes the guard's own options out of `rest`, up to a `--`, and returns them with every other
-/// argument in order (what follows `--` passes through as it is).
+/// argument in order (the `--` and what follows it pass through as they are, so cargo and nextest
+/// still see where their own arguments end).
 fn split_guard(rest: Vec<String>) -> Result<(GuardOptions, Vec<String>), String> {
     let mut guard = GuardOptions::default();
     let mut seen: Vec<String> = Vec::new();
@@ -355,6 +356,7 @@ fn split_guard(rest: Vec<String>) -> Result<(GuardOptions, Vec<String>), String>
     let mut args = rest.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--" {
+            passed.push(arg);
             passed.extend(args.by_ref());
             break;
         }
@@ -582,9 +584,14 @@ mod tests {
                     exclusive: true,
                     ..GuardOptions::default()
                 },
-                args: vec!["-p".to_owned(), "eileen-core".to_owned(), "--exclusive".to_owned()],
+                args: vec![
+                    "-p".to_owned(),
+                    "eileen-core".to_owned(),
+                    "--".to_owned(),
+                    "--exclusive".to_owned()
+                ],
             })),
-            "the guard's flags are taken out, and everything after `--` passes through"
+            "the guard's flags are taken out, and `--` with everything after it passes through"
         );
         let build = parse_strs(&["build", "--timings", "--recheck-wait-max=1"]);
         assert_eq!(

@@ -189,11 +189,15 @@ pub(crate) fn main(root: &Path, out: &mut dyn Write) -> io::Result<ExitCode> {
         Ok((files, findings)) => {
             let annotate = std::env::var_os("GITHUB_ACTIONS").is_some_and(|value| value == "true");
             render(files, &findings, annotate, out)?;
-            Ok(if findings.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+            Ok(if findings.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(crate::EXIT_FINDINGS)
+            })
         }
         Err(error) => {
             writeln!(out, "lint-repo: could not run: {error}")?;
-            Ok(ExitCode::from(2))
+            Ok(ExitCode::from(crate::EXIT_ERROR))
         }
     }
 }
@@ -230,7 +234,7 @@ fn render(
         writeln!(out, "lint-repo: passed")
     } else {
         writeln!(out, "reproduce: cargo xtask lint-repo")?;
-        writeln!(out, "lint-repo: {} problems", findings.len())
+        writeln!(out, "lint-repo: {}", crate::count(findings.len(), "problem", "problems"))
     }
 }
 

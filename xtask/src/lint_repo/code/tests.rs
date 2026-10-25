@@ -112,6 +112,41 @@ fn an_extra_disallowed_methods_expectation_fails() {
 }
 
 #[test]
+fn a_module_wide_or_cfg_attr_disallowed_methods_expectation_fails() {
+    let mut tree = MemTree::clean();
+    tree.set(
+        "crates/demo/src/clock.rs",
+        "#![expect(clippy::disallowed_methods, reason = \"the whole module\")]\n\
+         #[cfg_attr(test, expect(clippy::disallowed_methods, reason = \"tests only\"))]\n\
+         fn now() {}\n#[cfg_attr(windows, expect(clippy::too_many_lines, reason = \"long\"))]\n\
+         fn long() {}\n",
+    );
+    let found = found(&tree, Check::CredentialBoundary);
+    assert_eq!(found.len(), 2, "the module and the function, not the other lint: {found:?}");
+    assert!(found.iter().any(|f| f.contains(":1 ") && f.contains("the whole module")), "{found:?}");
+    assert!(found.iter().any(|f| f.contains(":2 ") && f.contains("on `now`")), "{found:?}");
+}
+
+#[test]
+fn an_ignore_or_should_panic_under_cfg_attr_fails() {
+    let mut tree = MemTree::clean();
+    tree.set(
+        "crates/demo/tests/it/more.rs",
+        "#[test]\n#[cfg_attr(windows, ignore = \"slow\")]\nfn a() {}\n\
+         #[test]\n#[cfg_attr(unix, should_panic)]\nfn b() {}\n#[cfg_attr(test, derive(Debug))]\nstruct C;\n",
+    );
+    let found = found(&tree, Check::Tests);
+    assert_eq!(
+        found,
+        [
+            "crates/demo/tests/it/more.rs:2 a `#[ignore]` test",
+            "crates/demo/tests/it/more.rs:5 a `#[should_panic]` test"
+        ],
+        "{found:?}"
+    );
+}
+
+#[test]
 fn ignored_and_panicking_tests_fail() {
     let mut tree = MemTree::clean();
     tree.set(

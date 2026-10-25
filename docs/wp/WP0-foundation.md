@@ -162,6 +162,12 @@ paths; `it::` is a crate's integration test target):
   `it::machine::an_unusable_os_id_gives_the_install_id_only_hash` and
   `it::machine::file_identity_reads_etc_then_falls_back_to_dbus`.
 
+Acceptance 7 passed in pull request #98's run 40223792187: `logic-linux` ran the simulator's 12
+pull request seeds twice each with `--doublecheck` (one trace hash per seed) in 61 s including
+the simulator's build, under the 90 s budget; locally the runs themselves take under a second.
+On CI the step runs the binary directly, since runners are not build-guarded; `cargo xtask sim`
+runs the same command under the guard on the owner's PC.
+
 ## Switching main's required checks
 
 On 2026-10-21 `main` required `test (3.12)` and `test (3.13)`, both from GitHub Actions (app id
@@ -248,11 +254,20 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   window's paging average, lowest headroom and available memory) to a machine-wide JSON-lines
   file under `samples::machine_root()`, and the acceptance record is taken from it.
 - `cargo xtask lint-repo` stays out of CI in phase A. On `main` after `wp0/xtask` it finds the
-  root `AGENTS.md` and `CLAUDE.md` missing, which `wp0/guidance` adds; `## Owns` sections of more
+  root `AGENTS.md` and `CLAUDE.md` missing, which `wp0/guidance` adds; `# Owns` sections of more
   than three bullets in `eileen-apps-linux`, `eileen-dbus-linux` and `eileen-shell-linux`; and
   check 14 at `crates/eileen-dbus-linux/src/testing.rs` lines 70 and 74 (`Command::new` outside
   the sanctioned sites). Those three crates are WP10's, so WP10 fixes them, and the CI step
-  joins once the tree is clean.
+  joins once the tree is clean. Until then `cargo xtask pre-push` reports `lint-repo`'s findings
+  without blocking the push, and `cargo xtask ci` (acceptance 1) passes only once they are
+  fixed; phase B makes the hook block when it adds `lint-repo` to CI.
+- Check 16 in `wp0/xtask` covers `#[ignore]` and `#[should_panic]` (also under `cfg_attr`) and
+  real sleeps in test code. Its other half, that owner's-PC and real-Claude tests live only in
+  `owner_pc::` and `real_claude::` modules (section 4.7), needs a way to tell such a test from
+  its code and arrives with phase B's full check set.
+- `eileen-sim`'s input generator draws `timer` inputs with made-up timer IDs, which only works
+  while the stub core sets no timers. WP1, whose core sets them, draws timer firings from the
+  world's pending timers instead (or leaves them to `World::advance`).
 - Check 14's list of `#[expect(clippy::disallowed_methods)]` functions after `wp0/base-crates`,
   which differs from section 4b.2's shorter names: `eileen_stdx::clock::SystemClock::now` and
   `::system_now`, `eileen_stdx::ids::OsIds::ulid` (its `Ids` impl),
@@ -701,6 +716,12 @@ request's push to `main` saves, so `wp0/xtask` records them. The per-worktree ta
 this cloud session (Ubuntu 24.04, debug, after `check`, `clippy`, `nextest` and the doc tests of
 the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows cross-check and
 `cargo doc` beside it. The owner's PC's Windows figure waits for a build there.
+
+`wp0/xtask` on 2026-10-25, pull request #98's run 40223792187 on 2c12a07, the first with
+`main`'s caches from `wp0/stubs` (warm, partial matches): `plan` 4 s, `hygiene` 21 s,
+`logic-linux` 190 s (tests 55 s, the simulator's seed set 61 s with its build), `windows-clippy`
+120 s (clippy 50 s, `fetch-native` 15 s), `windows-test` 165 s (tests 93 s), `all-green` 3 s;
+`pr-meta` 21 s. Against `wp0/stubs`' cold run each Windows job took about 69 percent less time.
 
 The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
 the owner's PC writes its percentiles between these markers and its thresholds to

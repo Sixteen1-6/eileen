@@ -245,29 +245,45 @@ fn check_spawns(path: &str, code: &str, tidy: &Tidy, findings: &mut Vec<Finding>
             ));
         }
     }
-    let mut from = 0;
-    while let Some(at) =
-        code.get(from..).and_then(|rest| rest.find("#[expect(")).map(|at| from + at)
-    {
-        let close = matching_paren(code, at + "#[expect".len());
-        from = close;
-        let attribute = code.get(at..close).unwrap_or_default();
-        if !attribute.contains("clippy::disallowed_methods") {
-            continue;
-        }
-        let target = attribute_target(code, close, &spans);
-        if !sanctioned(target, false) {
-            findings.push(Finding::new(
-                Check::CredentialBoundary,
-                path,
-                Some(line_of(code, at)),
-                format!(
-                    "an `#[expect(clippy::disallowed_methods)]` on `{}` that section 4b.2 does not sanction",
-                    target.unwrap_or("an item outside any function")
-                ),
-                "use the sanctioned helper instead (eileen_stdx, eileen_rt, eileen_supervisor); a \
-                 new exception needs a decision record and a line in xtask/tidy/disallowed-methods.toml",
-            ));
+    // Outer and inner attributes, plain or under `cfg_attr`. A module-wide `#![expect]` is never
+    // sanctioned: it would cover every function in the module.
+    let needles = [
+        ("#[expect(", false),
+        ("#[cfg_attr(", false),
+        ("#![expect(", true),
+        ("#![cfg_attr(", true),
+    ];
+    for (needle, inner) in needles {
+        let mut from = 0;
+        while let Some(at) = code.get(from..).and_then(|rest| rest.find(needle)).map(|at| from + at)
+        {
+            let close = matching_paren(code, at + needle.len() - 1);
+            from = close;
+            let attribute = code.get(at..close).unwrap_or_default();
+            if !attribute.contains("clippy::disallowed_methods") || !attribute.contains("expect(") {
+                continue;
+            }
+            let target = if inner { None } else { attribute_target(code, close, &spans) };
+            if inner || !sanctioned(target, false) {
+                findings.push(Finding::new(
+                    Check::CredentialBoundary,
+                    path,
+                    Some(line_of(code, at)),
+                    format!(
+                        "an `{}expect(clippy::disallowed_methods)]` on `{}` that section 4b.2 does \
+                         not sanction",
+                        if inner { "#![" } else { "#[" },
+                        target.unwrap_or(if inner {
+                            "the whole module"
+                        } else {
+                            "an item outside any function"
+                        })
+                    ),
+                    "use the sanctioned helper instead (eileen_stdx, eileen_rt, eileen_supervisor); \
+                     a new exception needs a decision record and a line in \
+                     xtask/tidy/disallowed-methods.toml",
+                ));
+            }
         }
     }
 }
@@ -334,7 +350,13 @@ fn check_tests(path: &str, code: &str, findings: &mut Vec<Finding>) {
             .chars()
             .take_while(|c| is_ident(*c))
             .collect();
-        if word == "ignore" || word == "should_panic" {
+        // `cfg_attr(windows, ignore)` ignores the test as surely as `#[ignore]` does.
+        let attribute =
+            code.get(from..).and_then(|rest| rest.split(']').next()).unwrap_or_default();
+        let named = ["ignore", "should_panic"].into_iter().find(|name| {
+            *name == word || (word == "cfg_attr" && !find_word(attribute, name).is_empty())
+        });
+        if let Some(word) = named {
             findings.push(Finding::new(
                 Check::Tests,
                 path,
@@ -350,7 +372,9 @@ fn check_tests(path: &str, code: &str, findings: &mut Vec<Finding>) {
     if blocks.is_empty() {
         return;
     }
-    let paused = code.contains("start_paused") || !find_word(code, "pause").is_empty();
+    // Only tokio's own paused clock counts: a `pause` of something else (audio, media) leaves
+    // a tokio sleep real.
+    let paused = code.contains("start_paused") || code.contains("time::pause");
     let imported = |module: &str| {
         code.lines().any(|line| {
             let line = line.trim_start();

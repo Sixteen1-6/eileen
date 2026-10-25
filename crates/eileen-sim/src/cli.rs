@@ -19,6 +19,8 @@ pub const EXIT_PASS: u8 = 0;
 pub const EXIT_FAIL: u8 = 1;
 /// A usage or IO error.
 pub const EXIT_ERROR: u8 = 2;
+/// The variable that names the commit a run is at, for the replay line of a failure.
+pub const COMMIT_ENV: &str = "EILEEN_SIM_COMMIT";
 
 /// The usage text.
 pub const USAGE: &str = "\
@@ -238,6 +240,11 @@ fn report_one(report: &RunReport, verbose: bool, out: &mut dyn Write) -> io::Res
             out.write_all(report.log.as_bytes())?;
             writeln!(out, "{name}: FAIL at step {step}: {violation}")?;
             writeln!(out, "replay: {}", report.replay_command())?;
+            // Section 4.7: the replay command comes with the commit it failed at, which
+            // `cargo xtask sim` and CI pass in.
+            if let Ok(commit) = std::env::var(COMMIT_ENV) {
+                writeln!(out, "commit: {commit}")?;
+            }
             Ok(EXIT_FAIL)
         }
     }
