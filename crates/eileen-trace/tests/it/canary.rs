@@ -33,6 +33,10 @@ const QUOTED_PASSWORD: &str = "pa\"ss\\word\tcanary";
 const PEM_BODY: &str = "MIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAcanary";
 /// A marked transcript.
 const TRANSCRIPT: &str = "my bank pin is in the blue notebook";
+/// A message quoting a private key header with no END line after it.
+const KEY_HEADER_QUOTED: &str = "could not parse \"-----BEGIN RSA PRIVATE KEY-----\"";
+/// The card as a negative JSON number.
+const NEGATIVE_CARD: i64 = -4_111_111_111_111_111;
 
 struct TempDir(PathBuf);
 
@@ -93,6 +97,8 @@ fn emit_secrets(pem: &str) {
     tracing::warn!(target: "eileen_desktop", password = PASSWORD, pem = %pem, "clipboard");
     tracing::warn!(target: "eileen_desktop", plain = QUOTED_PASSWORD, debug = ?QUOTED_PASSWORD, shown = %QUOTED_PASSWORD, "password field");
     tracing::warn!(target: "eileen_desktop", "typed {QUOTED_PASSWORD:?} into the field");
+    tracing::warn!(target: "eileen_desktop", line = KEY_HEADER_QUOTED, "a key header alone");
+    tracing::info!(target: "eileen_core", balance = NEGATIVE_CARD, "a negative card number");
     tracing::debug!(target: "eileen_core", key = API_KEY, "ring only");
 }
 

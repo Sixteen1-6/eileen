@@ -9,10 +9,11 @@
 //! would not be: JSON forbids leading zeros).
 //!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
-//! log line or a ring record), `Debug`-escaped (a `?value` field, or the console's strings),
-//! and `Debug` then JSON-escaped, so a password holding a quote or a backslash is caught after
-//! serialization too. The file layer also redacts each field value before it serializes the
-//! line, and the line pass stays as the backstop.
+//! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
+//! JSON-escaped, so a password holding a quote or a backslash is caught after serialization
+//! too. The file layer also redacts each field value before it serializes the line, and the
+//! line pass stays as the backstop. A ring dump redacts only the values under each record's
+//! `fields`, so the record's own ids and times never meet the card rule.
 //!
 //! A literal stays registered while its [`LiteralGuard`] lives, so a session's hook token
 //! leaves the scan when the session ends, and at most [`MAX_LITERALS`] are held at once: each
