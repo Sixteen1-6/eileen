@@ -349,10 +349,23 @@ fn a_system_bus_that_never_answers_leaves_the_portal_no_time_to_answer() {
     let shell = shell_at(bus.address(), silent.address());
     assert_eq!(
         shell.keep_awake().unwrap_err(),
-        PlatformError::DeadlineExceeded { call: "portal response" },
-        "the connect spent the half, so the portal's own wait passed at once, before the call's"
+        PlatformError::DeadlineExceeded { call: "system bus" },
+        "the connect spent the half, so the portal's own wait passed at once; logind's miss, \
+         late rather than absent, comes first"
     );
     assert!(closes.blocking_recv().is_some(), "the portal's unconfirmed request was closed");
+}
+
+#[test]
+fn keep_awake_on_two_buses_that_never_answer_passes_its_deadline() {
+    let silent = SilentBus::start();
+    let shell = shell_at(silent.address(), silent.address());
+    assert_eq!(
+        shell.keep_awake().unwrap_err(),
+        PlatformError::DeadlineExceeded { call: "system bus" },
+        "both buses are there and never answered, so neither holder is absent: logind's miss, \
+         once the half has passed, before the call's own deadline"
+    );
 }
 
 #[test]
