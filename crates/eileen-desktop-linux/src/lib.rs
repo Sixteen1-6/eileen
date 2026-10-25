@@ -63,8 +63,8 @@
 //!   such an object is read child by child by index, and only as far as the room goes.
 //! - libatspi waits up to 15 s on an app it first saw less than 15 s ago, and 800 ms only after;
 //!   [`CALL_TIMEOUT`] is 800 ms from the start, so a read just after an app starts can time out.
-//! - A listing reads one app after another, so each app that does not answer spends a call
-//!   timeout of the call's deadline; and every call connects to the accessibility bus anew.
+//! - Every call connects to the accessibility bus anew, and a listing reads one app after another:
+//!   each that does not answer spends a call timeout and leaves the front window unknown.
 //! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
 //! - A second at-spi-bus-launcher on the session's runtime folder and display takes the live bus.

@@ -78,15 +78,16 @@ pub(crate) async fn element_info(
 /// - `None` when no window is active, or when the whole tree was read and nothing in it is
 ///   focused.
 /// - A walk cut short, by its limits, its budget or a failed read, that found nothing focused is
-///   [`DbusError::DeadlineExceeded`]: the focus is unknown, not absent.
+///   [`DbusError::DeadlineExceeded`]: the focus is unknown, not absent. So is a listing that
+///   left an app unread, since the front window may be that app's.
 pub(crate) async fn focus(
     atspi: &Atspi,
     limits: TreeLimits,
     budget: Duration,
 ) -> Result<Option<(Accessible, WindowRef)>, DbusError> {
     let until = Instant::now() + search_budget(budget);
-    let windows = toplevels(atspi).await?;
-    let Some(front) = windows.first().filter(|front| front.is_active()) else { return Ok(None) };
+    let found = toplevels(atspi).await?;
+    let Some(front) = found.front(FOCUS)? else { return Ok(None) };
     let window = WindowRef { hwnd: window_id(&front.window.object), pid: front.pid };
     let walk = atspi.walk(&front.window.object, limits, until).await?;
     match deepest_focus(&walk) {

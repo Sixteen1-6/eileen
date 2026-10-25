@@ -40,6 +40,8 @@ const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
 struct World {
     runtime: tokio::runtime::Runtime,
     apps: Vec<App>,
+    /// The roots the registry lists, in order: each app's, and those a test adds.
+    roots: Vec<Reference>,
     registry: Option<zbus::Connection>,
     session: Option<Session>,
     a11y: PrivateBus,
@@ -52,7 +54,7 @@ impl World {
         let runtime = runtime.unwrap();
         let a11y = PrivateBus::start();
         let session = Some(runtime.block_on(Session::start(a11y.address())));
-        Self { runtime, apps: Vec::new(), registry: None, session, a11y }
+        Self { runtime, apps: Vec::new(), roots: Vec::new(), registry: None, session, a11y }
     }
 
     /// Starts an app and serves the objects `nodes` gives once the app's name is known, its
@@ -65,8 +67,15 @@ impl World {
             }
             app
         });
+        self.roots.push(app.reference(ROOT));
         self.apps.push(app);
         self.apps.len() - 1
+    }
+
+    /// Lists, after the roots so far, the root of an app that has gone since the registry
+    /// listed it: a unique name nothing holds, which the bus's daemon never gives out.
+    fn gone_app(&mut self) {
+        self.roots.push((":9.9".to_owned(), ROOT.try_into().unwrap()));
     }
 
     /// App `app`'s object at `path`.
@@ -80,10 +89,10 @@ impl World {
     }
 
     /// A desktop with `settings` on a bridge to the session bus. The first one serves the
-    /// registry, which lists the roots of the apps started so far, in order.
+    /// registry, which lists the roots listed so far, in order.
     fn desktop(&mut self, settings: LinuxDesktopSettings) -> LinuxDesktop {
         if self.registry.is_none() {
-            let roots = self.apps.iter().map(|app| app.reference(ROOT)).collect();
+            let roots = self.roots.clone();
             self.registry = Some(self.runtime.block_on(registry(&self.a11y, roots)));
         }
         LinuxDesktop::new(Bridge::on_private_bus(self.session_bus()).unwrap(), settings)
@@ -251,12 +260,13 @@ fn the_foreground_is_the_active_window_and_none_without_one() {
     world.app(|app| {
         vec![root(app, &["/stale"]), ("/stale", window(FRAME, "Stale", &[ACTIVE], vec![]))]
     });
+    world.gone_app();
     let desktop = world.desktop(settings());
     let front = window_id(&world.object(first, "/front"));
     assert_eq!(
         desktop.foreground().unwrap(),
         Some(WindowRef { hwnd: front, pid: std::process::id() }),
-        "the first active window that is not defunct"
+        "the first active window that is not defunct, a gone app leaving it known"
     );
     let windows = desktop.windows(true).unwrap();
     let in_front: Vec<_> = windows.iter().filter(|w| w.is_foreground).map(|w| w.hwnd).collect();
@@ -276,6 +286,59 @@ fn the_foreground_is_the_active_window_and_none_without_one() {
     let desktop = idle.desktop(settings());
     assert_eq!(desktop.foreground().unwrap(), None, "no window is active");
     assert_eq!(desktop.focused_element(Deadline::UIA).unwrap(), None, "so nothing is focused");
+}
+
+/// The app in front, busy past its call timeout: its root answers `NoReply`, so its active
+/// sign-in dialog, whose password field has the focus, is never read.
+fn busy_sign_in(app: &App) -> Vec<(&'static str, Node)> {
+    let (path, root) = root(app, &["/login"]);
+    let states = words(&[SHOWING, FOCUSED]);
+    let password = Node { role: PASSWORD_TEXT, states, ..Node::default() };
+    let login = window(DIALOG, "Sign in", &[ACTIVE], app.references(&["/password"]));
+    vec![(path, Node { no_reply: true, ..root }), ("/login", login), ("/password", password)]
+}
+
+#[test]
+fn while_an_app_does_not_answer_the_front_window_is_unknown() {
+    let unknown = |call| PlatformError::DeadlineExceeded { call };
+    let mut world = World::new();
+    world.app(busy_sign_in);
+    let idle =
+        world.app(|app| vec![root(app, &["/idle"]), ("/idle", window(FRAME, "Idle", &[], vec![]))]);
+    let desktop = world.desktop(settings());
+    let listed: Vec<_> = desktop.windows(true).unwrap().iter().map(|w| w.hwnd).collect();
+    assert_eq!(listed, [window_id(&world.object(idle, "/idle"))], "the busy app's are left out");
+    let foreground = desktop.foreground();
+    assert_eq!(
+        foreground.unwrap_err(),
+        unknown("foreground window"),
+        "the busy app may be in front"
+    );
+    let focus = desktop.focused_element(Deadline::UIA);
+    assert_eq!(focus.unwrap_err(), unknown("focused element"), "so the focus is unknown");
+    let selection = desktop.selection(false, Deadline::UIA);
+    assert_eq!(selection.unwrap_err(), unknown("focused element"), "and with it the selection");
+    let mut world = World::new();
+    world.app(busy_sign_in);
+    let stale = world.app(|app| {
+        let field = Node { role: TEXT, states: words(&[SHOWING, FOCUSED]), ..Node::default() };
+        let editor = window(FRAME, "Editor", &[ACTIVE], app.references(&["/field"]));
+        vec![root(app, &["/editor"]), ("/editor", editor), ("/field", field)]
+    });
+    let desktop = world.desktop(settings());
+    let windows = desktop.windows(true).unwrap();
+    let listed: Vec<_> = windows.iter().map(|w| (w.hwnd, w.is_foreground)).collect();
+    assert_eq!(
+        listed,
+        [(window_id(&world.object(stale, "/editor")), false)],
+        "a window of another app that still says it is active is not marked in front"
+    );
+    assert_eq!(desktop.foreground().unwrap_err(), unknown("foreground window"), "nor answered so");
+    assert_eq!(
+        desktop.focused_element(Deadline::UIA).unwrap_err(),
+        unknown("focused element"),
+        "nor its field as the focus, while the keyboard may be in the password field"
+    );
 }
 
 #[test]

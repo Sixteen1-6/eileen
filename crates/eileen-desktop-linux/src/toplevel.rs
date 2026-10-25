@@ -65,24 +65,51 @@ impl Toplevel {
     }
 }
 
+/// The windows a listing found, and whether it read every app's.
+#[derive(Debug, Clone)]
+pub(crate) struct Found<W> {
+    /// The windows, the first active one first and the rest in the registry's order.
+    pub(crate) windows: Vec<W>,
+    /// Whether an app was left out for a failure other than [`DbusError::NotFound`]: its
+    /// windows are unknown, and so is the front window, which may be one of them.
+    pub(crate) unread: bool,
+}
+
+impl Found<Toplevel> {
+    /// The front window: the first, when it is active, and `None` when no window is. While an
+    /// app is unread, the front window is unknown: [`DbusError::DeadlineExceeded`] naming `call`.
+    pub(crate) fn front(&self, call: &'static str) -> Result<Option<&Toplevel>, DbusError> {
+        if self.unread {
+            return Err(DbusError::DeadlineExceeded { call });
+        }
+        Ok(self.windows.first().filter(|front| front.is_active()))
+    }
+}
+
 /// The windows of every app the registry lists, the first active one first and the rest in the
 /// registry's order, without the defunct ones.
 ///
 /// - An app whose root, listing or process cannot be read, or one of whose windows answers
 ///   anything but [`DbusError::NotFound`], is left out with all its windows, and the others are
 ///   listed. A window gone since its app's listing is left out alone.
+/// - An app left out for anything but `NotFound`, the answer of an app that has gone, leaves the
+///   listing `unread`: one that does not answer in time may be the one in front.
 /// - No registry is [`DbusError::Unavailable`].
-pub(crate) async fn toplevels(atspi: &Atspi) -> Result<Vec<Toplevel>, DbusError> {
-    let mut windows = Vec::new();
+pub(crate) async fn toplevels(atspi: &Atspi) -> Result<Found<Toplevel>, DbusError> {
+    let mut found = Found { windows: Vec::new(), unread: false };
     for app in atspi.applications().await? {
-        windows.extend(app_windows(atspi, &app).await.unwrap_or_default());
+        match app_windows(atspi, &app).await {
+            Ok(windows) => found.windows.extend(windows),
+            Err(DbusError::NotFound { .. }) => {}
+            Err(_) => found.unread = true,
+        }
     }
-    if let Some(active) = windows.iter().position(Toplevel::is_active)
-        && let Some(front) = windows.get_mut(..=active)
+    if let Some(active) = found.windows.iter().position(Toplevel::is_active)
+        && let Some(front) = found.windows.get_mut(..=active)
     {
         front.rotate_right(1);
     }
-    Ok(windows)
+    Ok(found)
 }
 
 /// The windows of the app whose root is `app`, at most [`WINDOWS_PER_APP`].
@@ -113,9 +140,11 @@ async fn toplevel(atspi: &Atspi, object: &ObjectRef, pid: u32) -> Result<Topleve
 
 /// The windows `toplevels` lists, in its order, as `Grounding` gives them, each with what Eileen
 /// keeps of it. Each process is named once, by [`process_name`]; a window is Eileen's when its
-/// process is one of `own_processes`.
+/// process is one of `own_processes`. The first window is the foreground one when it is active
+/// and `front_known`, which a listing that left an app unread is not.
 pub(crate) fn window_infos(
     toplevels: Vec<Toplevel>,
+    front_known: bool,
     own_processes: &[String],
 ) -> Vec<(WindowInfo, KnownWindow)> {
     let mut names = BTreeMap::new();
@@ -133,7 +162,7 @@ pub(crate) fn window_infos(
             z_order: z,
             is_minimized: window.states.contains(State::ICONIFIED),
             is_cloaked: false,
-            is_foreground: z == 0 && window.states.contains(State::ACTIVE),
+            is_foreground: front_known && z == 0 && window.states.contains(State::ACTIVE),
             is_eileen: own_processes.contains(process),
             is_private: false,
             url_host: None,

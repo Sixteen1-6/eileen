@@ -45,17 +45,25 @@ impl Grounding for LinuxDesktop {
     /// coordinates, its process the name of its app's executable, and `z_order` counts the
     /// minimized windows too. No monitor, executable version, cloaking, private mode or page
     /// host is known: `url_host` is `None`, which keeps BUILD.md section 2.12's URL rule closed.
+    /// The windows of an app that does not answer are left out, and while one is, no window is
+    /// `is_foreground`: the front window is unknown, as [`Self::foreground`] says.
     fn windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, PlatformError> {
-        let mut windows = self.list(WINDOWS)?;
+        let mut windows = self.list(WINDOWS)?.windows;
         windows.retain(|window| include_minimized || !window.is_minimized);
         Ok(windows)
     }
 
     /// The first active window that is not defunct. `None` without one, which is also the
-    /// answer when the app in front puts no tree on the accessibility bus.
+    /// answer when the app in front puts no tree on the accessibility bus. While an app's
+    /// windows cannot be read (it does not answer in time, or answers what this crate cannot
+    /// read), the front window is unknown, `DeadlineExceeded`: it may be that app's, and another
+    /// app's window that still says it is active would otherwise take its place.
     fn foreground(&self) -> Result<Option<WindowRef>, PlatformError> {
-        let windows = self.list(FOREGROUND)?;
-        let front = windows.iter().find(|window| window.is_foreground);
+        let listed = self.list(FOREGROUND)?;
+        if listed.unread {
+            return Err(PlatformError::DeadlineExceeded { call: FOREGROUND });
+        }
+        let front = listed.windows.iter().find(|window| window.is_foreground);
         Ok(front.map(|window| WindowRef { hwnd: window.hwnd, pid: window.pid }))
     }
 
@@ -68,7 +76,8 @@ impl Grounding for LinuxDesktop {
     /// The focused element of the foreground window, its box in that window. `None` when no
     /// window is active, or nothing in the window's whole tree is focused. A search the settings'
     /// focus limits or four fifths of `deadline` cut short is `DeadlineExceeded`: the focus is
-    /// unknown, not absent.
+    /// unknown, not absent. So is the focus while an app's windows cannot be read, since the
+    /// front window is then unknown ([`Self::foreground`]).
     fn focused_element(&self, deadline: Deadline) -> Result<Option<ElementInfo>, PlatformError> {
         let limits = self.settings().focus_limits;
         self.on_bus(FOCUS, deadline, move |atspi| async move {
@@ -88,12 +97,12 @@ impl Grounding for LinuxDesktop {
         Err(PlatformError::Unavailable { what: ELEMENT_AT })
     }
 
-    /// The selected text of the focused element, found as [`Self::focused_element`] finds it:
-    /// its `Text`'s first selected range, at most 4,000 characters, as
-    /// `SelectionSource::TextPattern`. `None` without a focused element, for one without `Text`
-    /// or with nothing selected, and for a password field, whose text the client refuses to
-    /// read. `allow_clipboard` changes nothing: on Wayland only the focused surface may read the
-    /// clipboard, so it is never read.
+    /// The selected text of the focused element, found as [`Self::focused_element`] finds it,
+    /// with the same `DeadlineExceeded` when the focus is unknown: its `Text`'s first selected
+    /// range, at most 4,000 characters, as `SelectionSource::TextPattern`. `None` without a
+    /// focused element, for one without `Text` or with nothing selected, and for a password
+    /// field, whose text the client refuses to read. `allow_clipboard` changes nothing: on
+    /// Wayland only the focused surface may read the clipboard, so it is never read.
     fn selection(
         &self,
         _allow_clipboard: bool,

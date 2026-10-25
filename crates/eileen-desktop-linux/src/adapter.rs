@@ -18,7 +18,7 @@ use eileen_dbus_linux::Bridge;
 use eileen_platform::{Deadline, PlatformError, TreeLimits};
 
 use crate::atspi::{Atspi, accessibility_bus};
-use crate::toplevel::{KnownWindow, toplevels, window_infos};
+use crate::toplevel::{Found, KnownWindow, toplevels, window_infos};
 
 /// How much of the foreground window's tree a focus search reads in the product: 24 levels and
 /// 2,000 objects, twice as deep as a tree read's default and four times as wide, since the focus
@@ -93,16 +93,17 @@ impl LinuxDesktop {
     }
 
     /// Every window the registry's apps list, front to back, minimized ones included, within the
-    /// settings' deadline; errors name `call`. The listing replaces the windows
-    /// [`Self::known_window`] knows. The processes are named here, on the caller's thread, so
-    /// the bridge's thread reads no file.
-    pub(crate) fn list(&self, call: &'static str) -> Result<Vec<WindowInfo>, PlatformError> {
+    /// settings' deadline, and whether an app was left unread; errors name `call`. The listing
+    /// replaces the windows [`Self::known_window`] knows. The processes are named here, on the
+    /// caller's thread, so the bridge's thread reads no file.
+    pub(crate) fn list(&self, call: &'static str) -> Result<Found<WindowInfo>, PlatformError> {
         let found = self.on_bus(call, self.settings.deadline, |atspi| async move {
             Ok(toplevels(&atspi).await?)
         })?;
-        let listed = window_infos(found, &self.settings.own_processes);
+        let listed = window_infos(found.windows, !found.unread, &self.settings.own_processes);
         *self.known() = listed.iter().map(|(info, known)| (info.hwnd, known.clone())).collect();
-        Ok(listed.into_iter().map(|(info, _known)| info).collect())
+        let windows = listed.into_iter().map(|(info, _known)| info).collect();
+        Ok(Found { windows, unread: found.unread })
     }
 
     /// The windows the last listing found. A panic while the lock was held cannot leave them half
