@@ -54,7 +54,7 @@ const FILE_NAME: &str = "recently-used.xbel";
 
 /// The most of the file that is read: 16 MiB. As measured with GTK 3.24.41, its recent manager
 /// keeps the newest 1000 bookmarks, and 1000 with one app each took 0.71 MiB, or 12.25 MiB
-/// with every path 4094 bytes long and escaped byte by byte. A longer file, such as a sparse
+/// with every path 4094 bytes long, nearly all of it escaped. A longer file, such as a sparse
 /// one that takes no disk space, is refused whole: GTK adds new bookmarks at the end, so a cut
 /// list would lose the newest.
 const MAX_FILE_BYTES: u64 = 16 << 20;
