@@ -137,11 +137,12 @@ fn summary(windows: &[WindowInfo]) -> Vec<(i64, &str, u32, bool, Rect)> {
 }
 
 /// A world whose active window's focused text field holds `text` with `selections`, and the
-/// field's calls.
+/// field's calls. The field's `AccessibleId` is empty.
 fn focused_text(text: String, selections: Vec<(i32, i32)>) -> (World, Calls) {
     let mut world = World::new();
-    let states = words(&[SHOWING, FOCUSED]);
-    let field = Node { role: TEXT, states, text: Some(text), selections, ..Node::default() };
+    let (states, accessible_id) = (words(&[SHOWING, FOCUSED]), Some(String::new()));
+    let text = Some(text);
+    let field = Node { role: TEXT, states, text, selections, accessible_id, ..Node::default() };
     let calls = field.calls.clone();
     world.app(|app| {
         let editor = window(FRAME, "Editor", &[ACTIVE], app.references(&["/letter"]));
@@ -399,8 +400,40 @@ fn the_selection_is_the_first_range_of_the_focused_text() {
         "the first range, to 4,000 at most"
     );
     let (mut world, calls) = focused_text("Dear Ada".to_owned(), vec![]);
-    assert_eq!(world.desktop(settings()).selection(false, Deadline::UIA).unwrap(), None, "none");
-    assert_eq!(*calls.text_reads.lock().unwrap(), [], "and nothing read when nothing is selected");
+    let desktop = world.desktop(settings());
+    assert_eq!(desktop.selection(false, Deadline::UIA).unwrap(), None, "nothing selected");
+    assert_eq!(*calls.text_reads.lock().unwrap(), [], "and nothing read");
+    let field = desktop.focused_element(Deadline::UIA).unwrap().unwrap();
+    assert_eq!(field.automation_id, None, "an empty AccessibleId is none");
+}
+
+#[test]
+fn a_focus_search_stops_at_four_fifths_of_its_deadline() {
+    let mut world = World::new();
+    world.app(|app| {
+        // The walk enters `/stuck`, whose listing never answers, before `/panel`, which holds the
+        // focused field.
+        let hour = Some(Duration::from_secs(3_600));
+        let stuck = Node { slow_listing: hour, ..Node::showing("stuck", app.references(&["/x"])) };
+        let field = Node { states: words(&[SHOWING, FOCUSED]), ..Node::default() };
+        let front = window(FRAME, "Front", &[ACTIVE], app.references(&["/stuck", "/panel"]));
+        let panel = Node::showing("panel", app.references(&["/field"]));
+        vec![
+            root(app, &["/front"]),
+            ("/front", front),
+            ("/stuck", stuck),
+            ("/panel", panel),
+            ("/field", field),
+        ]
+    });
+    // The listing costs the 800 ms call timeout, past four fifths of 950 ms: the search stops
+    // there, where one that read on would find the field at about 810 ms.
+    let deadline = Deadline::after(Duration::from_millis(950));
+    assert_eq!(
+        world.desktop(settings()).focused_element(deadline),
+        Err(PlatformError::DeadlineExceeded { call: "focused element" }),
+        "the search leaves the last fifth of its deadline unread"
+    );
 }
 
 #[test]
