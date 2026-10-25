@@ -163,3 +163,22 @@ fn a_listing_that_stalls_passes_its_deadline_and_the_bridge_goes_on() {
     media.control(FULL, &MediaAction::Pause).unwrap();
     assert_eq!(fakes.run(calls(fakes.player(FULL))), [Call::Pause], "the bridge still serves");
 }
+
+#[test]
+fn players_that_never_answer_are_left_out_within_the_default_deadline() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    fakes.serve(&bus, FULL, full_root(), full_player());
+    fakes.serve(&bus, ODD, odd_root(), odd_player());
+    let gate = Gate::default();
+    for hung in HUNG {
+        fakes.serve_hung(&bus, hung, &gate);
+    }
+    // Read at the same time, the two cost the listing one method timeout together, about half a
+    // second inside the default deadline; read one after the other, they would pass it.
+    assert_eq!(
+        media(&bus).sessions(),
+        Ok(vec![full_state(), odd_state()]),
+        "the players that answer, in order, once one method timeout has passed"
+    );
+}
