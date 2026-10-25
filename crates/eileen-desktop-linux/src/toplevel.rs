@@ -172,7 +172,7 @@ mod tests {
     use zbus::names::OwnedUniqueName;
     use zbus::zvariant::OwnedObjectPath;
 
-    use super::{ObjectRef, exe_name, window_id};
+    use super::{ObjectRef, exe_name, process_name, window_id};
 
     /// The object at `path` of the app at `bus`.
     fn object(bus: &str, path: &str) -> ObjectRef {
@@ -192,7 +192,11 @@ mod tests {
     }
 
     #[test]
-    fn a_replaced_executable_keeps_its_name() {
+    fn a_process_is_named_by_its_executable_even_once_replaced() {
+        let exe = std::env::current_exe().unwrap();
+        let own = exe.file_name().unwrap().to_str().unwrap();
+        assert_eq!(process_name(std::process::id()), own, "this test's own process");
+        assert_eq!(process_name(u32::MAX), "", "no such process");
         let name = |path: &str| exe_name(Path::new(path));
         assert_eq!(name("/usr/bin/eileen-hud").as_deref(), Some("eileen-hud"), "the file name");
         assert_eq!(

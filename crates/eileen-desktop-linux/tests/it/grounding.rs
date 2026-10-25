@@ -57,7 +57,7 @@ impl World {
 
     /// Starts an app and serves the objects `nodes` gives once the app's name is known, its
     /// root among them; the app's index.
-    fn app(&mut self, nodes: impl FnOnce(&App) -> Vec<(&'static str, Node)>) -> usize {
+    fn app<'p>(&mut self, nodes: impl FnOnce(&App) -> Vec<(&'p str, Node)>) -> usize {
         let app = self.runtime.block_on(async {
             let app = App::start(&self.a11y).await;
             for (path, node) in nodes(&app) {
@@ -267,8 +267,14 @@ fn the_foreground_is_the_active_window_and_none_without_one() {
     let gone = window_id(&world.object(first, "/gone"));
     assert!(windows.iter().all(|w| w.hwnd != gone), "a defunct window is not listed");
     let mut idle = World::new();
-    idle.app(|app| vec![root(app, &["/idle"]), ("/idle", window(FRAME, "Idle", &[], vec![]))]);
-    assert_eq!(idle.desktop(settings()).foreground().unwrap(), None, "no window is active");
+    idle.app(|app| {
+        let field = Node { states: words(&[SHOWING, FOCUSED]), ..Node::default() };
+        let idle = window(FRAME, "Idle", &[], app.references(&["/field"]));
+        vec![root(app, &["/idle"]), ("/idle", idle), ("/field", field)]
+    });
+    let desktop = idle.desktop(settings());
+    assert_eq!(desktop.foreground().unwrap(), None, "no window is active");
+    assert_eq!(desktop.focused_element(Deadline::UIA).unwrap(), None, "so nothing is focused");
 }
 
 #[test]
@@ -427,6 +433,20 @@ fn an_app_that_does_not_answer_leaves_out_only_its_windows() {
 }
 
 #[test]
+fn an_app_has_at_most_64_windows_listed() {
+    let mut world = World::new();
+    let paths: Vec<String> = (0..65).map(|n| format!("/w{n}")).collect();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    world.app(|app| {
+        let mut nodes = vec![root(app, &paths)];
+        nodes.extend(paths.iter().map(|&path| (path, window(FRAME, path, &[], vec![]))));
+        nodes
+    });
+    let windows = world.desktop(settings()).windows(true).unwrap();
+    assert_eq!(windows.len(), 64, "the first 64 of an app's 65 windows");
+}
+
+#[test]
 fn eileens_own_windows_are_marked_by_process() {
     let mut world = World::new();
     world.app(|app| vec![root(app, &["/hud"]), ("/hud", window(FRAME, "Eileen", &[], vec![]))]);
@@ -502,11 +522,14 @@ fn a_silent_app_answers_deadline_exceeded_within_the_deadline() {
         waited >= SHORT.budget() && waited < CALL_TIMEOUT,
         "the settings' deadline, not the app's call timeout: {waited:?}"
     );
+    // The settings' deadline is the default here, so only the call's own can answer in time.
+    let desktop = world.desktop(settings());
     let started = Instant::now();
     assert_eq!(
         desktop.focused_element(SHORT),
         Err(PlatformError::DeadlineExceeded { call: "focused element" }),
-        "a call's own deadline"
+        "a call that takes a deadline keeps its own"
     );
-    assert!(started.elapsed() < CALL_TIMEOUT, "within it: {:?}", started.elapsed());
+    let waited = started.elapsed();
+    assert!(waited >= SHORT.budget() && waited < CALL_TIMEOUT, "within it: {waited:?}");
 }

@@ -84,7 +84,7 @@ pub(crate) async fn focus(
     limits: TreeLimits,
     budget: Duration,
 ) -> Result<Option<(Accessible, WindowRef)>, DbusError> {
-    let until = Instant::now() + (budget.saturating_mul(4) / 5).min(LONGEST_SEARCH);
+    let until = Instant::now() + search_budget(budget);
     let windows = toplevels(atspi).await?;
     let Some(front) = windows.first().filter(|front| front.is_active()) else { return Ok(None) };
     let window = WindowRef { hwnd: window_id(&front.window.object), pid: front.pid };
@@ -94,6 +94,13 @@ pub(crate) async fn focus(
         None if walk.truncated => Err(DbusError::DeadlineExceeded { call: FOCUS }),
         None => Ok(None),
     }
+}
+
+/// How long a focus search within a call's `budget` reads: four fifths of it, which leaves the
+/// rest for the read under way when it ends, at most one call timeout, and the element's own
+/// reads; at most [`LONGEST_SEARCH`].
+fn search_budget(budget: Duration) -> Duration {
+    (budget.saturating_mul(4) / 5).min(LONGEST_SEARCH)
 }
 
 /// The first `FOCUSED` node of `walk`, then its first `FOCUSED` child while it has one.
@@ -110,7 +117,17 @@ fn deepest_focus(walk: &Walk) -> Option<&WalkNode> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ROLE_NAMES, Role, role_name};
+    use std::time::Duration;
+
+    use super::{LONGEST_SEARCH, ROLE_NAMES, Role, role_name, search_budget};
+
+    #[test]
+    fn a_focus_search_reads_for_four_fifths_of_its_deadline() {
+        let millis = Duration::from_millis;
+        assert_eq!(search_budget(millis(5_500)), millis(4_400), "the default deadline's");
+        assert_eq!(search_budget(millis(100)), millis(80), "a short one's");
+        assert_eq!(search_budget(Duration::MAX), LONGEST_SEARCH, "never past the longest");
+    }
 
     #[test]
     fn control_types_are_at_spi_role_names() {
