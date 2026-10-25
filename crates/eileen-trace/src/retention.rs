@@ -276,7 +276,15 @@ mod tests {
             speech,
             "another process's files stay"
         );
-        assert_eq!(writer.inner, b"before midnight\nafter midnight\n", "every line written");
+
+        // A file the new day's prune would delete, back again before the day's second line.
+        touch(&dir.0, &daily("eileen", day, 1));
+        writer.write_all(b"later that day\n").unwrap();
+        assert!(dir.0.join(daily("eileen", day, 1)).exists(), "one prune a day after midnight too");
+        assert_eq!(
+            writer.inner, b"before midnight\nafter midnight\nlater that day\n",
+            "every line written"
+        );
     }
 
     /// A writer on a full disk: every write fails.
