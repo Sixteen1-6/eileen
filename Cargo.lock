@@ -300,6 +300,7 @@ dependencies = [
  "eileen-contracts",
  "eileen-dbus-linux",
  "eileen-platform",
+ "eileen-stdx",
  "proptest",
  "quick-xml",
  "rustix",
