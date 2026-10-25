@@ -6,17 +6,15 @@
 #   bash .github/linux-desktop/session.sh <command> [<argument>...]
 #
 # It runs itself again for each of three steps, which EILEEN_SESSION_STEP names:
-#   login     As the runner: lifts AppArmor's restriction of unprivileged user namespaces where it
-#             stops glycin's sandbox (below), then starts the next step as a transient system
-#             service of the runner's user with PAM's `login` stack, so pam_systemd registers a
-#             logind session on seat0, of type wayland, as GDM does for GNOME. logind and polkit
-#             then treat the tests as a user's local session, which a process outside every
-#             session is not.
+#   login     As the runner: starts the next step as a transient system service of the runner's
+#             user with PAM's `login` stack, so pam_systemd registers a logind session on seat0,
+#             of type wayland, as GDM does for GNOME. logind and polkit then treat the tests as a
+#             user's local session, which a process outside every session is not.
 #   bus       Inside that session: makes it seat0's active session, points the XDG folders at
 #             fresh ones (the user's systemd instance has its own sockets in /run/user), writes
 #             the PipeWire and portal configuration, and starts dbus-run-session, whose bus is the
 #             session bus of every service below and of the tests.
-#   services  On that bus: checks that bwrap makes glycin's sandbox, starts the compositor and
+#   services  On that bus: checks that bwrap starts glycin's sandbox, starts the compositor and
 #             the services, waits up to 20 s for each to answer, prints what the session is, runs
 #             the command, and stops what it started.
 # The exit status is the command's, or 1 naming what did not come up.
@@ -25,11 +23,13 @@
 # notification-daemon, an X11 program, crashes on: it runs on an Xvfb display of its own.
 #
 # gdk-pixbuf loads every image through glycin, GTK's icons among them, and glycin runs each
-# loader in a sandbox that bwrap makes in a user namespace of its own. Where bwrap cannot make
-# it, the loader exits at once, and GTK 3 aborts when an icon and then its fallback fail to
-# load: notification-daemon did, drawing its first notification. Where AppArmor restricts
-# unprivileged user namespaces and bwrap cannot make the sandbox, as on the runner, the login
-# step lifts the restriction, and the services step checks the sandbox before anything starts.
+# loader in a sandbox that bwrap makes. bwrap refuses to start in a process that holds any
+# capability, and pam_systemd gives a regular user who logs in on a seat CAP_WAKE_ALARM in its
+# ambient set, which systemd keeps for a unit with a PAM stack, so every program of the session
+# would hold it. Then each loader exits at once, and GTK 3 aborts when an icon and then its
+# fallback fail to load: notification-daemon did, on its first notification. So the session's
+# unit leaves CAP_WAKE_ALARM out of its bounding set, and systemd raises no ambient capability
+# that the bounding set leaves out. The services step checks that bwrap starts, before anything.
 set -euo pipefail
 
 script="$(realpath "${BASH_SOURCE[0]}")"
@@ -66,25 +66,20 @@ sandbox() {
 }
 
 login() {
-  local n=1 vt=() said
+  local n=1 vt=()
   while [ -e "$root/logs/session-$n" ]; do n=$((n + 1)); done
   mkdir -p "$root/logs/session-$n"
-  # The header says why, and the notice what bwrap said. The lift holds until the runner stops.
-  if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] &&
-    ! said="$(sandbox 2>&1)"; then
-    echo "session.sh: bwrap cannot make glycin's sandbox ($said); lifting AppArmor's" \
-      "restriction of unprivileged user namespaces" >&2
-    sudo -n sysctl --quiet --write kernel.apparmor_restrict_unprivileged_userns=0
-  fi
   # logind gives a session on seat0 a VT number only where seat0 has VTs. From VT 8 up there is
   # no getty, and each session takes its own, so one still closing never holds the next one's.
   if [ "$(loginctl show-seat seat0 --property=CanTTY --value)" = yes ]; then
     vt=(--setenv=XDG_VTNR=$((7 + n)))
   fi
-  # PATH goes by another name, since pam_env sets PATH from /etc/environment.
+  # PATH goes by another name, since pam_env sets PATH from /etc/environment. The bounding set
+  # leaves out CAP_WAKE_ALARM, which pam_systemd would give the session (the header says why).
   exec sudo -n systemd-run --pipe --wait --collect --quiet --same-dir --expand-environment=no \
     --uid="$(id -u)" --gid="$(id -g)" \
     --property=PAMName=login --property=RuntimeMaxSec=1500 \
+    --property=CapabilityBoundingSet=~CAP_WAKE_ALARM \
     --setenv=EILEEN_SESSION_STEP=bus --setenv=EILEEN_SESSION_LOGS="$root/logs/session-$n" \
     --setenv=EILEEN_RUNNER_PATH="$PATH" \
     --setenv=CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
@@ -203,8 +198,6 @@ inventory() {
   row seat0 "$(loginctl show-seat seat0 --property=CanTTY --property=CanGraphical 2>&1)"
   row cgroup "$(cut -d: -f3 /proc/self/cgroup)"
   row displays "Wayland $WAYLAND_DISPLAY (weston, no seat); X11 $x11 (Xvfb, notification-daemon's)"
-  row kernel.apparmor_restrict_unprivileged_userns \
-    "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>&1)"
   row "notification server" "$(session_call --dest org.freedesktop.Notifications \
     --object-path /org/freedesktop/Notifications \
     --method org.freedesktop.Notifications.GetServerInformation 2>&1)"
@@ -223,10 +216,12 @@ inventory() {
 }
 
 services() {
-  local said
+  local said ambient
   trap stop EXIT
   if ! said="$(sandbox 2>&1)"; then
-    echo "session.sh: bwrap cannot make glycin's sandbox, in which GTK loads its icons: $said" >&2
+    ambient="$(sed -n 's/^CapAmb:[[:space:]]*//p' /proc/self/status)"
+    echo "session.sh: bwrap cannot make glycin's sandbox, in which GTK loads its icons: $said" \
+      "(the session's ambient capabilities: $ambient)" >&2
     exit 1
   fi
   start weston weston --backend=headless --shell=kiosk --socket="$wayland" --idle-time=0 \
