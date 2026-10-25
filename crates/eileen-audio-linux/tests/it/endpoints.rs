@@ -48,13 +48,23 @@ fn endpoints_on(bus: &PrivateBus, deadline: Deadline) -> LinuxAudioEndpoints {
     LinuxAudioEndpoints::new(Bridge::on_private_bus(bus).unwrap(), settings)
 }
 
+/// Lowers the calling thread's priority by one nice level, up to 19, which needs no privilege,
+/// so that a revert to nice 0 cannot pass for one to the level the thread had. Returns the
+/// level.
+fn lower_priority() -> i32 {
+    let nice = (this_nice() + 1).min(19);
+    rustix::process::setpriority_process(Some(rustix::thread::gettid()), nice).unwrap();
+    assert_eq!(this_nice(), nice, "this thread's own nice level");
+    nice
+}
+
 #[test]
 fn register_audio_thread_promotes_the_calling_thread_and_its_ticket_reverts_it() {
     let bus = PrivateBus::start();
     let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
     let _fakes = Fakes::serve(&bus, fake.clone());
     let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE);
-    let (thread, nice) = (this_thread(), this_nice());
+    let (thread, nice) = (this_thread(), lower_priority());
     let ticket = endpoints.register_audio_thread().unwrap();
     assert_eq!(ticket.task(), "RealtimeKit real-time", "as the fake grants");
     assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "the calling thread, at 10");
