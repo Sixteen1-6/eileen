@@ -39,6 +39,8 @@ pub(crate) const READ_ONLY: u32 = 43;
 
 /// The bus's error for a call its callee let pass its timeout.
 pub(crate) const NO_REPLY: &str = "org.freedesktop.DBus.Error.NoReply";
+/// The error for a call its callee refuses to answer.
+pub(crate) const ACCESS_DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
 /// The error for a method the object does not have.
 const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 /// The error for an object the app does not serve, or no longer does.

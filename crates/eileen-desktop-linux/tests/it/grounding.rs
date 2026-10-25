@@ -25,8 +25,8 @@ use eileen_platform::{Deadline, Grounding, PlatformError, TreeLimits};
 use tokio::time::Instant;
 
 use crate::fake::{
-    ACTIVE, App, Calls, DEFUNCT, FOCUSED, ICONIFIED, Node, ROOT, Reference, SHOWING, Session,
-    count, registry, words,
+    ACCESS_DENIED, ACTIVE, App, Calls, DEFUNCT, FOCUSED, ICONIFIED, NO_REPLY, Node, ROOT,
+    Reference, SHOWING, Session, count, registry, words,
 };
 
 /// AT-SPI2's role numbers the tests use, written out.
@@ -426,21 +426,23 @@ fn the_foreground_is_the_active_window_and_none_without_one() {
     assert_eq!(desktop.focused_element(Deadline::UIA).unwrap(), None, "so nothing is focused");
 }
 
-/// The app in front, busy past its call timeout: its root answers `NoReply`, so its active
-/// sign-in dialog, whose password field has the focus, is never read.
-fn busy_sign_in(app: &App) -> Vec<(&'static str, Node)> {
+/// The app in front, which cannot be read: its root answers every method with `error`, so its
+/// active sign-in dialog, whose password field has the focus, is never read. [`NO_REPLY`] is the
+/// bus's answer for an app busy past its call timeout.
+fn unread_sign_in(app: &App, error: &'static str) -> Vec<(&'static str, Node)> {
     let (path, root) = root(app, &["/login"]);
     let states = words(&[SHOWING, FOCUSED]);
     let password = Node { role: PASSWORD_TEXT, states, ..Node::default() };
     let login = window(DIALOG, "Sign in", &[ACTIVE], app.references(&["/password"]));
-    vec![(path, Node { no_reply: true, ..root }), ("/login", login), ("/password", password)]
+    let root = Node { error_name: Some(error), ..root };
+    vec![(path, root), ("/login", login), ("/password", password)]
 }
 
 #[test]
-fn while_an_app_does_not_answer_the_front_window_is_unknown() {
+fn while_an_app_cannot_be_read_the_front_window_is_unknown() {
     let unknown = |call| PlatformError::DeadlineExceeded { call };
     let mut world = World::new();
-    world.app(busy_sign_in);
+    world.app(|app| unread_sign_in(app, NO_REPLY));
     let idle =
         world.app(|app| vec![root(app, &["/idle"]), ("/idle", window(FRAME, "Idle", &[], vec![]))]);
     let desktop = world.desktop(settings());
@@ -456,27 +458,42 @@ fn while_an_app_does_not_answer_the_front_window_is_unknown() {
     assert_eq!(focus.unwrap_err(), unknown("focused element"), "so the focus is unknown");
     let selection = desktop.selection(false, Deadline::UIA);
     assert_eq!(selection.unwrap_err(), unknown("focused element"), "and with it the selection");
-    let mut world = World::new();
-    world.app(busy_sign_in);
-    let stale = world.app(|app| {
-        let field = Node { role: TEXT, states: words(&[SHOWING, FOCUSED]), ..Node::default() };
-        let editor = window(FRAME, "Editor", &[ACTIVE], app.references(&["/field"]));
-        vec![root(app, &["/editor"]), ("/editor", editor), ("/field", field)]
-    });
-    let desktop = world.desktop(settings());
-    let windows = desktop.windows(true).unwrap();
-    let listed: Vec<_> = windows.iter().map(|w| (w.hwnd, w.is_foreground)).collect();
-    assert_eq!(
-        listed,
-        [(window_id(&world.object(stale, "/editor")), false)],
-        "a window of another app that still says it is active is not marked in front"
-    );
-    assert_eq!(desktop.foreground().unwrap_err(), unknown("foreground window"), "nor answered so");
-    assert_eq!(
-        desktop.focused_element(Deadline::UIA).unwrap_err(),
-        unknown("focused element"),
-        "nor its field as the focus, while the keyboard may be in the password field"
-    );
+    // Busy, or answering what the client cannot read: an error name the app chose, which the
+    // client reads as Invalid, or AccessDenied, which it reads as Refused.
+    for error in [NO_REPLY, "com.example.Busy", ACCESS_DENIED] {
+        let mut world = World::new();
+        world.app(|app| unread_sign_in(app, error));
+        let stale = world.app(|app| {
+            let (states, text) = (words(&[SHOWING, FOCUSED]), Some("Dear Ada".to_owned()));
+            let field =
+                Node { role: TEXT, states, text, selections: vec![(0, 4)], ..Node::default() };
+            let editor = window(FRAME, "Editor", &[ACTIVE], app.references(&["/field"]));
+            vec![root(app, &["/editor"]), ("/editor", editor), ("/field", field)]
+        });
+        let desktop = world.desktop(settings());
+        let windows = desktop.windows(true).unwrap();
+        let listed: Vec<_> = windows.iter().map(|w| (w.hwnd, w.is_foreground)).collect();
+        assert_eq!(
+            listed,
+            [(window_id(&world.object(stale, "/editor")), false)],
+            "{error}: a window of another app that still says it is active is not marked in front"
+        );
+        assert_eq!(
+            desktop.foreground().unwrap_err(),
+            unknown("foreground window"),
+            "{error}: nor answered so"
+        );
+        assert_eq!(
+            desktop.focused_element(Deadline::UIA).unwrap_err(),
+            unknown("focused element"),
+            "{error}: nor its field as the focus, while the keyboard may be in the password field"
+        );
+        assert_eq!(
+            desktop.selection(false, Deadline::UIA).unwrap_err(),
+            unknown("focused element"),
+            "{error}: nor that field's selected text"
+        );
+    }
 }
 
 #[test]
