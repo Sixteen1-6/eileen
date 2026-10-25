@@ -222,8 +222,8 @@ fn emails(line: &str, out: &mut Vec<PiiFinding>) {
 
 /// The length of the date and time at the start of `bytes`, if one starts there: ISO 8601's and
 /// TOML's `2026-10-21 15:30` or `2026-10-21T15:30`, with any seconds, fraction and offset
-/// (`:00.123456-07:00`, `Z`). Its digits are no phone number, though the phone rule reads ten
-/// in four groups up to a spaced hour, and ten in the seconds, fraction and offset hour.
+/// (`:00.123456-07:00`, `Z`). The phone rule would read a number in it: the ten digits in four
+/// groups up to a spaced hour, or the ten of the seconds, fraction and offset hour.
 fn date_time_len(bytes: &[u8]) -> Option<usize> {
     let digits = |at: usize, n: usize| {
         bytes.get(at..at + n).is_some_and(|run| run.iter().all(u8::is_ascii_digit))
@@ -310,15 +310,19 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
     }
 }
 
-/// True when `before`, the text in front of a folder marker, puts the marker in a web address
-/// (`http://` or `https://` earlier in the same word): the path of a page, not a folder on a PC.
-/// A `file://` address, or `sftp://` and the like, names a folder, so it is still scanned.
+/// True when `before`, the text in front of a folder marker, ends in the path of a web address:
+/// after `http://` or `https://`, with no space, quote, bracket, comma, `?`, `#` or `=` between,
+/// so the marker names a page, not a folder on a PC. A local path in a web address's query, a
+/// `file://` address and an `sftp://` one name a folder, so they are still scanned.
 fn in_web_address(before: &str) -> bool {
-    let word = before
-        .rsplit(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>'))
-        .next()
-        .unwrap_or_default();
-    word.contains("http://") || word.contains("https://")
+    let start = before.rfind("http://").max(before.rfind("https://"));
+    start.and_then(|at| before.get(at..)).is_some_and(|address| {
+        !address.contains(|c: char| {
+            c.is_whitespace()
+                || matches!(c, '"' | '\'' | '`' | '<' | '>' | '(' | ')' | ',' | ';' | '|')
+                || matches!(c, '?' | '#' | '=')
+        })
+    })
 }
 
 /// The folders a user's name follows: Windows' and macOS's `Users` (plain, JSON-escaped and
@@ -632,6 +636,11 @@ mod tests {
             kinds("see https://site.test/docs or /home/samlee/notes"),
             [PiiKind::UserPath],
             "a web address ends with its word"
+        );
+        assert_eq!(
+            kinds("https://files.example.com/open?path=/home/samlee/notes.txt"),
+            [PiiKind::UserPath],
+            "a local path in a web address's query names a folder on a PC"
         );
         assert_eq!(kinds("host DESKTOP-4F7Q2ZK"), [PiiKind::MachineName], "default machine name");
         assert_eq!(kinds(r"\\NAS01\photos"), [PiiKind::MachineName], "UNC host");
