@@ -62,10 +62,11 @@ impl Heartbeat {
         (silent > self.timeout).then_some(silent)
     }
 
-    /// When it will count as missed if no beat comes first.
+    /// When it will count as missed if no beat comes first; `None` when that lies past the
+    /// clock's range (a timeout such as `Duration::MAX` used as "never").
     #[must_use]
-    pub fn deadline(&self) -> Instant {
-        self.last + self.timeout
+    pub fn deadline(&self) -> Option<Instant> {
+        self.last.checked_add(self.timeout)
     }
 }
 
@@ -82,6 +83,13 @@ pub struct RestartPolicy {
     pub window: Duration,
     /// A run at least this long resets the delay to `initial`.
     pub stable_after: Duration,
+}
+
+impl RestartPolicy {
+    /// The first delay, never longer than the longest one.
+    fn first_delay(&self) -> Duration {
+        self.initial.min(self.max)
+    }
 }
 
 impl Default for RestartPolicy {
@@ -121,14 +129,16 @@ pub struct Restarts {
 impl Restarts {
     /// No restarts yet.
     #[must_use]
-    pub const fn new(policy: RestartPolicy) -> Self {
-        Self { policy, history: VecDeque::new(), next: policy.initial }
+    pub fn new(policy: RestartPolicy) -> Self {
+        Self { policy, history: VecDeque::new(), next: policy.first_delay() }
     }
 
     /// The child, started at `started`, exited at `now`: restart it, after how long, or give up.
+    /// Delays double up to the policy's maximum and saturate rather than overflow, whatever
+    /// the policy says.
     pub fn on_exit(&mut self, started: Instant, now: Instant) -> RestartDecision {
         if now.saturating_duration_since(started) >= self.policy.stable_after {
-            self.next = self.policy.initial;
+            self.next = self.policy.first_delay();
         }
         while self
             .history
@@ -143,7 +153,7 @@ impl Restarts {
         }
         self.history.push_back(now);
         let delay = self.next;
-        self.next = (self.next * 2).min(self.policy.max);
+        self.next = self.next.saturating_mul(2).min(self.policy.max);
         RestartDecision::After(delay)
     }
 }
@@ -199,14 +209,53 @@ mod tests {
         );
         heartbeat.beat(t0 + Duration::from_secs(11));
         assert_eq!(heartbeat.missed(t0 + Duration::from_secs(12)), None, "beat again");
-        assert_eq!(heartbeat.deadline(), t0 + Duration::from_secs(21), "next deadline");
+        assert_eq!(heartbeat.deadline(), Some(t0 + Duration::from_secs(21)), "next deadline");
+    }
+
+    #[test]
+    fn a_never_timeout_and_huge_or_inverted_delays_do_not_overflow() {
+        let t0 = Instant::now();
+        let never = Heartbeat::new(Duration::MAX, t0);
+        assert_eq!(never.deadline(), None, "a deadline past the clock's range is none");
+        assert_eq!(never.missed(t0 + Duration::from_secs(3_600)), None, "and is never missed");
+        let huge = RestartPolicy {
+            initial: Duration::MAX,
+            max: Duration::MAX,
+            max_restarts: 100,
+            ..RestartPolicy::default()
+        };
+        let mut restarts = Restarts::new(huge);
+        for i in 0..3 {
+            assert_eq!(
+                restarts.on_exit(t0, t0 + Duration::from_secs(i)),
+                RestartDecision::After(Duration::MAX),
+                "doubling saturates at the maximum"
+            );
+        }
+        let inverted = RestartPolicy {
+            initial: Duration::from_secs(60),
+            max: Duration::from_secs(30),
+            ..RestartPolicy::default()
+        };
+        let mut restarts = Restarts::new(inverted);
+        assert_eq!(
+            restarts.on_exit(t0, t0 + Duration::from_secs(1)),
+            RestartDecision::After(Duration::from_secs(30)),
+            "the first delay never exceeds the maximum"
+        );
+        assert_eq!(
+            restarts.on_exit(t0, t0 + Duration::from_secs(600)),
+            RestartDecision::After(Duration::from_secs(30)),
+            "nor does the first delay after a stable run"
+        );
     }
 
     #[tokio::test]
     async fn a_call_past_its_deadline_is_abandoned() {
+        // A zero deadline: tokio's timer rounds up to its next millisecond, so this waits at
+        // most a millisecond for a future that never completes.
         let pending =
-            with_deadline("test.call", Duration::from_millis(20), std::future::pending::<()>())
-                .await;
+            with_deadline("test.call", Duration::ZERO, std::future::pending::<()>()).await;
         assert_eq!(pending.unwrap_err().call, "test.call", "abandoned");
         assert_eq!(
             with_deadline("test.call", Duration::from_secs(5), async { 7 }).await,

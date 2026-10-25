@@ -8,6 +8,7 @@
 //! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
@@ -44,8 +45,9 @@ impl ChildClass {
     }
 }
 
-/// How to start one child.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// How to start one child. Its `Debug` lists the environment's names, never their values,
+/// which may carry a session token or a key the harness hands a worker.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChildSpec {
     /// A short constant name for logs (`eileen-speech`, `claude.worker`).
     pub name: &'static str,
@@ -108,6 +110,22 @@ impl ChildSpec {
     pub const fn class(mut self, class: ChildClass) -> Self {
         self.class = class;
         self
+    }
+}
+
+impl fmt::Debug for ChildSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let env_names: Vec<&OsString> = self.env.iter().map(|(name, _)| name).collect();
+        f.debug_struct("ChildSpec")
+            .field("name", &self.name)
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("env_clear", &self.env_clear)
+            .field("env_names", &env_names)
+            .field("cwd", &self.cwd)
+            .field("class", &self.class)
+            .field("piped", &self.piped)
+            .finish_non_exhaustive()
     }
 }
 
@@ -200,6 +218,11 @@ impl Child {
 
     /// Forwards stderr into tracing, one `child.stderr` event per line, until it closes.
     ///
+    /// The line goes in the `pii.line` field: a Claude session's stderr can quote paths, file
+    /// names and prompt text, and a sidecar's panic message can quote anything, so the log
+    /// files keep only its length and keyed hash while the flight recorder and the console
+    /// keep the text.
+    ///
     /// Lines are read as bytes and decoded lossily, so a tool writing in the ANSI code page
     /// does not stop the forwarding (which would leave the child writing into a closed pipe);
     /// at most [`MAX_STDERR_LINE`] bytes of a line are kept, so a child that writes megabytes
@@ -216,7 +239,7 @@ impl Child {
                 Ok(true)
             ) {
                 let text = decode_line(&line);
-                tracing::info!(name: names::CHILD_STDERR, child, line = %text);
+                tracing::info!(name: names::CHILD_STDERR, child, "pii.line" = %text);
             }
         }))
     }
