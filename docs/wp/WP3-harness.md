@@ -56,7 +56,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-Not started.
+The approval contract test's first pass ran on the owner's PC on 2026-10-21 and settled the
+permission route, which section 6.5's amendment of that date records (see Goal). No WP3 branch
+has started.
 
 ## Surprises
 

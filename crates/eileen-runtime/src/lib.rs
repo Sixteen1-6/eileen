@@ -43,8 +43,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-runtime` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-runtime`).
+//! - Fast command: `cargo xtask test -p eileen-runtime`.
 //! - Layers: unit and table tests (path classes, the HTTP parser), shuttle tests of the bus and
 //!   the supervisor glue, the redaction canary, and the end-to-end smoke with stubs.
 //! - A bug here starts as an event out of order, a lagging subscriber that lost events silently,

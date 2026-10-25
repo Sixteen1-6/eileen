@@ -5,9 +5,12 @@
 - Project skills (`sim-debug`, `add-fuzz-target`, `e2e-scenario`, `work-package` and
   `save-scenario`) arrive in `.claude/skills/` with WP0 phase B. Until then, follow AGENTS.md.
 - `.claude/settings.json` denies direct `cargo build`, `test`, `nextest`, `clippy`, `check`, `run`,
-  `doc`, `bench`, `fuzz`, `insta` and `mutants`, release builds, `cargo install`, `cargo clean`,
-  and reads of vendor credential files. Use `cargo xtask` instead. If a denial blocks you, stop and
-  ask; never work around it, because working around it skips the build guard.
+  `doc`, `bench`, `fuzz`, `insta`, `mutants`, `update` and the other compiling subcommands,
+  release builds, `cargo install`, `cargo clean`, and reads of credential files. Use `cargo xtask`
+  instead. The patterns cannot catch every spelling (an environment variable in front, say), so
+  the rule is what counts: if a denial blocks you, stop and ask; never work around it, because
+  working around it skips the build guard. The file denials cover the file tools only; never read
+  those files through the shell either.
 - `.claude/rules/ffi.md` loads when you open an `ffi` module. The per-crate rules generated from
   the crate docs arrive with `cargo xtask codegen` in WP0 phase B.
 - Final review: a fresh subagent that gets only the diff and the goal, not your own conclusions.

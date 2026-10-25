@@ -43,8 +43,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-contracts` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-contracts`).
+//! - Fast command: `cargo xtask test -p eileen-contracts`.
 //! - Layers: unit tests beside the helpers, property tests for the text forms, one snapshot per
 //!   module and per toolset, the text walk, and the scenario example parsed from TOML.
 //! - A bug here starts as a failing round trip or a snapshot diff that nobody meant.

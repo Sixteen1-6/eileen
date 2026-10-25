@@ -39,8 +39,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-apps` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-apps`).
+//! - Fast command: `cargo xtask test -p eileen-apps`.
 //! - Layers: neutral unit tests on Linux (timecode, URLs, ranking, the Laplacian on decoded
 //!   images), the two fuzz targets, and desktop tests with Resolve on the owner's PC.
 //! - A bug here starts as a playhead one frame off, or a render reported done that was not.

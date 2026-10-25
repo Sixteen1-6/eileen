@@ -289,7 +289,7 @@ or, inside a session, `/plugin install eileen --marketplace Sixteen1-6/eileen`. 
 
 ## 4. What was verified on this PC
 
-All work under `C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\claude-mods\`:
+All work under `%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\claude-mods\`:
 
 | Path | What it is |
 |---|---|

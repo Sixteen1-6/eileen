@@ -1,7 +1,7 @@
 # Security
 
 If you find a vulnerability, report it privately. Use GitHub's private vulnerability reporting on
-this repository, or send a direct message to the owner (Sixteen1-6 on GitHub). Please do not open a
+this repository, or send a direct message to the repository's owner on GitHub. Please do not open a
 public issue for security problems. You will get a reply, and a fix or a plan, before anything is
 disclosed.
 

@@ -18,8 +18,9 @@ must run one at a time on windows they own.
   abandoned and replaced, never waited on.
 - Unsafe code lives only in `ffi/`, one file per API area (`ffi/uia.rs`, `ffi/input.rs`), with
   `.claude/rules/ffi.md`'s policy.
-- Text leaving the crate goes through `eileen_contracts::desktop::sanitize`. No global UIA focus
-  handler; the window index is persisted and rebuilt on start.
+- Text leaving the crate goes through `eileen_contracts::desktop::sanitize`. No global focus
+  handler for Chromium and Electron windows (section 6.7). The app index persists to
+  `cache\apps.json`, is served at once and refreshes in the background (section 2.6).
 - The Raw Input module (`ffi::raw_input`) never stores or forwards a key code other than the
   configured dictation key, and for the approve, deny and unmute chords only a "came from a
   device" flag; never a pointer position (check 25).

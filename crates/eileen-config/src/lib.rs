@@ -40,8 +40,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-config` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-config`).
+//! - Fast command: `cargo xtask test -p eileen-config`.
 //! - Layers: the registry's coverage test, table tests per key, round trips that keep comments,
 //!   and the `config_toml` fuzz target.
 //! - A bug here starts as an error that names no line, or an edit that lost a comment.

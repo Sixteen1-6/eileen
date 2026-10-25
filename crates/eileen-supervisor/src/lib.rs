@@ -41,8 +41,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-supervisor` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-supervisor`).
+//! - Fast command: `cargo xtask test -p eileen-supervisor`.
 //! - Layers: unit tests for the watch logic; process tests that run the test binary again
 //!   as a helper child (Job Object semantics on Windows, stderr forwarding on both).
 //! - A bug here starts as an orphaned process after Eileen exits, or a restart storm.

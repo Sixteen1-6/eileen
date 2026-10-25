@@ -37,8 +37,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-scenarios` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-scenarios`).
+//! - Fast command: `cargo xtask test -p eileen-scenarios`.
 //! - Layers: save, share and submit round trips on fixtures, the `scenario_file` fuzz target,
 //!   and the end-to-end smoke on `windows-latest`.
 //! - A bug here starts as a shared scenario carrying a personal path, or a save that does not

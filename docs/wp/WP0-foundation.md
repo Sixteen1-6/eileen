@@ -13,7 +13,7 @@ the remaining repository checks and the nightly, weekly, long and release workfl
 
 ## Done when
 
-The acceptance list of BUILD.md section 6.2, items 1 to 12, each recorded below with its evidence.
+The acceptance list of BUILD.md section 6.2, items 1 to 13, each recorded below with its evidence.
 Items 4 and 10 need measurements on the owner's PC and on the first CI runs, which this file
 records when they exist.
 

@@ -35,8 +35,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-crash` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-crash`).
+//! - Fast command: `cargo xtask test -p eileen-crash`.
 //! - Layers: unit tests for the message cleaning; a Windows test that a crashing child leaves a
 //!   dump the guard wrote.
 //! - A bug here starts as a crash with no dump, or a dump with no symbols.

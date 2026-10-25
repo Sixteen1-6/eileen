@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-guard` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-guard`).
+//! - Fast command: `cargo xtask test -p eileen-guard`.
 //! - Layers: a Windows test that kills a stand-in sidecar mid-call and finds the guard's hang
 //!   dump in the incident and a restart within the backoff bound (WP2 acceptance 2).
 //! - A bug here starts as a hung core nobody restarted, or a restart storm.

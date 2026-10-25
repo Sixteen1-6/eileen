@@ -47,8 +47,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-trace` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-trace`).
+//! - Fast command: `cargo xtask test -p eileen-trace`.
 //! - Layers: unit tests per module; integration tests for the canary and the whole stack.
 //! - A bug here starts as a log line without its turn id, a span under the wrong parent, or
 //!   a secret on disk.

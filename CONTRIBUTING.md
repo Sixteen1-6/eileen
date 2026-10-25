@@ -2,7 +2,7 @@
 
 Eileen is a voice-first AI layer for Windows 11, with Linux following, MIT licensed and public.
 This file covers how to get set up, how to pick work, how to send a change and the rules that do
-not bend. Coding agents read [AGENTS.md](AGENTS.md), which says the same in fewer words.
+not bend. Coding agents read [AGENTS.md](AGENTS.md), the short form for them; this file has the full rules.
 
 ## Two ways to help
 

@@ -45,7 +45,7 @@ The PC: Windows 11 Home 26200, Intel Core Ultra 7 155H (16 cores, 22 logical pro
 | `versions/*.json` | crates.io API responses for 66 crates, fetched 10-20 11:35 to 11:41 | Source for section 4 |
 | `logs/load.csv` | CPU load and free RAM sampled during the 10-20 builds | Source for load context |
 
-Durable copy (no target directories): `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\rust-arch\`. Originals, with the build outputs and cargo's HTML timing report: `C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\rust-arch\`. The condensed notes of both attempts: `C:\Users\shubh\Projects\eileen-workfiles\predecessor-notes\rust-architecture.md`.
+Durable copy (no target directories): `%USERPROFILE%\Projects\eileen-workfiles\2026-10-scratch\rust-arch\`. Originals, with the build outputs and cargo's HTML timing report: `%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\rust-arch\`. The condensed notes of both attempts: `%USERPROFILE%\Projects\eileen-workfiles\predecessor-notes\rust-architecture.md`.
 
 ## 3. Workspace layout
 

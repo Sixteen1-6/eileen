@@ -37,8 +37,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-hud` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-hud`).
+//! - Fast command: `cargo xtask test -p eileen-hud`.
 //! - Layers: draw-list snapshots on Linux, the accessibility test, the `hud_line` fuzz target,
 //!   and desktop tests of the overlay on the owner's PC.
 //! - A bug here starts as a draw-list snapshot diff nobody meant.

@@ -7,7 +7,7 @@ This is for whoever writes `docs/BUILD.md` and WP0, and for every engineer agent
 ## How to read this
 
 - **Nothing was built or run for this report.** The PC had about 2 GB of free memory, so the work was reading.
-- **[read]**: read from the project's own files on GitHub, its documentation or its registry entry on 2026-10-20. Downloaded copies are in `C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\eng\raw\`.
+- **[read]**: read from the project's own files on GitHub, its documentation or its registry entry on 2026-10-20. Downloaded copies are in `%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\eng\raw\`.
 - **[secondary]**: from a search result or third-party write-up, not the project itself.
 - **[prior]**: carried from an earlier Eileen report, which says how it was measured.
 - **[inferred]**: design reasoning that has not been checked against anything. Verify before relying on it.

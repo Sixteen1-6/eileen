@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-replay` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-replay`).
+//! - Fast command: `cargo xtask test -p eileen-replay`.
 //! - Layers: unit tests for the matcher and the stable keys, scenario replays, and the
 //!   `expected_trace` fuzz target.
 //! - A bug here starts as a scenario that passes after the behaviour it checks broke.

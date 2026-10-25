@@ -12,24 +12,29 @@ entries with their licenses.
 Code and data
 -------------
 
-jpeg-encoder (Rust crate, used for screenshot JPEG encoding)
+jpeg-encoder (Rust crate, planned for screenshot JPEG encoding; no crate uses it yet)
   License: (MIT OR Apache-2.0) AND IJG.
   This software is based in part on the work of the Independent JPEG Group.
 
 Handy (https://github.com/cjpais/Handy)
-  License: MIT. Eileen's text insertion ports Handy's clipboard paste transaction, with
+  License: MIT. Eileen's text insertion will port Handy's clipboard paste transaction, with
   attribution kept, and borrows ideas from its dictation design. The pull request that ports the
   code (WP5) adds Handy's copyright line and the MIT permission notice here.
   Source: docs/research/2026-10-dictation-and-voices.md.
 
 SpeakoFlow dictation-cleanup-rules
-  License: MIT. Eileen's dictation cleanup ports the rule specification, the per-language filler
+  License: MIT. Eileen's dictation cleanup will port the rule specification, the per-language filler
   tables and the 79-case conformance suite. The pull request that ports them (WP4) adds the
   copyright line and the MIT permission notice here.
   Source: docs/research/2026-10-dictation-and-voices.md.
 
 sherpa-onnx (k2-fsa), native library shipped beside the binaries
-  License: Apache-2.0.
+  License: Apache-2.0. The upstream prebuilt archives bundle espeak-ng (GPL-3.0); release builds
+  ship WP4's build without espeak-ng and piper-phonemize (BUILD.md, "No GPL in the speech
+  build"). Until then only development builds use the upstream archive.
+
+sonora (WebRTC AEC3 echo cancellation in Rust), planned for WP4
+  License: BSD-3-Clause.
 
 ONNX Runtime (Microsoft), native library shipped beside the binaries
   License: MIT.
@@ -42,7 +47,7 @@ Pocket TTS (Kyutai), the default voice-cloning engine
   Code: MIT. Weights: CC-BY-4.0, attribution required: "Pocket TTS by Kyutai".
   The ONNX export Eileen runs (pocket-tts-onnx) is CC-BY-4.0 with Apache-2.0 export code.
   To confirm: the sherpa-onnx archive's README calls the archive non-commercial while its LICENSE
-  is CC-BY-4.0; confirmed with the maintainers before a downloader ships (owner answer 14).
+  is CC-BY-4.0; to be confirmed with the maintainers before a downloader ships (owner answer 14).
 
 Chatterbox (Resemble AI), optional engine chosen per voice
   Chatterbox-Turbo, official ONNX export: MIT.
@@ -68,4 +73,4 @@ Sentence embedding candidate (all-MiniLM-L6-v2 class): Apache-2.0, to confirm by
 Static embedding candidate (model2vec class): MIT, to confirm by WP4.
 AudioSeal generator and detector (opt-in watermark only): MIT.
 YuNet face detector (OpenCV Zoo face_detection_yunet): MIT.
-First-run demo clip: CC0.
+First-run demo clip (planned, not in the repository yet): CC0.

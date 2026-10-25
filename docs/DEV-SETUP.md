@@ -11,8 +11,8 @@ disagree, BUILD.md wins.
 |---|---|---|
 | Windows 11, or Ubuntu 24.04 or later | current | Windows for everything; Linux for the neutral crates, the `-linux` crates and fuzzing |
 | git | recent | Cloning, pull requests, the pre-push hook |
-| rustup | current | The toolchain itself is pinned to 1.99.0 in `rust-toolchain.toml`; rustup installs it on first use |
-| Visual Studio 2022 Build Tools, "Desktop development with C++" (MSVC 14.4x, Windows SDK 10.0.26100) | 17.14 | Windows: the MSVC target and the vendored C in SQLite, zstd and ring |
+| rustup | current | The toolchain itself is pinned to 1.99.0 in `rust-toolchain.toml`; `rustup toolchain install` below installs it |
+| Visual Studio 2022 Build Tools, "Desktop development with C++" (MSVC and a Windows 11 SDK) | 17.12 or later (17.12 with MSVC 14.42 builds the native libraries on the owner's PC) | Windows: the MSVC target and the vendored C in SQLite, zstd and ring |
 | A C compiler (`build-essential`) | distribution's | Linux: the same vendored C |
 | cargo-binstall | 1.26.0, prebuilt | Installing the other tools prebuilt. GPL-3.0-only, a tool we run and never link |
 | sccache | 0.18.0, prebuilt | Optional local compile cache |
@@ -29,6 +29,7 @@ it, builds work the same, only slower. No Dev Drive is needed.
 ```powershell
 git clone https://github.com/Sixteen1-6/eileen.git
 cd eileen
+rustup toolchain install
 cargo xtask setup
 ```
 

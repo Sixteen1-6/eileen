@@ -39,8 +39,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-e2e` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-e2e`).
+//! - Fast command: `cargo xtask test -p eileen-e2e`.
 //! - Layers: unit tests for the statistics and the clustering; the benchmarks themselves run on
 //!   the owner's PC.
 //! - A bug here starts as a benchmark difference reported that was noise.

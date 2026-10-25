@@ -37,8 +37,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-shim` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-shim`).
+//! - Fast command: `cargo xtask test -p eileen-shim`.
 //! - Layers: a unit test of the loop, and the binary end to end through the supervisor.
 //! - A bug here starts as a session whose `system/init` lists `eileen` as failed.
 //!

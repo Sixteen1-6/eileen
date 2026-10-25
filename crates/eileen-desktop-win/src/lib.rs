@@ -39,8 +39,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-desktop-win` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-desktop-win`).
+//! - Fast command: `cargo xtask test -p eileen-desktop-win`.
 //! - Layers: desktop tests in the `desktop` group under `desktop.lock`, on windows the test
 //!   created; the canary of WP5 acceptance 9 first in each nightly.
 //! - A bug here starts as a UI Automation call that hung past its deadline.

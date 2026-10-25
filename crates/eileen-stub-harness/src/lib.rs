@@ -32,8 +32,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-stub-harness` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-stub-harness`).
+//! - Fast command: `cargo xtask test -p eileen-stub-harness`.
 //! - Layers: the harness's tests against it (WP3 acceptance 2).
 //! - A bug here starts as a harness test that passes against the stub and fails against the
 //!   real CLI.

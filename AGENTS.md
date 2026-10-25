@@ -70,7 +70,7 @@ measured memory, and exits with code 75 when none comes within `--wait-max`: wai
   free memory.
 - Run guarded builds and test runs in the background and wait for them; a cold build can outlast
   a 10-minute foreground tool call. Never leave one orphaned.
-- Exclusive work takes both slots (`--exclusive`): release builds, anything that loads speech
+- Exclusive work takes both slots (`--exclusive`): release builds (the owner's), anything that loads speech
   models, soaks, benchmarks, tests with Resolve or Premiere running, and more than one real
   Claude session. No local fat-LTO builds, no `cargo install` from source, no `cargo clean`.
 - Desktop tests take `desktop.lock` through `cargo xtask` and touch only windows and devices the

@@ -12,8 +12,8 @@ folder builds with another toolchain, on Linux only, outside the root workspace 
 ## Rules
 
 - The nightly is pinned by date in `fuzz/rust-toolchain.toml`. Build from a copy of the root
-  lockfile (`cp Cargo.lock fuzz/`), so the targets build the versions the root workspace tests;
-  the copy is not committed.
+  lockfile (`cp Cargo.lock fuzz/`), so the targets build the versions the root workspace tests
+  (docs/wp/WP0-foundation.md); `.gitignore` keeps the copy out of commits.
 - Each target calls `fuzz_entry::<target>` in the neutral crate that owns the parser and fails only
   when that function reports a broken invariant. The entry never panics itself, because every
   Eileen binary links the crate.
@@ -24,5 +24,5 @@ folder builds with another toolchain, on Linux only, outside the root workspace 
   focused regression test sits beside the fix.
 - A target belongs to the package that owns its parser. WP10 adds the three Linux targets with
   its crates; WP0 does not declare them.
-- `cargo xtask fuzz` and `cargo xtask fuzz-replay` wrap this once they exist; until then run
-  `cargo fuzz` from this folder on Linux.
+- `cargo xtask fuzz` and `cargo xtask fuzz-replay` run the targets once WP0 phase B builds them.
+  Until then fuzzing is CI's and the owner's on Linux, never an agent's direct `cargo fuzz`.

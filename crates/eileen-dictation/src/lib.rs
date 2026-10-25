@@ -34,8 +34,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-dictation` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-dictation`).
+//! - Fast command: `cargo xtask test -p eileen-dictation`.
 //! - Layers: the conformance cases as table tests, property tests, and the `dictation_cleanup`
 //!   fuzz target.
 //! - A bug here starts as a sentence the cleaner changed that the user meant as said.

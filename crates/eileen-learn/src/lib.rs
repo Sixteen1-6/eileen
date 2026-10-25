@@ -36,8 +36,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-learn` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-learn`).
+//! - Fast command: `cargo xtask test -p eileen-learn`.
 //! - Layers: store tests on temporary folders, librarian runs against stub scripts in
 //!   `tests/scripts/`, and the learning scenarios.
 //! - A bug here starts as a forgotten fact that came back, or a snapshot that does not match

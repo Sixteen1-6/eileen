@@ -1,8 +1,8 @@
 # Architecture
 
-This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [docs/BUILD.md](docs/BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [docs/DECISIONS.md](docs/DECISIONS.md). Last revisited 2026-10-25, after the reviews of the v0.1 specification, its four verification rounds, the owner's answers and his direction of 2026-10-22 (decision D77).
+This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [docs/BUILD.md](docs/BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [docs/DECISIONS.md](docs/DECISIONS.md). Last revisited 2026-10-25, after the reviews of the v0.1 specification, its four verification rounds, the owner's answers and the owner's direction of 2026-10-22 (decision D77).
 
-WP0 moved this file to the repository root in `wp0/guidance`; check 3, from WP0 phase B, keeps its code map listing exactly the workspace crates and every path and type it names resolving (BUILD.md section 4b.3). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D74 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
+WP0 moved this file to the repository root in its guidance pull request; check 3, from WP0 phase B, keeps its code map listing exactly the workspace crates and every path and type it names resolving (BUILD.md section 4b.3). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D74 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
 
 ## Bird's eye view
 

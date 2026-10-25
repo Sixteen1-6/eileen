@@ -41,8 +41,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-shell-win` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-shell-win`).
+//! - Fast command: `cargo xtask test -p eileen-shell-win`.
 //! - Layers: the few tray and hotkey tests in the `desktop` group under `desktop.lock`, and
 //!   `owner_pc::` tests of the machine id.
 //! - A bug here starts as a hotkey another app took, or an unmute from a synthetic click.

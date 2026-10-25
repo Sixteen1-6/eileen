@@ -2,7 +2,7 @@
 
 Research pass 2026-10-11, refreshed 2026-10-20. Question: for the apps in the owner's examples (DaVinci Resolve, Photoshop, Premiere Pro, the browser, media, Office, Explorer, VS Code, Windows Terminal, and "the file I was working on"), what can Eileen drive through a real API instead of clicking, which rung of the action ladder does each sit on, and which language does each adapter need now that the always-on runtime is Rust-first?
 
-This extends [RESEARCH.md section 2.4](../RESEARCH.md#24-app-hooks-that-beat-clicking) and the ladder in [ARCHITECTURE.md section 3](../../ARCHITECTURE.md#3-action-layer-and-the-escalation-ladder). It is written for contributors who will build the adapters under M2 and the v0.2 app items in [ROADMAP.md](../ROADMAP.md).
+This extends [RESEARCH.md section 2.4](../RESEARCH.md#24-app-hooks-that-beat-clicking) and the ladder in [ARCHITECTURE.md section 3](../../ARCHITECTURE.md). It is written for contributors who will build the adapters under M2 and the v0.2 app items in [ROADMAP.md](../ROADMAP.md).
 
 ## How to read this
 

@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-core` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-core`).
+//! - Fast command: `cargo xtask test -p eileen-core`.
 //! - Layers: unit tests with scripted ports, exhaustive turn-taking (`turn::exhaustive`), the
 //!   simulator's seeds and regressions, and scenario replay.
 //! - A bug here starts as a failing simulator seed or a scenario whose expectation broke.

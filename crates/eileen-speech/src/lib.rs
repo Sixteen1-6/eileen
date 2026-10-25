@@ -42,8 +42,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-speech` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-speech`).
+//! - Fast command: `cargo xtask test -p eileen-speech`.
 //! - Layers: neutral unit tests on Linux (pipe protocol, turn fusion, log-mel, clause splitter,
 //!   phrase cache), the `speech_frame` fuzz target, and model tests under the exclusive build
 //!   slot.
