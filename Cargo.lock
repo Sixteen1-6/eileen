@@ -299,6 +299,8 @@ version = "0.0.0"
 dependencies = [
  "eileen-contracts",
  "eileen-dbus-linux",
+ "eileen-platform",
+ "eileen-stdx",
  "proptest",
  "quick-xml",
  "rustix",

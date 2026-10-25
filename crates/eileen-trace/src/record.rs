@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde_json::{Map, Value, json};
+use tracing::Metadata;
 use tracing::field::{Field, Visit};
 
 use crate::names::REMOTE_PARENT_FIELD;
@@ -40,11 +41,12 @@ pub struct SpanRecord {
 /// One event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EventRecord {
-    /// Its name (`span.slow`, or tracing's default `event file:line`).
+    /// Its name (`span.slow`, or tracing's default `event file:line`, which a record bridged
+    /// from the `log` crate takes from its own location).
     pub name: String,
     /// Its level.
     pub level: String,
-    /// Its target.
+    /// Its target (a bridged `log` record's own).
     pub target: String,
     /// The record id of the span it happened in.
     pub span: Option<u64>,
@@ -161,7 +163,7 @@ pub fn source_file(path: &str) -> Cow<'_, str> {
 
 /// An event's name as the ring and the test capture keep it: a name given with `name:` as it
 /// is, and `tracing`'s default, `event <file>:<line>`, with the file cut by [`source_file`].
-pub(crate) fn event_name(name: &'static str) -> Cow<'static, str> {
+fn event_name(name: &'static str) -> Cow<'static, str> {
     let Some(location) = name.strip_prefix("event ") else {
         return Cow::Borrowed(name);
     };
@@ -169,6 +171,69 @@ pub(crate) fn event_name(name: &'static str) -> Cow<'static, str> {
     match source_file(file) {
         Cow::Borrowed(_) => Cow::Borrowed(name),
         Cow::Owned(file) => Cow::Owned(format!("event {file}:{line}")),
+    }
+}
+
+/// The name and target tracing-log's callsites give every record it bridges from the `log`
+/// crate, one callsite per level.
+const BRIDGED: (&str, &str) = ("log event", "log");
+
+/// Where an event was logged, as the sinks keep it.
+pub(crate) struct Origin<'a> {
+    /// Its target.
+    pub(crate) target: Cow<'a, str>,
+    /// Its source file, cut by [`source_file`].
+    pub(crate) file: Option<Cow<'a, str>>,
+    /// Its line.
+    pub(crate) line: Option<u64>,
+    /// Its callsite's name.
+    callsite: &'static str,
+    /// Whether tracing-log bridged it from the `log` crate.
+    bridged: bool,
+}
+
+impl<'a> Origin<'a> {
+    /// Where the event of `meta`, with `fields`, was logged. tracing-log, which
+    /// [`init()`](crate::init()) installs for dependencies that log through the `log` crate,
+    /// sends every record through its level's callsite, named `log event` with target `log`
+    /// and no file or line, and carries the record's own in `log.target`, `log.module_path`,
+    /// `log.file` and `log.line` fields. Those four leave `fields` and give the target, file
+    /// and line, as `fmt`'s `NormalizeEvent` does, so each dependency keeps its own, and its
+    /// absolute source path, which holds the build PC's home folder, never stays in a field.
+    pub(crate) fn of(meta: &Metadata<'a>, fields: &mut Map<String, Value>) -> Self {
+        let callsite = meta.name();
+        let bridged = (callsite, meta.target()) == BRIDGED
+            && fields.get("log.target").is_some_and(Value::is_string);
+        if !bridged {
+            return Self {
+                target: Cow::Borrowed(meta.target()),
+                file: meta.file().map(source_file),
+                line: meta.line().map(u64::from),
+                callsite,
+                bridged,
+            };
+        }
+        let text = |value: Option<Value>| match value {
+            Some(Value::String(text)) => Some(text),
+            _ => None,
+        };
+        let target = text(fields.remove("log.target")).unwrap_or_default();
+        let file = text(fields.remove("log.file")).map(|file| source_file(&file).into_owned());
+        let line = fields.remove("log.line").as_ref().and_then(Value::as_u64);
+        fields.remove("log.module_path");
+        Self { target: Cow::Owned(target), file: file.map(Cow::Owned), line, callsite, bridged }
+    }
+
+    /// The event's name as the ring and the test capture keep it: its callsite's, as
+    /// [`event_name`] gives it, and for a bridged `log` record `event <file>:<line>` from the
+    /// record's own location, the form `tracing` names its own events with (`log event`, the
+    /// callsite's, when the record has none).
+    pub(crate) fn name(&self) -> Cow<'static, str> {
+        match (&self.file, self.line) {
+            (Some(file), Some(line)) if self.bridged => Cow::Owned(format!("event {file}:{line}")),
+            _ if self.bridged => Cow::Borrowed(self.callsite),
+            _ => event_name(self.callsite),
+        }
     }
 }
 

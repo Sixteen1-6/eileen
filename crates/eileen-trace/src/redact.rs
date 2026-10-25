@@ -15,6 +15,16 @@
 //! card right after a colour code (`ESC[0m`) or a URL escape (`%3A`), whose last byte is a
 //! letter, which is why the console never colours what it writes.
 //!
+//! A card's digits come in groups joined by single spaces or hyphens. A run of groups that is
+//! not a card as a whole can still begin with one: the longest part of it that passes and ends
+//! before a space, or before a hyphen once the part holds a separator of its own, is taken. So
+//! a card read out with its CVV or expiry date after it is found: `4111 1111 1111 1111 12 27`
+//! becomes `[redacted:card] 12 27`, and `4111-1111-1111-1111-123` becomes `[redacted:card]-123`.
+//! A part that is a single group never ends at a hyphen, since a hyphen joins the parts of one
+//! id: a `traceparent`'s parent id can be 16 digits that pass, and its flags follow after a
+//! hyphen, so `4111111111111111-123` is not found. Each group of a run is tried as a start, so
+//! a number in front of a card never hides any of it.
+//!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
 //! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
 //! JSON-escaped, so a password holding a quote or a backslash is caught after serialization
@@ -307,11 +317,18 @@ impl Redactor {
         }
         let mut i = 0;
         while i < bytes.len() {
-            if let Some(finding) = match_at(bytes, i) {
-                i = finding.range.end;
-                found.push(finding);
-            } else {
-                i += 1;
+            match match_at(bytes, i) {
+                // A card can end before its run does, so the starts inside it are tried too: when
+                // a number and the front of a card pass together, the rest of the card is found.
+                Some(finding) if finding.kind == SecretKind::CardNumber => {
+                    found.push(finding);
+                    i += 1;
+                }
+                Some(finding) => {
+                    i = finding.range.end;
+                    found.push(finding);
+                }
+                None => i += 1,
             }
         }
         found.sort_by_key(|f| (f.range.start, std::cmp::Reverse(f.range.end)));
@@ -496,22 +513,35 @@ fn private_key(bytes: &[u8], i: usize) -> Option<Finding> {
     Some(Finding { kind: SecretKind::PrivateKey, range: i..i + end })
 }
 
+/// The card number that starts at `i`: the run of digit groups from there, or else the longest
+/// part of it that ends before a space, or before a hyphen once the part holds a separator of
+/// its own (a card read out with its CVV or expiry date after it). A part that is a single
+/// group never ends at a hyphen, which joins the parts of one id.
 fn card(bytes: &[u8], i: usize) -> Option<Finding> {
+    let found = |end| Finding { kind: SecretKind::CardNumber, range: i..end };
     let mut digits = Vec::with_capacity(19);
     let mut end = i;
     let mut j = i;
+    let mut part = None;
+    let mut grouped = false;
     while let Some(&b) = bytes.get(j) {
         if b.is_ascii_digit() {
+            if digits.len() == 19 {
+                // Longer than any card, so only a part of it can be one.
+                return part.map(found);
+            }
             digits.push(b);
             j += 1;
             end = j;
-            if digits.len() > 19 {
-                return None;
-            }
         } else if (b == b' ' || b == b'-')
             && bytes.get(j + 1).is_some_and(u8::is_ascii_digit)
             && !digits.is_empty()
         {
+            // One group and then a hyphen is how a `traceparent` writes its parent id and flags.
+            if (b == b' ' || grouped) && card_digits(&digits) {
+                part = Some(end);
+            }
+            grouped = true;
             j += 1;
         } else {
             break;
@@ -519,9 +549,13 @@ fn card(bytes: &[u8], i: usize) -> Option<Finding> {
     }
     // A word of its own at the end too: a run that a letter continues is part of an id.
     let continued = bytes.get(end).is_some_and(u8::is_ascii_alphanumeric);
-    let card_length = matches!(digits.len(), 15 | 16 | 19);
-    (card_length && !continued && luhn(&digits))
-        .then_some(Finding { kind: SecretKind::CardNumber, range: i..end })
+    let whole = (!continued && card_digits(&digits)).then_some(end);
+    whole.or(part).map(found)
+}
+
+/// 15, 16 or 19 digits that pass the Luhn check.
+fn card_digits(digits: &[u8]) -> bool {
+    matches!(digits.len(), 15 | 16 | 19) && luhn(digits)
 }
 
 #[cfg(test)]
@@ -544,6 +578,10 @@ mod tests {
                 SecretKind::PrivateKey,
             ),
             ("card 4111 1111 1111 1111 thanks", SecretKind::CardNumber),
+            // Followed by its CVV (19 digits that fail the Luhn check) or its expiry date (20).
+            ("card 4111 1111 1111 1111 123", SecretKind::CardNumber),
+            ("4111 1111 1111 1111 12 27", SecretKind::CardNumber),
+            ("4111-1111-1111-1111 123", SecretKind::CardNumber),
         ];
         for (text, kind) in cases {
             let found = r.find(text);
@@ -657,10 +695,74 @@ mod tests {
     }
 
     #[test]
+    fn a_card_read_out_with_its_cvv_or_expiry_date_is_found() {
+        let r = Redactor::new();
+        for (text, redacted) in [
+            ("card 4111 1111 1111 1111 123", "card [redacted:card] 123"),
+            ("4111 1111 1111 1111 12 27", "[redacted:card] 12 27"),
+            ("4111-1111-1111-1111 123", "[redacted:card] 123"),
+            ("4111111111111111 12/27", "[redacted:card] 12/27"),
+            ("4111 1111 1111 1111 12 27 123 3rd try", "[redacted:card] 12 27 123 3rd try"),
+            // A letter after the last group makes the whole run part of a word, not the card.
+            ("card 4111 1111 1111 1111 2nd try", "card [redacted:card] 2nd try"),
+            // An American Express card's 15 digits and its four-digit code.
+            ("3782 822463 10005 1234", "[redacted:card] 1234"),
+            // Its first 16 digits pass too, and the longest part that passes is the card.
+            ("4111 1111 1111 1111 003 123", "[redacted:card] 123"),
+            // After a hyphen, once the card holds a separator of its own.
+            ("6400 8570 7213 7033-135", "[redacted:card]-135"),
+            ("4111-1111-1111-1111-123", "[redacted:card]-123"),
+            ("4111-1111-1111-1111-12/27", "[redacted:card]-12/27"),
+            ("3782-822463-10005-1234", "[redacted:card]-1234"),
+        ] {
+            assert_eq!(r.redact(text), redacted, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_19_digit_card_whose_first_16_digits_pass_is_redacted_whole() {
+        let r = Redactor::new();
+        // 4111 1111 1111 1111 003 passes the Luhn check, and so do its first 16 digits: the card
+        // is the whole run, never the part before its last group.
+        for (text, redacted) in [
+            ("4111 1111 1111 1111 003", "[redacted:card]"),
+            ("card 4111 1111 1111 1111 003 thanks", "card [redacted:card] thanks"),
+            ("4111-1111-1111-1111-003", "[redacted:card]"),
+        ] {
+            assert_eq!(r.redact(text), redacted, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_number_in_front_of_a_card_never_hides_any_of_it() {
+        let r = Redactor::new();
+        // From 345 the first 15 digits pass and all 19 fail, and from 2028 the first 16 pass:
+        // both parts end inside the card, which is still redacted to its last digit.
+        for text in [
+            "ref 345 4111 1111 1111 1111",
+            "ref 2028 4111 1111 1111 1111",
+            "ref 22 4111 1111 1111 1111",
+        ] {
+            let out = r.redact(text);
+            assert!(out.ends_with("[redacted:card]") && !out.contains("1111"), "{text}: {out}");
+        }
+    }
+
+    #[test]
     fn no_traceparent_is_a_card() {
         let r = Redactor::new();
         // Span ids as the registry hands them out: a slot's key plus 1, its generation at bit 51.
-        let spans = [7_u64, (1 << 51) + 3, (5 << 51) + 1, 0x00ab_cdef_0000_0001];
+        // The last three are slots reused 1,024, 2,048 and 3,072 times: 16 digits from 2 to 6
+        // that pass the Luhn check, with the flags after the next hyphen.
+        let spans = [
+            7_u64,
+            (1 << 51) + 3,
+            (5 << 51) + 1,
+            0x00ab_cdef_0000_0001,
+            (1_024 << 51) + 6,
+            (2_048 << 51) + 2,
+            (3_072 << 51) + 7,
+        ];
         let mut lost = Vec::new();
         for n in 0..4_096_u64 {
             let hash = blake3::hash(&n.to_le_bytes());
@@ -712,6 +814,31 @@ mod tests {
             "token hook-token-canary",
             "unregistered once both guards are gone"
         );
+    }
+
+    #[test]
+    fn a_retired_secret_leaves_the_scan_in_every_form() {
+        let r = Arc::new(Redactor::new());
+        let unquote =
+            |text: String| text.strip_prefix('"').unwrap().strip_suffix('"').unwrap().to_owned();
+        let json = |text: &str| unquote(serde_json::Value::from(text).to_string());
+        // More sessions than MAX_LITERALS, one after another. A quote, a backslash and a tab
+        // give each secret forms that differ (raw, escaped once and escaped twice), where a
+        // plain token's forms are one string.
+        for session in 0..1_000 {
+            let secret = format!("pa\"ss\\word\t{session:06}");
+            let debug = unquote(format!("{secret:?}"));
+            let forms = [json(&secret), json(&debug), debug, secret.clone()];
+            let guard = r.add_literal(&secret).unwrap();
+            for form in &forms {
+                assert_eq!(r.redact(form), "[redacted:secret]", "session {session}: {form}");
+            }
+            drop(guard);
+            for form in &forms {
+                assert!(!r.prefilter(form), "session {session} ended and {form} is scanned for");
+            }
+        }
+        assert_eq!((r.literal_count(), r.refused_literals()), (0, 0), "none held, none refused");
     }
 
     #[test]
