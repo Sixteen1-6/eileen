@@ -17,7 +17,7 @@
 //! - [`Bridge`]: the one thread where trait calls run their async jobs on [`Buses`] (the shared
 //!   buses, or a session connection of the job's own), within a `Deadline` ([`Bridge::call`])
 //!   or behind a `Subscription` ([`Bridge::watch`]); [`DEFAULT_DEADLINE`] for a call with none.
-//! - `testing`, behind the `private-bus` feature: the private bus and fake services for tests.
+//! - `testing`, behind the `private-bus` feature: the private and silent buses, and fake services.
 //!
 //! # Does not own
 //!
