@@ -29,13 +29,11 @@
 //!   record's ids and times (test `ring::tests::span_ids_of_reused_slots_survive_the_dump`),
 //!   and a ring's size bounds what its lines and their queue allocate
 //!   (`ring::tests::the_bound_counts_what_the_lines_allocate`).
-//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
-//!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
+//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in (test
+//!   `it::stack::file_lines_carry_their_span_and_reduce_pii`); a span trace shows them as their
+//!   length alone even then (`it::stack::a_logged_span_trace_shows_pii_fields_as_their_length` and
+//!   `it::stack::a_logged_span_trace_shows_pii_lengths_with_personal_logs_on`). No log line or ring
 //!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
-//! - A span trace, text that any sink can carry, shows `pii.` fields as their length alone,
-//!   whatever `logging.include_personal` says (tests
-//!   `it::stack::a_logged_span_trace_shows_pii_fields_as_their_length` and
-//!   `it::stack::a_logged_span_trace_shows_pii_lengths_with_personal_logs_on`).
 //! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
 //!   exactly, and never today's (tests `it::stack::the_core_keeps_the_other_processes_files`
 //!   and `it::stack::the_core_prunes_its_own_files_by_the_date_in_their_names`).
@@ -46,8 +44,7 @@
 //! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
 //!   and error crates, `serde_json`, `blake3`, `thiserror` and `toml` (for [`privacy`]); no
 //!   async runtime, no OpenTelemetry.
-//! - Wire types: the JSON-lines log and ring formats, documented in [`file`](mod@file) and
-//!   [`ring`].
+//! - Wire types: the JSON-lines log and ring formats that [`file`](mod@file) and [`ring`] document.
 //!
 //! # Testing
 //!
@@ -60,9 +57,8 @@
 //! # Traps
 //!
 //! - [`init()`] can run once per process; tests use [`init::build`] with `with_default`.
-//! - Span ids are reused after a span closes, and every process hands out the same ones:
-//!   records carry their own ids, and a `traceparent` resolves by trace and span id
-//!   ([`schema`]).
+//! - Span ids are reused after a span closes, and every process hands out the same ones: records
+//!   carry their own ids, and a `traceparent` resolves by trace and span id ([`schema`]).
 //! - User content goes in `pii.` fields only, never in a span name or a message.
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
