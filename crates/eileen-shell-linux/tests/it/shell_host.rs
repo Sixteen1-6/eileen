@@ -565,7 +565,8 @@ fn set_tray_shows_the_mute_state_and_menu_and_reports_choices() {
     let tray = TraySettings { icon: "eileen-on".to_owned(), muted_icon: "eileen-muted".to_owned() };
     let (shell, mut events) =
         rig.shell_with(LinuxShellSettings { tray, ..settings(DEFAULT_DEADLINE, None) });
-    let muted = TrayState { muted: true, tooltip: "Muted".to_owned(), ..state() };
+    // No D-Bus string may hold U+0000, and the bus would drop the tray's connection for one.
+    let muted = TrayState { muted: true, tooltip: "Mu\0ted".to_owned(), ..state() };
     assert_eq!(shell.set_tray(muted), Ok(()), "a watcher has the item");
     let (item, _sender) = rig.registered(&mut registrations);
     let icon = || String::try_from(rig.property(&item, ITEM_PATH, ITEM, "IconName"));
@@ -573,7 +574,7 @@ fn set_tray_shows_the_mute_state_and_menu_and_reports_choices() {
     let tooltip = rig.property(&item, ITEM_PATH, ITEM, "ToolTip");
     let (_icon, _pixmaps, _title, text) =
         <(String, Vec<(i32, i32, Vec<u8>)>, String, String)>::try_from(tooltip).unwrap();
-    assert_eq!(text, "Muted", "the state's tooltip");
+    assert_eq!(text, "Muted", "the state's tooltip, without its U+0000");
     shell.set_tray(state()).unwrap();
     assert_eq!(icon().unwrap(), "eileen-on", "the settings' icon");
     let (_revision, root) = rig.layout(&item, 0, -1);

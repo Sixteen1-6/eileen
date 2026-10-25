@@ -228,6 +228,15 @@ impl Rig {
     }
 }
 
+/// The name of the error `result` holds; `None` for an answer.
+pub(super) fn error_name<T>(result: zbus::Result<T>) -> Option<String> {
+    match result {
+        Ok(_answer) => None,
+        Err(zbus::Error::MethodError(name, _, _)) => Some(name.to_string()),
+        Err(error) => panic!("an error reply: {error}"),
+    }
+}
+
 /// An item with this id and label, and `checked`.
 pub(super) fn tray_item(id: &str, label: &str, checked: Option<bool>) -> TrayItem {
     TrayItem { id: id.to_owned(), label: label.to_owned(), checked }
@@ -304,34 +313,58 @@ fn a_clicked_item_reaches_the_sink_by_its_id_and_a_stale_one_is_an_id_error() {
     let (_revision, root) = rig.layout(&item, 0, -1);
     let [mute, quit] = [root.children[0].id, root.children[1].id];
     rig.menu_event(&item, quit, "clicked").unwrap();
-    assert_eq!(rig.event(&mut events), LinuxShellEvent::TrayChoice("quit".to_owned()), "chosen");
-    shell
-        .set_tray(TrayState { menu: vec![tray_item("mute", "Mute", Some(true))], ..state() })
-        .unwrap();
-    let stale = rig.menu_event(&item, quit, "clicked").unwrap_err();
-    let zbus::Error::MethodError(name, _, _) = &stale else { panic!("an error reply: {stale}") };
-    assert_eq!(name.as_str(), INVALID_ARGS, "an item shown no more");
-    let group =
-        vec![(mute, "clicked", OwnedValue::from(0_i32), 0_u32), (quit, "clicked", 0_i32.into(), 0)];
-    let errors: Vec<i32> =
-        rig.menu_call(&item, "EventGroup", &(group,)).unwrap().body().deserialize().unwrap();
+    let choice = |id: &str| LinuxShellEvent::TrayChoice(id.to_owned());
+    assert_eq!(rig.event(&mut events), choice("quit"), "chosen, by its TrayItem id");
+    let menu = vec![tray_item("mute", "Mute", Some(true)), tray_item("about", "About", None)];
+    shell.set_tray(TrayState { menu, ..state() }).unwrap();
+    let stale = rig.menu_event(&item, quit, "clicked");
+    assert_eq!(error_name(stale).as_deref(), Some(INVALID_ARGS), "an item shown no more");
+    let click = |id: i32| (id, "clicked", OwnedValue::from(0_i32), 0_u32);
+    let group = rig.menu_call(&item, "EventGroup", &(vec![click(mute), click(quit)],));
+    let errors: Vec<i32> = group.unwrap().body().deserialize().unwrap();
     assert_eq!(errors, [quit], "the stale id, as an id error");
-    assert_eq!(
-        rig.event(&mut events),
-        LinuxShellEvent::TrayChoice("mute".to_owned()),
-        "the known one"
-    );
-    let stale_group = vec![(quit, "clicked", OwnedValue::from(0_i32), 0_u32)];
-    let none_known = rig.menu_call(&item, "EventGroup", &(stale_group,)).unwrap_err();
-    let zbus::Error::MethodError(name, _, _) = &none_known else {
-        panic!("an error: {none_known}")
-    };
-    assert_eq!(name.as_str(), INVALID_ARGS, "a group with no known id");
+    assert_eq!(rig.event(&mut events), choice("mute"), "the known one, chosen");
+    let none_known = rig.menu_call(&item, "EventGroup", &(vec![click(quit)],)).map(drop);
+    assert_eq!(error_name(none_known).as_deref(), Some(INVALID_ARGS), "no known id in the group");
     rig.menu_event(&item, 0, "opened").unwrap();
     rig.menu_event(&item, mute, "hovered").unwrap();
-    rig.menu_event(&item, mute, "clicked").unwrap();
-    let next = rig.event(&mut events);
-    assert_eq!(next, LinuxShellEvent::TrayChoice("mute".to_owned()), "only a click is a choice");
+    let (_revision, root) = rig.layout(&item, 0, -1);
+    rig.menu_event(&item, root.children[1].id, "clicked").unwrap();
+    assert_eq!(rig.event(&mut events), choice("about"), "only a click is a choice");
+}
+
+#[test]
+fn the_menu_answers_for_its_items_and_never_asks_to_update() {
+    let mut rig = Rig::new();
+    let mut registrations = rig.watcher();
+    let (shell, _events) = rig.shell();
+    shell.set_tray(state()).unwrap();
+    let (item, _sender) = rig.registered(&mut registrations);
+    let (_revision, root) = rig.layout(&item, 0, -1);
+    let [mute, quit] = [root.children[0].id, root.children[1].id];
+    let label = vec!["label".to_owned()];
+    let labels = |ids: Vec<i32>| -> Vec<(i32, Option<String>)> {
+        let reply = rig.menu_call(&item, "GetGroupProperties", &(ids, &label)).unwrap();
+        let groups: Vec<(i32, HashMap<String, OwnedValue>)> = reply.body().deserialize().unwrap();
+        let text = |value: &OwnedValue| String::try_from(value.clone()).unwrap();
+        groups.into_iter().map(|(id, found)| (id, found.get("label").map(text))).collect()
+    };
+    assert_eq!(labels(vec![quit, 99]), [(quit, Some("Quit".to_owned()))], "known ids alone");
+    let all = [(0, None), (mute, Some("Mute".to_owned())), (quit, Some("Quit".to_owned()))];
+    assert_eq!(labels(Vec::new()), all, "no ids: the root and every item");
+    let property = |id: i32, name: &str| {
+        let reply = rig.menu_call(&item, "GetProperty", &(id, name))?;
+        Ok(String::try_from(reply.body().deserialize::<OwnedValue>()?)?)
+    };
+    assert_eq!(property(quit, "label").unwrap(), "Quit", "one property");
+    assert_eq!(error_name(property(99, "label")).as_deref(), Some(INVALID_ARGS), "unknown item");
+    let missing = property(quit, "no-such-property");
+    assert_eq!(error_name(missing).as_deref(), Some(INVALID_ARGS), "unknown property");
+    let reply = rig.menu_call(&item, "AboutToShow", &(0_i32,)).unwrap();
+    assert!(!reply.body().deserialize::<bool>().unwrap(), "no update needed");
+    let reply = rig.menu_call(&item, "AboutToShowGroup", &(vec![0_i32, quit, 99],)).unwrap();
+    let (updates, errors): (Vec<i32>, Vec<i32>) = reply.body().deserialize().unwrap();
+    assert_eq!((updates, errors), (Vec::new(), vec![99]), "no update, and the unknown id");
 }
 
 #[test]
