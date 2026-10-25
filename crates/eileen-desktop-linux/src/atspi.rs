@@ -35,9 +35,14 @@ pub use self::kinds::{Interfaces, Role, State, StateSet};
 use self::proxies::{AccessibleProxy, Reference, TextProxy};
 pub use self::walk::{Walk, WalkNode};
 
-/// The call timeout of the accessibility bus's connection: 800 ms, libatspi 2.52's own default
-/// for each call (its `method_call_timeout`, read from the library's data). It is shorter than
-/// the session bus's 5 s, so one app that hangs cannot stall a listing.
+/// The call timeout of the accessibility bus's connection: 800 ms, libatspi 2.52's
+/// `method_call_timeout`, read from the library's data. It is shorter than the session bus's
+/// 5 s, so one app that hangs cannot stall a listing.
+///
+/// libatspi uses it as a floor, not a flat bound: a call to an app it first saw less than its
+/// `app_startup_time` (15 s) ago may take what is left of those 15 s. This client keeps 800 ms
+/// from the start, so a read right after an app starts can pass its deadline where libatspi,
+/// and so a screen reader, would wait.
 pub const CALL_TIMEOUT: Duration = Duration::from_millis(800);
 
 /// The registry's bus name.

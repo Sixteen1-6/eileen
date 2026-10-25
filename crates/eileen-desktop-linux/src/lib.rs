@@ -1,6 +1,5 @@
 //! The desktop process's platform implementations on Linux, as `eileen-desktop-win`'s on Windows
-//! (BUILD.md sections 2.6 and 3.4; docs/LINUX.md sections 3 and 4). So far it holds the AT-SPI2
-//! client its desktop traits will read the desktop through.
+//! (BUILD.md sections 2.6 and 3.4; docs/LINUX.md sections 3 and 4): so far, the AT-SPI2 client.
 //!
 //! # Owns
 //!
@@ -62,6 +61,8 @@
 //! - `ChildCount` can be wrong, and `GetChildren` on a big table makes the app build every
 //!   child: an object that manages its descendants, or has more children than there is room
 //!   for, is read child by child by index, and only as far as the room goes.
+//! - libatspi waits up to 15 s on an app it first saw less than 15 s ago, and 800 ms only after;
+//!   [`CALL_TIMEOUT`] is 800 ms from the start, so a read just after an app starts can time out.
 //! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
 //! - A second at-spi-bus-launcher started with the session's `XDG_RUNTIME_DIR` and `DISPLAY`
