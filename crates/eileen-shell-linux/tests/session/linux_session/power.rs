@@ -1,8 +1,11 @@
 //! The power facts over D-Bus, from `UPower` and power-profiles-daemon on the runner's system
 //! bus: one reading, and the stream of changes while the test switches the profile to
-//! `power-saver` and back to the one it found, as a user does. polkit lets only the active local
-//! session switch it, so the lane's session can and a process outside every session cannot. The
-//! runner is a VM on mains power.
+//! `power-saver` and back to the one it found, as a user does. polkit lets a caller switch it
+//! when the session it judges the caller by is active and local: the caller's logind session or,
+//! for a process in none, the one logind names as its user's display, a graphical one first
+//! (polkit's `polkit_backend_session_monitor_get_session_for_subject`). The tests run in the
+//! lane's session, which is; the runner's own steps run in system services, outside the user's
+//! slice, and so have neither. The runner is a VM on mains power.
 
 use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon};
 

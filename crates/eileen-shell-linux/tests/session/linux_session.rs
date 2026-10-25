@@ -82,8 +82,9 @@ impl Drop for Session {
 }
 
 /// Switches power-profiles-daemon to `profile` with a `Set` of its `ActiveProfile`, as a
-/// desktop's power menu does. polkit allows it to the active local session alone
-/// (`org.freedesktop.UPower.PowerProfiles.switch-profile` is `allow_active`), as the lane's is.
+/// desktop's power menu does. `org.freedesktop.UPower.PowerProfiles.switch-profile` is
+/// `allow_active`: polkit allows it to a caller in an active local session, as the tests in the
+/// lane's are (the power tests' doc says which session polkit gives a process in none).
 async fn set_profile(system: &zbus::Connection, profile: &str) -> zbus::Result<()> {
     let property = (PROFILES, "ActiveProfile", Value::from(profile));
     let reply =
