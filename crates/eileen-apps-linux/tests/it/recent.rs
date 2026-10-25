@@ -338,11 +338,11 @@ fn a_fifo_or_a_device_in_the_files_place_is_refused_unread() {
     );
 }
 
-/// A copy of the `GLib` fixture in `scratch`, named `name`, that `File::set_len` extends with
-/// zeros to `len` bytes. It writes none of them, so the file takes no more disk than the fixture.
-fn sparse_gtk(scratch: &Scratch, name: &str, len: u64) -> RecentlyUsed {
+/// A file in `scratch`, named `name`, that holds `text` and then zeros to `len` bytes.
+/// `File::set_len` adds the zeros without writing them, so they take no disk space.
+fn sparse(scratch: &Scratch, name: &str, text: &[u8], len: u64) -> RecentlyUsed {
     let path = scratch.path().join(name);
-    fs::copy(fixtures().join("home/sam/.local/share/recently-used.xbel"), &path).unwrap();
+    fs::write(&path, text).unwrap();
     fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(len).unwrap();
     RecentlyUsed::at(path)
 }
@@ -350,19 +350,24 @@ fn sparse_gtk(scratch: &Scratch, name: &str, len: u64) -> RecentlyUsed {
 #[test]
 fn a_file_over_16_mib_is_refused_whole() {
     // The reader reads at most 16 MiB and one byte of the file, and a file that reaches that
-    // byte is refused rather than listed from its first 16 MiB. Both files are the fixture and
-    // then zeros, which read as text after the root.
+    // byte is refused rather than listed from its first 16 MiB. The files hold the GLib
+    // fixture and then zeros, which read as text after the root.
     const LIMIT: u64 = 16 << 20;
+    let gtk_file = fs::read(fixtures().join("home/sam/.local/share/recently-used.xbel")).unwrap();
     let scratch = Scratch::new();
-    let at = sparse_gtk(&scratch, "at-the-limit.xbel", LIMIT);
+    let at = sparse(&scratch, "at-the-limit.xbel", &gtk_file, LIMIT);
     assert_eq!(at.bookmarks(), gtk().bookmarks(), "a file of exactly 16 MiB is read whole");
-    let over = sparse_gtk(&scratch, "over-the-limit.xbel", LIMIT + 1);
+    let over = sparse(&scratch, "over-the-limit.xbel", &gtk_file, LIMIT + 1);
     let too_large = Err(FileError::Invalid {
         what: "recently-used.xbel",
         detail: "larger than 16 MiB".to_owned(),
     });
     assert_eq!(over.bookmarks(), too_large, "one byte more is refused");
     assert_eq!(over.recent(10), too_large, "and so is the list of it");
+    // Without its end tag, what is read ends inside the root: broken XML on its own.
+    let open_root = gtk_file.strip_suffix(b"</xbel>").unwrap();
+    let cut = sparse(&scratch, "cut-inside-the-root.xbel", open_root, LIMIT + 1);
+    assert_eq!(cut.bookmarks(), too_large, "refused for its size, not for the cut");
 }
 
 #[test]

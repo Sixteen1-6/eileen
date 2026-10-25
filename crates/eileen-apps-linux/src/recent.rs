@@ -9,8 +9,9 @@
 //! bookmark file, is a [`FileError`] that holds no path and none of the file's text; GTK and KIO
 //! replace such a file on their next write. The open never waits, as a FIFO's would for a
 //! writer, and what is neither a file nor a folder, such as a FIFO or a device, is refused
-//! before it is read. The submodules hold the rules: `xbel` the file's layout and which
-//! bookmarks count, `uri` the path, `time` the times, `kind` the kind of file.
+//! before it is read. A file over 16 MiB is refused whole, once one byte past that limit is
+//! read. The submodules hold the rules: `xbel` the file's layout and which bookmarks count,
+//! `uri` the path, `time` the times, `kind` the kind of file.
 //!
 //! # The list
 //!
@@ -38,7 +39,7 @@ mod xbel;
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::PathBuf;
 
@@ -50,6 +51,12 @@ use crate::{FileError, Session};
 
 /// The file's name in the user's data folder, and what its errors name.
 const FILE_NAME: &str = "recently-used.xbel";
+
+/// The most of the file that is read: 16 MiB. GTK keeps at most 1000 bookmarks and KIO 300; a
+/// thousand as GTK writes them take about 0.7 MiB, and 12.3 MiB if every path is as long as
+/// Linux allows and escaped byte by byte. A longer file, such as a sparse one that takes no
+/// disk space, is refused whole: GTK writes the newest bookmarks last, so a cut list loses them.
+const MAX_FILE_BYTES: u64 = 16 << 20;
 
 /// A recently used file: the `RecentSources` trait's `RecentItem` (`eileen-platform`, on the
 /// unmerged base crates) field for field, except that the app's name, which another app wrote,
@@ -105,7 +112,8 @@ impl RecentlyUsed {
     /// Every usable bookmark in the file, in the file's order: each local file that is not
     /// private and has a time, with its app and its kind. A path the file lists twice is here
     /// twice. A missing file, or one with no root element, has none. A FIFO or a device in the
-    /// file's place is [`FileError::Invalid`], opened without waiting and not read.
+    /// file's place is [`FileError::Invalid`], opened without waiting and not read, and so is a
+    /// file over 16 MiB, of which 16 MiB and one byte are read.
     pub fn bookmarks(&self) -> Result<Vec<RecentItem>, FileError> {
         let opened = File::options().read(true).custom_flags(OPEN_FLAGS).open(self.path.get());
         let file = match opened {
@@ -118,6 +126,14 @@ impl RecentlyUsed {
         if !meta.is_file() && !meta.is_dir() {
             return Err(FileError::Invalid { what: FILE_NAME, detail: "not a file".to_owned() });
         }
-        xbel::read_bookmarks(BufReader::new(file))
+        // The read stops one byte past the limit, and a file that reaches that byte is refused,
+        // even when the cut leaves what was read broken.
+        let mut limited = BufReader::new(file.take(MAX_FILE_BYTES + 1));
+        let read = xbel::read_bookmarks(&mut limited);
+        if limited.get_ref().limit() == 0 {
+            let detail = format!("larger than {} MiB", MAX_FILE_BYTES >> 20);
+            return Err(FileError::Invalid { what: FILE_NAME, detail });
+        }
+        read
     }
 }
