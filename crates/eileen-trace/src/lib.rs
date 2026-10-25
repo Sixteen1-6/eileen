@@ -57,7 +57,8 @@
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
 //! - The core's process name, `eileen`, begins every other process's file name: match log
-//!   file names exactly, never by prefix, as tracing-appender's `max_log_files` does.
+//!   file names exactly, never by prefix (tracing-appender's `max_log_files` matches by
+//!   prefix, so it stays off).
 //!
 //! # Logs and tracing
 //!

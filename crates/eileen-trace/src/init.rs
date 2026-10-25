@@ -271,7 +271,7 @@ pub fn build(
     let mut file_filter = None;
     if let Some(dir) = &config.log_dir {
         // Not the appender's `max_log_files`: it matches by prefix, so the core (`eileen`)
-        // pruned every other process's files as its own.
+        // would prune every other process's files as its own.
         let appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix(process)
