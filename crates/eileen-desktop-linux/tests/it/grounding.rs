@@ -546,7 +546,12 @@ fn a_focused_password_field_says_so_and_its_selection_is_never_read() {
         ("password text", true, None),
         "a password field, which has no automation id"
     );
-    assert_eq!(desktop.selection(true, Deadline::UIA).unwrap(), None, "the clipboard allowed");
+    assert_eq!(desktop.selection(false, Deadline::UIA).unwrap(), None, "its selection refused");
+    assert_eq!(
+        desktop.selection(true, Deadline::UIA),
+        Err(PlatformError::Unavailable { what: "clipboard" }),
+        "and the clipboard, allowed, not read yet"
+    );
     assert_eq!(*calls.text_reads.lock().unwrap(), [], "its text is never asked for");
 }
 
@@ -554,7 +559,8 @@ fn a_focused_password_field_says_so_and_its_selection_is_never_read() {
 fn the_selection_is_the_first_range_of_the_focused_text() {
     let letter = format!("Dear \u{202E}Ada,\u{2066} {}", "x".repeat(9_000));
     let (mut world, calls) = focused_text(letter, vec![(10, 9_000), (0, 4)]);
-    let selection = world.desktop(settings()).selection(false, Deadline::UIA).unwrap().unwrap();
+    let desktop = world.desktop(settings());
+    let selection = desktop.selection(false, Deadline::UIA).unwrap().unwrap();
     assert_eq!(selection.source, SelectionSource::TextPattern, "read from the Text interface");
     let text = selection.text.get();
     assert!(text.starts_with("Dear Ada, xx"), "sanitized: {:?}", text.get(..20));
@@ -564,9 +570,16 @@ fn the_selection_is_the_first_range_of_the_focused_text() {
         [(10, 4_010)],
         "the first range, to 4,000 at most"
     );
+    let found = desktop.selection(true, Deadline::UIA).unwrap();
+    assert_eq!(found, Some(selection), "a selection found needs no clipboard");
     let (mut world, calls) = focused_text("Dear Ada".to_owned(), vec![]);
     let desktop = world.desktop(settings());
     assert_eq!(desktop.selection(false, Deadline::UIA).unwrap(), None, "nothing selected");
+    assert_eq!(
+        desktop.selection(true, Deadline::UIA),
+        Err(PlatformError::Unavailable { what: "clipboard" }),
+        "and the clipboard, which may hold what was copied, not read yet"
+    );
     assert_eq!(*calls.text_reads.lock().unwrap(), [], "and nothing read");
     let field = desktop.focused_element(Deadline::UIA).unwrap().unwrap();
     assert_eq!(field.automation_id, None, "an empty AccessibleId is none");

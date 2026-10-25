@@ -3,7 +3,7 @@
 //!
 //! - `windows` and `foreground`: each app's top-level objects (`src/toplevel.rs`).
 //! - `focused_element`: the focused object of the foreground window (`src/element.rs`).
-//! - `selection`: that object's selected text, from its `Text` alone.
+//! - `selection`: that object's selected text, from its `Text` alone; the clipboard is not read.
 //! - The rest answer `PlatformError::Unavailable`, each method's doc saying why and what brings
 //!   it.
 
@@ -25,6 +25,7 @@ const SELECTION_CHARS: usize = 4_000;
 const WINDOWS: &str = "desktop windows";
 const FOREGROUND: &str = "foreground window";
 const SELECTION: &str = "selection";
+const CLIPBOARD: &str = "clipboard";
 const MONITORS: &str = "monitors";
 const WINDOW_AT: &str = "window under a point";
 const ELEMENT_AT: &str = "element under a point";
@@ -118,15 +119,20 @@ impl Grounding for LinuxDesktop {
     /// with the same `DeadlineExceeded` when the focus is unknown: its `Text`'s first selected
     /// range, at most 4,000 characters, as `SelectionSource::TextPattern`. `None` without a
     /// focused element, for one without `Text` or with nothing selected, and for a password
-    /// field, whose text the client refuses to read. `allow_clipboard` changes nothing: on
-    /// Wayland only the focused surface may read the clipboard, so it is never read.
+    /// field, whose text the client refuses to read.
+    ///
+    /// The clipboard is not read yet: with `allow_clipboard`, a selection the `Text` route does
+    /// not find is `Unavailable { what: "clipboard" }`, never `None`. On Wayland a client reads
+    /// the clipboard only while one of its surfaces has the focus, or through the Clipboard
+    /// portal of a `RemoteDesktop` session (`RequestClipboard`, `SelectionRead`), which phase
+    /// L2's `Input` brings; GNOME's backend for it is measured then.
     fn selection(
         &self,
-        _allow_clipboard: bool,
+        allow_clipboard: bool,
         deadline: Deadline,
     ) -> Result<Option<Selection>, PlatformError> {
         let limits = self.settings().focus_limits;
-        self.on_bus(SELECTION, deadline, move |atspi| async move {
+        let selected = self.on_bus(SELECTION, deadline, move |atspi| async move {
             let Some((element, _window)) = focus(&atspi, limits, deadline.budget()).await? else {
                 return Ok(None);
             };
@@ -140,7 +146,11 @@ impl Grounding for LinuxDesktop {
                 Err(DbusError::Refused { .. }) => Ok(None),
                 Err(error) => Err(error.into()),
             }
-        })
+        })?;
+        if selected.is_none() && allow_clipboard {
+            return Err(PlatformError::Unavailable { what: CLIPBOARD });
+        }
+        Ok(selected)
     }
 
     /// `Unavailable`: GNOME tells clients no presentation or do-not-disturb state over a D-Bus
