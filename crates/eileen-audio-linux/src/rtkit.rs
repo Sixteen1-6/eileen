@@ -26,14 +26,14 @@
 //!
 //! # Reverting
 //!
-//! [`RealtimeKit::revert`] asks for `SCHED_OTHER` at the nice level the thread had, floored at
-//! `MinNiceLevel` ([`Promoted::restore`]), since rtkit refuses any level below it: neither std
-//! nor rustix has a safe `sched_setscheduler`. rtkit 0.14 records the real-time priority it last
-//! granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend makes every thread
-//! it still records real-time again. It forgets a thread only in the garbage collection it runs
-//! at the start of each call to its object, once the thread is neither real-time nor at a
-//! negative nice level, so the revert reads `RTTimeUSecMax` once more to start one, even when
-//! the revert failed: one whose answer never came still comes before the read.
+//! [`RealtimeKit::revert`] asks rtkit for `SCHED_OTHER`, since neither std nor rustix has a safe
+//! `sched_setscheduler`, at the nice level the thread had, floored at `MinNiceLevel`
+//! ([`Promoted::restore`]), below which rtkit refuses any. rtkit 0.14 records the real-time
+//! priority it last granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend
+//! makes every thread it still records real-time again. It forgets a thread only in the garbage
+//! collection it runs at the start of each call to its object, once the thread is neither
+//! real-time nor at a negative nice level, so the revert reads `RTTimeUSecMax` once more to start
+//! one, even when the revert failed: one whose answer never came still comes before the read.
 
 use zbus::proxy::CacheProperties;
 

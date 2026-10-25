@@ -41,11 +41,12 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-audio-linux`.
-//! - Layers: unit and property tests for the limits and the bound; integration tests in `tests/it/`
-//!   against a fake `RealtimeKit` on `eileen-dbus-linux`'s private bus, which checks the caller's
-//!   `RLIMIT_RTTIME` and keeps rtkit 0.14's record of each thread, and [`LinuxAudioEndpoints`]
-//!   through `Bridge::on_private_bus`. No live test: WSL2 has no `RealtimeKit`; a real Ubuntu
-//!   desktop checks a registered thread with `chrt -p`.
+//! - Layers: unit and property tests for the limits, the bound and the promoter's hand-over;
+//!   integration tests in `tests/it/` against a fake `RealtimeKit` on `eileen-dbus-linux`'s
+//!   private bus, which serves its calls in order, checks the caller's `RLIMIT_RTTIME` and keeps
+//!   rtkit 0.14's record of each thread, and [`LinuxAudioEndpoints`] through
+//!   `Bridge::on_private_bus`. No live test: WSL2 has no `RealtimeKit`; a real Ubuntu desktop
+//!   checks a registered thread with `chrt -p`.
 //!
 //! # Traps
 //!
