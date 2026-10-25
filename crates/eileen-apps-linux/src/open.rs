@@ -199,8 +199,10 @@ impl Opener {
     /// The same opener, its checks of paths and files run on `pool`'s blocking pool instead: it
     /// caps the threads that checks hung on a file system hold, at the cost of every later check
     /// waiting once they hold them all, and tokio's paused time stands still while a check runs
-    /// there, as it does not for a thread of its own. Never the D-Bus bridge's runtime, whose
-    /// blocking threads zbus needs to connect a bus.
+    /// there, as it does not for a thread of its own. Dropping that runtime, as `#[tokio::main]`
+    /// does on return, waits for each check it is running, a hung one included: end it with
+    /// `Runtime::shutdown_background` or `shutdown_timeout`. Never the D-Bus bridge's runtime,
+    /// whose blocking threads zbus needs to connect a bus.
     #[must_use]
     pub fn checking_files_on(mut self, pool: Handle) -> Self {
         self.pool = Some(pool);

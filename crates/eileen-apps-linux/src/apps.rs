@@ -110,6 +110,8 @@ impl LinuxApps {
     /// [`Opener::checking_files_on`] runs its checks: it caps the threads that reads hung on a
     /// file system hold, at the cost of every later read waiting once they hold them all, until
     /// its call's deadline. Once the runtime has shut down, a read answers `Io` at once, unrun.
+    /// Dropping it, as `#[tokio::main]` does on return, waits for each read it is running, a
+    /// hung one included: end it with `Runtime::shutdown_background` or `shutdown_timeout`.
     /// Never the D-Bus bridge's runtime, whose blocking threads zbus needs to connect a bus.
     #[must_use]
     pub fn reading_files_on(mut self, pool: Handle) -> Self {
