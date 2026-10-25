@@ -1,0 +1,25 @@
+[package]
+name = "eileen-config"
+description = "Eileen's configuration: the settings registry, loading with line-numbered errors, validation, comment-keeping edits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP7"
+unsafe = "forbid"
+
+[dependencies]
+clap.workspace = true
+eileen-contracts.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

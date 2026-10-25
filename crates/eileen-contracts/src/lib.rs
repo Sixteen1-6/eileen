@@ -15,8 +15,8 @@
 //! # Does not own
 //!
 //! - Behaviour. The few functions here are pure helpers over the types (ID text forms, dates,
-//!   the scenario expiry rule, `sanitize`); every decision lives in `eileen-core` and the crates
-//!   behind the ports.
+//!   the scenario expiry rule, `sanitize`), plus [`ports::IdleComponent`], the component that
+//!   does nothing; every decision lives in `eileen-core` and the crates behind the ports.
 //! - Types that appear only in another crate's own signatures (driver errors, harness and
 //!   platform handles, the platform traits of section 3.4): those crates define them.
 //!
