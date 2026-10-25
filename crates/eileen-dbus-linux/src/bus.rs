@@ -1,4 +1,5 @@
-//! Connections to the user's session bus and the system bus, each with a method timeout.
+//! Connections to the user's session bus, the system bus and a bus at an address, each with a
+//! method timeout.
 //!
 //! Every method call on these connections is bounded by the connection's method timeout, which
 //! zbus enforces with a tokio timer and reports as an I/O error of kind `TimedOut`;
@@ -47,6 +48,21 @@ pub async fn system_bus_within(timeout: Duration) -> Result<zbus::Connection, Db
     let builder = zbus::connection::Builder::system()
         .map_err(|error| DbusError::from_zbus(SYSTEM, &error))?;
     build_within(builder, SYSTEM, timeout).await
+}
+
+/// The bus at `address`, a D-Bus server address such as `unix:path=/run/user/1000/at-spi/bus`,
+/// each method call bounded by `timeout`; errors name `what`. It is for a bus that is neither
+/// the session's nor the system's, such as the accessibility bus, whose address another
+/// service hands out: a caller that did not choose the address checks it before connecting,
+/// since zbus also follows addresses that start a program (`unixexec:`) or reach the network.
+pub async fn bus_at_within(
+    address: &str,
+    what: &'static str,
+    timeout: Duration,
+) -> Result<zbus::Connection, DbusError> {
+    let builder = zbus::connection::Builder::address(address)
+        .map_err(|error| DbusError::from_zbus(what, &error))?;
+    build_within(builder, what, timeout).await
 }
 
 /// The connection `builder` makes, each method call bounded by `timeout`; errors name `what`.

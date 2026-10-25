@@ -1,14 +1,14 @@
 //! The D-Bus helpers every Linux crate shares (docs/LINUX.md section 4): what a failed call
 //! means, the buses with a method timeout, who owns a name, the portal request client, the
 //! signal streams' helpers and conventions, and the bridge from the synchronous platform traits
-//! to the async clients. `eileen-shell-linux` and `eileen-apps-linux` use them and never
-//! re-implement them.
+//! to the async clients. The other Linux crates use them and never re-implement them.
 //!
 //! # Owns
 //!
 //! - [`DbusError`], its mappings from zbus errors and D-Bus error names, and its `From` into
 //!   `PlatformError`, variant for variant.
-//! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms.
+//! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms;
+//!   [`bus_at_within`] for a bus at an address, such as the accessibility bus.
 //! - [`name_owner`] and [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
 //! - [`Request`]: an xdg-desktop-portal request, from its token to its `Response`, and
 //!   [`close_request`], which ends one and waits for the portal's answer.
@@ -92,7 +92,9 @@ mod stream;
 pub mod testing;
 
 pub use bridge::{Bridge, Buses, DEFAULT_DEADLINE};
-pub use bus::{METHOD_TIMEOUT, session_bus, session_bus_within, system_bus, system_bus_within};
+pub use bus::{
+    METHOD_TIMEOUT, bus_at_within, session_bus, session_bus_within, system_bus, system_bus_within,
+};
 pub use error::DbusError;
 pub use names::{Names, OwnerChange, OwnerChanges, name_owner, owner_changes};
 pub use portal::{CLOSE_GRACE, Request, close_request};

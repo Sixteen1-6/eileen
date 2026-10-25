@@ -1,11 +1,12 @@
-//! The private bus, the method timeout and the round-trip barrier.
+//! The private bus, the method timeout (a private bus's, and a bus's at an address) and the
+//! round-trip barrier.
 
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{
     PrivateBus, next_message, nothing_ready, ready_now, round_trip, serve,
 };
-use eileen_dbus_linux::{DbusError, next};
+use eileen_dbus_linux::{DbusError, bus_at_within, next};
 
 /// The fake service's name.
 const NAME: &str = "org.eileen.Test";
@@ -65,6 +66,33 @@ async fn a_call_past_the_method_timeout_is_a_passed_deadline() {
         DbusError::from_zbus("the hanging call", &error),
         DbusError::DeadlineExceeded { call: "the hanging call" },
         "the connection's method timeout is a passed deadline, not an I/O error"
+    );
+}
+
+#[tokio::test]
+async fn a_bus_at_an_address_bounds_each_call_by_its_timeout() {
+    let bus = PrivateBus::start();
+    let _service = serve(&bus, NAME, PATH, Echo { prefix: "echo: " }).await;
+    let nowhere = format!("unix:path={}", bus.dir().join("no-bus-here").display());
+    assert_eq!(
+        bus_at_within(&nowhere, "the test bus", Duration::from_secs(5)).await.unwrap_err(),
+        DbusError::Unavailable { what: "the test bus" },
+        "no bus listens there, and the error names what the caller said"
+    );
+    let client =
+        bus_at_within(bus.address(), "the test bus", Duration::from_secs(5)).await.unwrap();
+    let reply =
+        client.call_method(Some(NAME), PATH, Some(INTERFACE), "Echo", &("hello",)).await.unwrap();
+    let text: String = reply.body().deserialize().unwrap();
+    assert_eq!(text, "echo: hello", "the connection reached the bus at the address");
+    // Paused only now, as in the test above: from here the only timer is the method timeout.
+    tokio::time::pause();
+    let error =
+        client.call_method(Some(NAME), PATH, Some(INTERFACE), "Hang", &()).await.unwrap_err();
+    assert_eq!(
+        DbusError::from_zbus("the hanging call", &error),
+        DbusError::DeadlineExceeded { call: "the hanging call" },
+        "the timeout the caller gave bounds the call"
     );
 }
 
