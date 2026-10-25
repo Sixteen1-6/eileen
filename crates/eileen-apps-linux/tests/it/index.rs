@@ -14,13 +14,13 @@ use eileen_apps_linux::{AppEntry, AppKind, DesktopEntry, FileError, Session, ent
 use crate::open::Scratch;
 
 /// The fixture session's root.
-fn fixture() -> PathBuf {
+pub(crate) fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("session")
 }
 
 /// The fixture session as `from_vars` reads it, held to the fixture's folders: the export
 /// folders `from_vars` adds are the real machine's, which a test must not read.
-fn session(lang: &str, desktop: &str, path: Option<&Path>) -> Session {
+pub(crate) fn session(lang: &str, desktop: &str, path: Option<&Path>) -> Session {
     session_with(lang, None, desktop, path)
 }
 

@@ -41,6 +41,12 @@ const KEY_HEADER_QUOTED: &str = "could not parse \"-----BEGIN RSA PRIVATE KEY---
 const NEGATIVE_CARD: i64 = -4_111_111_111_111_111;
 /// The card on a line of its own, which `Debug` writes after an escaped newline (`\n`).
 const CARD_ON_ITS_OWN_LINE: &str = "Card number:\n4111 1111 1111 1111";
+/// The card read out with its expiry date and its CVV after it.
+const CARD_WITH_EXPIRY_AND_CVV: &str = "4111 1111 1111 1111 12 27 123";
+/// The card with hyphens between its groups.
+const CARD_HYPHENATED: &str = "4111-1111-1111-1111";
+/// The hyphenated card with its CVV after one more hyphen.
+const CARD_HYPHENATED_WITH_CVV: &str = "4111-1111-1111-1111-123";
 /// 6/11, whose 16 digits after the point pass the card rule's Luhn check.
 const RATIO: f64 = 6.0 / 11.0;
 /// A `traceparent` whose trace id's last digit, parent id and flags make 19 digits that do too.
@@ -79,7 +85,7 @@ const HOME_FOLDERS: [&str; 3] = [":\\Users\\", ":\\\\Users\\\\", "/home/"];
 /// Asserts that `text` holds no form of any secret and no home folder, and that every line is
 /// valid JSON.
 fn assert_clean_json_lines(what: &str, text: &str) {
-    for secret in [API_KEY, JWT, CARD, PASSWORD, QUOTED_PASSWORD, PEM_BODY] {
+    for secret in [API_KEY, JWT, CARD, CARD_HYPHENATED, PASSWORD, QUOTED_PASSWORD, PEM_BODY] {
         for form in forms(secret) {
             assert!(!text.contains(&form), "{form} reached {what}:\n{text}");
         }
@@ -108,6 +114,8 @@ fn emit_secrets(pem: &str) {
     tracing::warn!(target: "eileen_desktop", line = KEY_HEADER_QUOTED, "a key header alone");
     tracing::info!(target: "eileen_core", balance = NEGATIVE_CARD, "a negative card number");
     tracing::info!(target: "eileen_core", note = CARD_ON_ITS_OWN_LINE, shown = ?CARD_ON_ITS_OWN_LINE, "a card on its own line");
+    tracing::info!(target: "eileen_core", card = CARD_WITH_EXPIRY_AND_CVV, "a card with its expiry date and CVV");
+    tracing::info!(target: "eileen_core", card = CARD_HYPHENATED_WITH_CVV, "a hyphenated card and its CVV");
     tracing::debug!(target: "eileen_core", key = API_KEY, "ring only");
 }
 
@@ -400,7 +408,7 @@ fn fake_secrets_never_reach_the_console() {
     tracing::subscriber::with_default(subscriber, || emit_secrets(&pem));
     let text = console.text();
     assert!(text.lines().count() >= 6, "the events reached the console:\n{text}");
-    for secret in [API_KEY, JWT, CARD, PASSWORD, QUOTED_PASSWORD, PEM_BODY] {
+    for secret in [API_KEY, JWT, CARD, CARD_HYPHENATED, PASSWORD, QUOTED_PASSWORD, PEM_BODY] {
         for form in forms(secret) {
             assert!(!text.contains(&form), "{form} reached the console:\n{text}");
         }
