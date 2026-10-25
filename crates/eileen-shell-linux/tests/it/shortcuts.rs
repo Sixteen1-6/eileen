@@ -478,6 +478,6 @@ async fn a_portal_without_the_interface_is_not_found_and_no_portal_unavailable()
     assert_eq!(
         ShortcutsSession::open(&client, APP_ID, WAIT).await.unwrap_err(),
         DbusError::NotFound { what: SESSION_WHAT },
-        "a portal without GlobalShortcuts, as GNOME 46's"
+        "a portal without GlobalShortcuts; Ubuntu 24.04's lacks the registry too"
     );
 }
