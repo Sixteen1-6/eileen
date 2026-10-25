@@ -1,7 +1,10 @@
 //! The session's lock state, and the request to lock it, on logind for the lane's own session.
 //! Nothing in the headless session locks the screen, so the state stays unlocked whatever the
 //! tests ask; what a request does is make logind send the session's `Lock` signal, which a
-//! desktop's screen locker acts on.
+//! desktop's screen locker acts on. So these tests run in the lane's session alone (`main.rs`): on
+//! a developer's desktop the request can lock the screen, after which the unlocked check can fail,
+//! or, where the desktop's apps run in the user's own systemd units rather than in the session, as
+//! on GNOME, the lock test finds no session for its process.
 
 use eileen_dbus_linux::testing::{ready_now, round_trip};
 use eileen_platform::ShellHost;
