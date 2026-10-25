@@ -189,8 +189,10 @@ impl ShortcutsSession {
 
     /// Binds `shortcuts`, the session's whole set, waiting at most `deadline` for the answer,
     /// which typically comes once the user has seen the desktop's dialog: the shortcuts the
-    /// desktop bound, which may be fewer. Past the deadline the request is closed, which
-    /// dismisses the dialog, and the answer is [`DbusError::DeadlineExceeded`].
+    /// desktop bound, which may be fewer. Past the deadline the request is closed and the answer
+    /// is [`DbusError::DeadlineExceeded`]. GNOME leaves its dialog up all the same: an accept
+    /// that comes later is stored but binds nothing, and the next bind of those shortcuts gets
+    /// them without a dialog.
     pub async fn bind(
         &self,
         shortcuts: &[Shortcut],

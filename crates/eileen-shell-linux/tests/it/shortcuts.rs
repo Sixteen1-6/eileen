@@ -457,7 +457,7 @@ async fn a_bind_left_unanswered_closes_its_request_at_the_deadline() {
     };
     loop {
         if let Some(Report::RequestClosed(closed)) = reports.recv().await {
-            assert_eq!(closed, request, "the bind's own request, which dismisses the dialog");
+            assert_eq!(closed, request, "the bind's own request, closed past the deadline");
             break;
         }
     }

@@ -16,7 +16,7 @@
 //! 5. [`Request::answer`] waits for the `Response` from that sender, within the caller's
 //!    deadline, and gives its code and results ([`Response`]); [`Request::wait`] gives the code
 //!    alone. The answer is a signal, which no method timeout bounds. Past the deadline either
-//!    closes the request, which dismisses a dialog the portal still shows.
+//!    closes the request, which asks the portal to dismiss a dialog it still shows.
 //! 6. A request that holds until it is closed, as an inhibition does, ends with
 //!    [`close_request`]: `Close`, answered within the connection's method timeout. It takes the
 //!    handle alone, so the holder need not keep the [`Request`] and its signal stream.
