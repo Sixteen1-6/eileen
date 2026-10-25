@@ -14,7 +14,7 @@ use std::time::Duration;
 use eileen_contracts::desktop::{ElementInfo, Point, Rect, SelectionSource, WindowInfo, WindowRef};
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::PrivateBus;
-use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
+use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, owner_changes};
 use eileen_desktop_linux::{
     CALL_TIMEOUT, FOCUS_LIMITS, KnownWindow, LinuxDesktop, LinuxDesktopSettings, ObjectRef,
     window_id,
@@ -81,6 +81,19 @@ impl World {
     /// listed it: a unique name nothing holds, which the bus's daemon never gives out.
     fn gone_app(&mut self) {
         self.roots.push((":9.9".to_owned(), ROOT.try_into().unwrap()));
+    }
+
+    /// Closes app `app`'s connection, as an app that quits does, and waits until the bus has
+    /// seen it go. The apps after it move down one index.
+    fn close(&mut self, app: usize) {
+        let app = self.apps.remove(app);
+        let name = app.name();
+        self.runtime.block_on(async {
+            let watcher = self.a11y.connect().await;
+            let mut changes = owner_changes(&watcher, Names::Name(&name)).await.unwrap();
+            app.close().await;
+            while changes.next().await.unwrap().new.is_some() {}
+        });
     }
 
     /// App `app`'s object at `path`.
@@ -343,6 +356,26 @@ fn minimized_windows_are_left_out_unless_asked() {
     let all = desktop.windows(true).unwrap();
     let all: Vec<_> = all.iter().map(|w| (w.hwnd, w.is_minimized)).collect();
     assert_eq!(all, [(away, true), (here, false)], "asked for, it is listed and says so");
+}
+
+#[test]
+fn each_listing_replaces_the_windows_it_knows() {
+    let mut world = World::new();
+    let stays = world
+        .app(|app| vec![root(app, &["/stays"]), ("/stays", window(FRAME, "Stays", &[], vec![]))]);
+    let quits = world
+        .app(|app| vec![root(app, &["/quits"]), ("/quits", window(FRAME, "Quits", &[], vec![]))]);
+    let desktop = world.desktop(settings());
+    let (stays, quits) =
+        (window_id(&world.object(stays, "/stays")), window_id(&world.object(quits, "/quits")));
+    assert_eq!(desktop.known_window(quits), None, "an id no listing gave");
+    assert_eq!(desktop.windows(true).unwrap().len(), 2, "both listed");
+    assert!(desktop.known_window(quits).is_some(), "and known");
+    world.close(1);
+    let listed: Vec<_> = desktop.windows(true).unwrap().iter().map(|w| w.hwnd).collect();
+    assert_eq!(listed, [stays], "the app that quit is gone");
+    assert_eq!(desktop.known_window(quits), None, "and the next listing forgets its window");
+    assert!(desktop.known_window(stays).is_some(), "but not the other");
 }
 
 #[test]
