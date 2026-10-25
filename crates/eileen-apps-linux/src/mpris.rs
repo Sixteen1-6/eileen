@@ -33,6 +33,10 @@
 mod value;
 mod watch;
 
+use std::future::poll_fn;
+use std::pin::Pin;
+use std::task::Poll;
+
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
 use eileen_contracts::tools::apps::MediaAction;
@@ -164,15 +168,16 @@ impl MprisSessions {
     ///
     /// A player that does not answer, has no `Player` interface or sends something other than
     /// a property map is left out, so one broken player never hides the others; only a failure
-    /// of the bus itself is an error.
+    /// of the bus itself is an error. The players are read at the same time, so the listing
+    /// waits as long as its slowest read: players that never answer cost one method timeout
+    /// together, not one each.
     pub async fn sessions(&self) -> Result<Vec<MediaState>, DbusError> {
-        let mut sessions = Vec::new();
-        for (name, owner) in players(&self.conn).await? {
-            if let Ok((_, state)) = read(self.conn.clone(), name, owner, None).await {
-                sessions.push(state);
-            }
-        }
-        Ok(sessions)
+        let reads = players(&self.conn)
+            .await?
+            .into_iter()
+            .map(|(name, owner)| read(self.conn.clone(), name, owner, None));
+        let answered = join_all(reads).await.into_iter().filter_map(Result::ok);
+        Ok(answered.map(|(_, state)| state).collect())
     }
 
     /// Sends `action` to the player `session`, a bus name from [`Self::sessions`]
@@ -366,14 +371,59 @@ async fn read(
     Ok((app, state))
 }
 
+/// Awaits all of `futures` at once, in this task, and gives their outputs in the order the
+/// futures came: the join takes as long as its slowest future, not the sum of them. It is
+/// written here because the workspace has no `futures` crate, tokio's `join!` takes a fixed
+/// number of futures, and its `JoinSet` spawns a task for each, which clippy.toml's spawn rules
+/// keep out. Each wake polls every future still running, which suits the few players on a bus.
+async fn join_all<F: Future>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output> {
+    let mut joined: Vec<Joined<F>> =
+        futures.into_iter().map(|future| Joined::Running(Box::pin(future))).collect();
+    poll_fn(|cx| {
+        let mut running = false;
+        for slot in &mut joined {
+            if let Joined::Running(future) = slot {
+                match future.as_mut().poll(cx) {
+                    Poll::Ready(output) => *slot = Joined::Done(output),
+                    Poll::Pending => running = true,
+                }
+            }
+        }
+        if running { Poll::Pending } else { Poll::Ready(()) }
+    })
+    .await;
+    joined.into_iter().filter_map(Joined::output).collect()
+}
+
+/// One future of a [`join_all`]: still running, or done with its output.
+enum Joined<F: Future> {
+    /// Not done yet.
+    Running(Pin<Box<F>>),
+    /// Done.
+    Done(F::Output),
+}
+
+impl<F: Future> Joined<F> {
+    /// The output, once done.
+    fn output(self) -> Option<F::Output> {
+        match self {
+            Self::Done(output) => Some(output),
+            Self::Running(_) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use eileen_contracts::tools::apps::MediaAction;
     use eileen_dbus_linux::DbusError;
+    use tokio::time::{Instant, sleep};
     use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
 
     use super::value::Properties;
-    use super::{Call, plan};
+    use super::{Call, join_all, plan};
 
     fn player(entries: Vec<(&str, Value<'static>)>) -> Properties {
         entries
@@ -470,5 +520,20 @@ mod tests {
         );
         let unknown = player(vec![("Metadata", track(0))]);
         assert!(plan(&MediaAction::Seek { seconds: 999.0 }, &unknown).is_ok(), "no length known");
+    }
+
+    // Only tokio's timers wait here, so paused time runs the join without a wall clock.
+    #[tokio::test(start_paused = true)]
+    async fn a_join_waits_for_its_slowest_future_and_keeps_their_order() {
+        let after = |ms, output| async move {
+            sleep(Duration::from_millis(ms)).await;
+            output
+        };
+        let started = Instant::now();
+        let joined = join_all([after(30, 'a'), after(10, 'b'), after(20, 'c')]).await;
+        assert_eq!(joined, ['a', 'b', 'c'], "in the order the futures came, not as they finished");
+        assert_eq!(started.elapsed(), Duration::from_millis(30), "the slowest one's time");
+        let nothing = std::iter::empty::<std::future::Ready<char>>();
+        assert!(join_all(nothing).await.is_empty(), "nothing to wait for");
     }
 }

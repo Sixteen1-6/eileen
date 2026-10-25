@@ -27,7 +27,11 @@ const MARGIN: Duration = Duration::from_secs(1);
 /// it (`replies` is every message the listing's connection receives) and a read has reached
 /// `stalled`, a gate that is never opened. A connection hands each reply to the call that waits
 /// for it before any stream sees it, so from then on the listing waits only for method timeouts.
-async fn answered_and_stalled(replies: &mut MessageStream, full: &zbus::Connection, stalled: &Gate) {
+async fn answered_and_stalled(
+    replies: &mut MessageStream,
+    full: &zbus::Connection,
+    stalled: &Gate,
+) {
     let full = full.unique_name().unwrap();
     let mut answered = 0;
     while answered < 2 {
