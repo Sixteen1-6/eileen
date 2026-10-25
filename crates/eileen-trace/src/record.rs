@@ -10,19 +10,21 @@ use tracing::field::{Field, Visit};
 
 use crate::names::REMOTE_PARENT_FIELD;
 use crate::redact::Redactor;
-use crate::traceparent;
+use crate::traceparent::{self, TraceParent};
 
 /// One span, from its open to its close.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpanRecord {
     /// Its record id, unique within its process for the whole recording.
     pub id: u64,
-    /// Its `tracing` span id, the one a `traceparent` names (reused after the span closes).
+    /// Its `tracing` span id, the one a `traceparent` names (reused after the span closes, and
+    /// handed out by every process from the same small range).
     pub span_id: u64,
     /// Its parent's record id, in the same process.
     pub parent: Option<u64>,
-    /// Its parent's span id in another process, from its `traceparent` field.
-    pub remote_parent: Option<u64>,
+    /// Its parent in another process, from its `traceparent` field: the trace (the turn's ULID,
+    /// or a job's with no turn) and the parent's span id in that process.
+    pub remote_parent: Option<TraceParent>,
     /// Its name, from [`crate::names`].
     pub name: String,
     /// The process that recorded it (`eileen`, `eileen-speech`, ...).
@@ -86,13 +88,9 @@ impl Visit for JsonVisitor {
     }
 }
 
-/// The span id a `traceparent` field names, when it holds a valid one.
-pub(crate) fn remote_parent(fields: &Map<String, Value>) -> Option<u64> {
-    fields
-        .get(REMOTE_PARENT_FIELD)
-        .and_then(Value::as_str)
-        .and_then(traceparent::parse)
-        .map(|tp| tp.parent_id)
+/// The parent a `traceparent` field names, when it holds a valid one.
+pub(crate) fn remote_parent(fields: &Map<String, Value>) -> Option<TraceParent> {
+    fields.get(REMOTE_PARENT_FIELD).and_then(Value::as_str).and_then(traceparent::parse)
 }
 
 /// Runs every string value of `fields` (nested ones included) through `redactor`, before the

@@ -48,7 +48,9 @@
 //! # Traps
 //!
 //! - [`init()`] can run once per process; tests use [`init::build`] with `with_default`.
-//! - Span ids are reused after a span closes; records carry their own ids for that reason.
+//! - Span ids are reused after a span closes, and every process hands out the same ones:
+//!   records carry their own ids, and a `traceparent` resolves by trace and span id
+//!   ([`schema`]).
 //! - User content goes in `pii.` fields only, never in a span name or a message.
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
