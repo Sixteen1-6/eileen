@@ -1,9 +1,11 @@
 //! [`LinuxShell`]: `eileen-platform`'s `ShellHost` on Linux (BUILD.md section 3.4; docs/LINUX.md
 //! section 4). It is thin: each method converts types and errors and calls this crate's client
 //! for it on `eileen-dbus-linux`'s [`Bridge`], whose thread makes, uses and drops every
-//! connection. No `ShellHost` method takes a `Deadline`, so each D-Bus call waits at most the
-//! settings' deadline, `eileen-dbus-linux`'s [`DEFAULT_DEADLINE`] unless a caller sets another;
-//! past it the call answers `PlatformError::DeadlineExceeded`, naming the call.
+//! connection. No `ShellHost` method that calls D-Bus takes a `Deadline`, so each D-Bus call
+//! waits at most the settings' deadline, `eileen-dbus-linux`'s [`DEFAULT_DEADLINE`] unless a
+//! caller sets another; past it the call answers `PlatformError::DeadlineExceeded`, naming the
+//! call. `set_run_at_sign_in` takes the caller's, for its file write, and does not enforce it
+//! yet.
 //!
 //! - `toast`: [`Notifier::notify`] on the session bus. A notifier lives for one toast, made on
 //!   the bridge's thread from the session connection of the moment, so it asks the server's
@@ -12,7 +14,9 @@
 //!   desktop's hold on the session bus, as the next section says.
 //! - `lock_workstation` and `session_locked`: [`SessionLock`] on the system bus.
 //! - `set_run_at_sign_in`: [`set_run_at_sign_in`] in the settings' autostart folder, with std
-//!   file I/O on the caller's thread; with no folder it is `Unavailable`.
+//!   file I/O on the caller's thread, so a hung home folder holds that thread past the caller's
+//!   deadline until WP10 moves the write onto a helper thread (BUILD.md section 3.4); with no
+//!   folder it is `Unavailable`.
 //! - `register_hotkey`, `set_tray` and `watch_input`: `Unavailable` until phase L2.
 //!
 //! # The power request
@@ -162,8 +166,10 @@ impl ShellHost for LinuxShell {
         Err(PlatformError::Unavailable { what: INPUT })
     }
 
-    /// [`set_run_at_sign_in`] with the settings' folder, ID and program.
-    fn set_run_at_sign_in(&self, on: bool) -> Result<(), PlatformError> {
+    /// [`set_run_at_sign_in`] with the settings' folder, ID and program, on the caller's thread.
+    /// It does not enforce the caller's deadline yet: section 3.4 of BUILD.md asks for a helper
+    /// thread, abandoned past it, which WP10 adds.
+    fn set_run_at_sign_in(&self, on: bool, _deadline: Deadline) -> Result<(), PlatformError> {
         let LinuxShellSettings { autostart_dir, autostart_id, program, .. } = &self.settings;
         let dir = autostart_dir.as_deref().ok_or(PlatformError::Unavailable { what: AUTOSTART })?;
         Ok(set_run_at_sign_in(dir, autostart_id, program, on)?)

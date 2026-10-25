@@ -2,7 +2,7 @@
 
 use eileen_contracts::core_io::{KeyEdge, Toast};
 
-use crate::{PlatformError, PowerRequest, Subscription};
+use crate::{Deadline, PlatformError, PowerRequest, Subscription};
 
 /// A Windows virtual-key code (`VK_*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,8 +55,10 @@ pub trait ShellHost: Send + Sync {
         dictation_key: VirtualKey,
         sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>,
     ) -> Result<Subscription, PlatformError>;
-    /// Adds or removes the `HKCU` Run entry.
-    fn set_run_at_sign_in(&self, on: bool) -> Result<(), PlatformError>;
+    /// Adds or removes the `HKCU` Run entry (on Linux, the XDG autostart entry under the home
+    /// folder, which may be a network mount) within `deadline`. A write abandoned past it may
+    /// still land, so a caller told `DeadlineExceeded` cannot know which state holds.
+    fn set_run_at_sign_in(&self, on: bool, deadline: Deadline) -> Result<(), PlatformError>;
     /// A display-required and system-required power request for an armed run.
     fn keep_awake(&self) -> Result<PowerRequest, PlatformError>;
     /// Locks the workstation, at the end of an armed run.
@@ -74,14 +76,20 @@ mod fake {
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::time::Duration;
 
     use eileen_contracts::core_io::Toast;
+    use eileen_stdx::clock::ManualClock;
 
     use super::{ShellHost, ShellInputEvent, TrayState, VirtualKey};
-    use crate::fake_util::{Sinks, lock};
-    use crate::{PlatformError, PowerRequest, Subscription};
+    use crate::fake_util::{FileTime, LateOperation, Sinks, lock};
+    use crate::{Deadline, PlatformError, PowerRequest, Subscription};
 
-    /// A shell that records what it was asked to show.
+    /// What `set_run_at_sign_in` names when it passes its deadline.
+    const SIGN_IN_ENTRY: &str = "run-at-sign-in entry";
+
+    /// A shell that records what it was asked to show. `set_run_at_sign_in` takes no time
+    /// until [`Self::set_file_time`] gives it some.
     #[derive(Debug)]
     pub struct FakeShellHost {
         hotkeys: Mutex<BTreeMap<String, u32>>,
@@ -91,6 +99,7 @@ mod fake {
         run_at_sign_in: AtomicBool,
         locked: AtomicBool,
         power_requests: Arc<AtomicU32>,
+        files: FileTime,
     }
 
     impl Default for FakeShellHost {
@@ -103,6 +112,7 @@ mod fake {
                 run_at_sign_in: AtomicBool::new(false),
                 locked: AtomicBool::new(false),
                 power_requests: Arc::new(AtomicU32::new(0)),
+                files: FileTime::default(),
             }
         }
     }
@@ -142,6 +152,16 @@ mod fake {
         pub fn runs_at_sign_in(&self) -> bool {
             self.run_at_sign_in.load(Ordering::SeqCst)
         }
+
+        /// Makes each `set_run_at_sign_in` take `takes` on `clock`, as on a home folder a server
+        /// holds: within the caller's deadline the call moves the clock by `takes` and changes
+        /// the entry; past it, the clock moves by the deadline's budget and the call answers
+        /// `DeadlineExceeded`. The entry then changes anyway when `late` is
+        /// [`LateOperation::Lands`], as an abandoned write may still land, and stays as it was
+        /// when it is [`LateOperation::Lost`].
+        pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration, late: LateOperation) {
+            self.files.set(clock, takes, late);
+        }
     }
 
     impl ShellHost for FakeShellHost {
@@ -176,9 +196,9 @@ mod fake {
             Ok(self.input.add(sink))
         }
 
-        fn set_run_at_sign_in(&self, on: bool) -> Result<(), PlatformError> {
-            self.run_at_sign_in.store(on, Ordering::SeqCst);
-            Ok(())
+        fn set_run_at_sign_in(&self, on: bool, deadline: Deadline) -> Result<(), PlatformError> {
+            self.files
+                .run(SIGN_IN_ENTRY, deadline, || self.run_at_sign_in.store(on, Ordering::SeqCst))
         }
 
         fn keep_awake(&self) -> Result<PowerRequest, PlatformError> {
@@ -204,8 +224,16 @@ mod fake {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    use eileen_contracts::ids::{MonoTime, WallTime};
+    use eileen_stdx::clock::{Clock, ManualClock};
 
     use super::{FakeShellHost, ShellHost, ShellInputEvent, VirtualKey};
+    use crate::{Deadline, LateOperation, PlatformError};
+
+    /// The callers' deadline in these tests: 5 s, which the file times fall either side of.
+    const FIVE_SECONDS: Deadline = Deadline::after(Duration::from_secs(5));
 
     #[test]
     fn input_reaches_watchers_until_they_unsubscribe() {
@@ -238,5 +266,43 @@ mod tests {
         assert_eq!(shell.power_requests(), 0, "released");
         shell.lock_workstation().unwrap();
         assert!(shell.session_locked().unwrap(), "locked");
+    }
+
+    /// A shell whose sign-in entry was written within its deadline in 1 s of `clock`'s time,
+    /// and whose next write past its deadline ends as `late` says.
+    fn shell_with_the_entry(clock: &Arc<ManualClock>, late: LateOperation) -> FakeShellHost {
+        let shell = FakeShellHost::default();
+        shell.set_file_time(Arc::clone(clock), Duration::from_secs(1), late);
+        shell.set_run_at_sign_in(true, FIVE_SECONDS).unwrap();
+        assert!(shell.runs_at_sign_in(), "written within its deadline");
+        // The home folder's server stalls: the next write takes half a minute.
+        shell.set_file_time(Arc::clone(clock), Duration::from_secs(30), late);
+        shell
+    }
+
+    #[test]
+    fn a_sign_in_entry_written_past_its_deadline_may_be_lost() {
+        let clock = Arc::new(ManualClock::new(WallTime(0)));
+        let shell = shell_with_the_entry(&clock, LateOperation::Lost);
+        assert_eq!(
+            shell.set_run_at_sign_in(false, FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "run-at-sign-in entry" }),
+            "the removal passed its deadline"
+        );
+        assert!(shell.runs_at_sign_in(), "the lost removal left the entry as it was");
+        assert_eq!(clock.mono(), MonoTime(6_000_000_000), "1 s, then the 5 s budget and no more");
+    }
+
+    #[test]
+    fn a_sign_in_entry_written_past_its_deadline_may_still_land() {
+        let clock = Arc::new(ManualClock::new(WallTime(0)));
+        let shell = shell_with_the_entry(&clock, LateOperation::Lands);
+        assert_eq!(
+            shell.set_run_at_sign_in(false, FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "run-at-sign-in entry" }),
+            "the caller was told the removal passed its deadline"
+        );
+        assert!(!shell.runs_at_sign_in(), "the abandoned removal landed anyway");
+        assert_eq!(clock.mono(), MonoTime(6_000_000_000), "1 s, then the 5 s budget and no more");
     }
 }

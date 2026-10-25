@@ -27,8 +27,10 @@
 //!
 //! - Called by the `-win` crates (implementations), `eileen-runtime` (`SystemMemory`,
 //!   `MachineIdentity`, `machine`), `eileen-config` (`SecretStore`) and the sidecars' servers.
-//! - May depend on `eileen-contracts`, `serde_json`, `secrecy`, `blake3` and `thiserror`;
-//!   must not depend on any `-win` crate or any other Eileen crate.
+//! - May depend on `eileen-contracts`, `serde_json`, `secrecy`, `blake3` and `thiserror`, and,
+//!   for the fakes only (the `fake` feature and this crate's tests), on `eileen-stdx`, whose
+//!   `ManualClock` they keep simulated time on; must not depend on any `-win` crate or any
+//!   other Eileen crate.
 //! - Wire types: none; everything that crosses a process is a contract type.
 //!
 //! # Testing
@@ -43,6 +45,12 @@
 //! - [`machine::machine_hash`] normalises its OS id itself: pass the raw value, and anything
 //!   unusable counts as no id at all.
 //! - [`HudSurface`] is the only trait that is not `Send + Sync`: it lives on the HUD's thread.
+//! - A method that reads or writes a file the user's profile may keep on another machine takes
+//!   the caller's [`Deadline`] (BUILD.md section 3.4). Its implementation enforces it on a
+//!   helper thread of its own, abandoned past the deadline, because a hung file read cannot be
+//!   interrupted; this crate holds no such helper. The fakes model it with a file time on a
+//!   `ManualClock` (`set_file_time`), so a test passes a deadline without sleeping, and a
+//!   `LateOperation` the test chooses, since an abandoned write may still land.
 //!
 //! # Logs and tracing
 //!
@@ -85,6 +93,8 @@ pub use desktop::{
 #[cfg(any(test, feature = "fake"))]
 pub use desktop::{FakeAutomation, FakeCapture, FakeGrounding, FakeInput, FakeTextInsertion};
 pub use error::PlatformError;
+#[cfg(any(test, feature = "fake"))]
+pub use fake_util::LateOperation;
 pub use handles::{Deadline, PowerRequest, RgbaImage, Subscription, ThreadTicket};
 #[cfg(any(test, feature = "fake"))]
 pub use hud::FakeHudSurface;
