@@ -61,6 +61,8 @@
 //! - `ChildCount` can be wrong, and `GetChildren` on a big table makes the app build every
 //!   child: an object that manages its descendants, or has more children than there is room
 //!   for, is read child by child by index, and only as far as the room goes.
+//! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
+//!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
 //! - A second at-spi-bus-launcher started with the session's `XDG_RUNTIME_DIR` and `DISPLAY`
 //!   takes over the live bus's socket path and display property, which cuts the desktop's apps
 //!   off from it: a test that runs a real launcher gives it a folder and a display of its own.
