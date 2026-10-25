@@ -51,8 +51,9 @@
 //! - A panic still reaches the join handle as a `JoinError`; logging it does not swallow it.
 //! - `await-tree` overhead is unmeasured; section 12 of the observability report asks for it.
 //! - Linux keeps 15 bytes of a thread name, and std cuts the rest without a word. There
-//!   [`runtime::build`] names its threads `<name>-rt` and refuses a `name` over 12 bytes;
-//!   elsewhere they are `<name>-worker`.
+//!   [`runtime::build`] names its threads `<name>-rt`, and a `name` over 12 bytes fails a soft
+//!   assertion and keeps its first 12 (so `eileen-speech` and `eileen-desktop` need a shorter
+//!   one); elsewhere they are `<name>-worker`.
 //!
 //! # Logs and tracing
 //!
