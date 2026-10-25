@@ -1,0 +1,33 @@
+[package]
+name = "eileen-guard"
+description = "Eileen's guard: outside the core's Job Object, it writes crash and hang dumps and restarts a hung core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "guard"
+owns = "WP2"
+unsafe = "forbid"
+
+# minidumper is a native library of BUILD.md section 4.1, declared from W0 so its build failures
+# show up before WP2 uses it; the stub does not use it yet.
+[package.metadata.cargo-machete]
+ignored = ["minidumper"]
+
+[[bin]]
+name = "eileen-guard"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+minidumper.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,3 @@
+# What cargo-fuzz writes besides the committed seed corpora and regressions.
+artifacts/
+coverage/

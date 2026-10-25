@@ -1,0 +1,21 @@
+[package]
+name = "eileen-record"
+description = "Eileen's recordings: the recording formats on disk, the blob store, the reader, writer and trim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, tools"
+owns = "WP1"
+unsafe = "forbid"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

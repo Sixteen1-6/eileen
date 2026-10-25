@@ -1,0 +1,26 @@
+[package]
+name = "eileen-hud"
+description = "Eileen's on-screen layer: the platform-neutral layout from HUD state to a draw list, and the HUD process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "hud"
+owns = "WP8"
+unsafe = "forbid"
+
+[[bin]]
+name = "eileen-hud"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

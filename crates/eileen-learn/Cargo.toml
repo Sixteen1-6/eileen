@@ -1,0 +1,22 @@
+[package]
+name = "eileen-learn"
+description = "The IO half of Eileen's learning loop: the recorder, the learning store, snapshots, the librarian and forgetting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP7"
+unsafe = "forbid"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+eileen-contracts.workspace = true
+
+[lints]
+workspace = true

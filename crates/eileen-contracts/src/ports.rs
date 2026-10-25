@@ -9,6 +9,7 @@ use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::task::Poll;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -212,6 +213,167 @@ impl fmt::Display for ComponentError {
 
 impl std::error::Error for ComponentError {}
 
+/// A component that takes the effects routed to it, drops them and does nothing else, until
+/// the runtime shuts down or closes its effect source. WP0's stub crates return it from their
+/// `component` constructors, so `eileen-cli` wires every component from the first day, and a
+/// test can stand it in for a component it does not exercise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdleComponent {
+    name: &'static str,
+    accepts: &'static [EffectFamily],
+}
+
+impl IdleComponent {
+    /// An idle component named `name` that accepts the effect families in `accepts`.
+    #[must_use]
+    pub const fn new(name: &'static str, accepts: &'static [EffectFamily]) -> Self {
+        Self { name, accepts }
+    }
+}
+
+impl Component for IdleComponent {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn accepts(&self) -> &'static [EffectFamily] {
+        self.accepts
+    }
+
+    fn start(
+        self: Box<Self>,
+        ctx: ComponentCtx,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ComponentError>> + Send>> {
+        Box::pin(async move {
+            let ComponentCtx { mut effects, shutdown, .. } = ctx;
+            let mut stop = shutdown.wait();
+            loop {
+                let mut next = effects.recv();
+                // True when an effect arrived (it is dropped here); false once the source is
+                // closed or the runtime is shutting down.
+                let took_one = std::future::poll_fn(|cx| {
+                    if stop.as_mut().poll(cx).is_ready() {
+                        return Poll::Ready(false);
+                    }
+                    next.as_mut().poll(cx).map(|effect| effect.is_some())
+                })
+                .await;
+                if !took_one {
+                    return Ok(());
+                }
+            }
+        })
+    }
+}
+
 pub(crate) fn register(r: &mut Registry) {
     r.add::<Cleaned>();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::future::{Future, pending, ready};
+    use std::path::PathBuf;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    use super::{
+        Backpressure, Component, ComponentCtx, EffectSource, IdleComponent, InputSink,
+        ShutdownSignal,
+    };
+    use crate::core_io::{Effect, EffectFamily, Input, TimerId};
+    use crate::ids::{Envelope, MonoTime, SessionId, TraceCtx, WallTime};
+
+    struct Refuse;
+
+    impl InputSink for Refuse {
+        fn send(&self, _input: Envelope<Input>) -> Result<(), Backpressure> {
+            Err(Backpressure { capacity: 0 })
+        }
+    }
+
+    /// Hands out its queued effects, then reports the source closed.
+    struct Queue(VecDeque<Envelope<Effect>>);
+
+    impl EffectSource for Queue {
+        fn recv(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
+            Box::pin(ready(self.0.pop_front()))
+        }
+    }
+
+    /// Never hands out an effect and never closes.
+    struct Silent;
+
+    impl EffectSource for Silent {
+        fn recv(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
+            Box::pin(pending())
+        }
+    }
+
+    struct Shutdown(bool);
+
+    impl ShutdownSignal for Shutdown {
+        fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            if self.0 { Box::pin(ready(())) } else { Box::pin(pending()) }
+        }
+    }
+
+    fn timer(id: u64) -> Envelope<Effect> {
+        Envelope {
+            seq: id,
+            at: WallTime(0),
+            mono: MonoTime(0),
+            ctx: TraceCtx::default(),
+            body: Effect::CancelTimer(TimerId(id)),
+        }
+    }
+
+    fn ctx(effects: Box<dyn EffectSource>, shut_down: bool) -> ComponentCtx {
+        ComponentCtx {
+            inputs: Box::new(Refuse),
+            effects,
+            data_dir: PathBuf::from("data"),
+            session: SessionId::from_ulid(ulid::Ulid::from_parts(1, 1)),
+            shutdown: Box::new(Shutdown(shut_down)),
+        }
+    }
+
+    /// Polls a future that needs no wake-up to finish: every future these tests build is ready
+    /// or pending for good, so one poll per step decides it.
+    fn finish<F: Future>(future: F) -> Option<F::Output> {
+        let mut future = Box::pin(future);
+        match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(output) => Some(output),
+            Poll::Pending => None,
+        }
+    }
+
+    #[test]
+    fn an_idle_component_drains_its_effects_and_stops_when_the_source_closes() {
+        let idle = Box::new(IdleComponent::new("idle", &[EffectFamily::Timer]));
+        assert_eq!(idle.name(), "idle", "its name");
+        assert_eq!(idle.accepts(), [EffectFamily::Timer], "its families");
+        let queue = Queue([timer(1), timer(2)].into_iter().collect());
+        let outcome = finish(idle.start(ctx(Box::new(queue), false)));
+        assert_eq!(outcome, Some(Ok(())), "it ends cleanly once the source is closed");
+    }
+
+    #[test]
+    fn an_idle_component_stops_at_shutdown() {
+        let idle = Box::new(IdleComponent::new("idle", &[]));
+        let outcome = finish(idle.start(ctx(Box::new(Silent), true)));
+        assert_eq!(outcome, Some(Ok(())), "it ends cleanly at shutdown");
+    }
+
+    #[test]
+    fn an_idle_component_waits_while_nothing_happens() {
+        let idle = Box::new(IdleComponent::new("idle", &[]));
+        let outcome = finish(idle.start(ctx(Box::new(Silent), false)));
+        assert_eq!(outcome, None, "no effect and no shutdown: it keeps waiting");
+    }
 }

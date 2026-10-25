@@ -1,0 +1,6 @@
+# cargo-fuzz needs a nightly toolchain for the sanitizers; it is pinned by date so a fuzz run is
+# reproducible (BUILD.md section 4b.1). The rest of the repository builds with the stable
+# toolchain the root rust-toolchain.toml pins.
+[toolchain]
+channel = "nightly-2026-10-01"
+profile = "minimal"

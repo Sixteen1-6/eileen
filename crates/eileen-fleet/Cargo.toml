@@ -1,0 +1,21 @@
+[package]
+name = "eileen-fleet"
+description = "Eileen's test fleet runner: scenarios on friends' PCs, recorded or live, and their results"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, tools"
+owns = "WP9"
+unsafe = "forbid"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true
