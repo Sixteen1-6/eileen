@@ -1,6 +1,6 @@
 # Architecture
 
-This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-21, after the reviews of the v0.1 specification, its four verification rounds and the owner's answers.
+This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-25, after the reviews of the v0.1 specification, its four verification rounds, the owner's answers and his direction of 2026-10-22 (decision D77).
 
 WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D74 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
 
@@ -10,7 +10,7 @@ Eileen listens whenever the microphone is not muted, works out what the user mea
 
 - **Input:** audio from the microphone, and the system's own output as the echo reference; hotkeys, tray and HUD clicks; typed text; what is on screen (window state, the UI Automation tree, app scripting state); events from connectors; the output of Claude sessions.
 - **Output:** speech; the HUD; actions on the PC through tools; messages to Claude sessions running on the owner's own plan.
-- **State:** the job registry and event log (`eileen.db`), learned skills, trajectories, the user model and the episodic ledger (`learn.sqlite`, from which each Claude session gets its own skill snapshot), settings with their version history, recordings and incidents. All of it lives on the user's PC.
+- **State:** the job registry and event log (`eileen.db`); learned skills, trajectories, phrasings and vocabulary, the derived index of Claude's notes (with no note text) and the episodic ledger (`learn.sqlite`, from which each Claude session gets its own skill snapshot); Claude's notes about the person, in the claude CLI's own format under `memory\` in the data directory (decision D77); settings with their version history, recordings and incidents. All of it lives on the user's PC.
 
 One core process owns the microphone loop, the tray and hotkeys, the event bus, jobs, permissions, the learning loop's decisions and a supervisor. Everything that can hang or crash (speech models, UI Automation, app COM, the HUD, every Claude session) runs in a child process the supervisor can kill. The core decides everything in one deterministic state machine, `Core::step`, which the simulator drives in tests.
 
@@ -69,7 +69,7 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-apps-win` | lib | Windows | SMTC, the app hooks (COM targets, the Resolve process gate), recent-work sources |
 | `eileen-intent` | lib | neutral | The layered intent resolver, the grammar, the skill matcher, introspection |
 | `eileen-skills` | lib | neutral | The learning loop's decisions: template grammar, linter, provenance, ladder, shadow agreement, replay state machine |
-| `eileen-learn` | lib | neutral | The learning loop's IO: trajectories, the skill store and verified snapshots, the librarian, the user model and phrasings, route statistics and proposals, the ledger, forget |
+| `eileen-learn` | lib | neutral | The learning loop's IO: trajectories, the skill store and verified snapshots, the librarian, Claude's notes (the writer with no model, the derived index and the watcher), phrasings and vocabulary, route statistics and proposals, the ledger, forget |
 | `eileen-config` | lib | neutral | TOML configuration, the settings model, versions, profiles, secrets through the platform trait |
 | `eileen-hud` | lib and bin | neutral layout | The HUD sidecar |
 | `eileen-hud-win` | lib | Windows | The HUD renderer: DirectWrite, the overlay, the strip, the thumbnail |
@@ -157,7 +157,7 @@ Development only. The simulator owns the invariants; `eileen-e2e` owns benchmark
 
 **Connectors.** The PC is the first connector (`pc.desktop`, `pc.apps`). The phone, the home hub and other devices are new connectors with the same manifests, tiers, job model and learning loop. Room-sensing connectors are opt-in per device and local only.
 
-**Learning.** Every tool call is recorded at the dispatcher, fast-path and brain actions included; successful jobs become native skills each Claude session gets in its own verified snapshot; proven skills replay with a check after every step and hand off to a worker on the first failed check; phrasings the user kept run from the fast path (a paraphrase only when it is close enough and names the same app or file); the user's own corrections become facts with no model; the user can ask what was learned, correct it and make Eileen forget it.
+**Learning.** Every tool call is recorded at the dispatcher, fast-path and brain actions included; successful jobs become native skills each Claude session gets in its own verified snapshot; proven skills replay with a check after every step and hand off to a worker on the first failed check; phrasings the user kept run from the fast path (a paraphrase only when it is close enough and names the same app or file); the person (preferences, context, how the user likes things done) lives in the claude CLI's own notes, and the user's own statements and corrections become native notes that Eileen writes with no model (decision D77); the user can ask what was learned, correct it and make Eileen forget it.
 
 ## Glossary
 
