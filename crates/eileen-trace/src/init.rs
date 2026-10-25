@@ -217,8 +217,37 @@ impl Drop for WriterThread {
     }
 }
 
-/// Keeps tracing running: dropping it lets the file and console writers write what they hold,
-/// waiting at most about 1.2 s for each, even for a terminal that stopped reading.
+/// Keeps tracing running. The files and the console write on threads of their own, and only
+/// while this lives, so hold it for all of `main`:
+///
+/// - A process that ends without dropping it loses the lines still queued:
+///   `std::process::exit` runs no destructors, which is why clippy.toml bans it.
+/// - Once it drops, the files and the console write nothing more; the ring still records.
+/// - Dropping it lets each writer write what it holds, waiting at most about 1.2 s for each.
+///   With a terminal that stopped reading, the wait for the console ends there, and the lines
+///   it still holds are lost when the process ends.
+///
+/// ```no_run
+/// # fn main() -> Result<(), eileen_trace::TraceError> {
+/// let config = eileen_trace::TraceConfig::new(None);
+/// let _guard = eileen_trace::init(eileen_trace::ProcessKind::Cli, &config)?;
+/// // The rest of `main`: `_guard` drops when it returns.
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Discarding it stops both writers at once, so the compiler warns, and the workspace's lints
+/// make that an error:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// # fn main() -> Result<(), eileen_trace::TraceError> {
+/// let config = eileen_trace::TraceConfig::new(None);
+/// eileen_trace::init(eileen_trace::ProcessKind::Cli, &config)?;
+/// # Ok(())
+/// # }
+/// ```
+#[must_use = "dropping it stops the file and console writers"]
 pub struct TraceGuard {
     file: Option<WriterThread>,
     console: Option<WriterThread>,
@@ -434,7 +463,7 @@ fn soft_assert_hook(failure: &Failure<'_>) {
 
 /// Starts tracing for this process: installs the stack as the global default, bridges the
 /// `log` crate, and switches soft assertions to reporting (log, count, request a dump). Call
-/// it once, at the start of `main`.
+/// it once, at the start of `main`, and hold the [`TraceGuard`] it returns until `main` returns.
 ///
 /// A global default set before (an earlier `init`, say) is [`TraceError::AlreadyInitialised`].
 /// When a `log` logger was set first (an `env_logger::init()`, say), records logged through
