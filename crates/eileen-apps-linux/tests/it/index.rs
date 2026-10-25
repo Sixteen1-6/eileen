@@ -1,6 +1,7 @@
 //! The app index over the fixture session: precedence, masking, the desktop's filters,
 //! `TryExec`, locales and packaged apps, and finding the entry of a trait's `AppEntry`; and over
-//! a scratch folder, what it skips: a FIFO, a device and an entry over a mebibyte.
+//! a scratch folder, what it skips (a FIFO, a device and an entry over a mebibyte) and how it
+//! walks links to folders.
 
 use std::ffi::OsString;
 use std::fs;
@@ -46,6 +47,10 @@ fn session_with(lang: &str, language: Option<&str>, desktop: &str, path: Option<
 
 fn names(apps: &[DesktopEntry]) -> Vec<&str> {
     apps.iter().map(|app| app.name.as_str()).collect()
+}
+
+fn ids(apps: &[DesktopEntry]) -> Vec<&str> {
+    apps.iter().map(|app| app.id.as_str()).collect()
 }
 
 fn find<'a>(apps: &'a [DesktopEntry], id: &str) -> &'a DesktopEntry {
@@ -298,4 +303,38 @@ fn an_entry_over_a_mebibyte_is_skipped() {
     fs::write(applications.join("at.desktop"), entry("At the cap", CAP)).unwrap();
     fs::write(applications.join("over.desktop"), entry("Over the cap", CAP + 1)).unwrap();
     assert_eq!(names(&index(&session)), ["At the cap", "Plain"], "one byte over is skipped");
+}
+
+#[test]
+fn a_folder_that_links_lead_back_to_is_walked_once() {
+    // Ten links to `.`, and one to the data folder above, which holds only `applications/`. A
+    // walk that followed each of them again at every level, down to its depth limit of 8, would
+    // read the folder about 1.3e8 times and not return for hours.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    for n in 0..10 {
+        symlink(".", applications.join(format!("here-{n}"))).unwrap();
+    }
+    symlink("..", applications.join("up")).unwrap();
+    assert_eq!(ids(&index(&session)), ["plain.desktop"], "once, under its own path");
+}
+
+#[test]
+fn a_folder_two_links_lead_to_is_walked_once_under_the_first() {
+    // Some installs link their own folder into `applications/`. Here two links name one folder:
+    // the walk follows `tools`, the first in its sorted order, and `tools-old` leads nowhere new,
+    // so the folder's entry is listed once, with the first path's desktop file ID.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let install = scratch.path().join("install");
+    fs::create_dir_all(&install).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(install.join("tool.desktop"), tool).unwrap();
+    symlink(&install, applications.join("tools")).unwrap();
+    symlink(&install, applications.join("tools-old")).unwrap();
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "tools-tool.desktop"],
+        "a link to a new folder is followed, and a second path to it is not"
+    );
 }
