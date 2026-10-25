@@ -74,9 +74,13 @@ implementation's helper thread, since a hung file read cannot be interrupted.
 `wp0/platform-file-deadlines` changes the seven that exist (`Apps::index`, `launch` and
 `open_path`, `RecentSources::recent`, `watch` and `thumbnail`, `ShellHost::set_run_at_sign_in`)
 and their fakes, which spend a file time on `eileen-stdx`'s `ManualClock`, so a test answers
-within a deadline or passes one without sleeping. `MachineProbe::facts` takes its deadline when
-phase B's `wp0/machine-contracts` builds the trait. `eileen-shell-linux`'s `set_run_at_sign_in`
-takes the parameter and leaves the helper thread to WP10.
+within a deadline or passes one without sleeping. Past it, the test chooses whether the
+abandoned launch, open or sign-in write lands anyway (`LateOperation`), since section 3.4 lets
+it. `MachineProbe::facts` takes its deadline when phase B's `wp0/machine-contracts` builds the
+trait. `eileen-shell-linux`'s `set_run_at_sign_in` takes the parameter but does not enforce it
+yet; the "Still open" list in [WP10-linux.md](WP10-linux.md) tracks that, with the recent-files
+read in #66 (`LinuxRecent::recent`), until both run on a helper thread within the caller's
+deadline.
 
 ## Acceptance records
 
