@@ -8,7 +8,7 @@ use std::time::Duration;
 use eileen_dbus_linux::testing::{PrivateBus, next_message, serve};
 use eileen_dbus_linux::{DbusError, Request, close_request};
 use zbus::message::Header;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 /// The portal's bus name.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -27,7 +27,8 @@ const CLOSING: &str = "the request";
 
 /// A fake portal. `Ask` makes a request and answers with its handle: the one the token
 /// predicts, or [`OLD_HANDLE`]; with a code other than [`SILENT`], it first sends that
-/// `Response`. `Respond` sends a `Response` on a handle later, or a malformed one.
+/// `Response`. `Respond` sends a `Response` on a handle later, or a malformed one, and
+/// `RespondWith` one with the results it is given.
 struct FakePortal;
 
 #[zbus::interface(name = "org.eileen.Test.Portal")]
@@ -61,6 +62,19 @@ impl FakePortal {
         #[zbus(connection)] conn: &zbus::Connection,
     ) {
         respond(conn, header.sender().unwrap().as_str(), handle, code, malformed).await;
+    }
+
+    async fn respond_with(
+        &self,
+        handle: &str,
+        code: u32,
+        results: HashMap<String, OwnedValue>,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) {
+        let (to, interface) = (header.sender().unwrap().as_str(), "org.freedesktop.portal.Request");
+        let body = (code, results);
+        conn.emit_signal(Some(to), handle, interface, "Response", &body).await.unwrap();
     }
 }
 
@@ -124,6 +138,29 @@ async fn the_portals_response_gives_its_code_even_when_it_comes_before_the_reply
         let sender = request.follow(&reply).await.unwrap();
         assert_eq!(request.wait(&sender, DEADLINE).await, Ok(code), "code {code}");
     }
+}
+
+#[tokio::test]
+async fn a_response_carries_its_results() {
+    let bus = PrivateBus::start();
+    let (_portal, client, mut request) = setup(&bus).await;
+    let reply = call(&client, "Ask", &(request.token(), SILENT, false)).await;
+    let sender = request.follow(&reply).await.unwrap();
+    let handle = request.path().to_string();
+    let path = ObjectPath::try_from("/org/freedesktop/portal/desktop/session/1_7/s").unwrap();
+    let results = HashMap::from([("count", Value::from(3_u32)), ("session", Value::from(path))]);
+    call(&client, "RespondWith", &(handle.as_str(), 0_u32, results)).await;
+    let response = request.answer(&sender, DEADLINE).await.unwrap();
+    assert_eq!(response.code, 0, "the code");
+    let count = response.results.get("count").map(|value| u32::try_from(value).unwrap());
+    assert_eq!(count, Some(3), "a result of the portal's own, by its key");
+    let session = response.results.get("session").map(<&ObjectPath<'_>>::try_from);
+    assert_eq!(
+        session.map(|path| path.unwrap().as_str()),
+        Some("/org/freedesktop/portal/desktop/session/1_7/s"),
+        "each result keeps its type"
+    );
+    assert_eq!(response.results.len(), 2, "every result, and nothing else");
 }
 
 #[tokio::test]
