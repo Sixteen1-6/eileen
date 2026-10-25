@@ -23,7 +23,7 @@ records when they exist.
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
-| 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in `wp0/base-crates-review` |
+| 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
@@ -59,7 +59,7 @@ Objects, the guard's detached spawn, deadlines, heartbeats, restart backoff, `qo
 below; the owner's-PC half of acceptance 4 waits for `wp0/xtask`'s `slots --baseline`.
 
 A second review of the six crates had started when the owner merged #73 so that WP10's drafts
-could retarget to `main`; its findings ship as `wp0/base-crates-review`. That pull request
+could retarget to `main`; its findings ship as pull request #75. That pull request
 moves the machine root off Windows to the XDG state folder and drops the `HOME` fallback on
 Windows, runs every guard wait on the caller's clock, keeps secrets and the per-install key out
 of `Debug`, keeps dependencies' absolute source paths out of the logs, logs panic messages and
@@ -103,7 +103,7 @@ paths; `it::` is a crate's integration test target):
   holds each test in; the second review's nit on it stays open for phase B's `user_launch`,
   whose own Windows test needs the same job reading.
 - Acceptance 6, in `eileen-trace`: `it::canary::fake_secrets_never_reach_disk_or_a_dump` and
-  `it::canary::fake_secrets_never_reach_the_console`, joined in `wp0/base-crates-review` by
+  `it::canary::fake_secrets_never_reach_the_console`, joined in pull request #75 by
   `it::canary::no_home_folder_reaches_disk_or_a_dump`.
 - Acceptance 12, in `eileen-platform`, on both runners: `it::machine::the_golden_vector_is_stable`,
   `it::machine::windows_guid_form_and_linux_form_give_one_hash`,
