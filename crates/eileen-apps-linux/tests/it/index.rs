@@ -4,6 +4,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -255,14 +256,32 @@ fn beside_a_plain_entry(scratch: &Scratch) -> (Session, PathBuf) {
 }
 
 #[test]
-fn a_fifo_or_a_device_named_as_an_entry_is_skipped_unread() {
+fn a_fifo_or_a_device_named_as_an_entry_is_skipped_at_once() {
     // Nothing writes to the FIFO, so an open that waited for a writer would never return, and
     // /dev/zero never ends. The FIFO sorts first, so an index that waits hangs before it reads.
+    // Both would be skipped even if they were read, the FIFO as empty and /dev/zero as over the
+    // size limit, so the next test checks that a FIFO is not read.
     let scratch = Scratch::new();
     let (session, applications) = beside_a_plain_entry(&scratch);
     scratch.fifo("applications/pipe.desktop");
     symlink("/dev/zero", applications.join("zero.desktop")).unwrap();
     assert_eq!(names(&index(&session)), ["Plain"], "only the entry beside them, without waiting");
+}
+
+#[test]
+fn a_fifo_that_holds_an_entry_is_skipped_unread() {
+    // On Linux a read-write open of a FIFO never waits, and the read-only open after it finds
+    // that writer. The reader held here keeps what was written once the writer closes, and with
+    // no writer a read returns the entry and then the end: only the check that the descriptor
+    // is a regular file keeps it out.
+    let scratch = Scratch::new();
+    let (session, _) = beside_a_plain_entry(&scratch);
+    let fifo = scratch.fifo("applications/piped.desktop");
+    let mut writer = fs::OpenOptions::new().read(true).write(true).open(&fifo).unwrap();
+    let _reader = fs::File::open(&fifo).unwrap();
+    writer.write_all(b"[Desktop Entry]\nType=Application\nName=Piped\nExec=piped\n").unwrap();
+    drop(writer);
+    assert_eq!(names(&index(&session)), ["Plain"], "what the FIFO holds is not read");
 }
 
 #[test]
