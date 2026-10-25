@@ -363,19 +363,19 @@ async fn a_cancelled_bind_is_refused() {
     assert_eq!(
         session.bind(&[mute()], WAIT).await,
         Err(DbusError::Refused { what: BIND_WHAT, reason: "cancelled by the user" }),
-        "the user closed the dialog"
+        "code 1, the documentation's cancel"
     );
     assert_eq!(
         session.bind(&[mute()], WAIT).await,
-        Err(DbusError::Refused { what: BIND_WHAT, reason: "the portal refused" }),
-        "a session takes one bind, and GNOME answers a second with 2"
+        Err(DbusError::Refused { what: BIND_WHAT, reason: "refused or cancelled" }),
+        "code 2, which GNOME answers a dismissed dialog with, and a second bind on a session"
     );
 }
 
 #[tokio::test]
 async fn a_session_the_portal_refuses_or_answers_oddly_is_not_opened() {
     for (code, error) in [
-        (2, DbusError::Refused { what: SESSION_WHAT, reason: "the portal refused" }),
+        (2, DbusError::Refused { what: SESSION_WHAT, reason: "refused or cancelled" }),
         (3, DbusError::Invalid { what: "portal response", detail: "code 3".to_owned() }),
     ] {
         let bus = PrivateBus::start();

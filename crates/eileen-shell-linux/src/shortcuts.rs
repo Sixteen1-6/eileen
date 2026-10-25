@@ -22,7 +22,10 @@
 //! The rules:
 //!
 //! - The `Response` codes are the Request documentation's: 1 is a refusal, "cancelled by the
-//!   user", 2 one by the portal, "the portal refused", and any other [`DbusError::Invalid`].
+//!   user", 2 one ended another way, "refused or cancelled", and any other
+//!   [`DbusError::Invalid`]. GNOME answers a dialog the user dismissed with 2, since its settings
+//!   refuse the bind; it gives 1 only to a request the caller has closed, which the frontend no
+//!   longer reports.
 //! - A portal without the interface, as on GNOME 46, answers `UnknownMethod` or
 //!   `UnknownInterface`, [`DbusError::NotFound`]; no portal at all is
 //!   [`DbusError::Unavailable`].
@@ -328,7 +331,7 @@ fn confirmed(what: &'static str, code: u32) -> Result<(), DbusError> {
     match code {
         0 => Ok(()),
         1 => Err(DbusError::Refused { what, reason: "cancelled by the user" }),
-        2 => Err(DbusError::Refused { what, reason: "the portal refused" }),
+        2 => Err(DbusError::Refused { what, reason: "refused or cancelled" }),
         other => Err(DbusError::Invalid { what: RESPONSE_WHAT, detail: format!("code {other}") }),
     }
 }
