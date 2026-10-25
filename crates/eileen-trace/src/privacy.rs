@@ -5,8 +5,9 @@
 //! A scenario folder passes when no file is binary (except consented audio), no file is over
 //! its size cap, `scenario.toml` never says `origin = "user"`, no text line holds a secret the
 //! [`Redactor`] finds or anything the PII scan finds (e-mail addresses, phone numbers but not
-//! dates with a time, user folders such as `C:\Users\<name>` and `/home/<name>` but not the
-//! path of a web address, machine names and token prefixes), and:
+//! dates with a time, user folders such as `C:\Users\<name>`, `/home/<name>`, `/media/<name>`
+//! and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not the path of a web
+//! address, machine names and token prefixes), and:
 //!
 //! - **Audio only with its consent record.** `scenario.toml` parses as a [`Scenario`] with
 //!   `origin = "contributed-consented-audio"`, its `intent.audio.file` names the audio file,
@@ -320,11 +321,32 @@ fn in_web_address(before: &str) -> bool {
     word.contains("http://") || word.contains("https://")
 }
 
+/// The folders a user's name follows: Windows' and macOS's `Users` (plain, JSON-escaped and
+/// with forward slashes), Linux's `/home/`, and `/media/`, where Ubuntu mounts a user's drives
+/// (`/media/<name>/<label>`; Fedora's and Arch's `/run/media/<name>` too).
+const USER_FOLDERS: [&str; 6] =
+    [":\\users\\", ":\\\\users\\\\", ":/users/", "/home/", "/users/", "/media/"];
+
+/// A Linux home as a Windows app shows a WSL distro's files, `\home\` plain and JSON-escaped:
+/// it counts only under the distro's root ([`under_wsl_distro`]), so a Windows folder named
+/// Home is not read as one.
+const WSL_HOMES: [&str; 2] = ["\\home\\", "\\\\home\\\\"];
+
+/// True when `before`, the text in front of a `\home\` marker, ends with a WSL distro's root,
+/// `\\wsl.localhost\<distro>` or `\\wsl$\<distro>`, plain or JSON-escaped.
+fn under_wsl_distro(before: &str) -> bool {
+    let mut parts = before.rsplit('\\').filter(|part| !part.is_empty());
+    parts.next().is_some() && matches!(parts.next(), Some("wsl.localhost" | "wsl$"))
+}
+
 fn user_paths(line: &str, out: &mut Vec<PiiFinding>) {
     let lower = line.to_ascii_lowercase();
-    for marker in [":\\users\\", ":\\\\users\\\\", ":/users/", "/home/", "/users/"] {
+    let markers =
+        USER_FOLDERS.iter().map(|m| (m, false)).chain(WSL_HOMES.iter().map(|m| (m, true)));
+    for (marker, wsl) in markers {
         for (at, _) in lower.match_indices(marker) {
-            if in_web_address(lower.get(..at).unwrap_or_default()) {
+            let before = lower.get(..at).unwrap_or_default();
+            if (wsl && !under_wsl_distro(before)) || in_web_address(before) {
                 continue;
             }
             let name_start = at + marker.len();
@@ -591,6 +613,16 @@ mod tests {
             "JSON-escaped"
         );
         assert_eq!(kinds("/home/samlee/notes"), [PiiKind::UserPath], "Linux home");
+        for (line, what) in [
+            (r"\\wsl.localhost\Ubuntu\home\samlee\notes.txt", "a WSL home as Windows shows it"),
+            (r"\\wsl$\Ubuntu-24.04\home\samlee\notes.txt", "the older wsl$ form"),
+            (r#"{"path":"\\\\wsl.localhost\\Ubuntu\\home\\samlee\\notes.txt"}"#, "JSON-escaped"),
+            (r#"{"path":"\\\\wsl$\\Ubuntu\\home\\samlee\\notes.txt"}"#, "wsl$ JSON-escaped"),
+            ("/media/samlee/USB/cv.pdf", "Ubuntu's drive mounts"),
+            ("/run/media/samlee/USB/cv.pdf", "Fedora's and Arch's"),
+        ] {
+            assert_eq!(kinds(line), [PiiKind::UserPath], "{what}: {line}");
+        }
         assert_eq!(
             kinds("file:///home/samlee/notes.txt"),
             [PiiKind::UserPath],
@@ -649,6 +681,10 @@ mod tests {
             "[the guide](HTTPS://site.test/users/guide)",
             "server 192.168.100.200",
             r"C:\Users\Public\Desktop",
+            r"\\wsl.localhost\Ubuntu\home\{NAME}\notes.txt",
+            "/media/{NAME}/USB/{TITLE}",
+            r"{DOCS}\Home\Recipes.docx",
+            "https://cdn.example.com/static/media/logo.png",
             "version 1.13.8",
         ] {
             assert!(kinds(line).is_empty(), "{line}: {:?}", kinds(line));
