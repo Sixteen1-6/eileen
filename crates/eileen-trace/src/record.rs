@@ -106,7 +106,7 @@ pub(crate) fn redact_values(fields: &mut Map<String, Value>, redactor: &Redactor
 fn redact_value(value: &mut Value, redactor: &Redactor) {
     match value {
         Value::String(text) => {
-            if let std::borrow::Cow::Owned(clean) = redactor.redact(text) {
+            if let Cow::Owned(clean) = redactor.redact(text) {
                 *text = clean;
             }
         }
