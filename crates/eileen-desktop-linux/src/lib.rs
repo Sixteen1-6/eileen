@@ -29,7 +29,8 @@
 //!   tree (2.6 keeps Chromium out of accessibility mode too), and no app's state. Its proxies
 //!   declare no setter (test `toolkit_accessibility_is_read_and_never_written`).
 //! - Every app text is sanitized (`eileen_contracts::desktop::sanitize`) and bounded, and errors
-//!   never carry it. A role, a state or an interface means only what this crate's tables say.
+//!   never carry it, nor an error name an app chose. A role, a state or an interface means only
+//!   what this crate's tables say.
 //! - Every call is bounded by its connection's call timeout, and a walk by its `TreeLimits` and
 //!   its budget, checked between reads: `eileen-dbus-linux`'s deadline model, with no timer of
 //!   its own around a call (tests `each_call_is_bounded_by_the_call_timeout` and the walk's).

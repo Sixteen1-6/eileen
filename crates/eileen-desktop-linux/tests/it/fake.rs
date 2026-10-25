@@ -32,8 +32,34 @@ pub(crate) const MANAGES_DESCENDANTS: u32 = 31;
 /// `ATSPI_STATE_READ_ONLY`, in the second word.
 pub(crate) const READ_ONLY: u32 = 43;
 
+/// The bus's error for a call its callee let pass its timeout.
+const NO_REPLY: &str = "org.freedesktop.DBus.Error.NoReply";
+/// The error for a method the object does not have.
+const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
+/// The error for arguments the object cannot use.
+const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
+
 /// A reference as AT-SPI2 sends one: a bus name and a path.
 pub(crate) type Reference = (String, OwnedObjectPath);
+
+/// A failed method call, answered by the error's name alone: one of D-Bus's own, or any name the
+/// app chose, which the bus carries as it is.
+#[derive(Debug)]
+struct Failure(&'static str);
+
+impl zbus::DBusError for Failure {
+    fn create_reply(&self, msg: &zbus::message::Header<'_>) -> zbus::Result<zbus::Message> {
+        zbus::Message::error(msg, self.0)?.build(&())
+    }
+
+    fn name(&self) -> zbus::names::ErrorName<'_> {
+        zbus::names::ErrorName::from_static_str_unchecked(self.0)
+    }
+
+    fn description(&self) -> Option<&str> {
+        None
+    }
+}
 
 /// `GetState`'s two words for `states`.
 pub(crate) fn words(states: &[u32]) -> Vec<u32> {
@@ -141,6 +167,8 @@ pub(crate) struct Node {
     /// Every read answers `org.freedesktop.DBus.Error.NoReply`, as the bus does for an app
     /// that let a call pass its timeout.
     pub(crate) no_reply: bool,
+    /// Every method, but no property, answers this error name, one the app chose.
+    pub(crate) error_name: Option<&'static str>,
     /// `GetRole` never answers.
     pub(crate) silent: bool,
     /// The text `Text.GetText` answers, whatever range is asked for; `None` serves no `Text`.
@@ -162,12 +190,20 @@ impl Node {
         }
     }
 
-    /// Fails a read as an app past its timeout does, when the node says so.
-    fn read(&self) -> fdo::Result<()> {
+    /// Fails a property read as an app past its timeout does, when the node says so.
+    fn property(&self) -> fdo::Result<()> {
         if self.no_reply {
             return Err(fdo::Error::NoReply("the app did not answer".to_owned()));
         }
         Ok(())
+    }
+
+    /// Fails a method as the node says: as an app past its timeout, or with its own error name.
+    fn read(&self) -> Result<(), Failure> {
+        if self.no_reply {
+            return Err(Failure(NO_REPLY));
+        }
+        self.error_name.map_or(Ok(()), |name| Err(Failure(name)))
     }
 }
 
@@ -178,42 +214,42 @@ struct Object(Node);
 impl Object {
     #[zbus(property)]
     fn name(&self) -> fdo::Result<String> {
-        self.0.read().map(|()| self.0.name.clone())
+        self.0.property().map(|()| self.0.name.clone())
     }
 
     #[zbus(property)]
     fn child_count(&self) -> fdo::Result<i32> {
-        self.0.read().map(|()| self.0.child_count)
+        self.0.property().map(|()| self.0.child_count)
     }
 
-    async fn get_role(&self) -> fdo::Result<u32> {
+    async fn get_role(&self) -> Result<u32, Failure> {
         if self.0.silent {
             std::future::pending::<()>().await;
         }
         self.0.read().map(|()| self.0.role)
     }
 
-    fn get_state(&self) -> fdo::Result<Vec<u32>> {
+    fn get_state(&self) -> Result<Vec<u32>, Failure> {
         self.0.read().map(|()| self.0.states.clone())
     }
 
-    fn get_interfaces(&self) -> fdo::Result<Vec<String>> {
+    fn get_interfaces(&self) -> Result<Vec<String>, Failure> {
         self.0.read().map(|()| self.0.interfaces.clone())
     }
 
-    fn get_children(&self) -> fdo::Result<Vec<Reference>> {
+    fn get_children(&self) -> Result<Vec<Reference>, Failure> {
         self.0.calls.listings.fetch_add(1, Ordering::SeqCst);
         if self.0.no_get_children {
-            return Err(fdo::Error::UnknownMethod("no GetChildren in this app".to_owned()));
+            return Err(Failure(UNKNOWN_METHOD));
         }
         self.0.read().map(|()| self.0.children.clone())
     }
 
-    fn get_child_at_index(&self, index: i32) -> fdo::Result<Reference> {
+    fn get_child_at_index(&self, index: i32) -> Result<Reference, Failure> {
         self.0.calls.index_reads.fetch_add(1, Ordering::SeqCst);
         self.0.read()?;
         let child = usize::try_from(index).ok().and_then(|index| self.0.children.get(index));
-        child.cloned().ok_or_else(|| fdo::Error::InvalidArgs("no child there".to_owned()))
+        child.cloned().ok_or(Failure(INVALID_ARGS))
     }
 }
 
@@ -292,5 +328,10 @@ impl App {
 
 /// Serves the registry on `bus`, whose root lists `apps`.
 pub(crate) async fn registry(bus: &PrivateBus, apps: Vec<Reference>) -> zbus::Connection {
-    serve(bus, REGISTRY, ROOT, Object(Node::showing("main", apps))).await
+    registry_root(bus, Node::showing("main", apps)).await
+}
+
+/// Serves the registry on `bus`, whose root is `root`.
+pub(crate) async fn registry_root(bus: &PrivateBus, root: Node) -> zbus::Connection {
+    serve(bus, REGISTRY, ROOT, Object(root)).await
 }

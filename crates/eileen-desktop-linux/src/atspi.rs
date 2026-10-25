@@ -11,8 +11,8 @@
 //!   ([`Atspi::text`]) and a bounded walk of its tree ([`Atspi::walk`]).
 //!
 //! An app's text is untrusted: it is sanitized and bounded before it leaves this module, and
-//! errors never carry it. Every call waits at most the connection's call timeout; past it, the
-//! call is [`DbusError::DeadlineExceeded`].
+//! errors never carry it, not even an error name the app chose. Every call waits at most the
+//! connection's call timeout; past it, the call is [`DbusError::DeadlineExceeded`].
 
 mod bus;
 mod kinds;
@@ -55,6 +55,8 @@ const REGISTRY_CALL: &str = "accessibility registry";
 const OBJECT: &str = "accessible object";
 /// What errors of a text read name.
 const TEXT: &str = "accessible text";
+/// The detail of an error the callee answered with a name of its own, which is not kept.
+const APPS_OWN_ERROR: &str = "an error name of the app's own";
 
 /// An accessible object: the unique name of its app's connection on the accessibility bus and
 /// its path there.
@@ -123,7 +125,7 @@ impl Atspi {
     /// reference [`ObjectRef::new`] refuses is left out. No registry on the bus is
     /// [`DbusError::Unavailable`]: nothing serves the desktop's tree.
     pub async fn applications(&self) -> Result<Vec<ObjectRef>, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(REGISTRY_CALL, &error);
+        let failed = |error: zbus::Error| failure(REGISTRY_CALL, &error);
         let registry = AccessibleProxy::builder(&self.conn)
             .destination(REGISTRY)
             .and_then(|builder| builder.path(ROOT))
@@ -238,13 +240,26 @@ fn references(children: &[Reference]) -> Vec<ObjectRef> {
     children.iter().filter_map(|(bus, path)| ObjectRef::new(bus, path)).collect()
 }
 
-/// What a failed call at an app's object means. The bus answers a call to a unique name that
-/// nothing holds with `ServiceUnknown`, which [`DbusError::from_zbus`] makes
+/// What a failed call on the accessibility bus means: [`DbusError::from_zbus`]'s answer, without
+/// an error name the callee chose. Any process on the bus can answer with any name, and one
+/// [`DbusError::from_error_name`] does not know would be [`DbusError::Invalid`]'s detail, that
+/// process's own text; the detail says only where it came from.
+fn failure(what: &'static str, error: &zbus::Error) -> DbusError {
+    let failure = DbusError::from_zbus(what, error);
+    if matches!(failure, DbusError::Invalid { .. }) && matches!(error, zbus::Error::MethodError(..))
+    {
+        return DbusError::Invalid { what, detail: APPS_OWN_ERROR.to_owned() };
+    }
+    failure
+}
+
+/// What a failed call at an app's object means, as [`failure`] says. The bus answers a call to a
+/// unique name that nothing holds with `ServiceUnknown`, which [`DbusError::from_zbus`] makes
 /// [`DbusError::Unavailable`]; here that is the app gone, so the object is
 /// [`DbusError::NotFound`], as one the app does not serve is. `Unavailable` is kept for what is
 /// not there at all: no launcher, no accessibility bus, no registry.
 fn object_failure(what: &'static str, error: &zbus::Error) -> DbusError {
-    let failure = DbusError::from_zbus(what, error);
+    let failure = failure(what, error);
     if let DbusError::Unavailable { what } = failure {
         return DbusError::NotFound { what };
     }
