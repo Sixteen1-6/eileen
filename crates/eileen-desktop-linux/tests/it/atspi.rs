@@ -1,7 +1,8 @@
 //! The AT-SPI2 client against fake services: the accessibility bus the launcher names and the
-//! addresses it refuses, the registry's applications, each object's reads, the walk's order,
-//! limits, budget and failures, children read by index, the password rule, the call timeout and
-//! the toolkit switch.
+//! addresses it refuses, the registry's applications, each object's reads, a gone app and an
+//! app's own error names, the walk's order, limits, budget and failures, children read by index
+//! and wrong counts, the password rule, the call timeout, the toolkit switch and the proxies'
+//! property caches.
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;

@@ -267,8 +267,8 @@ fn unknown_method(error: &zbus::Error) -> bool {
 /// process's own text; the detail says only where it came from.
 fn failure(what: &'static str, error: &zbus::Error) -> DbusError {
     let failure = DbusError::from_zbus(what, error);
-    if matches!(failure, DbusError::Invalid { .. }) && matches!(error, zbus::Error::MethodError(..))
-    {
+    let named_by_callee = matches!(error, zbus::Error::MethodError(..));
+    if named_by_callee && matches!(failure, DbusError::Invalid { .. }) {
         return DbusError::Invalid { what, detail: APPS_OWN_ERROR.to_owned() };
     }
     failure
