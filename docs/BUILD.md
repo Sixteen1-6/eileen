@@ -3816,9 +3816,14 @@ disallowed-methods = [
   { path = "tokio::spawn", reason = "use eileen_rt::task::spawn: it names the task, keeps the span and registers it", allow-invalid = true },
   { path = "tokio::task::spawn", reason = "use eileen_rt::task::spawn", allow-invalid = true },
   { path = "tokio::task::spawn_blocking", reason = "use eileen_rt::task::spawn_blocking (named, bounded pool)", allow-invalid = true },
+  { path = "tokio::runtime::Handle::spawn", reason = "use eileen_rt::task::spawn, inside the handle's enter() for another runtime: it names the task, keeps the span and registers it", allow-invalid = true },
+  { path = "tokio::runtime::Runtime::spawn", reason = "use eileen_rt::task::spawn, inside the runtime's enter()", allow-invalid = true },
+  { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use eileen_rt::task::spawn_blocking, inside the runtime's enter()", allow-invalid = true },
+  { path = "zbus::Executor::spawn", reason = "with zbus's tokio feature this is a bare tokio::spawn; use eileen_rt::task::spawn", allow-invalid = true },
 ]
 disallowed-types = [
   { path = "std::sync::mpsc::Sender", reason = "use bounded tokio::sync channels" },
+  { path = "tokio::task::JoinSet", reason = "its spawn methods, collect and extend each start a bare tokio task; use eileen_rt::task::spawn and keep the JoinHandles", allow-invalid = true },
 ]
 disallowed-names = ["foo", "bar", "baz", "tmp", "data2"]
 ```
