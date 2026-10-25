@@ -1,6 +1,6 @@
 # cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
-# allowed for jpeg-encoder, one license exception for webpki-roots, and the Linux target added so
-# the Linux lane is checked too.
+# allowed for jpeg-encoder, one license exception for webpki-roots, the Linux target added so the
+# Linux lane is checked too, and three advisory ignores (decision D78).
 
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
@@ -9,7 +9,15 @@ all-features = false
 [advisories]
 unmaintained = "workspace"
 yanked = "deny"
-ignore = []
+# Decision D78: zip 2.6.1 reaches the tree only as a build dependency of sherpa-onnx-sys 1.13.8
+# (pinned exactly in BUILD.md section 4.1), whose build script calls it only for iOS archives; the
+# only patched release, zip 9.0.0, needs a sherpa-onnx pin past the cooling-off period. These
+# three come out with that pin.
+ignore = [
+  { id = "RUSTSEC-2026-0367", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0368", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0369", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
+]
 
 [licenses]
 # Permissive only; everything linked must be compatible with shipping one MIT binary.

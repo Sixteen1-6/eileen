@@ -63,6 +63,10 @@ pub struct LearnConfig;
 
 /// The learning component. The stub accepts the learn family and does nothing.
 #[must_use]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "section 3.3.15's signature; LearnConfig has no fields until WP7"
+)]
 pub fn component(_cfg: &LearnConfig) -> Box<dyn Component> {
     Box::new(IdleComponent::new("learn", &[EffectFamily::Learn]))
 }

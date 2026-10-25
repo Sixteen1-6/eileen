@@ -1,5 +1,5 @@
 //! Eileen's app adapters (BUILD.md section 2.7): the neutral MCP server behind the `apps_*`
-//! tools, with the Resolve bridge and its MCP route, media and the YouTube URL builder, Office,
+//! tools, with the Resolve bridge and its MCP route, media and the URL builder for video pages, Office,
 //! Explorer, recent work, face picking and sharpness on images, and `routes_lookup`, run as the
 //! `eileen-apps` sidecar. A lib and a binary. A stub until WP6 builds it; the stub binary says it
 //! is not built yet.

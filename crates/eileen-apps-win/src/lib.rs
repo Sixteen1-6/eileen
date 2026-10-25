@@ -6,7 +6,7 @@
 //!
 //! # Owns
 //!
-//! - [`WinAppHost`], [`WinApps`], [`WinMediaSessions`] and [`WinRecentSources`], the Windows
+//! - `WinAppHost`, `WinApps`, `WinMediaSessions` and `WinRecentSources`, the Windows
 //!   implementations of those traits.
 //! - Opening URLs, allowlisted URIs and paths through `eileen_supervisor::user_launch`.
 //!
@@ -55,8 +55,8 @@
 use eileen_contracts::desktop::{MediaState, WindowRef};
 use eileen_contracts::tools::apps::MediaAction;
 use eileen_platform::{
-    AppEntry, AppHost, AppOp, AppProcess, Apps, Deadline, MediaSessions, PlatformError,
-    RecentItem, RecentSources, RgbaImage, Subscription,
+    AppEntry, AppHost, AppOp, AppProcess, Apps, Deadline, MediaSessions, PlatformError, RecentItem,
+    RecentSources, RgbaImage, Subscription,
 };
 
 /// What every stub call answers.
@@ -103,7 +103,11 @@ impl Apps for WinApps {
         Err(NOT_BUILT)
     }
 
-    fn main_window(&self, _pid: u32, _deadline: Deadline) -> Result<Option<WindowRef>, PlatformError> {
+    fn main_window(
+        &self,
+        _pid: u32,
+        _deadline: Deadline,
+    ) -> Result<Option<WindowRef>, PlatformError> {
         Err(NOT_BUILT)
     }
 
@@ -158,7 +162,11 @@ impl RecentSources for WinRecentSources {
         Err(NOT_BUILT)
     }
 
-    fn thumbnail(&self, _item: &RecentItem, _edge_px: u32) -> Result<Option<RgbaImage>, PlatformError> {
+    fn thumbnail(
+        &self,
+        _item: &RecentItem,
+        _edge_px: u32,
+    ) -> Result<Option<RgbaImage>, PlatformError> {
         Err(NOT_BUILT)
     }
 }

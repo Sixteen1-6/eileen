@@ -70,7 +70,9 @@ pub use brain::{
 use eileen_contracts::core_io::EffectFamily;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::ports::{Component, IdleComponent};
-pub use worker::{AcpWorker, AnyWorker, ClaudeWorker, CodexWorker, WorkerDriver, WorkerSession, worker_for};
+pub use worker::{
+    AcpWorker, AnyWorker, ClaudeWorker, CodexWorker, WorkerDriver, WorkerSession, worker_for,
+};
 
 /// What the harness reads at start. WP3 adds its fields (the CLI's location, the model aliases,
 /// the pool sizes).
@@ -91,6 +93,10 @@ pub enum DriverError {
 /// The harness component: the brain's slots and the workers. The stub accepts the brain and
 /// worker families and does nothing.
 #[must_use]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "section 3.3.15's signature; HarnessConfig has no fields until WP3"
+)]
 pub fn component(_cfg: &HarnessConfig) -> Box<dyn Component> {
     Box::new(IdleComponent::new("harness", &[EffectFamily::Brain, EffectFamily::Worker]))
 }

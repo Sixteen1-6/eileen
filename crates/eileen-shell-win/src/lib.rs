@@ -1,14 +1,14 @@
 //! Eileen's shell on Windows (BUILD.md sections 2.1, 2.5, 2.12 and 3.4): `eileen-platform`'s
 //! `ShellHost` (the tray with its data-driven menu, global hotkeys, Raw Input for the dictation
 //! key and physical activity, toasts, the Run entry, power requests, the session lock),
-//! `SystemMemory`, `MachineIdentity` and `SecretStore`, and the shell [`component`]. A stub until
+//! `SystemMemory`, `MachineIdentity` and `SecretStore`, and the shell `component`. A stub until
 //! WP2 builds it: every call answers `PlatformError::Unavailable`.
 //!
 //! # Owns
 //!
-//! - [`WinShell`], [`WinSystemMemory`], [`WinMachineIdentity`] and [`WinSecretStore`], the
+//! - `WinShell`, `WinSystemMemory`, `WinMachineIdentity` and `WinSecretStore`, the
 //!   Windows implementations of those traits; from WP0 phase B, `MachineProbe` too.
-//! - The shell [`component`], which shows toasts and runs the tray and hotkeys on the core's
+//! - The shell `component`, which shows toasts and runs the tray and hotkeys on the core's
 //!   shell thread.
 //! - The Start menu shortcut with the `AppUserModelID`, and the `HKCU` Run entry.
 //!
@@ -153,6 +153,10 @@ pub struct ShellConfig;
 
 /// The shell component. The stub accepts toasts and does nothing.
 #[must_use]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "section 3.3.15's signature; ShellConfig has no fields until WP2"
+)]
 pub fn component(_cfg: &ShellConfig) -> Box<dyn Component> {
     Box::new(IdleComponent::new("shell", &[EffectFamily::Notify]))
 }

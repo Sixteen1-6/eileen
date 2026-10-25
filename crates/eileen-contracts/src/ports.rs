@@ -297,9 +297,7 @@ mod tests {
     struct Queue(VecDeque<Envelope<Effect>>);
 
     impl EffectSource for Queue {
-        fn recv(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
+        fn recv(&mut self) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
             Box::pin(ready(self.0.pop_front()))
         }
     }
@@ -308,9 +306,7 @@ mod tests {
     struct Silent;
 
     impl EffectSource for Silent {
-        fn recv(
-            &mut self,
-        ) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
+        fn recv(&mut self) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
             Box::pin(pending())
         }
     }

@@ -1,3 +1,6 @@
 # What cargo-fuzz writes besides the committed seed corpora and regressions.
 artifacts/
 coverage/
+# Generated when the fuzz workspace builds. Start from a copy of the root Cargo.lock
+# (`cp Cargo.lock fuzz/`), so the targets build the versions the root workspace tests.
+Cargo.lock

@@ -19,7 +19,7 @@ cargo-fuzz = true
 members = ["."]
 
 [dependencies]
-libfuzzer-sys = "0.4.12"
+libfuzzer-sys = "0.4.13"
 eileen-apps = { path = "../crates/eileen-apps" }
 eileen-config = { path = "../crates/eileen-config" }
 eileen-contracts = { path = "../crates/eileen-contracts" }

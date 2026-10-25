@@ -6,7 +6,7 @@
 //!
 //! # Owns
 //!
-//! - [`WinHudSurface`], the Windows implementation of `HudSurface`.
+//! - `WinHudSurface`, the Windows implementation of `HudSurface`.
 //! - The renderer WP8's probe picks (`DirectWrite` into `Direct2D` on a `DirectComposition`
 //!   surface, or the colour-keyed GDI fallback).
 //!

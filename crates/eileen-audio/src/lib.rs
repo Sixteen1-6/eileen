@@ -66,6 +66,10 @@ pub struct AudioConfig;
 
 /// The audio component. The stub accepts the audio family and does nothing.
 #[must_use]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "section 3.3.15's signature; AudioConfig has no fields until WP4"
+)]
 pub fn component(_cfg: &AudioConfig) -> Box<dyn Component> {
     Box::new(IdleComponent::new("audio", &[EffectFamily::Audio]))
 }

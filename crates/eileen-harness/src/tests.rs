@@ -7,8 +7,8 @@ use eileen_contracts::jobs::Route;
 use eileen_contracts::speech::LanguageSupport;
 
 use crate::{
-    AnyWorker, BrainBackend, BrainSuite, DriverError, HarnessConfig, WorkerDriver,
-    brain_benchmark, brain_for, component, worker_for,
+    AnyWorker, BrainBackend, BrainSuite, DriverError, HarnessConfig, WorkerDriver, brain_benchmark,
+    brain_for, component, worker_for,
 };
 
 /// The output of a future that is ready at once, as every stub driver's is.

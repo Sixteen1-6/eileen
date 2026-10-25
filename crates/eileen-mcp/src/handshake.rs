@@ -38,25 +38,24 @@ pub fn answer(line: &str) -> Option<String> {
     Some(match method {
         "initialize" => success(
             id,
-            json!({
+            &json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
             }),
         ),
-        "tools/list" => success(id, json!({ "tools": [] })),
-        "ping" => success(id, json!({})),
+        "tools/list" => success(id, &json!({ "tools": [] })),
+        "ping" => success(id, &json!({})),
         _ => failure(id, METHOD_NOT_FOUND, "method not found"),
     })
 }
 
-fn success(id: &Value, result: Value) -> String {
+fn success(id: &Value, result: &Value) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
 }
 
 fn failure(id: &Value, code: i64, message: &str) -> String {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
-        .to_string()
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 //!
 //! # Owns
 //!
-//! - [`WinAudioEndpoints`], the Windows implementation of `AudioEndpoints`, and from WP0 phase B
+//! - `WinAudioEndpoints`, the Windows implementation of `AudioEndpoints`, and from WP0 phase B
 //!   its `endpoints` and `watch_endpoints` through `IMMNotificationClient`.
 //! - MMCSS registration for the audio threads, reverted on the registering thread.
 //!

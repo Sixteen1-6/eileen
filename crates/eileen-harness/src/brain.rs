@@ -173,7 +173,11 @@ impl BrainBackend for AnyBrain {
 /// The brain backend for `route`; `RouteUnavailable` for every route but Claude in v0.1. The
 /// harness component holds up to three, one per `BrainSlot`, and stamps every event with its
 /// process's instance.
-#[expect(clippy::missing_const_for_fn, reason = "the stub's body; WP3 locates the CLI here")]
+#[expect(
+    clippy::missing_const_for_fn,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "the stub's body and section 3.3.8's signature; WP3 locates the CLI here"
+)]
 pub fn brain_for(route: Route, _cfg: &HarnessConfig) -> Result<AnyBrain, DriverError> {
     match route {
         Route::Claude => Ok(AnyBrain::Claude(ClaudeBrain)),

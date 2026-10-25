@@ -75,7 +75,11 @@ pub mod ladder {
     /// is.
     #[must_use]
     #[expect(clippy::missing_const_for_fn, reason = "a stub until WP7's ladder")]
-    pub fn next_level(_meta: &SkillMeta, _uses: &[UseRecord], _policy: &LadderPolicy) -> Transition {
+    pub fn next_level(
+        _meta: &SkillMeta,
+        _uses: &[UseRecord],
+        _policy: &LadderPolicy,
+    ) -> Transition {
         Transition::Stay
     }
 }
@@ -101,13 +105,21 @@ pub mod shadow {
     /// postcondition names one. The stub issues none.
     #[must_use]
     #[expect(clippy::missing_const_for_fn, reason = "a stub until WP7's shadow rules")]
-    pub fn checks(_recipe: &Recipe, _slots: &SlotValues, _steps: &[TrajectoryStep]) -> Vec<CheckPlan> {
+    pub fn checks(
+        _recipe: &Recipe,
+        _slots: &SlotValues,
+        _steps: &[TrajectoryStep],
+    ) -> Vec<CheckPlan> {
         Vec::new()
     }
 
     /// Whether a shadowed job agreed with the recipe. The stub cannot tell.
     #[must_use]
-    pub fn agree(_recipe: &Recipe, _slots: &SlotValues, _steps: &[TrajectoryStep]) -> ShadowVerdict {
+    pub fn agree(
+        _recipe: &Recipe,
+        _slots: &SlotValues,
+        _steps: &[TrajectoryStep],
+    ) -> ShadowVerdict {
         ShadowVerdict::Inconclusive {
             step: String::new(),
             reason: "the skill engine is not built yet".to_owned(),

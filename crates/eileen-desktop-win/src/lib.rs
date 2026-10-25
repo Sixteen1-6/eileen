@@ -6,8 +6,8 @@
 //!
 //! # Owns
 //!
-//! - [`WinGrounding`], [`WinAutomation`], [`WinInput`], [`WinCapture`], [`WinTextInsertion`]
-//!   and [`WinSystemVolume`], the Windows implementations of those traits.
+//! - `WinGrounding`, `WinAutomation`, `WinInput`, `WinCapture`, `WinTextInsertion`
+//!   and `WinSystemVolume`, the Windows implementations of those traits.
 //! - UI Automation's apartment thread with deadlines, abandoned and replaced on a hang; Raw
 //!   Input for physical activity; the `testpad` fixture.
 //!

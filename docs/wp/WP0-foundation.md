@@ -24,7 +24,7 @@ records when they exist.
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
-| 4 | `wp0/stubs` | Not started |
+| 4 | `wp0/stubs` | Open on 2026-10-25; its amendment, pull request #95 (decision D78), goes first |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
 
@@ -66,6 +66,23 @@ of `Debug`, keeps dependencies' absolute source paths out of the logs, logs pani
 child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTicket` thread-bound,
 removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
 span-parent table, with a test for each.
+
+`wp0/stubs` adds the other 33 crates of section 3.1, every one but the `-linux` crates, which
+WP10 creates itself, and their `[workspace.dependencies]` lines. Each has the crate doc with the
+eight headings of section 4b.4 naming its owner package, `[package.metadata.eileen]`, the
+signatures section 3 gives it, and bodies that return a typed `Unavailable` error or do nothing.
+`component(cfg)` returns `eileen_contracts::ports::IdleComponent`, which drops the effects routed
+to it until its source closes or the runtime shuts down; `eileen-cli` wires every component and
+every subcommand of section 3.5, and each subcommand reaches its crate's `cli` module, which says
+it is not built yet. The real native dependencies sit under their Windows target tables, with
+`cargo-machete` told why each stub does not use them yet. The `-win` crates are
+`#![cfg(windows)]`. `eileen-shim` answers `initialize` and an empty `tools/list` through
+`eileen_mcp::handshake`. `fuzz/` declares every target of section 4.7 but WP10's three, each
+calling a stub `fuzz_entry`. `crates/eileen-core/clippy.toml` is the root file plus the `HashMap`
+ban, and `.config/nextest.toml` takes back the `package()` terms it left out until the crates
+existed. The stubs were cut off on the owner's PC before their first build; this cloud session
+merged `main` into them, compiled them on Linux and for Windows, and fixed what the build, clippy
+and rustdoc found.
 
 ## Acceptance records
 
@@ -299,6 +316,28 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   `main` in this file, which none of them touches. WP10 rebases its stack with
   `git rebase --onto origin/main 3fde1ab`, which replays only its own commits; WP0 changes
   nothing on those branches.
+
+- Stubs: `sherpa-onnx-sys` 1.13.8 takes `zip` 2.6.1 as a build dependency, and three advisories
+  against it (RUSTSEC-2026-0367 to RUSTSEC-2026-0369) list only `zip` 9.0.0 as patched, which no
+  1.x release accepts. Its build script calls `zip` only for iOS archives. The amendment, pull
+  request #95, records decision D78, and `deny.toml` ignores the three with their reasons until
+  the pin moves.
+- Stubs: three crates the first lock of the native dependencies brings in are security patches
+  inside the cooling-off period, taken under section 4.1's rule as the oldest patched releases:
+  `rustls` 0.23.46, `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10. Cargo also chose 15
+  other releases younger than 14 days (the `icu_*` 2.4 family with `tinystr`, `yoke`, `zerovec`
+  and `zerovec-derive`, `combine`, `crc32fast`, `memmap2` and `zstd-sys`); `cargo update
+  --precise` took each back to its newest older release. `keyring-core` 1.0.1 and `global-hotkey`
+  0.9.0 are section 4.1's own pins. `ring`'s `Apache-2.0 AND ISC` passes `cargo deny`.
+- Stubs: the unit-struct configurations (`HarnessConfig` and the others) are zero-sized, so
+  pedantic clippy asks to pass them by value; section 3.3.15's `component(cfg: &...)` signature
+  stays, with an `#[expect(clippy::trivially_copy_pass_by_ref)]` that fails the build once the
+  owning package gives the type a field.
+- Stubs: a `-win` crate is empty off Windows, so an intra-doc link in its crate doc breaks
+  `cargo doc` on Linux under `-D warnings`. Their crate docs name their types in plain code
+  spans instead.
+- Stubs: `shuttle` and `shuttle-tokio` are still not in the lock: no stub uses them, and the lock
+  holds only what a member uses. WP2 locks them with its `shuttle` feature.
 
 ## Decisions
 

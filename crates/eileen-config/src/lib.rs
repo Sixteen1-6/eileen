@@ -148,7 +148,11 @@ pub fn apply(_current_toml: &str, _changes: &[SettingChange]) -> Result<String, 
 
 /// Every setting's effective value and where it came from. The stub explains nothing.
 #[must_use]
-#[expect(clippy::missing_const_for_fn, reason = "a stub until WP7's explain")]
+#[expect(
+    clippy::missing_const_for_fn,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "a stub with section 3.3.11's signature until WP7's explain and Layers' fields"
+)]
 pub fn explain(_config: &Config, _layers: &Layers) -> Vec<Explained> {
     Vec::new()
 }
