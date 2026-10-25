@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::admission::WINDOW_MS;
 use crate::samples::{Baseline, Sample, percentile, plus_25};
 
 /// The floor never goes under this, MB (section 2.5 rule 1).
@@ -27,7 +28,7 @@ pub fn compute_baseline(samples: &[Sample]) -> Option<Baseline> {
     let excluded = samples.len() - kept.len();
     let mut windows: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
     for s in &kept {
-        let entry = windows.entry(s.at_ms / 30_000).or_insert((0, 0));
+        let entry = windows.entry(s.at_ms / WINDOW_MS).or_insert((0, 0));
         entry.0 += u64::from(s.paging_kb_s);
         entry.1 += 1;
     }

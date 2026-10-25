@@ -49,7 +49,10 @@
 //!
 //! - Windows file locks are mandatory: a holder's record lives beside its lock, never in it.
 //! - Point a test at a temporary root with [`samples::Store::at`]; the machine root comes from
-//!   `LOCALAPPDATA`, never from `EILEEN_DATA_DIR`.
+//!   `LOCALAPPDATA` (off Windows, when unset, the XDG state folder; on Windows nothing else),
+//!   never from `EILEEN_DATA_DIR`.
+//! - Every wait runs on the caller's [`clock::Clock`] (admission, the re-check, a reading's
+//!   minimum interval, the samples lock), so a test on a `ManualClock` never waits for real.
 //! - The paging rate is judged as a 30 s average against limits measured on this PC; a
 //!   number from elsewhere means nothing.
 //! - [`SystemMemory`] is not `Send` on any OS (its Windows PDH query stays on the thread that

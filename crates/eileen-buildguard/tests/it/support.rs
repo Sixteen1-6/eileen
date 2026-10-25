@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::ChildStdout;
 
+use eileen_buildguard::clock::ManualClock;
 use eileen_buildguard::samples::{Sample, Source, Store};
 use eileen_buildguard::{CargoChild, CargoInvocation, spawn_cargo};
 
@@ -45,17 +46,17 @@ pub(crate) fn prefill(
     headroom_mb: u32,
     paging_kb_s: u32,
 ) {
+    let clock = ManualClock::new(now_ms);
     for i in 0..7 {
-        store
-            .append(&Sample {
-                at_ms: now_ms - (6 - i) * 5_000,
-                avail_mb,
-                headroom_mb,
-                paging_kb_s,
-                slot_held: false,
-                src: Source::Runtime,
-            })
-            .unwrap();
+        let sample = Sample {
+            at_ms: now_ms - (6 - i) * 5_000,
+            avail_mb,
+            headroom_mb,
+            paging_kb_s,
+            slot_held: false,
+            src: Source::Runtime,
+        };
+        store.append(&sample, &clock).unwrap();
     }
 }
 

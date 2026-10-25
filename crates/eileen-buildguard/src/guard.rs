@@ -12,8 +12,8 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::admission::{
-    Decision, Reason, SAMPLE_EVERY_MS, Thresholds, View, decide_exclusive, decide_slot0,
-    decide_slot1, past_peak, recheck,
+    Decision, Reason, SAMPLE_EVERY_MS, Thresholds, View, decide_exclusive, decide_second_build,
+    decide_slot0, past_peak, recheck,
 };
 use crate::clock::{Clock, millis};
 use crate::disk::MIN_FREE_DISK_GB;
@@ -164,11 +164,14 @@ pub enum Slots {
 }
 
 impl Slots {
-    const fn as_str(self) -> &'static str {
+    /// The slots part of `EILEEN_BUILD_SLOT_HELD` for slots this ticket holds itself; `None`
+    /// for a nested ticket, which passes on the outer command's value unchanged.
+    const fn as_str(self) -> Option<&'static str> {
         match self {
-            Self::Zero => "0",
-            Self::One => "1",
-            Self::Both | Self::Nested => "0+1",
+            Self::Zero => Some("0"),
+            Self::One => Some("1"),
+            Self::Both => Some("0+1"),
+            Self::Nested => None,
         }
     }
 }
@@ -208,14 +211,14 @@ impl Ticket {
     /// The variables every cargo invocation under this ticket gets.
     #[must_use]
     pub fn env(&self) -> Vec<(String, String)> {
-        let held = self
-            .nested_value
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}:{}", self.slots.as_str(), self.jobs, self.pid));
-        vec![
-            ("CARGO_BUILD_JOBS".to_owned(), self.jobs.to_string()),
-            (SLOT_HELD_ENV.to_owned(), held),
-        ]
+        let jobs = ("CARGO_BUILD_JOBS".to_owned(), self.jobs.to_string());
+        let held = match (&self.nested_value, self.slots.as_str()) {
+            (Some(outer), _) => outer.clone(),
+            (None, Some(slots)) => format!("{slots}:{}:{}", self.jobs, self.pid),
+            // A nested ticket always carries the outer value; without one there is none to pass.
+            (None, None) => return vec![jobs],
+        };
+        vec![jobs, (SLOT_HELD_ENV.to_owned(), held)]
     }
 
     /// Takes one memory sample marked `slot_held`, for a running build's 10 s tick.
@@ -277,7 +280,7 @@ fn take_sample(
     holds_slot: bool,
     local: &mut Vec<Sample>,
 ) -> Result<Sample, Reason> {
-    let reading = env.memory.sample().map_err(|e| Reason::Unreadable(e.to_string()))?;
+    let reading = env.memory.sample(env.clock).map_err(|e| Reason::Unreadable(e.to_string()))?;
     let sample = Sample {
         at_ms: env.clock.now_ms(),
         avail_mb: reading.avail_mb,
@@ -286,8 +289,8 @@ fn take_sample(
         slot_held: holds_slot || env.store.slot_held(),
         src: Source::Guard,
     };
-    let shared =
-        (env.memory.is_real() || !env.store.is_machine()) && env.store.append(&sample).is_ok();
+    let shared = (env.memory.is_real() || !env.store.is_machine())
+        && env.store.append(&sample, env.clock).is_ok();
     if !shared {
         local.push(sample);
     }
@@ -406,9 +409,9 @@ fn admitted(decision: Decision) -> Result<u32, Reason> {
 /// It decides from the slots as they stand and takes a lock only once the rules admit, so a
 /// refused attempt holds nothing and writes no record. The rule depends on whether another
 /// build runs, not on which index is free: with both slots free it is slot 0's rule; with one
-/// held it is the second-build rule (slot 1's in section 6.1), for whichever slot is free. A
-/// take that loses a race to another command refuses for this tick, and the next tick decides
-/// again from the new state.
+/// held it is the second-build rule (slot 1's rule in section 6.1), for whichever slot is
+/// free. A take that loses a race to another command refuses for this tick, and the next tick
+/// decides again from the new state.
 fn admit(
     request: &Request,
     env: &Env<'_>,
@@ -449,14 +452,15 @@ fn admit(
     // A held lock with no record is a take in progress or another command's brief probe, so
     // the running build's start is unknown: wait for the next tick rather than guess it.
     let Some(first) = slots::slot_holder(root, running) else {
-        return Err(Reason::Slot1BeforePeak);
+        return Err(Reason::HolderUnknown);
     };
     let now = env.clock.now_ms();
     let during = env
         .store
         .recent_at(now, Duration::from_millis(now.saturating_sub(first.started_ms)))
         .unwrap_or_default();
-    let jobs = admitted(decide_slot1(view, past_peak(&during, first.started_ms, now), t))?;
+    let past = past_peak(&during, first.started_ms, now);
+    let jobs = admitted(decide_second_build(view, past, t))?;
     let held = match free {
         Slot::Zero => Slots::Zero,
         Slot::One => Slots::One,
@@ -499,7 +503,7 @@ pub fn acquire_desktop(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Env, Request, admit};
+    use super::{Env, Request, Slots, admit};
     use crate::admission::{Reason, Thresholds, View};
     use crate::clock::ManualClock;
     use crate::memory::FakeMemory;
@@ -552,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn a_held_slot_without_a_record_waits_for_the_peak() {
+    fn a_held_slot_without_a_record_waits_for_its_holder() {
         let dir = root("no-record");
         let other = Holder {
             pid: 4_242,
@@ -562,10 +566,19 @@ mod tests {
         };
         let held = slots::try_take_slot(&dir, Slot::Zero, &other).unwrap().unwrap();
         std::fs::remove_file(dir.join("build-slot-0.holder")).unwrap();
-        // Memory is plentiful, so only the unknown start of the running build refuses.
-        assert_eq!(attempt(&dir, &view(9_000, 100)), Err(Reason::Slot1BeforePeak), "waits");
+        // Memory is plentiful, so only the unknown start of the running build refuses, and the
+        // reason says so rather than claiming the build is before its peak.
+        assert_eq!(attempt(&dir, &view(9_000, 100)), Err(Reason::HolderUnknown), "waits");
         drop(held);
         let _ignored = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_ticket_holding_its_own_slots_names_them() {
+        assert_eq!(Slots::Zero.as_str(), Some("0"), "slot 0");
+        assert_eq!(Slots::One.as_str(), Some("1"), "slot 1");
+        assert_eq!(Slots::Both.as_str(), Some("0+1"), "both");
+        assert_eq!(Slots::Nested.as_str(), None, "a nested ticket passes on the outer value");
     }
 
     #[test]

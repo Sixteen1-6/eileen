@@ -2,20 +2,21 @@
 //!
 //! Section 6.1 rule 1, as functions of samples so tests drive them with fake memory:
 //!
-//! - **Slot 0's rule**, for a build that starts while no other build holds a slot, admits it
-//!   when commit headroom, minus the build's own estimated commit (1 GB plus 0.5 GB per
-//!   compile job of the ticket), stays at or above the floor over the last 30 s, and the 30 s
-//!   paging average is at or under the slot-0 limit, whatever the available figure.
-//! - **Slot 1's rule**, for a second build while another holds a slot (whichever index is
-//!   free: slot 0's build may finish while slot 1's runs), admits it only when available
-//!   memory is at least 1.5 GB plus 0.5 GB per compile job, the same headroom rule holds, and
-//!   the running build has been sampled past its peak (its memory has stopped rising for
-//!   30 s).
+//! - **Slot 0's rule** ([`decide_slot0`]), for a build that starts while no other build holds
+//!   a slot, admits it when commit headroom, minus the build's own estimated commit (1 GB plus
+//!   0.5 GB per compile job of the ticket), stays at or above the floor over the last 30 s, and
+//!   the 30 s paging average is at or under the slot-0 limit, whatever the available figure.
+//! - **Slot 1's rule**, the second-build rule ([`decide_second_build`]), for a build that
+//!   starts while another holds a slot (whichever index is free: slot 0's build may finish
+//!   while slot 1's runs), admits it only when available memory is at least 1.5 GB plus
+//!   0.5 GB per compile job, the same headroom rule holds, and the running build has been
+//!   sampled past its peak (its memory has stopped rising for 30 s).
 //! - The ticket's job count is [`jobs_for`]: `min(6, max(2, floor((available_gb - 1.5) /
 //!   0.5)))`, ceiling 8 when one holder has both slots; it never falls as memory rises.
 
 use std::fmt;
 
+use crate::disk::MIN_FREE_DISK_GB;
 use crate::samples::{Baseline, Sample};
 
 /// The slot-0 paging limit until the baseline exists, KB/s.
@@ -84,9 +85,10 @@ pub const fn estimated_commit_mb(jobs: u32) -> u32 {
     1_024_u32.saturating_add(jobs.saturating_mul(512))
 }
 
-/// The available memory slot 1 needs, MB: 1.5 GB plus 0.5 GB per compile job.
+/// The available memory a second build needs, MB (slot 1's rule in section 6.1, applied to
+/// whichever slot is free): 1.5 GB plus 0.5 GB per compile job.
 #[must_use]
-pub const fn slot1_needs_mb(jobs: u32) -> u32 {
+pub const fn second_build_needs_mb(jobs: u32) -> u32 {
     1_536_u32.saturating_add(jobs.saturating_mul(512))
 }
 
@@ -160,16 +162,18 @@ pub enum Reason {
         /// The limit, KB/s.
         limit_kb_s: u32,
     },
-    /// A second build (slot 1's rule) needs more available memory.
-    Slot1Memory {
+    /// A second build (slot 1's rule, whichever slot is free) needs more available memory.
+    SecondBuildMemory {
         /// Available memory, MB.
         avail_mb: u32,
         /// What it needs, MB.
         needs_mb: u32,
     },
-    /// A second build waits until the running build is past its peak (or until the running
-    /// build's holder record says when it started).
-    Slot1BeforePeak,
+    /// A second build waits until the running build is past its peak.
+    SecondBuildBeforePeak,
+    /// The running build's lock is held but its holder record is not there (a take in progress
+    /// or another command's brief probe), so its start is unknown and the next tick decides.
+    HolderUnknown,
     /// Both slots are held (or, for exclusive work, at least one is).
     SlotsTaken,
     /// Another desktop test or manual desktop session holds `desktop.lock`.
@@ -200,16 +204,19 @@ impl fmt::Display for Reason {
                     "paging averaged {avg_kb_s} KB/s over 30 s, over the {limit_kb_s} KB/s limit"
                 )
             }
-            Self::Slot1Memory { avail_mb, needs_mb } => {
+            Self::SecondBuildMemory { avail_mb, needs_mb } => {
                 write!(f, "a second build needs {needs_mb} MB available and {avail_mb} MB is")
             }
-            Self::Slot1BeforePeak => {
+            Self::SecondBuildBeforePeak => {
                 f.write_str("a second build waits until the running build is past its memory peak")
             }
+            Self::HolderUnknown => f.write_str(
+                "the running build's holder record is not written yet, so its start is unknown",
+            ),
             Self::SlotsTaken => f.write_str("the build slots are taken"),
             Self::DesktopTaken => f.write_str("another desktop session holds desktop.lock"),
             Self::Disk { free_gb } => {
-                write!(f, "only {free_gb} GB of disk is free; builds need 20 GB")
+                write!(f, "only {free_gb} GB of disk is free; builds need {MIN_FREE_DISK_GB} GB")
             }
             Self::Sampling => f.write_str("sampling memory for 30 s"),
             Self::Recheck(inner) => write!(f, "re-check before the next cargo: {inner}"),
@@ -266,20 +273,22 @@ pub fn decide_slot0(view: &View, t: &Thresholds) -> Decision {
     }
 }
 
-/// Slot 1's rule, for a second build while another holds a slot (whichever slot is free),
-/// given whether the running build is past its peak.
+/// The second-build rule (slot 1's rule in section 6.1), for a build that starts while
+/// another holds a slot, whichever slot is free, given whether the running build is past its
+/// peak.
 #[must_use]
-pub fn decide_slot1(view: &View, running_past_peak: bool, t: &Thresholds) -> Decision {
+pub fn decide_second_build(view: &View, running_past_peak: bool, t: &Thresholds) -> Decision {
     let jobs = jobs_for(view.latest_avail_mb, false);
-    let needs_mb = slot1_needs_mb(jobs);
+    let needs_mb = second_build_needs_mb(jobs);
     if view.latest_avail_mb < needs_mb {
-        return Decision::Refuse(Reason::Slot1Memory { avail_mb: view.latest_avail_mb, needs_mb });
+        let avail_mb = view.latest_avail_mb;
+        return Decision::Refuse(Reason::SecondBuildMemory { avail_mb, needs_mb });
     }
     if let Err(reason) = headroom_ok(view, jobs, t) {
         return Decision::Refuse(reason);
     }
     if !running_past_peak {
-        return Decision::Refuse(Reason::Slot1BeforePeak);
+        return Decision::Refuse(Reason::SecondBuildBeforePeak);
     }
     Decision::Admit { jobs }
 }
@@ -289,9 +298,10 @@ pub fn decide_slot1(view: &View, running_past_peak: bool, t: &Thresholds) -> Dec
 #[must_use]
 pub fn decide_exclusive(view: &View, t: &Thresholds) -> Decision {
     let jobs = jobs_for(view.latest_avail_mb, true);
-    let needs_mb = slot1_needs_mb(jobs);
+    let needs_mb = second_build_needs_mb(jobs);
     if view.latest_avail_mb < needs_mb {
-        return Decision::Refuse(Reason::Slot1Memory { avail_mb: view.latest_avail_mb, needs_mb });
+        let avail_mb = view.latest_avail_mb;
+        return Decision::Refuse(Reason::SecondBuildMemory { avail_mb, needs_mb });
     }
     match headroom_ok(view, jobs, t).and_then(|()| paging_ok(view, t)) {
         Ok(()) => Decision::Admit { jobs },
@@ -340,7 +350,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        Decision, Reason, Thresholds, View, decide_slot0, decide_slot1, jobs_for, past_peak,
+        Decision, Reason, Thresholds, View, decide_second_build, decide_slot0, jobs_for, past_peak,
     };
     use crate::samples::{Sample, Source};
 
@@ -400,20 +410,29 @@ mod tests {
 
     #[test]
     fn slot1_needs_memory_and_a_past_peak() {
-        let low = decide_slot1(&view(2_000, 9_000, 100), true, &Thresholds::DEFAULT);
+        let low = decide_second_build(&view(2_000, 9_000, 100), true, &Thresholds::DEFAULT);
         assert_eq!(
             low,
-            Decision::Refuse(Reason::Slot1Memory { avail_mb: 2_000, needs_mb: 2_560 }),
+            Decision::Refuse(Reason::SecondBuildMemory { avail_mb: 2_000, needs_mb: 2_560 }),
             "below"
         );
-        let early = decide_slot1(&view(5_000, 9_000, 100), false, &Thresholds::DEFAULT);
-        assert_eq!(early, Decision::Refuse(Reason::Slot1BeforePeak), "before the peak");
+        let early = decide_second_build(&view(5_000, 9_000, 100), false, &Thresholds::DEFAULT);
+        assert_eq!(early, Decision::Refuse(Reason::SecondBuildBeforePeak), "before the peak");
         assert!(
             matches!(
-                decide_slot1(&view(5_000, 9_000, 100), true, &Thresholds::DEFAULT),
+                decide_second_build(&view(5_000, 9_000, 100), true, &Thresholds::DEFAULT),
                 Decision::Admit { .. }
             ),
             "admitted"
+        );
+    }
+
+    #[test]
+    fn the_disk_reason_names_the_guards_own_minimum() {
+        let reason = Reason::Disk { free_gb: 12 }.to_string();
+        assert!(
+            reason.ends_with(&format!("builds need {} GB", crate::disk::MIN_FREE_DISK_GB)),
+            "{reason}"
         );
     }
 
