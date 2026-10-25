@@ -27,7 +27,7 @@ disallowed-methods = [
   { path = "tokio::task::spawn_blocking", reason = "use eileen_rt::task::spawn_blocking (named, bounded pool)", allow-invalid = true },
   { path = "tokio::runtime::Handle::spawn", reason = "use eileen_rt::task::spawn, inside the handle's enter() for another runtime: it names the task, keeps the span and registers it; in a -linux crate, a local task on the bridge's LocalSet (tokio::task::spawn_local inside a job)", allow-invalid = true },
   { path = "tokio::runtime::Runtime::spawn", reason = "use eileen_rt::task::spawn, inside the runtime's enter(); in a -linux crate, a local task on the bridge's LocalSet (tokio::task::spawn_local inside a job)", allow-invalid = true },
-  { path = "zbus::Executor::spawn", reason = "with zbus's tokio feature this is a bare tokio::spawn; in a -linux crate run it as a local task on the bridge's LocalSet (tokio::task::spawn_local inside a job), elsewhere use eileen_rt::task::spawn", allow-invalid = true },
+  { path = "zbus::Executor::spawn", reason = "with zbus's tokio feature this is a bare tokio::spawn; in a -linux crate run it as a local task on the bridge's LocalSet (tokio::task::spawn_local inside a job), elsewhere use eileen_rt::task::spawn" },
 ]
 disallowed-types = [
   { path = "std::sync::mpsc::Sender", reason = "use bounded tokio::sync channels" },
