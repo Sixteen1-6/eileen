@@ -1214,7 +1214,7 @@ WP0 creates every crate below except the `-linux` ones as a documented stub that
 | `eileen-stdx` | lib | neutral | all | forbid | WP0 | contracts |
 | `eileen-trace` | lib | neutral | all | forbid | WP0 | contracts, stdx |
 | `eileen-rt` | lib | neutral | all async processes | forbid | WP0 | contracts, stdx, trace |
-| `eileen-platform` | lib | neutral | all | forbid | WP0 | contracts |
+| `eileen-platform` | lib | neutral | all | forbid | WP0 | contracts; stdx only for its fakes (the clock port, section 3.4) |
 | `eileen-supervisor` | lib | neutral, Windows module | all | `ffi` only | WP0 | contracts, stdx, trace, rt |
 | `eileen-buildguard` | lib | neutral, Windows module | tools, core | `ffi` only | WP0 | none (std and `windows-sys` only) |
 | `eileen-core` | lib | neutral | core | forbid | WP1 | contracts, stdx, trace (the resolver, dictation cleaner, settings validator and skill engine arrive through ports in `eileen-contracts`) |
@@ -3012,6 +3012,8 @@ pub struct SpeakerBar {
 
 `eileen-platform` holds the traits every OS implements. Windows implementations live in the `-win` crates and Linux ones in WP10's `-linux` crates ([LINUX.md](LINUX.md) section 4); fakes for tests live next to each trait under `cfg(any(test, feature = "fake"))`.
 
+A method that reads or writes a file the user's profile may keep on another machine (a folder redirected to a server, a home folder on an NFS or FUSE mount) takes the caller's `Deadline`, as `AppHost::call`, `Grounding` and `Automation` do, and its implementation enforces it on a helper thread, which it abandons past the deadline to answer `PlatformError::DeadlineExceeded`, because a hung file read cannot be interrupted (section 2.1 rule 2). The deadline bounds the caller's wait, not the abandoned work, so a write may still land after its caller was told it passed. The fakes of these methods keep simulated time on `eileen-stdx`'s `ManualClock`, so a test can answer within a deadline or pass one without sleeping.
+
 ```rust
 pub trait AudioEndpoints: Send + Sync {          // eileen-audio-win; cpal does the streaming itself
     fn default_capture(&self, category: StreamCategory) -> Result<EndpointInfo, PlatformError>;
@@ -3043,8 +3045,9 @@ pub trait MachineProbe: Send + Sync {            // eileen-shell-win: GetLogical
                                                  // the monitor count; Linux: eileen-shell-linux, from /proc and sysfs
                                                  // (docs/LINUX.md section 4). The fake holds WP0's three fixture machines
                                                  // (section 6.2, phase B)
-    /// Everything but the audio endpoints and the execution providers, which their own components report.
-    fn facts(&self) -> Result<MachineFacts, PlatformError>;
+    /// Everything but the audio endpoints and the execution providers, which their own components report. `deadline`
+    /// bounds measuring the data folder's volume, which on Linux sits in the home folder, a network mount on some PCs.
+    fn facts(&self, deadline: Deadline) -> Result<MachineFacts, PlatformError>;
     /// CPU busy percent since the last call (GetSystemTimes deltas) and the power state.
     fn load(&self) -> Result<(u8, PowerState), PlatformError>;
     /// PowerSource | BatterySaver | Displays changes (RegisterPowerSettingNotification, WM_DISPLAYCHANGE).
@@ -3112,12 +3115,17 @@ pub trait Capture: Send + Sync {
     fn capture(&self, target: &ShotTarget) -> Result<RgbaImage, PlatformError>;
 }
 pub trait Apps: Send + Sync {                    // index and launch
-    fn index(&self) -> Result<Vec<AppEntry>, PlatformError>;
-    fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError>;     // pid
+    /// Reads the Start menu's shortcuts, which Folder Redirection can move to a server; Linux: the desktop entries,
+    /// some under the home folder.
+    fn index(&self, deadline: Deadline) -> Result<Vec<AppEntry>, PlatformError>;
+    /// Returns the pid. A desktop app starts from a shortcut that may sit in the redirected Start menu; Linux may read
+    /// the desktop entries again to find the app.
+    fn launch(&self, app: &AppEntry, deadline: Deadline) -> Result<u32, PlatformError>;
     fn main_window(&self, pid: u32, deadline: Deadline) -> Result<Option<WindowRef>, PlatformError>;
     fn open_url(&self, url: &str) -> Result<(), PlatformError>;
     fn open_uri(&self, uri: &str) -> Result<(), PlatformError>;
-    fn open_path(&self, path: &str, with_app: Option<&AppEntry>) -> Result<(), PlatformError>;
+    /// The user's own file or folder, often in a redirected folder; Linux opens it to hand the portal a descriptor.
+    fn open_path(&self, path: &str, with_app: Option<&AppEntry>, deadline: Deadline) -> Result<(), PlatformError>;
 }
 pub trait TextInsertion: Send + Sync {
     fn insert(&self, text: &str, target: &InsertTarget, method: InsertMethod) -> Result<InsertOutcome, PlatformError>;
@@ -3129,9 +3137,12 @@ pub trait MediaSessions: Send + Sync {           // eileen-apps-win (SMTC); Linu
     fn subscribe(&self, sink: Box<dyn Fn(MediaState) + Send + Sync>) -> Result<Subscription, PlatformError>;
 }
 pub trait RecentSources: Send + Sync {
-    fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError>;
-    fn watch(&self, roots: &[String], sink: Box<dyn Fn(RecentItem) + Send + Sync>) -> Result<Subscription, PlatformError>;
-    fn thumbnail(&self, item: &RecentItem, edge_px: u32) -> Result<Option<RgbaImage>, PlatformError>;
+    /// The Recent folder in the roaming profile; Linux: `recently-used.xbel` under the home folder.
+    fn recent(&self, limit: usize, deadline: Deadline) -> Result<Vec<RecentItem>, PlatformError>;
+    /// `deadline` bounds opening the roots, user folders a redirect or a mount may hold, not the subscription.
+    fn watch(&self, roots: &[String], sink: Box<dyn Fn(RecentItem) + Send + Sync>, deadline: Deadline) -> Result<Subscription, PlatformError>;
+    /// Reads the file or the thumbnail cache, both possibly on another machine.
+    fn thumbnail(&self, item: &RecentItem, edge_px: u32, deadline: Deadline) -> Result<Option<RgbaImage>, PlatformError>;
 }
 pub trait ShellHost: Send + Sync {               // eileen-shell-win, on the core's shell thread
     fn register_hotkey(&self, chord: &str, id: u32) -> Result<(), PlatformError>;   // fails if another app owns it
@@ -3139,7 +3150,8 @@ pub trait ShellHost: Send + Sync {               // eileen-shell-win, on the cor
     fn toast(&self, toast: &Toast) -> Result<(), PlatformError>;
     /// Raw Input sink: edges of the configured dictation key and a timestamp of the last physical input, nothing else.
     fn watch_input(&self, dictation_key: VirtualKey, sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>) -> Result<Subscription, PlatformError>;
-    fn set_run_at_sign_in(&self, on: bool) -> Result<(), PlatformError>;            // HKCU Run entry
+    /// The `HKCU` Run entry; Linux: the XDG autostart entry under the home folder.
+    fn set_run_at_sign_in(&self, on: bool, deadline: Deadline) -> Result<(), PlatformError>;
     /// Display-required and system-required power request (PowerSetRequest) for an armed run; dropped on release.
     fn keep_awake(&self) -> Result<PowerRequest, PlatformError>;
     fn lock_workstation(&self) -> Result<(), PlatformError>;                       // at the end of an armed run
@@ -4571,3 +4583,4 @@ Open risks (each has an owner package that measures it):
 - 2026-10-24, amendment from `wp10/dbus-bridge-amendment`, before the Linux trait implementations: `eileen-dbus-linux` may depend on `eileen-platform` and `eileen-stdx` (3.1). Section 3.4's traits are synchronous and the Linux D-Bus clients run on tokio, so the crate gains one bridge, a named thread with a current-thread runtime that a trait call posts to and waits on within its `Deadline`, and the conversion from `DbusError` to `PlatformError`, so neither is written once per `-linux` crate. No decision record and no contract changes.
 - 2026-10-25, amendment after #25, Dependabot's move of `syn` from 2.0.119 to 3.0.6, which the owner approved ("merge and amend"). Section 4.1's rule for `syn` said the newest 2.x release at least 14 days old; it now says the newest 3.x release at least 14 days old. 3.0.6 (2026-09-16) satisfied the cooling-off period when Dependabot proposed it on 2026-10-21. No workspace member uses `syn` yet (only `tools/repo-tools`, from WP0 phase B, will), so nothing that builds today changes; the comment beside the pin in `Cargo.toml` follows in a `deps` pull request. No decision record and no contract changes.
 - 2026-10-25, amendment applying the owner's direction of 2026-10-22 ([OWNER-DIRECTION.md](OWNER-DIRECTION.md#2026-10-22)): learn the person through the models' own memory and use every native advantage of the tools Eileen routes to, and adopt Ayham's ten learning ideas (pull request #34) with ideas 1, 3, 4, 8 and 9 in v0.1 and the rest after v0.1. Decision D77 records it, with the research in [2026-10-learning-the-person.md](research/2026-10-learning-the-person.md). Section 0's summary paragraph and reviewers' line say so. The person moves from `learn.sqlite` into the claude CLI's own notes, kept in Eileen's data directory (a hub per user, a folder per repository), with the fact rows as a derived index holding no note text (section 2.10 item 15, new). The brain reads the hub through `--append-system-prompt-file` and a `[notes]` block that replaces `[facts]` (2.3); the grammar gains the receipt and notes phrases (2.4), and the user control list names them (2.10 item 10); Claude's notes do not load into the owner's own Claude sessions in v0.1 (2.9); coding sessions write notes natively only after WP3's memory gate, WP7's note acceptance and the `--restricted` question allow it, the web and screen workers and the pool get note lines, and `continue_session` (whose transcript persists) and the librarian get none (2.5, 2.10 item 15); a `Notes` path class, held writes, a watcher that restores and holds unexplained changes, tombstones of keyed hashes and a wider forget plan guard them (2.10 items 9, 11 and 12, 2.12); receipts and step corrections join capture and measurement (2.10 items 1, 2, 6 and 13), fault injection and re-proving join the ladder (item 5), and induced templates join distillation (item 2); file checkpointing is off, workers get `--fallback-model`, and repository instruction files reach coding jobs through `--add-dir` (2.5); the new keys are Safety keys (2.11); the data directory gains `memory\` and `learning\pending\notes\` (2.15); 3.3.8's mapping table gains a Memory row, and 3.3.13 gains provisional shapes (including `ToolSource`'s phrasing id, the induced templates' `[match]` routing, the HUD's notes panels and inputs, `learned_note_propose` and the new settings keys) that WP7 applies by amendment with WP0, WP1, WP3 and WP8; 3.5 gains `eileen notes`; section 1 gains the receipt and notes rows in E11 and a second proposed-ideas table; WP1's builds and acceptance 17, WP3's builds and acceptance 4 and 8, WP7's builds and acceptance 5, 6, 7, 9, 13 and 14, and WP8's builds and acceptance 12 carry the work; section 7 records the entry, three questions waiting for the owner (D4's `~/.claude` rule, D40's `--restricted` fence, and how far v0.1 uses Claude's own note-taking), the local-first open point with its recommendation applied, two questions carried into packages and six risks; ARCHITECTURE.md's state, crate and learning lines follow. The design applies every finding of the critics' review of the first draft, some in an equivalent form the pull request names; none was declined. A review of the pull request then gave `continue_session` no note lines in v0.1, limited the `Notes` class to the folders a session's `MemorySpec` names, kept memory folders out of `--add-dir`, restored the `Stale` rule for vocabulary facts and gave note-backed facts a `Stale` retirement that leaves the loaded index, routed an unconfirmed induced template through `[match]` at any level, widened the note-overlap check to every file text a job read, recorded the `Notes` class against D40, and corrected the research note's account of Claude's app memory; every finding was applied. No Rust changes.
+- 2026-10-25, amendment from `docs/platform-file-deadlines`, answering Ayham's question from WP10's drafts: do section 3.4's synchronous methods that read files take a deadline, or does each implementation bound its reads on a helper thread? Both. Section 2.1 rule 2 gives every call to another process a deadline, and a file read is one when a server holds the file (a folder redirected to a share, a home folder on an NFS or FUSE mount). Section 3.4's opening now says that such a method takes the caller's `Deadline`, as `AppHost::call`, `Grounding` and `Automation` do, and that its implementation enforces it on a helper thread, because a hung read cannot be interrupted. `RecentSources::recent` (the Recent folder in the roaming profile, `recently-used.xbel` under the home folder), `RecentSources::thumbnail` (the file, or the thumbnail cache) and `ShellHost::set_run_at_sign_in` (on Linux, the XDG autostart entry under the home folder) take one. A check of every other method in 3.4 adds five: `Apps::index` reads the Start menu's shortcuts, which Folder Redirection can move to a server, and on Linux the desktop entries under the home folder; `Apps::launch` starts a desktop app from a shortcut that may sit there, and on Linux may read the entries again to find the app; `Apps::open_path` opens the user's own file, which on Linux it opens itself to hand the portal a descriptor (WP10's `Opener::open_path` already bounds that by a deadline); `RecentSources::watch` opens each root it watches, user folders that a redirect or a mount may hold, and its deadline bounds that setup, not the subscription; `MachineProbe::facts` measures the data folder's volume, which on Linux sits in the home folder. The others need none: `AppHost::call`, `Apps::main_window` and the UI Automation calls of `Grounding` and `Automation` already take one, and the rest read no file of the user's (`MachineIdentity` reads system files, `SecretStore` calls the OS's credential service, `Apps::open_url` and `open_uri` hand an address to the shell or the portal, the memory and machine readings besides the data folder's volume come from the kernel, and the audio, volume, input, capture, text insertion, media and HUD traits touch no file). Section 3.1 lets `eileen-platform`'s fakes use `eileen-stdx`, on whose `ManualClock` they keep simulated time. No decision record and no contract changes.

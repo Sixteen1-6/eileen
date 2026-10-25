@@ -4,8 +4,12 @@
 //! Each record is one compact JSON line: `{"t":"open"|"record"|"close"|"event", ...}`. Span
 //! ids in the lines are record ids, unique for the life of the process, because `tracing`
 //! reuses a span's id once it closes. `pii.` fields are kept in memory; secrets are scanned
-//! when the ring is dumped, never later.
+//! when the ring is dumped, never later, in the values under each record's `fields` (numbers
+//! too: a card number becomes `0`). The rest of a record comes from `tracing`'s metadata, the
+//! layer's counter and the clock, and is not scanned: a span id or a time can pass the card
+//! rule's Luhn check.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,12 +23,22 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::record::{EventRecord, JsonVisitor, SpanRecord, event_name, remote_parent, sorted};
+use crate::record::{
+    EventRecord, JsonVisitor, SpanRecord, event_name, redact_values, remote_parent, sorted,
+};
 use crate::redact::Redactor;
 
 struct Inner {
     lines: VecDeque<(i64, String)>,
-    bytes: usize,
+    /// What the held lines' strings have allocated.
+    line_bytes: usize,
+}
+
+impl Inner {
+    /// The heap the ring holds: the lines' strings and the queue's buffer, spare slots too.
+    fn held(&self) -> usize {
+        self.line_bytes + self.lines.capacity() * size_of::<(i64, String)>()
+    }
 }
 
 /// The ring of one process.
@@ -42,20 +56,21 @@ impl std::fmt::Debug for Ring {
         f.debug_struct("Ring")
             .field("process", &self.process)
             .field("max_bytes", &self.max_bytes)
-            .field("bytes", &self.lock().bytes)
+            .field("bytes", &self.bytes())
             .finish_non_exhaustive()
     }
 }
 
 impl Ring {
-    /// A ring for `process` keeping at most `max_bytes` and at most `window` of records.
+    /// A ring for `process` holding at most `max_bytes` of heap (see [`Ring::bytes`]) and at
+    /// most `window` of records.
     #[must_use]
     pub fn new(process: &'static str, max_bytes: usize, window: Duration) -> Self {
         Self {
             process,
             max_bytes,
             window_us: eileen_stdx::num::micros_i64(window),
-            inner: Mutex::new(Inner { lines: VecDeque::new(), bytes: 0 }),
+            inner: Mutex::new(Inner { lines: VecDeque::new(), line_bytes: 0 }),
             next_id: AtomicU64::new(1),
             dump_requests: AtomicU64::new(0),
         }
@@ -65,34 +80,38 @@ impl Ring {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn push(&self, at_us: i64, line: String) {
+    fn push(&self, at_us: i64, mut line: String) {
+        // `Value::to_string` grows its buffer by doubling, so a line can hold twice its length;
+        // the bound counts allocations, so each line keeps only what it needs.
+        line.shrink_to_fit();
         let mut inner = self.lock();
-        inner.bytes += line.len();
+        inner.line_bytes += line.capacity();
         inner.lines.push_back((at_us, line));
         let oldest_kept = at_us.saturating_sub(self.window_us);
-        while inner.bytes > self.max_bytes
+        while inner.held() > self.max_bytes
             || inner.lines.front().is_some_and(|(at, _)| *at < oldest_kept)
         {
             let Some((_, dropped)) = inner.lines.pop_front() else { break };
-            inner.bytes -= dropped.len();
+            inner.line_bytes -= dropped.capacity();
         }
         drop(inner);
     }
 
-    /// The bytes held now.
+    /// The heap held now, which `max_bytes` bounds: each line's allocation and the queue's own
+    /// buffer.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.lock().bytes
+        self.lock().held()
     }
 
-    /// The records as JSON lines, every line through `redactor` (`events.jsonl` of an
-    /// incident bundle).
+    /// The records as JSON lines, every value under a record's `fields` through `redactor`
+    /// (`events.jsonl` of an incident bundle). The record's own ids and times stay as they are.
     #[must_use]
     pub fn dump(&self, redactor: &Redactor) -> Vec<u8> {
         let lines: Vec<String> = self.lock().lines.iter().map(|(_, l)| l.clone()).collect();
         let mut out = Vec::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
         for line in &lines {
-            out.extend_from_slice(redactor.redact(line).as_bytes());
+            out.extend_from_slice(redact_record(line, redactor).as_bytes());
             out.push(b'\n');
         }
         out
@@ -117,6 +136,20 @@ impl Ring {
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .is_ok()
     }
+}
+
+/// A ring line with every value under its `fields` through `redactor` and the rest as the
+/// layer wrote it, or the line itself when nothing matched. A line that is not a JSON object,
+/// which the layer never writes, is redacted whole.
+fn redact_record<'a>(line: &'a str, redactor: &Redactor) -> Cow<'a, str> {
+    let Ok(Value::Object(mut record)) = serde_json::from_str::<Value>(line) else {
+        return redactor.redact(line);
+    };
+    let replaced = record
+        .get_mut("fields")
+        .and_then(Value::as_object_mut)
+        .is_some_and(|fields| redact_values(fields, redactor));
+    if replaced { Cow::Owned(Value::Object(record).to_string()) } else { Cow::Borrowed(line) }
 }
 
 /// What [`parse_lines`] read back.
@@ -281,10 +314,125 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use serde_json::json;
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::{Ring, RingLayer};
+    use crate::names;
     use crate::redact::Redactor;
+
+    #[test]
+    fn span_ids_of_reused_slots_survive_the_dump() {
+        // A span id is the registry's slot key plus 1, with the slot's generation from bit 51,
+        // so from about a slot's 900th reuse on its ids are 19-digit numbers starting with 2
+        // to 6, and about one in ten of those passes the card rule's Luhn check.
+        let ring = Arc::new(Ring::new("eileen", 8 * 1024 * 1024, Duration::from_secs(600)));
+        let subscriber = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&ring)));
+        let ids: Vec<u64> = tracing::subscriber::with_default(subscriber, || {
+            (0..2_048)
+                .filter_map(|_| tracing::info_span!("reused").id())
+                .map(|id| id.into_u64())
+                .collect()
+        });
+        let dumped: Vec<u64> =
+            ring.records(&Redactor::new()).spans.iter().map(|span| span.span_id).collect();
+        let changed: Vec<(u64, u64)> = ids
+            .iter()
+            .zip(&dumped)
+            .filter(|(id, got)| id != got)
+            .map(|(id, got)| (*id, *got))
+            .collect();
+        assert_eq!(dumped.len(), 2_048, "every span read back");
+        assert!(
+            changed.is_empty(),
+            "{} of {} span ids changed in the dump, the first (id, dumped): {:?}",
+            changed.len(),
+            ids.len(),
+            changed.first()
+        );
+    }
+
+    #[test]
+    fn the_dump_redacts_field_values_and_keeps_the_records_ids_and_times() {
+        let ring = Ring::new("eileen", 64 * 1024, Duration::from_secs(600));
+        // Slot 2's first reuse, and a time in 2033: each 16 digits that pass the Luhn check.
+        let sid: u64 = (1 << 51) + 3;
+        let at_us: i64 = 2_000_000_000_000_006;
+        let line = json!({
+            "t": "open", "at_us": at_us, "id": 3, "sid": sid, "parent": null, "name": "turn",
+            "target": "eileen_core", "process": "eileen",
+            "fields": {
+                "amount": 4_111_111_111_111_111_u64,
+                "card": "4111 1111 1111 1111",
+                "nested": {"cards": [4_111_111_111_111_111_u64]},
+                "turn_id": "turn_1",
+            },
+        });
+        ring.push(at_us, line.to_string());
+        let spans = ring.records(&Redactor::new()).spans;
+        assert_eq!(spans.len(), 1, "the line read back");
+        let span = &spans[0];
+        assert_eq!(span.span_id, sid, "the span id is the record's own");
+        assert_eq!(span.start_us, at_us, "and so is the time");
+        assert_eq!(span.fields["amount"], 0, "a card as a field's number becomes 0");
+        assert_eq!(
+            span.fields["card"], "[redacted:card]",
+            "a card in a field's string is redacted"
+        );
+        assert_eq!(span.fields["nested"]["cards"][0], 0, "nested values are field values too");
+        assert_eq!(span.fields["turn_id"], "turn_1", "other values stay");
+    }
+
+    #[test]
+    fn a_traceparent_keeps_its_parent_through_the_dump() {
+        // The trace id ends in a hex letter and a 2, which the parent id and the flags continue
+        // into 19 digits that pass the card rule's Luhn check.
+        let traceparent = "00-0123456789abcdef0123456789abcde2-0000000000000007-01";
+        let ring = Arc::new(Ring::new("eileen-desktop", 64 * 1024, Duration::from_secs(600)));
+        let subscriber = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&ring)));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info_span!(target: "eileen_desktop", names::DESKTOP_ACTION, traceparent)
+                .in_scope(|| {});
+        });
+        let spans = ring.records(&Redactor::new()).spans;
+        assert_eq!(spans.len(), 1, "the span read back");
+        assert_eq!(spans[0].fields["traceparent"], traceparent, "the traceparent is kept whole");
+        assert!(spans[0].remote_parent.is_some(), "so the span keeps its parent in the core");
+    }
+
+    #[test]
+    fn the_bound_counts_what_the_lines_allocate() {
+        let ring = Ring::new("eileen", 4_096, Duration::from_secs(600));
+        let mut lengths = Vec::new();
+        for n in 0..30 {
+            // A ring-shaped event line of about 260 bytes, in the buffer `to_string` grew.
+            let line = json!({
+                "t": "event", "at_us": 1_761_134_400_000_000_i64 + n, "level": "DEBUG",
+                "target": "eileen_core::turn", "name": "event crates/eileen-core/src/turn.rs:42",
+                "span": 7, "process": "eileen",
+                "fields": {
+                    "message": "the router chose the fast path",
+                    "turn_id": "turn_01JABCDEFGHJKMNPQRSTVWXYZ0",
+                },
+            })
+            .to_string();
+            lengths.push(line.len());
+            ring.push(1_761_134_400_000_000 + n, line);
+        }
+        let (held, spare) = {
+            let inner = ring.lock();
+            let held = inner.lines.iter().map(|(_, line)| line.capacity()).sum::<usize>()
+                + inner.lines.capacity() * size_of::<(i64, String)>();
+            (held, inner.lines.iter().map(|(_, line)| line.capacity() - line.len()).sum::<usize>())
+        };
+        assert!(
+            held <= 4_096,
+            "lines of {:?} bytes and their queue hold {held} bytes in a 4096-byte ring",
+            lengths.first()
+        );
+        assert_eq!(ring.bytes(), held, "bytes() reports what the lines and the queue hold");
+        assert_eq!(spare, 0, "each line keeps only what it needs, so the ring keeps more of them");
+    }
 
     #[test]
     fn records_round_trip_and_the_ring_stays_bounded() {
