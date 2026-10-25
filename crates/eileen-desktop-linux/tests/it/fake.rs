@@ -1,8 +1,8 @@
 //! Fake AT-SPI2 services: on a session bus, the launcher's `org.a11y.Bus` and `org.a11y.Status`
 //! ([`Session`]); on an accessibility bus, a registry ([`registry`]) and apps ([`App`]), each of
-//! whose objects is a [`Node`] that serves `org.a11y.atspi.Accessible`, and
-//! `org.a11y.atspi.Text` when it has text. The numbers here are AT-SPI2's own, written out, so
-//! the tests do not read the crate's tables to check them.
+//! whose objects is a [`Node`] that serves `org.a11y.atspi.Accessible`, `org.a11y.atspi.Text`
+//! when it has text and `org.a11y.atspi.Component` when it has a box. The numbers here are
+//! AT-SPI2's own, written out, so the tests do not read the crate's tables to check them.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,10 +22,14 @@ pub(crate) const ROOT: &str = "/org/a11y/atspi/accessible/root";
 /// The path of the null reference.
 pub(crate) const NULL: &str = "/org/a11y/atspi/null";
 
+/// `ATSPI_STATE_ACTIVE`.
+pub(crate) const ACTIVE: u32 = 1;
 /// `ATSPI_STATE_DEFUNCT`.
 pub(crate) const DEFUNCT: u32 = 6;
 /// `ATSPI_STATE_FOCUSED`.
 pub(crate) const FOCUSED: u32 = 12;
+/// `ATSPI_STATE_ICONIFIED`.
+pub(crate) const ICONIFIED: u32 = 15;
 /// `ATSPI_STATE_SHOWING`.
 pub(crate) const SHOWING: u32 = 25;
 /// `ATSPI_STATE_MANAGES_DESCENDANTS`.
@@ -41,6 +45,8 @@ const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 pub(crate) const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 /// The error for arguments the object cannot use.
 const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
+/// `ATSPI_COORD_TYPE_WINDOW`, the one kind of coordinate a fake box is given in.
+const WINDOW_COORDS: u32 = 1;
 
 /// A reference as AT-SPI2 sends one: a bus name and a path.
 pub(crate) type Reference = (String, OwnedObjectPath);
@@ -122,7 +128,8 @@ pub(crate) struct Session {
     pub(crate) writes: Arc<AtomicU32>,
     /// The launcher's connection, which receives every call to it.
     pub(crate) launcher: zbus::Connection,
-    _bus: PrivateBus,
+    /// The session bus itself.
+    pub(crate) bus: PrivateBus,
 }
 
 impl Session {
@@ -136,7 +143,7 @@ impl Session {
         let status = Status { enabled: Arc::clone(&enabled), writes: Arc::clone(&writes) };
         assert!(launcher.object_server().at(LAUNCHER, status).await.unwrap(), "Status is served");
         let conn = bus.connect().await;
-        Self { conn, address, enabled, writes, launcher, _bus: bus }
+        Self { conn, address, enabled, writes, launcher, bus }
     }
 }
 
@@ -182,6 +189,13 @@ pub(crate) struct Node {
     pub(crate) silent: bool,
     /// The text `Text.GetText` answers, whatever range is asked for; `None` serves no `Text`.
     pub(crate) text: Option<String>,
+    /// The selected ranges `Text.GetNSelections` and `GetSelection` answer.
+    pub(crate) selections: Vec<(i32, i32)>,
+    /// The box `Component.GetExtents` answers in window coordinates, `(x, y, width, height)`;
+    /// `None` serves no `Component`.
+    pub(crate) extents: Option<(i32, i32, i32, i32)>,
+    /// `AccessibleId`; `None` answers `UnknownProperty`, as an app that predates it does.
+    pub(crate) accessible_id: Option<String>,
     /// The calls it receives.
     pub(crate) calls: Calls,
 }
@@ -240,6 +254,13 @@ impl Object {
         self.0.property().map(|()| self.0.child_count)
     }
 
+    #[zbus(property)]
+    fn accessible_id(&self) -> fdo::Result<String> {
+        self.0.property()?;
+        let unknown = || fdo::Error::UnknownProperty("AccessibleId".to_owned());
+        self.0.accessible_id.clone().ok_or_else(unknown)
+    }
+
     async fn get_role(&self) -> Result<u32, Failure> {
         if self.0.silent {
             std::future::pending::<()>().await;
@@ -276,7 +297,8 @@ impl Object {
 /// A fake object's `org.a11y.atspi.Text`. It answers its whole text whatever range is asked
 /// for, so the bound a test sees is the client's own.
 struct Text {
-    text: String,
+    content: String,
+    selections: Vec<(i32, i32)>,
     reads: Arc<Mutex<Vec<(i32, i32)>>>,
 }
 
@@ -284,7 +306,28 @@ struct Text {
 impl Text {
     fn get_text(&self, start_offset: i32, end_offset: i32) -> String {
         self.reads.lock().unwrap().push((start_offset, end_offset));
-        self.text.clone()
+        self.content.clone()
+    }
+
+    fn get_n_selections(&self) -> i32 {
+        i32::try_from(self.selections.len()).unwrap()
+    }
+
+    fn get_selection(&self, selection_num: i32) -> Result<(i32, i32), Failure> {
+        let range = usize::try_from(selection_num).ok().and_then(|n| self.selections.get(n));
+        range.copied().ok_or(Failure(INVALID_ARGS))
+    }
+}
+
+/// A fake object's `org.a11y.atspi.Component`, which gives its box in window coordinates alone,
+/// as an app on Wayland gives the only box that means anything there. The box is one `(iiii)`
+/// argument, as at-spi2-core's `GetExtents` answers it.
+struct Component((i32, i32, i32, i32));
+
+#[zbus::interface(name = "org.a11y.atspi.Component")]
+impl Component {
+    fn get_extents(&self, coord_type: u32) -> Result<((i32, i32, i32, i32),), Failure> {
+        if coord_type == WINDOW_COORDS { Ok((self.0,)) } else { Err(Failure(INVALID_ARGS)) }
     }
 }
 
@@ -330,13 +373,20 @@ impl App {
         ObjectRef { bus, path: OwnedObjectPath::try_from(path).unwrap() }
     }
 
-    /// Serves `node` at `path`, and its `Text` when it has text; the calls it will receive.
-    pub(crate) async fn add(&self, path: &str, node: Node) -> Calls {
+    /// Serves `node` at `path`, with its `Text` when it has text and its `Component` when it has
+    /// a box, each then named among its interfaces; the calls it will receive.
+    pub(crate) async fn add(&self, path: &str, mut node: Node) -> Calls {
         let calls = node.calls.clone();
         let server = self.conn.object_server();
         if let Some(text) = node.text.clone() {
-            let text = Text { text, reads: Arc::clone(&calls.text_reads) };
+            let reads = Arc::clone(&calls.text_reads);
+            let text = Text { content: text, selections: node.selections.clone(), reads };
             assert!(server.at(path, text).await.unwrap(), "Text is served at {path}");
+            node.interfaces.push("org.a11y.atspi.Text".to_owned());
+        }
+        if let Some(extents) = node.extents {
+            assert!(server.at(path, Component(extents)).await.unwrap(), "Component at {path}");
+            node.interfaces.push("org.a11y.atspi.Component".to_owned());
         }
         assert!(server.at(path, Object(node)).await.unwrap(), "{path} is served");
         calls
