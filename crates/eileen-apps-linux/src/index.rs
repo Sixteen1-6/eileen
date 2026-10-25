@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read as _;
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
 use eileen_contracts::ids::Personal;
@@ -25,6 +25,11 @@ use crate::open::OPEN_FLAGS;
 
 /// How deep the index looks below an `applications/` folder (`kde4/kate.desktop` is one deep).
 const MAX_DEPTH: usize = 8;
+
+/// The most folders the index reads under one `applications/` folder, links followed: far more
+/// than real trees take (a Wine prefix's menu takes tens), so a link to a big tree, such as `/`,
+/// costs a bounded walk where a whole one could take hours.
+const MAX_FOLDERS: usize = 1024;
 
 /// The most of one desktop entry the index reads: 1 MiB, far more than real entries take, so a
 /// huge file, such as a sparse one that takes no disk space, cannot fill memory. A longer file
@@ -163,6 +168,11 @@ impl Session {
 /// is not a regular file, such as a FIFO or a device, is skipped without being read, and a file
 /// is read only up to 1 MiB and skipped when it is longer. Like a file that cannot be read, a
 /// skipped one does not decide its desktop file ID.
+///
+/// Links to folders are followed, but a data folder's walk reads each folder once, however many
+/// paths lead to it, such as links to `.` or to a folder above: its entries take their IDs from
+/// the first of those paths in the walk's order. The walk reads at most 1024 folders, so a link
+/// to a big tree, such as `/`, cannot keep it going: folders past the 1024th are not read.
 #[must_use]
 pub fn index(session: &Session) -> Vec<DesktopEntry> {
     let mut decided: BTreeSet<String> = BTreeSet::new();
@@ -170,7 +180,7 @@ pub fn index(session: &Session) -> Vec<DesktopEntry> {
     for dir in &session.data_dirs {
         let packaged = is_export(dir);
         let mut files = Vec::new();
-        collect(&dir.join("applications"), "", 0, &mut files);
+        collect(&dir.join("applications"), "", 0, &mut BTreeSet::new(), &mut files);
         for (id, path) in files {
             if decided.contains(&id) {
                 continue;
@@ -232,7 +242,27 @@ fn is_export(dir: &Path) -> bool {
 
 /// The `.desktop` files under `dir`, with their desktop file IDs (`prefix` is the ID's start
 /// for a subfolder, such as `kde4-`), sorted by path so a folder's files keep one order.
-fn collect(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, PathBuf)>) {
+///
+/// `walked` holds the folders this walk has read, by the device and inode that every path to a
+/// folder shares. A folder in it is not read again, so a link back to it leads nowhere and its
+/// files keep the IDs of the path that reached it first. Once it holds [`MAX_FOLDERS`], the walk
+/// reads no more folders, but keeps the files it has listed.
+fn collect(
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    walked: &mut BTreeSet<(u64, u64)>,
+    out: &mut Vec<(String, PathBuf)>,
+) {
+    if walked.len() >= MAX_FOLDERS {
+        return;
+    }
+    let Ok(folder) = std::fs::metadata(dir) else {
+        return;
+    };
+    if !walked.insert((folder.dev(), folder.ino())) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -246,7 +276,7 @@ fn collect(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, PathBu
     for (name, path) in entries {
         if path.is_dir() {
             if depth < MAX_DEPTH {
-                collect(&path, &format!("{prefix}{name}-"), depth + 1, out);
+                collect(&path, &format!("{prefix}{name}-"), depth + 1, walked, out);
             }
         } else if name.ends_with(".desktop") {
             out.push((format!("{prefix}{name}"), path));
