@@ -6,8 +6,8 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use eileen_dbus_linux::METHOD_TIMEOUT;
 use eileen_dbus_linux::testing::PrivateBus;
+use eileen_dbus_linux::{METHOD_TIMEOUT, Names, owner_changes};
 use eileen_desktop_linux::{
     Atspi, CALL_TIMEOUT, DbusError, Interfaces, Role, State, Walk, accessibility_bus,
     toolkit_accessibility,
@@ -165,6 +165,35 @@ async fn an_object_reads_its_name_role_states_and_known_interfaces() {
         atspi.accessible(&app.object("/missing")).await.unwrap_err(),
         DbusError::NotFound { what: "accessible object" },
         "an object the app does not serve"
+    );
+}
+
+#[tokio::test]
+async fn an_object_whose_app_has_gone_is_not_found() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    app.tree(&[("/root", &["/a"]), ("/a", &[])]).await;
+    let (root, name) = (app.object("/root"), app.name());
+    let client = a11y.connect().await;
+    let atspi = Atspi::new(&client);
+    let read = atspi.accessible(&root).await.unwrap();
+    let mut changes = owner_changes(&client, Names::Name(&name)).await.unwrap();
+    app.close().await;
+    while changes.next().await.unwrap().new.is_some() {}
+    let gone = DbusError::NotFound { what: "accessible object" };
+    assert_eq!(atspi.accessible(&root).await.unwrap_err(), gone, "nothing holds its app's name");
+    assert_eq!(atspi.children(&read, 10).await.unwrap_err(), gone, "nor its children");
+    let walk = atspi.walk(&root, TreeLimits::default(), later()).await;
+    assert_eq!(walk.unwrap_err(), gone, "a walk from it fails with its root");
+    assert_eq!(
+        atspi.text(&root, 10).await.unwrap_err(),
+        DbusError::NotFound { what: "accessible text" },
+        "nor its text"
+    );
+    assert_eq!(
+        atspi.applications().await.unwrap_err(),
+        DbusError::Unavailable { what: "accessibility registry" },
+        "no registry is no accessibility at all, not a gone app"
     );
 }
 

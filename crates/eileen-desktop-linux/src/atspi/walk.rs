@@ -32,7 +32,8 @@ pub struct WalkNode {
 impl Atspi {
     /// The tree under `root`, read breadth first, at most `limits.max_nodes` objects of it.
     ///
-    /// - The root is read whatever the budget, and its failure is the walk's error. It is
+    /// - The root is read whatever the budget, and its failure is the walk's error, as
+    ///   [`Atspi::accessible`] gives it: [`DbusError::NotFound`] when its app has gone. It is
     ///   entered whatever its states, since an app's root reports none.
     /// - Below the root, an object is read but not entered when it is not `SHOWING` or is
     ///   `DEFUNCT`: hidden menus and pages, and what an app has let go, stay out.

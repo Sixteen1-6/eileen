@@ -248,6 +248,11 @@ impl App {
         self.conn.unique_name().unwrap().to_string()
     }
 
+    /// Closes the app's connection, as an app that quits does.
+    pub(crate) async fn close(self) {
+        self.conn.close().await.unwrap();
+    }
+
     /// A reference to the app's object at `path`, as AT-SPI2 sends one.
     pub(crate) fn reference(&self, path: &str) -> Reference {
         (self.name(), OwnedObjectPath::try_from(path).unwrap())

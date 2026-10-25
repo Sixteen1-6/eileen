@@ -120,7 +120,8 @@ impl Atspi {
     }
 
     /// The apps the registry lists: its root's children, each an app's root object. A
-    /// reference [`ObjectRef::new`] refuses is left out.
+    /// reference [`ObjectRef::new`] refuses is left out. No registry on the bus is
+    /// [`DbusError::Unavailable`]: nothing serves the desktop's tree.
     pub async fn applications(&self) -> Result<Vec<ObjectRef>, DbusError> {
         let failed = |error: zbus::Error| DbusError::from_zbus(REGISTRY_CALL, &error);
         let registry = AccessibleProxy::builder(&self.conn)
@@ -136,9 +137,10 @@ impl Atspi {
 
     /// What `object` is: its `Name`, `GetRole`, `GetState`, `GetInterfaces` and `ChildCount`,
     /// asked at once. The name is sanitized and kept to 1,000 characters, and interface names
-    /// outside [`Interfaces`]' table are dropped. Any of the five that fails fails the read.
+    /// outside [`Interfaces`]' table are dropped. Any of the five that fails fails the read. An
+    /// object whose app has gone, or that its app does not serve, is [`DbusError::NotFound`].
     pub async fn accessible(&self, object: &ObjectRef) -> Result<Accessible, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(OBJECT, &error);
+        let failed = |error: zbus::Error| object_failure(OBJECT, &error);
         let proxy: AccessibleProxy<'_> = proxies::of(&self.conn, object).await.map_err(failed)?;
         let (name, role, states, interfaces, count) = tokio::join!(
             proxy.name(),
@@ -161,7 +163,8 @@ impl Atspi {
     /// when the parent says it has no more than that and does not manage its descendants;
     /// otherwise, or when the app has no `GetChildren`, `GetChildAtIndex` reads them one by one
     /// from index 0, so a big table never builds every child. A reference [`ObjectRef::new`]
-    /// refuses is left out, and a failed index read fails the listing.
+    /// refuses is left out, and a failed index read fails the listing. A parent whose app has
+    /// gone is [`DbusError::NotFound`].
     pub async fn children(
         &self,
         parent: &Accessible,
@@ -172,13 +175,14 @@ impl Atspi {
 
     /// The text of `object`, at most `max_chars` characters of it, sanitized. It reads the
     /// object's role first and refuses a password field before any `Text` call, as Windows
-    /// refuses an element whose `IsPassword` is set (BUILD.md section 2.6).
+    /// refuses an element whose `IsPassword` is set (BUILD.md section 2.6). An object without
+    /// `Text`, or whose app has gone, is [`DbusError::NotFound`].
     pub async fn text(
         &self,
         object: &ObjectRef,
         max_chars: usize,
     ) -> Result<Untrusted<String>, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(TEXT, &error);
+        let failed = |error: zbus::Error| object_failure(TEXT, &error);
         let accessible: AccessibleProxy<'_> =
             proxies::of(&self.conn, object).await.map_err(failed)?;
         if Role(accessible.get_role().await.map_err(failed)?) == Role::PASSWORD_TEXT {
@@ -197,7 +201,7 @@ impl Atspi {
         at_most: u32,
         until: Option<Instant>,
     ) -> Result<Listing, DbusError> {
-        let failed = |error: zbus::Error| DbusError::from_zbus(OBJECT, &error);
+        let failed = |error: zbus::Error| object_failure(OBJECT, &error);
         let proxy: AccessibleProxy<'_> =
             proxies::of(&self.conn, &parent.object).await.map_err(failed)?;
         let room = usize::try_from(at_most).unwrap_or(usize::MAX);
@@ -232,4 +236,17 @@ impl Atspi {
 /// The references in `children` that name an object.
 fn references(children: &[Reference]) -> Vec<ObjectRef> {
     children.iter().filter_map(|(bus, path)| ObjectRef::new(bus, path)).collect()
+}
+
+/// What a failed call at an app's object means. The bus answers a call to a unique name that
+/// nothing holds with `ServiceUnknown`, which [`DbusError::from_zbus`] makes
+/// [`DbusError::Unavailable`]; here that is the app gone, so the object is
+/// [`DbusError::NotFound`], as one the app does not serve is. `Unavailable` is kept for what is
+/// not there at all: no launcher, no accessibility bus, no registry.
+fn object_failure(what: &'static str, error: &zbus::Error) -> DbusError {
+    let failure = DbusError::from_zbus(what, error);
+    if let DbusError::Unavailable { what } = failure {
+        return DbusError::NotFound { what };
+    }
+    failure
 }
