@@ -26,8 +26,8 @@
 //! # Boundaries
 //!
 //! - Called by `xtask` (`cargo xtask sim`) and the fuzz target `sim`; no shipped crate depends
-//!   on it (development only: section 3.1's table, and `process = "tests"` in its metadata,
-//!   check 22).
+//!   on it (development only: section 3.1's table and `process = "tests"` in its metadata; no
+//!   repository check enforces it yet).
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-replay`, `eileen-intent`,
 //!   `eileen-dictation`, `eileen-skills`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
 //! - Must not depend on `eileen-runtime`, `eileen-harness` or `eileen-supervisor`, which its

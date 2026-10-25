@@ -144,3 +144,21 @@ fn the_fleet_run_times_exclude_each_other() {
         assert!(parsed.is_err(), "{flags:?} together are refused");
     }
 }
+
+#[test]
+fn the_users_words_stay_out_of_debug() {
+    let voice = Cli::try_parse_from([
+        "eileen",
+        "voice",
+        "render",
+        "my private words",
+        "--voice",
+        "nova",
+        "--out",
+        "f.wav",
+    ])
+    .unwrap();
+    assert!(!format!("{voice:?}").contains("private"), "voice render text: {voice:?}");
+    let say = Cli::try_parse_from(["eileen", "say", "my private words"]).unwrap();
+    assert!(!format!("{say:?}").contains("private"), "say text: {say:?}");
+}

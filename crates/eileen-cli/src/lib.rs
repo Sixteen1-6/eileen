@@ -65,8 +65,11 @@
 
 pub mod wiring;
 
+use std::convert::Infallible;
+use std::fmt;
 use std::io::{self, Write as _};
 use std::process::ExitCode;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
 use eileen_config::cli::{AddMcpArgs, ConfigCommand};
@@ -154,7 +157,7 @@ pub enum Command {
     Voice {
         /// The arguments `eileen-speech voice` takes.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        args: Vec<VoiceArg>,
     },
     /// The scenario corpus.
     Scenario {
@@ -196,6 +199,25 @@ pub enum Command {
     },
     /// Probe the MCP tools (a developer command).
     McpProbe,
+}
+
+/// One argument `eileen voice` passes to `eileen-speech voice` unparsed. Its `Debug` gives the
+/// length only, because `voice render` carries the user's own words.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VoiceArg(pub String);
+
+impl fmt::Debug for VoiceArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceArg").field("len", &self.0.len()).finish()
+    }
+}
+
+impl FromStr for VoiceArg {
+    type Err = Infallible;
+
+    fn from_str(arg: &str) -> Result<Self, Self::Err> {
+        Ok(Self(arg.to_owned()))
+    }
 }
 
 /// The forms of `eileen bench` that name a benchmark.
@@ -314,7 +336,10 @@ pub fn run(cli: Cli) -> Result<(), CommandError> {
             eileen_config::cli::apps_add_mcp(args).map_err(CommandError::from)
         }
         Command::Notes { command } => eileen_learn::cli::notes(command).map_err(CommandError::from),
-        Command::Voice { args } => eileen_runtime::cli::voice(args).map_err(CommandError::from),
+        Command::Voice { args } => {
+            let args = args.into_iter().map(|arg| arg.0).collect();
+            eileen_runtime::cli::voice(args).map_err(CommandError::from)
+        }
         Command::Scenario { command } => {
             eileen_scenarios::cli::scenario(command).map_err(CommandError::from)
         }

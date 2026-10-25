@@ -122,6 +122,15 @@ paths; `it::` is a crate's integration test target):
 - Acceptance 6, in `eileen-trace`: `it::canary::fake_secrets_never_reach_disk_or_a_dump` and
   `it::canary::fake_secrets_never_reach_the_console`, joined in pull request #75 by
   `it::canary::no_home_folder_reaches_disk_or_a_dump`.
+- Acceptance 3, from `wp0/stubs` (pull request #96; CI run 40217929368 on ce4dd65 green on
+  `ubuntu-latest` and `windows-latest`): every stub builds on both OSes with its native
+  dependencies under target tables, and the `hygiene` job's `cargo deny --locked check` passes
+  with the `webpki-roots` exception and D78's three ignores; `eileen --version` runs
+  (`eileen-cli::it::process::eileen_version_runs`); every subcommand of section 3.5 exists and
+  says it is not built yet (`eileen-cli::it::commands::every_command_of_section_3_5_says_not_built_yet`,
+  `eileen-cli::it::process::a_command_says_it_is_not_built_yet_and_fails`); the stub shim
+  answers `initialize` within 100 ms once it is up
+  (`eileen-shim::it::process::the_binary_answers_initialize_within_100_ms`).
 - Acceptance 12, in `eileen-platform`, on both runners: `it::machine::the_golden_vector_is_stable`,
   `it::machine::windows_guid_form_and_linux_form_give_one_hash`,
   `it::machine::a_cloned_image_with_two_install_ids_gives_two_hashes`,
@@ -190,6 +199,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   `Apps`, `RecentSources` and `ShellHost` methods that the `eileen-apps-win` and
   `eileen-shell-win` stubs implement, so it updates those two stubs' signatures before it
   merges; only its Windows lanes would show it.
+- The next amendment of section 4b.3 adds the `zip` ban `deny.toml` carries since `wp0/stubs`
+  (`zip` only as a direct dependency of `sherpa-onnx-sys`, so D78's ignores cover nothing
+  else) to the text and to D78's consequences.
 - The fuzz workspace builds from a copy of the root `Cargo.lock` (`cp Cargo.lock fuzz/`), so its
   versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
   package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development

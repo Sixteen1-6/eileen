@@ -23,7 +23,8 @@
 //! # Boundaries
 //!
 //! - Started by `eileen-harness` through the supervisor in tests; no shipped crate depends on it
-//!   (development only: section 3.1's table, and `process = "tests"` in its metadata, check 22).
+//!   (development only: section 3.1's table and `process = "tests"` in its metadata; no
+//!   repository check enforces it yet).
 //! - May depend on `eileen-harness`, `eileen-contracts` and `eileen-stdx`.
 //! - Must not depend on `eileen-trace` (it writes only the protocol on stdout), `eileen-rt`,
 //!   `eileen-runtime` or rmcp (section 3.1), or on a `-win` or `-linux` crate (check 15).

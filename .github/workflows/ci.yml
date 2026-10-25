@@ -176,7 +176,7 @@ jobs:
         run: |
           dir="$(cygpath -u "$RUNNER_TEMP")/sherpa-onnx"
           mkdir -p "$dir"
-          curl --fail --location --retry 5 --silent --show-error --output "$dir/$ARCHIVE" \
+          curl --fail --location --retry 5 --retry-all-errors --silent --show-error --output "$dir/$ARCHIVE" \
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$ARCHIVE"
           echo "$SHA256  $dir/$ARCHIVE" | sha256sum --check --strict
           echo "SHERPA_ONNX_ARCHIVE_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
@@ -209,7 +209,7 @@ jobs:
         run: |
           dir="$(cygpath -u "$RUNNER_TEMP")/sherpa-onnx"
           mkdir -p "$dir"
-          curl --fail --location --retry 5 --silent --show-error --output "$dir/$ARCHIVE" \
+          curl --fail --location --retry 5 --retry-all-errors --silent --show-error --output "$dir/$ARCHIVE" \
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$ARCHIVE"
           echo "$SHA256  $dir/$ARCHIVE" | sha256sum --check --strict
           echo "SHERPA_ONNX_ARCHIVE_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"

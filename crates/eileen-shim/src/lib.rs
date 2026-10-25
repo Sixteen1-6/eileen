@@ -61,8 +61,9 @@ use std::io::{self, BufRead, Write};
 use eileen_mcp::handshake;
 
 /// Answers each line the client writes on `input` with one line on `output`, until `input`
-/// ends. Blank lines are skipped, and a line that is not UTF-8 is read lossily, so it gets a
-/// parse error back instead of ending the session.
+/// ends. Blank lines are skipped, and a line that is not UTF-8 is read lossily (bad bytes
+/// become U+FFFD), so it is still answered, with a parse error when it is then not JSON,
+/// instead of ending the session.
 pub fn serve(mut input: impl BufRead, output: &mut impl Write) -> io::Result<()> {
     let mut raw = Vec::new();
     loop {

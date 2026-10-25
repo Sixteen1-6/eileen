@@ -1,6 +1,7 @@
 # cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
 # allowed for jpeg-encoder, one license exception for webpki-roots, the Linux target added so the
-# Linux lane is checked too, and three advisory ignores (decision D78).
+# Linux lane is checked too, three advisory ignores (decision D78), and a ban on zip outside
+# sherpa-onnx-sys so those ignores cover nothing else.
 
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]

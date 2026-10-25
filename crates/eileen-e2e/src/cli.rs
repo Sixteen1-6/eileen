@@ -1,6 +1,6 @@
-//! The `eileen-e2e` command line, which `cargo xtask contract-claude`, `bench`, `triage` and
-//! `fleet-validate` dispatch to (BUILD.md section 4b.5). A stub until WP9 builds it: every
-//! command says it is not built yet.
+//! The `eileen-e2e` command line, which `cargo xtask bench`, `triage` and `fleet-validate`
+//! dispatch to (BUILD.md section 4b.5; `contract-claude` goes to WP3's harness binary). A stub
+//! until WP9 builds it: every command says it is not built yet.
 
 use std::io::{self, Write as _};
 use std::process::ExitCode;
@@ -30,8 +30,6 @@ pub struct E2eCli {
 /// The commands of `eileen-e2e`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum E2eCommand {
-    /// Replay the harness scripts' prompts through the real claude CLI and compare event shapes.
-    ContractClaude,
     /// Run the benchmarks.
     Bench,
     /// Cluster fleet failures into issues.

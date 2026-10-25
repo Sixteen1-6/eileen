@@ -9,8 +9,8 @@
 //! - The benchmarks and their A/B judgement (alternating runs, Mann-Whitney, strata), and the
 //!   results history on the `devhub` branch.
 //! - The soak runner, fleet ingest and triage, and result validation.
-//! - The commands `cargo xtask` dispatches here: `contract-claude`, `bench`, `triage` and
-//!   `fleet-validate` ([`cli`]).
+//! - The commands `cargo xtask` dispatches here: `bench`, `triage` and `fleet-validate`
+//!   ([`cli`]).
 //!
 //! # Does not own
 //!
@@ -27,7 +27,8 @@
 //! # Boundaries
 //!
 //! - Called by `cargo xtask` and the `devhub.yml` workflow; no shipped crate depends on it
-//!   (development only: section 3.1's table, and `process = "tests"` in its metadata, check 22).
+//!   (development only: section 3.1's table and `process = "tests"` in its metadata; no
+//!   repository check enforces it yet).
 //! - May depend on `eileen-scenarios`, `eileen-fleet`, `eileen-replay`, `eileen-record`,
 //!   `eileen-supervisor`, `eileen-mcp`, `eileen-config`, `eileen-rt`, `eileen-contracts`,
 //!   `eileen-stdx` and `eileen-trace`.
