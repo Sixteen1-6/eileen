@@ -720,6 +720,20 @@ mod tests {
     }
 
     #[test]
+    fn a_19_digit_card_whose_first_16_digits_pass_is_redacted_whole() {
+        let r = Redactor::new();
+        // 4111 1111 1111 1111 003 passes the Luhn check, and so do its first 16 digits: the card
+        // is the whole run, never the part before its last group.
+        for (text, redacted) in [
+            ("4111 1111 1111 1111 003", "[redacted:card]"),
+            ("card 4111 1111 1111 1111 003 thanks", "card [redacted:card] thanks"),
+            ("4111-1111-1111-1111-003", "[redacted:card]"),
+        ] {
+            assert_eq!(r.redact(text), redacted, "{text}");
+        }
+    }
+
+    #[test]
     fn a_number_in_front_of_a_card_never_hides_any_of_it() {
         let r = Redactor::new();
         // From 345 the first 15 digits pass and all 19 fail, and from 2028 the first 16 pass:
