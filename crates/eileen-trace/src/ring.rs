@@ -30,7 +30,15 @@ use crate::redact::Redactor;
 
 struct Inner {
     lines: VecDeque<(i64, String)>,
-    bytes: usize,
+    /// What the held lines' strings have allocated.
+    line_bytes: usize,
+}
+
+impl Inner {
+    /// The heap the ring holds: the lines' strings and the queue's buffer, spare slots too.
+    fn held(&self) -> usize {
+        self.line_bytes + self.lines.capacity() * size_of::<(i64, String)>()
+    }
 }
 
 /// The ring of one process.
@@ -48,20 +56,21 @@ impl std::fmt::Debug for Ring {
         f.debug_struct("Ring")
             .field("process", &self.process)
             .field("max_bytes", &self.max_bytes)
-            .field("bytes", &self.lock().bytes)
+            .field("bytes", &self.bytes())
             .finish_non_exhaustive()
     }
 }
 
 impl Ring {
-    /// A ring for `process` keeping at most `max_bytes` and at most `window` of records.
+    /// A ring for `process` holding at most `max_bytes` of heap (see [`Ring::bytes`]) and at
+    /// most `window` of records.
     #[must_use]
     pub fn new(process: &'static str, max_bytes: usize, window: Duration) -> Self {
         Self {
             process,
             max_bytes,
             window_us: eileen_stdx::num::micros_i64(window),
-            inner: Mutex::new(Inner { lines: VecDeque::new(), bytes: 0 }),
+            inner: Mutex::new(Inner { lines: VecDeque::new(), line_bytes: 0 }),
             next_id: AtomicU64::new(1),
             dump_requests: AtomicU64::new(0),
         }
@@ -71,24 +80,28 @@ impl Ring {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn push(&self, at_us: i64, line: String) {
+    fn push(&self, at_us: i64, mut line: String) {
+        // `Value::to_string` grows its buffer by doubling, to up to twice the line, and the
+        // bound counts allocations, so a line keeps only what it needs.
+        line.shrink_to_fit();
         let mut inner = self.lock();
-        inner.bytes += line.len();
+        inner.line_bytes += line.capacity();
         inner.lines.push_back((at_us, line));
         let oldest_kept = at_us.saturating_sub(self.window_us);
-        while inner.bytes > self.max_bytes
+        while inner.held() > self.max_bytes
             || inner.lines.front().is_some_and(|(at, _)| *at < oldest_kept)
         {
             let Some((_, dropped)) = inner.lines.pop_front() else { break };
-            inner.bytes -= dropped.len();
+            inner.line_bytes -= dropped.capacity();
         }
         drop(inner);
     }
 
-    /// The bytes held now.
+    /// The heap held now, which `max_bytes` bounds: each line's allocation and the queue's own
+    /// buffer.
     #[must_use]
     pub fn bytes(&self) -> usize {
-        self.lock().bytes
+        self.lock().held()
     }
 
     /// The records as JSON lines, every value under a record's `fields` through `redactor`
@@ -367,6 +380,38 @@ mod tests {
         );
         assert_eq!(span.fields["nested"]["cards"][0], 0, "nested values are field values too");
         assert_eq!(span.fields["turn_id"], "turn_1", "other values stay");
+    }
+
+    #[test]
+    fn the_bound_counts_what_the_lines_allocate() {
+        let ring = Ring::new("eileen", 4_096, Duration::from_secs(600));
+        let mut lengths = Vec::new();
+        for n in 0..30 {
+            // A ring-shaped event line of about 260 bytes, in the buffer `to_string` grew.
+            let line = json!({
+                "t": "event", "at_us": 1_761_134_400_000_000_i64 + n, "level": "DEBUG",
+                "target": "eileen_core::turn", "name": "event crates/eileen-core/src/turn.rs:42",
+                "span": 7, "process": "eileen",
+                "fields": {
+                    "message": "the router chose the fast path",
+                    "turn_id": "turn_01JABCDEFGHJKMNPQRSTVWXYZ0",
+                },
+            })
+            .to_string();
+            lengths.push(line.len());
+            ring.push(1_761_134_400_000_000 + n, line);
+        }
+        let held = {
+            let inner = ring.lock();
+            inner.lines.iter().map(|(_, line)| line.capacity()).sum::<usize>()
+                + inner.lines.capacity() * size_of::<(i64, String)>()
+        };
+        assert!(
+            held <= 4_096,
+            "lines of {:?} bytes and their queue hold {held} bytes in a 4096-byte ring",
+            lengths.first()
+        );
+        assert_eq!(ring.bytes(), held, "bytes() reports what the lines and the queue hold");
     }
 
     #[test]

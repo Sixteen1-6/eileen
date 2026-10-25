@@ -25,7 +25,9 @@
 //!   dump line stays valid JSON (tests `it::canary::fake_secrets_never_reach_disk_or_a_dump`
 //!   and `it::canary::fake_secrets_never_reach_the_console`).
 //! - A ring dump scans only the values under each record's `fields`, so it keeps every
-//!   record's ids and times (test `ring::tests::span_ids_of_reused_slots_survive_the_dump`).
+//!   record's ids and times (test `ring::tests::span_ids_of_reused_slots_survive_the_dump`),
+//!   and a ring's size bounds what its lines and their queue allocate
+//!   (`ring::tests::the_bound_counts_what_the_lines_allocate`).
 //! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
 //!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
 //!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
