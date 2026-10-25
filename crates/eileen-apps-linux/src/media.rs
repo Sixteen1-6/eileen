@@ -6,7 +6,7 @@
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::tools::apps::MediaAction;
 use eileen_dbus_linux::{Bridge, Buses, DEFAULT_DEADLINE};
-use eileen_platform::{MediaSessions, PlatformError, Subscription};
+use eileen_platform::{Deadline, MediaSessions, PlatformError, Subscription};
 
 use crate::{MprisEvent, MprisSessions};
 
@@ -24,9 +24,16 @@ const SUBSCRIBE: &str = "media subscription";
 ///
 /// - `sessions` and `control` are [`MprisSessions::sessions`] and [`MprisSessions::control`],
 ///   whose docs give the rules. The trait takes no `Deadline`, so each waits at most
-///   [`DEFAULT_DEADLINE`]: the connection's method timeout and half a second. A player that
-///   never answers holds a call for that whole timeout: `sessions` leaves one such player out
-///   with half a second left for the others, and passes its deadline when there are two.
+///   [`DEFAULT_DEADLINE`], the connection's method timeout and half a second, unless
+///   [`Self::new_within`] gives another; past it the call is `DeadlineExceeded`, naming
+///   "media sessions" or "media control".
+/// - The listing reads the players at the same time, so players that never answer cost it one
+///   method timeout together: within [`DEFAULT_DEADLINE`], it answers without them with about
+///   half a second to spare. It can still pass its deadline, as one player's reads come one
+///   after the other, its `Player` properties and then its root interface, each within the
+///   method timeout: a player that answers the first late and never answers the second holds
+///   the listing for up to two timeouts. So can the bus itself: connecting has no timeout, and
+///   the listing asks for the players' names and owners one call at a time before it reads them.
 /// - `subscribe` runs a [`MprisWatch`](crate::MprisWatch) on the bridge, and calls the sink
 ///   with each player's state when it opens, then with each change. A player that arrives is
 ///   its state; one that leaves is its last state with `playing` false
@@ -38,19 +45,31 @@ const SUBSCRIBE: &str = "media subscription";
 #[derive(Debug, Clone)]
 pub struct LinuxMedia {
     bridge: Bridge,
+    /// How long each call waits for its answer.
+    deadline: Deadline,
 }
 
 impl LinuxMedia {
-    /// The media sessions on `bridge`'s session bus.
+    /// The media sessions on `bridge`'s session bus, each call waiting at most
+    /// [`DEFAULT_DEADLINE`].
     #[must_use]
     pub const fn new(bridge: Bridge) -> Self {
-        Self { bridge }
+        Self::new_within(bridge, DEFAULT_DEADLINE)
+    }
+
+    /// The media sessions on `bridge`'s session bus, each call waiting at most `deadline`
+    /// instead: for a caller that needs an answer sooner, such as a test that holds a call past
+    /// its deadline. Below the connection's method timeout, one player that never answers makes
+    /// the whole listing pass its deadline, where [`Self::new`] would leave that player out.
+    #[must_use]
+    pub const fn new_within(bridge: Bridge, deadline: Deadline) -> Self {
+        Self { bridge, deadline }
     }
 }
 
 impl MediaSessions for LinuxMedia {
     fn sessions(&self) -> Result<Vec<MediaState>, PlatformError> {
-        self.bridge.call(SESSIONS, DEFAULT_DEADLINE, |buses| async move {
+        self.bridge.call(SESSIONS, self.deadline, |buses| async move {
             let bus = buses.session().await?;
             Ok(MprisSessions::new(&bus).sessions().await?)
         })
@@ -58,7 +77,7 @@ impl MediaSessions for LinuxMedia {
 
     fn control(&self, session: &str, action: &MediaAction) -> Result<(), PlatformError> {
         let (session, action) = (session.to_owned(), *action);
-        self.bridge.call(CONTROL, DEFAULT_DEADLINE, move |buses| async move {
+        self.bridge.call(CONTROL, self.deadline, move |buses| async move {
             let bus = buses.session().await?;
             Ok(MprisSessions::new(&bus).control(&session, &action).await?)
         })
@@ -73,6 +92,6 @@ impl MediaSessions for LinuxMedia {
             Ok(MprisSessions::new(&bus).subscribe().await?)
         };
         let each = move |event: MprisEvent| sink(event.into_state());
-        self.bridge.watch(SUBSCRIBE, DEFAULT_DEADLINE, open, each)
+        self.bridge.watch(SUBSCRIBE, self.deadline, open, each)
     }
 }

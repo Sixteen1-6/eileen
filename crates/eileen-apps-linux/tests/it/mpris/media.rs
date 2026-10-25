@@ -6,19 +6,28 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::time::Duration;
 
 use eileen_apps_linux::LinuxMedia;
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::tools::apps::MediaAction;
 use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::PrivateBus;
-use eileen_platform::{MediaSessions, PlatformError};
+use eileen_platform::{Deadline, MediaSessions, PlatformError};
 use tokio::sync::mpsc;
 
 use super::fake::{
     Call, FULL, Gate, ODD, Player, Root, calls, full_player, full_root, full_state, interface,
     odd_player, odd_root, odd_state, serve,
 };
+
+/// The deadline of a listing that a player holds for the connection's whole method timeout: it
+/// passes whatever its length below that timeout, and a short one keeps the test short.
+const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
+
+/// Players whose reads wait at a gate that never opens; by name, they come between the full
+/// player and the odd one.
+const HUNG: [&str; 2] = ["org.mpris.MediaPlayer2.hung1", "org.mpris.MediaPlayer2.hung2"];
 
 /// Fake players by bus name, on a multi-thread runtime of their own.
 struct Fakes {
@@ -37,6 +46,11 @@ impl Fakes {
     fn serve(&mut self, bus: &PrivateBus, name: &'static str, root: Root, player: Player) {
         let service = self.run(serve(bus, name, root, player));
         self.players.insert(name, service);
+    }
+
+    /// Serves a player called `name` whose reads wait at `gate`.
+    fn serve_hung(&mut self, bus: &PrivateBus, name: &'static str, gate: &Gate) {
+        self.serve(bus, name, full_root(), Player { gate: Some(gate.clone()), ..full_player() });
     }
 
     /// The connection of the player `name`.
@@ -135,24 +149,17 @@ fn a_listing_that_stalls_passes_its_deadline_and_the_bridge_goes_on() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
     fakes.serve(&bus, FULL, full_root(), full_player());
-    // Players whose reads wait at a gate that never opens; by name, they are read after FULL.
-    let gate = Gate::default();
-    for stalled in ["org.mpris.MediaPlayer2.stalled1", "org.mpris.MediaPlayer2.stalled2"] {
-        fakes.serve(
-            &bus,
-            stalled,
-            full_root(),
-            Player { gate: Some(gate.clone()), ..full_player() },
-        );
-    }
-    let media = media(&bus);
-    // The first stalled player is left out at the connection's method timeout; the second holds
-    // the listing past the bridge's deadline, half a second later.
+    // A player that never answers holds the listing for the connection's whole method timeout,
+    // far past the short deadline.
+    fakes.serve_hung(&bus, HUNG[0], &Gate::default());
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
     assert_eq!(
-        media.sessions(),
+        LinuxMedia::new_within(bridge.clone(), SHORT).sessions(),
         Err(PlatformError::DeadlineExceeded { call: "media sessions" }),
-        "the bridge's deadline, not a listing without the stalled players after two timeouts"
+        "the adapter's deadline, not a listing without the hung player a method timeout later"
     );
+    // Another adapter on the same bridge, with the default deadline.
+    let media = LinuxMedia::new(bridge);
     media.control(FULL, &MediaAction::Pause).unwrap();
     assert_eq!(fakes.run(calls(fakes.player(FULL))), [Call::Pause], "the bridge still serves");
 }
