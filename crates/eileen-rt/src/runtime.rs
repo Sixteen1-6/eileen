@@ -53,9 +53,10 @@ fn fits_linux(thread_name: &str) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
         format!(
-            "the runtime's thread name {thread_name:?} is {} bytes, and Linux keeps \
-             {LINUX_THREAD_NAME_MAX}",
-            thread_name.len()
+            "the runtime's thread name {thread_name:?} is {} bytes and Linux keeps \
+             {LINUX_THREAD_NAME_MAX}, so the runtime's name is at most {} bytes",
+            thread_name.len(),
+            LINUX_THREAD_NAME_MAX - THREAD_SUFFIX.len()
         ),
     ))
 }
@@ -113,7 +114,9 @@ mod tests {
         for name in ["eileen-speech", "eileen-desktop"] {
             let error = build(name, Some(1), 1).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{name}: {error}");
-            assert!(error.to_string().contains(&format!("\"{name}-rt\"")), "{name}: {error}");
+            let message = error.to_string();
+            assert!(message.contains(&format!("\"{name}-rt\"")), "names the thread: {message}");
+            assert!(message.contains("at most 12 bytes"), "says what fits: {message}");
         }
     }
 }
