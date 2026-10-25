@@ -27,6 +27,8 @@ const STATUS: &str = "accessibility status";
 ///   bus did not start), is [`DbusError::Unavailable`].
 /// - An address that is not `unix:path=` or `unix:abstract=` is [`DbusError::Invalid`], before
 ///   any connect: `eileen_dbus_linux::bus_at_within` refuses it.
+/// - A socket where no bus listens, as a launcher whose bus has gone gives, is
+///   [`DbusError::Unavailable`].
 pub async fn accessibility_bus(
     session: &Connection,
     call_timeout: Duration,
@@ -48,7 +50,8 @@ pub async fn accessibility_bus(
 /// Whether toolkits are asked to put their trees on the accessibility bus: `IsEnabled` of
 /// `session`'s `org.a11y.Status`, read, never written. Qt, Chromium and Electron, and Firefox
 /// serve their trees only while it is on or a screen reader runs; turning it on would switch
-/// every one of them into accessibility mode, which only the user decides.
+/// every one of them into accessibility mode, which only the user decides. No `org.a11y.Status`
+/// on the session bus, as without the launcher, is [`DbusError::Unavailable`].
 pub async fn toolkit_accessibility(session: &Connection) -> Result<bool, DbusError> {
     let failed = |error: zbus::Error| DbusError::from_zbus(STATUS, &error);
     let status = StatusProxy::builder(session)

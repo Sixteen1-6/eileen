@@ -91,6 +91,12 @@ async fn without_the_bus_launcher_the_accessibility_bus_is_unavailable() {
         DbusError::Unavailable { what: "accessibility bus" },
         "the launcher answers an empty address when its bus did not start"
     );
+    let gone = Session::start("unix:path=/nonexistent/at-spi/bus").await;
+    assert_eq!(
+        accessibility_bus(&gone.conn, CALL_TIMEOUT).await.unwrap_err(),
+        DbusError::Unavailable { what: "accessibility bus" },
+        "no bus listens at the socket the launcher names"
+    );
 }
 
 #[tokio::test]
