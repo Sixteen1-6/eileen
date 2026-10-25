@@ -17,8 +17,8 @@ use tokio::time::Instant;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::fake::{
-    App, DEFUNCT, FOCUSED, MANAGES_DESCENDANTS, NULL, Node, READ_ONLY, ROOT, SHOWING, Session,
-    count, registry, registry_root, words,
+    App, DEFUNCT, FOCUSED, MANAGES_DESCENDANTS, NO_REPLY, NULL, Node, READ_ONLY, ROOT, SHOWING,
+    Session, count, registry, registry_root, words,
 };
 
 /// A budget no test reaches.
@@ -309,6 +309,28 @@ async fn a_node_that_does_not_answer_costs_its_subtree_not_the_walk() {
         atspi.walk(&app.object("/b"), TreeLimits::default(), later()).await.unwrap_err(),
         DbusError::DeadlineExceeded { call: "accessible object" },
         "the root's failure is the walk's"
+    );
+}
+
+#[tokio::test]
+async fn a_listing_that_fails_costs_the_subtree_not_the_walk() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    app.tree(&[("/root", &["/a", "/b"]), ("/b", &["/b1"]), ("/b1", &[]), ("/a1", &[])]).await;
+    let a = Node { listing_error: Some(NO_REPLY), ..Node::showing("a", app.references(&["/a1"])) };
+    let a = app.add("/a", a).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    let walk = atspi.walk(&app.object("/root"), TreeLimits::default(), later()).await.unwrap();
+    assert_eq!(
+        shape(&walk),
+        [("root", None, 0), ("a", Some(0), 1), ("b", Some(0), 1), ("b1", Some(2), 2)],
+        "a is kept without its children, and the walk goes on"
+    );
+    assert!(walk.truncated, "a's listing failed, which left a1 out");
+    assert_eq!(
+        (count(&a.listings), count(&a.index_reads)),
+        (1, 0),
+        "a listing past its timeout is not tried again by index"
     );
 }
 

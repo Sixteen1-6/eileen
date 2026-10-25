@@ -33,7 +33,7 @@ pub(crate) const MANAGES_DESCENDANTS: u32 = 31;
 pub(crate) const READ_ONLY: u32 = 43;
 
 /// The bus's error for a call its callee let pass its timeout.
-const NO_REPLY: &str = "org.freedesktop.DBus.Error.NoReply";
+pub(crate) const NO_REPLY: &str = "org.freedesktop.DBus.Error.NoReply";
 /// The error for a method the object does not have.
 const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 /// The error for arguments the object cannot use.
@@ -169,6 +169,8 @@ pub(crate) struct Node {
     pub(crate) no_reply: bool,
     /// Every method, but no property, answers this error name, one the app chose.
     pub(crate) error_name: Option<&'static str>,
+    /// `GetChildren` and `GetChildAtIndex` answer this error name, and every other read answers.
+    pub(crate) listing_error: Option<&'static str>,
     /// `GetRole` never answers.
     pub(crate) silent: bool,
     /// The text `Text.GetText` answers, whatever range is asked for; `None` serves no `Text`.
@@ -205,6 +207,11 @@ impl Node {
         }
         self.error_name.map_or(Ok(()), |name| Err(Failure(name)))
     }
+
+    /// Fails a listing, by index or not, when the node says so.
+    fn listing(&self) -> Result<(), Failure> {
+        self.listing_error.map_or(Ok(()), |name| Err(Failure(name)))
+    }
 }
 
 /// A fake object's `org.a11y.atspi.Accessible`.
@@ -239,6 +246,7 @@ impl Object {
 
     fn get_children(&self) -> Result<Vec<Reference>, Failure> {
         self.0.calls.listings.fetch_add(1, Ordering::SeqCst);
+        self.0.listing()?;
         if self.0.no_get_children {
             return Err(Failure(UNKNOWN_METHOD));
         }
@@ -247,6 +255,7 @@ impl Object {
 
     fn get_child_at_index(&self, index: i32) -> Result<Reference, Failure> {
         self.0.calls.index_reads.fetch_add(1, Ordering::SeqCst);
+        self.0.listing()?;
         self.0.read()?;
         let child = usize::try_from(index).ok().and_then(|index| self.0.children.get(index));
         child.cloned().ok_or(Failure(INVALID_ARGS))
