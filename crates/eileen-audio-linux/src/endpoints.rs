@@ -15,9 +15,9 @@
 //! promoter task on the bridge's thread and waits for its answer within the settings' deadline;
 //! past it, the bridge cancels only that wait, never the task, since a promotion cut short could
 //! leave a thread real-time with no ticket to revert it. Once promoted, the task answers with a
-//! channel and waits. When the ticket drops, or at once when nothing took the answer (the call
-//! had given up, or its answer arrived too late), the task reverts the thread with
-//! [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
+//! channel and waits. When the ticket drops, or at once when no ask can come (the call had given
+//! up, its answer arrived too late, or the ticket's ask was dropped unsent), the task reverts the
+//! thread with [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
 //! ([`Promoted::restore`]).
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
@@ -131,9 +131,8 @@ impl AudioEndpoints for LinuxAudioEndpoints {
     }
 }
 
-/// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, and
-/// answers with a channel to revert it through. It reverts `thread` once asked through that
-/// channel, or once the channel or the wait for the answer is gone without asking.
+/// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, hands the
+/// promotion over ([`hand_over`]), then reverts `thread` and answers the ask, if one came.
 async fn promoter(
     buses: Buses,
     thread: ThreadId,
@@ -152,18 +151,28 @@ async fn promoter(
             return;
         }
     };
-    let (revert, asked) = oneshot::channel();
-    // `None` when the call or the ticket went without asking: revert at once.
-    let reverted =
-        if answer.send(Ok((promotion, revert))).is_ok() { asked.await.ok() } else { None };
+    let asked = hand_over(answer, promotion).await;
     // The system bus of the moment: the bridge connects it again if it has closed since.
     let outcome = match buses.system().await {
         Ok(system) => RealtimeKit::new(&system).revert(thread, restore).await,
         Err(error) => Err(error),
     };
-    if let Some(reverted) = reverted {
+    if let Some(reverted) = asked {
         let _ignored = reverted.send(outcome);
     }
+}
+
+/// Answers the registration with `promotion` and a channel to ask for the revert through, then
+/// waits for that ask. Returns the channel the ask brought, to answer it on, or `None` when no
+/// ask will come: the registration did not take its answer (its wait had ended), or the ask's
+/// channel dropped unsent (the answer reached the bridge's reply as the wait ended, or the bridge
+/// refused or cancelled the ticket's call). The promoter reverts next in every case.
+async fn hand_over(answer: oneshot::Sender<Answer>, promotion: Promotion) -> Option<Reverted> {
+    let (revert, asked) = oneshot::channel();
+    if answer.send(Ok((promotion, revert))).is_err() {
+        return None;
+    }
+    asked.await.ok()
 }
 
 /// The ticket of a promotion. Dropped, it asks the promoter task to revert through `revert` and
@@ -178,4 +187,58 @@ fn reverted_on_drop(bridge: Bridge, promotion: Promotion, revert: Revert) -> Thr
             Ok(())
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::{Pin, pin};
+    use std::task::{Context, Poll, Waker};
+
+    use tokio::sync::oneshot;
+
+    use super::hand_over;
+    use crate::Promotion;
+
+    const PROMOTION: Promotion = Promotion::Realtime { priority: 10 };
+
+    /// `future` polled once with a waker that does nothing: the channels need no runtime, and
+    /// each step below is ready or not when it is polled.
+    fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+        future.poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[test]
+    fn an_answer_nobody_takes_means_revert_now() {
+        let (answer, answered) = oneshot::channel();
+        drop(answered);
+        let mut handing = pin!(hand_over(answer, PROMOTION));
+        assert!(matches!(poll_once(handing.as_mut()), Poll::Ready(None)), "no ask will come");
+    }
+
+    #[test]
+    fn an_ask_dropped_unsent_means_revert_now() {
+        let (answer, mut answered) = oneshot::channel();
+        let mut handing = pin!(hand_over(answer, PROMOTION));
+        assert!(poll_once(handing.as_mut()).is_pending(), "answered, and waiting for the ask");
+        let (promotion, revert) = answered.try_recv().unwrap().unwrap();
+        assert_eq!(promotion, PROMOTION, "the promotion");
+        drop(revert);
+        assert!(matches!(poll_once(handing.as_mut()), Poll::Ready(None)), "no ask will come");
+    }
+
+    #[test]
+    fn an_ask_is_answered_on_the_channel_it_brings() {
+        let (answer, mut answered) = oneshot::channel();
+        let mut handing = pin!(hand_over(answer, PROMOTION));
+        assert!(poll_once(handing.as_mut()).is_pending(), "answered, and waiting for the ask");
+        let (_promotion, revert) = answered.try_recv().unwrap().unwrap();
+        let (reverted, mut outcome) = oneshot::channel();
+        revert.send(reverted).unwrap();
+        let Poll::Ready(Some(reverted)) = poll_once(handing.as_mut()) else {
+            panic!("the ask's channel");
+        };
+        reverted.send(Ok(())).unwrap();
+        assert_eq!(outcome.try_recv(), Ok(Ok(())), "the ticket hears how the revert went");
+    }
 }
