@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use eileen_stdx::clock;
 use eileen_stdx::soft_assert::{self, Failure, Mode};
 use tracing::{Level, Subscriber};
 use tracing_appender::non_blocking::{ErrorCounter, NonBlockingBuilder, WorkerGuard};
@@ -26,6 +27,7 @@ use crate::file::{FileLayer, RedactingMakeWriter};
 use crate::names;
 use crate::pii::{PiiKey, Policy};
 use crate::redact::Redactor;
+use crate::retention::{Retained, Retention};
 use crate::ring::{Ring, RingLayer};
 use crate::slow::{SlowLayer, Stats};
 
@@ -118,7 +120,12 @@ pub struct TraceConfig {
     pub pii_key: Option<PiiKey>,
     /// Slow-span thresholds by span name, milliseconds.
     pub slow_span_ms: BTreeMap<String, u64>,
-    /// Daily files kept per process.
+    /// Daily files each process keeps of its own, today's included: the newest by the date in
+    /// the name, matched exactly as `<process>.<YYYY-MM-DD>.jsonl`, pruned when tracing starts
+    /// and after each UTC midnight. 1 keeps today's alone, and 0 keeps every file, as
+    /// tracing-appender's `max_log_files(0)` did. Other processes' files and other names are
+    /// never touched; the core's janitor caps the whole folder at 14 days and 500 MB (BUILD.md
+    /// section 2.15).
     pub max_log_files: usize,
 }
 
@@ -268,20 +275,22 @@ pub fn build(
     let mut dropped = None;
     let mut file_filter = None;
     if let Some(dir) = &config.log_dir {
+        // Not the appender's `max_log_files`: it matches by prefix, so the core (`eileen`)
+        // would prune every other process's files as its own.
         let appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix(process)
             .filename_suffix("jsonl")
-            .max_log_files(config.max_log_files)
             .build(dir)
             .map_err(|e| TraceError::Logs {
                 dir: dir.display().to_string(),
                 detail: e.to_string(),
             })?;
+        let rule = Retention { dir: dir.clone(), process, keep: config.max_log_files };
         let (writer, guard) = NonBlockingBuilder::default()
             .lossy(true)
             .thread_name("eileen-log-writer")
-            .finish(appender);
+            .finish(Retained::new(appender, rule, clock::system()));
         dropped = Some(writer.error_counter());
         file_guard = Some(guard);
         let policy = if config.include_personal {
