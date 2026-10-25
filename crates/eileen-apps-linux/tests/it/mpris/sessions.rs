@@ -1,14 +1,15 @@
 //! `MprisSessions::sessions` and `MprisSessions::control` against fake players: the listing and
-//! how leniently it reads odd players, each control call and each refusal, and a player that
-//! never answers.
+//! how leniently it reads odd players, each control call and each refusal, and players that
+//! never answer.
 
 use std::pin::pin;
 use std::time::Duration;
 
 use eileen_apps_linux::{DbusError, MprisSessions};
 use eileen_contracts::tools::apps::MediaAction;
-use eileen_dbus_linux::next;
-use eileen_dbus_linux::testing::PrivateBus;
+use eileen_dbus_linux::testing::{PrivateBus, next_message};
+use eileen_dbus_linux::{METHOD_TIMEOUT, next};
+use tokio::time::Instant;
 use zbus::MessageStream;
 use zbus::message::Type;
 use zbus::zvariant::OwnedObjectPath;
@@ -18,6 +19,27 @@ use super::fake::{
     float_state, full_player, full_root, full_state, interface, named, odd_player, odd_root,
     odd_state, serve,
 };
+
+/// What a caller's deadline adds to one method timeout, for the calls that answer.
+const MARGIN: Duration = Duration::from_secs(1);
+
+/// Returns once `full`, the full player's connection, has answered both of a listing's reads of
+/// it (`replies` is every message the listing's connection receives) and a read has reached
+/// `stalled`, a gate that is never opened. A connection hands each reply to the call that waits
+/// for it before any stream sees it, so from then on the listing waits only for method timeouts.
+async fn answered_and_stalled(replies: &mut MessageStream, full: &zbus::Connection, stalled: &Gate) {
+    let full = full.unique_name().unwrap();
+    let mut answered = 0;
+    while answered < 2 {
+        let message = next_message(replies).await;
+        let header = message.header();
+        let from_full = header.sender().is_some_and(|sender| sender.as_str() == full.as_str());
+        if message.message_type() == Type::MethodReturn && from_full {
+            answered += 1;
+        }
+    }
+    stalled.entered.notified().await;
+}
 
 #[tokio::test]
 async fn sessions_lists_every_player_with_what_it_reports() {
@@ -111,21 +133,25 @@ async fn a_reply_that_is_not_a_property_map_is_left_out() {
 #[tokio::test]
 async fn a_player_that_never_answers_is_left_out_and_passes_its_deadline() {
     let bus = PrivateBus::start();
-    let _full = serve(&bus, FULL, full_root(), full_player()).await;
-    // After the full player by name, so it is read last.
+    let full = serve(&bus, FULL, full_root(), full_player()).await;
     let hung = "org.mpris.MediaPlayer2.hung";
     let gate = Gate::default();
     let _hung =
         serve(&bus, hung, full_root(), Player { gate: Some(gate.clone()), ..full_player() }).await;
-    let mpris = MprisSessions::new(&bus.connect_within(Duration::from_secs(5)).await);
+    let conn = bus.connect_within(Duration::from_secs(5)).await;
+    let mut replies = MessageStream::from(&conn);
+    let mpris = MprisSessions::new(&conn);
 
-    // Each call runs in real time until the hung player is asked; then only the method timeout
-    // is left to fire, and tokio's paused clock reaches it as soon as the runtime is idle.
+    // Each call runs in real time until the full player has answered and the hung player is
+    // asked; then only the method timeout is left to fire, and tokio's paused clock reaches it
+    // as soon as the runtime is idle.
     let mut sessions = pin!(mpris.sessions());
     tokio::select! {
-        () = gate.entered.notified() => {}
+        () = answered_and_stalled(&mut replies, &full, &gate) => {}
         early = &mut sessions => panic!("the listing ended before it asked the hung player: {early:?}"),
     }
+    // Unpolled, the stream would hold up the connection once its queue is full.
+    drop(replies);
     tokio::time::pause();
     assert_eq!(
         sessions.await.unwrap(),
@@ -144,6 +170,41 @@ async fn a_player_that_never_answers_is_left_out_and_passes_its_deadline() {
         control.await,
         Err(DbusError::DeadlineExceeded { call: "media player" }),
         "a call past the connection's method timeout passes its deadline"
+    );
+}
+
+#[tokio::test]
+async fn the_listing_waits_one_method_timeout_however_many_players_never_answer() {
+    let bus = PrivateBus::start();
+    // First by name, so a listing that reads one player at a time has the full player's answers
+    // before it asks the two that never answer.
+    let full = serve(&bus, FULL, full_root(), full_player()).await;
+    let (first, second) = (Gate::default(), Gate::default());
+    let stalled = |gate: &Gate| Player { gate: Some(gate.clone()), ..full_player() };
+    let _first = serve(&bus, "org.mpris.MediaPlayer2.stalled1", full_root(), stalled(&first)).await;
+    let _second =
+        serve(&bus, "org.mpris.MediaPlayer2.stalled2", full_root(), stalled(&second)).await;
+    let conn = bus.connect_within(METHOD_TIMEOUT).await;
+    let mut replies = MessageStream::from(&conn);
+    let mpris = MprisSessions::new(&conn);
+
+    // In real time until the full player has answered and the first stalled player is asked;
+    // then only method timeouts are left to fire, and tokio's paused clock reaches each as soon
+    // as the runtime is idle. The wait is measured from the pause, so only those timeouts count.
+    let mut sessions = pin!(mpris.sessions());
+    tokio::select! {
+        () = answered_and_stalled(&mut replies, &full, &first) => {}
+        early = &mut sessions => panic!("the listing ended before it asked the stalled players: {early:?}"),
+    }
+    drop(replies);
+    tokio::time::pause();
+    let paused = Instant::now();
+    let listed = sessions.await;
+    let waited = paused.elapsed();
+    assert_eq!(listed.unwrap(), [full_state()], "the player that answers, and only it");
+    assert!(
+        waited <= METHOD_TIMEOUT + MARGIN,
+        "the players that never answer cost one method timeout together, not one each: {waited:?}"
     );
 }
 
