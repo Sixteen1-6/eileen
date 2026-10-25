@@ -859,6 +859,14 @@ fn a_silent_app_answers_deadline_exceeded_within_the_deadline() {
     );
     let waited = started.elapsed();
     assert!(waited >= SHORT.budget() && waited < CALL_TIMEOUT, "within it: {waited:?}");
+    let started = Instant::now();
+    assert_eq!(
+        desktop.selection(false, SHORT),
+        Err(PlatformError::DeadlineExceeded { call: "selection" }),
+        "so does the selection"
+    );
+    let waited = started.elapsed();
+    assert!(waited >= SHORT.budget() && waited < CALL_TIMEOUT, "within its own: {waited:?}");
     // With a call timeout shorter than the deadline, the silent app costs its call timeout.
     let quick = LinuxDesktopSettings { call_timeout: SHORT.budget(), ..settings() };
     let started = Instant::now();
