@@ -1,15 +1,16 @@
 //! The redaction canary: fake secrets written through the file and ring layers never appear
 //! raw on disk or in a ring dump (acceptance 6), and the console layer writes none of them
 //! either (BUILD.md section 2.13: no sink writes them where policy forbids). Nor does the home
-//! folder of the PC that built a dependency, which its events carry in their source path. And
-//! values that only look like a card number reach every sink whole.
+//! folder of the PC that built a dependency, which its events carry in their source path and
+//! its `log` records in a field. And values that only look like a card number reach every
+//! sink whole.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eileen_trace::{Console, ProcessKind, Redactor, TraceConfig, names};
-use serde_json::Value;
+use eileen_trace::{Console, ProcessKind, Redactor, TraceConfig, names, test_support};
+use serde_json::{Value, json};
 use tracing::callsite::{DefaultCallsite, Identifier};
 use tracing::field::{FieldSet, Value as FieldValue};
 use tracing::metadata::Kind;
@@ -223,6 +224,141 @@ fn no_home_folder_reaches_disk_or_a_dump() {
     assert_clean_json_lines("a log file", &files);
     assert_clean_json_lines("a ring dump", &dump);
     assert!(!files.contains("someone") && !dump.contains("someone"), "no user name anywhere");
+}
+
+/// The fields of tracing-log 0.2.0's callsites, which carry a bridged record's own target,
+/// module, file and line.
+const LOG_FIELDS: &[&str] = &["message", "log.target", "log.module_path", "log.file", "log.line"];
+
+/// tracing-log 0.2.0's callsite for `log` records at WARN, which `init` installs: one per
+/// level, shared by every record, named `log event` with target `log` and no location.
+static LOG_WARN: Metadata<'static> = Metadata::new(
+    "log event",
+    "log",
+    Level::WARN,
+    None,
+    None,
+    None,
+    FieldSet::new(LOG_FIELDS, Identifier(&LOG_WARN_CALLSITE)),
+    Kind::EVENT,
+);
+static LOG_WARN_CALLSITE: DefaultCallsite = DefaultCallsite::new(&LOG_WARN);
+
+/// Where a dependency's `log::warn!` was, on a Linux build PC.
+const LOG_FILE: &str = "/home/someone/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/somecrate-1.2.3/src/conn.rs";
+
+/// `value` as a field value.
+fn as_value<T: FieldValue>(value: &T) -> &dyn FieldValue {
+    value
+}
+
+/// A dependency's `log::warn!(target: target, "{message}")` at `location`, bridged as
+/// tracing-log's `dispatch_record` does it: the dispatcher is asked with the record's own target
+/// and location, and the event goes through the shared callsite, with them in its fields.
+fn log_warn(target: &str, location: Option<(&str, u32)>, message: &str) {
+    let (file, line) = (location.map(|(file, _)| file), location.map(|(_, line)| line));
+    let fieldset = FieldSet::new(LOG_FIELDS, Identifier(&LOG_WARN_CALLSITE));
+    let asked = Metadata::new(
+        "log record",
+        target,
+        Level::WARN,
+        file,
+        line,
+        Some(target),
+        fieldset,
+        Kind::EVENT,
+    );
+    let fields = LOG_WARN.fields();
+    let field = |name: &str| fields.field(name).unwrap();
+    let shown = tracing::field::display(message);
+    tracing::dispatcher::get_default(|dispatch| {
+        if dispatch.enabled(&asked) {
+            dispatch.event(&tracing::Event::new(
+                &LOG_WARN,
+                &fields.value_set(&[
+                    (&field("message"), Some(as_value(&shown))),
+                    (&field("log.target"), Some(as_value(&target))),
+                    (&field("log.module_path"), Some(as_value(&target))),
+                    (&field("log.file"), file.as_ref().map(as_value)),
+                    (&field("log.line"), line.as_ref().map(as_value)),
+                ]),
+            ));
+        }
+    });
+}
+
+/// Every key of a line's or a record's fields.
+fn keys<'a>(fields: impl IntoIterator<Item = (&'a String, &'a Value)>) -> Vec<&'a str> {
+    fields.into_iter().map(|(key, _)| key.as_str()).collect()
+}
+
+#[test]
+fn a_log_crate_record_keeps_its_own_target_and_location() {
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("eileen-trace-log-{}", std::process::id())));
+    let _ignored = std::fs::remove_dir_all(&dir.0);
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        log_warn("somecrate::conn", Some((LOG_FILE, 42)), "a log record");
+        log_warn("somecrate::bare", None, "a log record without a location");
+        tracing::warn!(target: "eileen_core", "a tracing event");
+    });
+    let parsed = guard.ring().records(guard.redactor());
+    let dump = String::from_utf8(guard.ring().dump(guard.redactor())).unwrap();
+    drop(guard);
+    let files = read_all(&dir.0);
+    let lines: Vec<Value> = files.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let line = |message: &str| lines.iter().find(|l| l["fields"]["message"] == message).unwrap();
+    let origin = |line: &Value| {
+        (line["target"].clone(), line["filename"].clone(), line["line_number"].clone())
+    };
+    let record = line("a log record");
+    assert_eq!(
+        origin(record),
+        (json!("somecrate::conn"), json!("somecrate-1.2.3/src/conn.rs"), json!(42)),
+        "the file line has the record's own target and location: {record}"
+    );
+    assert_eq!(
+        keys(record["fields"].as_object().unwrap()),
+        ["message"],
+        "no log.* field: {record}"
+    );
+    let bare = line("a log record without a location");
+    assert_eq!(
+        origin(bare),
+        (json!("somecrate::bare"), Value::Null, Value::Null),
+        "a record without a location keeps its own target: {bare}"
+    );
+    let event = line("a tracing event");
+    assert_eq!(event["target"], "eileen_core", "a tracing event keeps its own: {event}");
+    assert!(event["filename"].as_str().unwrap().ends_with("canary.rs"), "its file: {event}");
+    let ring = |message: &str| {
+        let message = Value::from(message);
+        parsed.events.iter().find(|e| e.fields.get("message") == Some(&message)).unwrap()
+    };
+    let (record, bare) = (ring("a log record"), ring("a log record without a location"));
+    assert_eq!(
+        (record.target.as_str(), record.name.as_str(), keys(&record.fields)),
+        ("somecrate::conn", "event somecrate-1.2.3/src/conn.rs:42", vec!["message"]),
+        "the ring names the record from its own location"
+    );
+    assert_eq!(
+        (bare.target.as_str(), bare.name.as_str()),
+        ("somecrate::bare", "log event"),
+        "a record without a location keeps the callsite's name"
+    );
+    let ((), captured) =
+        test_support::capture(|| log_warn("somecrate::conn", Some((LOG_FILE, 42)), "captured"));
+    let captured = &captured.events[0];
+    assert_eq!(
+        (captured.target.as_str(), captured.name.as_str(), keys(&captured.fields)),
+        ("somecrate::conn", "event somecrate-1.2.3/src/conn.rs:42", vec!["message"]),
+        "the test capture keeps the record as the ring does"
+    );
+    assert_clean_json_lines("a log file", &files);
+    assert_clean_json_lines("a ring dump", &dump);
 }
 
 /// An in-memory console for the test.

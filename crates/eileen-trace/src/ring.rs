@@ -24,7 +24,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::record::{
-    EventRecord, JsonVisitor, SpanRecord, event_name, redact_values, remote_parent, sorted,
+    EventRecord, JsonVisitor, Origin, SpanRecord, redact_values, remote_parent, sorted,
 };
 use crate::redact::Redactor;
 
@@ -285,13 +285,14 @@ where
         let span =
             ctx.event_span(event).and_then(|s| s.extensions().get::<RecordId>().map(|r| r.0));
         let meta = event.metadata();
+        let origin = Origin::of(meta, &mut visitor.0);
         let at_us = now_us();
         let mut line = Map::new();
         line.insert("t".to_owned(), json!("event"));
         line.insert("at_us".to_owned(), json!(at_us));
         line.insert("level".to_owned(), json!(meta.level().as_str()));
-        line.insert("target".to_owned(), json!(meta.target()));
-        line.insert("name".to_owned(), json!(event_name(meta.name())));
+        line.insert("target".to_owned(), json!(origin.target));
+        line.insert("name".to_owned(), json!(origin.name()));
         line.insert("span".to_owned(), json!(span));
         line.insert("process".to_owned(), json!(self.ring.process));
         line.insert("fields".to_owned(), Value::Object(visitor.0));

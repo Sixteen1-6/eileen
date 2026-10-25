@@ -31,7 +31,8 @@
 //!   (`ring::tests::the_bound_counts_what_the_lines_allocate`).
 //! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
 //!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
-//!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
+//!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`,
+//!   and for `log` records `it::canary::a_log_crate_record_keeps_its_own_target_and_location`).
 //! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
 //!   exactly, and never today's (tests `it::stack::the_core_keeps_the_other_processes_files`
 //!   and `it::stack::the_core_prunes_its_own_files_by_the_date_in_their_names`).
@@ -39,11 +40,10 @@
 //! # Boundaries
 //!
 //! - Called by every Eileen crate; `tools/repo-tools` uses [`redact`] and [`privacy`].
-//! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
-//!   and error crates, `serde_json`, `blake3`, `thiserror` and `toml` (for [`privacy`]); no
-//!   async runtime, no OpenTelemetry.
-//! - Wire types: the JSON-lines log and ring formats, documented in [`file`](mod@file) and
-//!   [`ring`].
+//! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing`, `tracing-subscriber`,
+//!   `tracing-appender`, `tracing-error`, `serde_json`, `blake3`, `thiserror` and `toml` (for
+//!   [`privacy`]); no async runtime, no OpenTelemetry.
+//! - Wire types: the JSON-lines log and ring formats, described in [`file`](mod@file) and [`ring`].
 //!
 //! # Testing
 //!
@@ -56,10 +56,10 @@
 //! # Traps
 //!
 //! - [`init()`] can run once per process; tests use [`init::build`] with `with_default`.
-//! - Span ids are reused after a span closes, and every process hands out the same ones:
-//!   records carry their own ids, and a `traceparent` resolves by trace and span id
-//!   ([`schema`]).
+//! - Span ids are reused after a span closes, and every process hands out the same ones: records
+//!   carry their own ids, and a `traceparent` resolves by trace and span id ([`schema`]).
 //! - User content goes in `pii.` fields only, never in a span name or a message.
+//! - A `log` record arrives as tracing-log's `log event`: read its origin with `record::Origin`.
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
 //! - The core's process name, `eileen`, begins every other process's file name: match log
@@ -100,3 +100,30 @@ pub mod traceparent;
 pub use init::{Console, ProcessKind, TraceConfig, TraceError, TraceGuard, build, init};
 pub use record::{EventRecord, SpanRecord};
 pub use redact::Redactor;
+
+#[cfg(test)]
+mod tests {
+    /// The crate doc's lines under `# Boundaries`, up to the next heading.
+    fn boundaries() -> String {
+        let doc: Vec<&str> =
+            include_str!("lib.rs").lines().map_while(|line| line.strip_prefix("//!")).collect();
+        let start = doc.iter().position(|line| line.trim() == "# Boundaries").unwrap();
+        let section = doc[start + 1..].iter().take_while(|line| !line.trim().starts_with("# "));
+        section.copied().collect::<Vec<_>>().join("\n")
+    }
+
+    /// BUILD.md section 4b.4: the Boundaries heading names what the crate may depend on, so it
+    /// names each dependency in the manifest.
+    #[test]
+    fn the_boundaries_name_every_dependency() {
+        let manifest: toml::Table = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+        let boundaries = boundaries();
+        let missing: Vec<&String> = manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .filter(|name| !boundaries.contains(&format!("`{name}`")))
+            .collect();
+        assert!(missing.is_empty(), "the Boundaries leave out {missing:?}:\n{boundaries}");
+    }
+}
