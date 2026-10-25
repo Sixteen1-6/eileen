@@ -1,7 +1,8 @@
 //! The `GlobalShortcuts` client against a fake portal on a private bus: the host registry's call
 //! before the session, the bind's shortcuts and the desktop's triggers, the U+0000 rule,
-//! refusals and odd answers, the session's signals and its close, a bind left unanswered, and
-//! portals without the interface. The fake's items are `pub(super)` for the shell's tests.
+//! refusals and odd answers, the session's signals and its close, a session or a bind left
+//! unanswered, and portals without the interface. The fake's items are `pub(super)` for the
+//! shell's tests.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,7 @@ use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip, serve};
 use eileen_shell_linux::{BoundShortcut, DbusError, Shortcut, ShortcutEvent, ShortcutsSession};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -401,8 +403,35 @@ async fn a_cancelled_bind_is_refused() {
 }
 
 #[tokio::test]
+async fn a_bind_whose_shortcuts_are_malformed_is_invalid() {
+    let bus = PrivateBus::start();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { bind: Mode::Later, ..Modes::GRANT });
+    let portal = serve_portal(&bus, fake).await;
+    let (_client, session) = opened(&bus).await;
+    let shortcuts = [mute()];
+    let (bound, ()) = tokio::join!(session.bind(&shortcuts, WAIT), async {
+        let bind = loop {
+            if let Some(Report::Bound(bind)) = reports.recv().await {
+                break bind;
+            }
+        };
+        let odd = HashMap::from([("shortcuts", Value::from("odd"))]);
+        respond(&portal, &bind.caller, &bind.request, 0, odd).await;
+    });
+    let detail = "the bound shortcuts are not a(sa{sv})".to_owned();
+    assert_eq!(
+        bound,
+        Err(DbusError::Invalid { what: BIND_WHAT, detail }),
+        "a granted bind whose shortcuts are a string is not read as none bound"
+    );
+}
+
+#[tokio::test]
 async fn a_session_the_portal_refuses_or_answers_oddly_is_not_opened() {
+    let no_handle =
+        DbusError::Invalid { what: SESSION_WHAT, detail: "no session handle".to_owned() };
     for (code, error) in [
+        (0, no_handle),
         (2, DbusError::Refused { what: SESSION_WHAT, reason: "refused or cancelled" }),
         (3, DbusError::Invalid { what: "portal response", detail: "code 3".to_owned() }),
     ] {
@@ -412,7 +441,7 @@ async fn a_session_the_portal_refuses_or_answers_oddly_is_not_opened() {
         let _portal = serve_portal(&bus, fake).await;
         let client = bus.connect().await;
         let opened = ShortcutsSession::open(&client, APP_ID, WAIT).await;
-        assert_eq!(opened.unwrap_err(), error, "code {code}");
+        assert_eq!(opened.unwrap_err(), error, "code {code}, with no results");
     }
 }
 
@@ -465,6 +494,36 @@ async fn the_sessions_close_ends_its_events() {
     assert_eq!(events.next().await, Some(ShortcutEvent::Closed), "the session's own close");
     press(&portal, &to, "Activated", &ours, "hotkey-1").await;
     assert_eq!(events.next().await, None, "and the stream ends there");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_left_unanswered_closes_its_request_at_the_deadline() {
+    let bus = PrivateBus::start();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { create: Mode::Later, ..Modes::GRANT });
+    let _portal = serve_portal(&bus, fake).await;
+    let client = bus.connect().await;
+    let start = Instant::now();
+    let opened = ShortcutsSession::open(&client, APP_ID, DEADLINE).await;
+    assert_eq!(
+        opened.unwrap_err(),
+        DbusError::DeadlineExceeded { call: "portal response" },
+        "CreateSession was never answered"
+    );
+    assert_eq!(start.elapsed(), DEADLINE, "the caller's deadline, the only timer");
+    let session = loop {
+        if let Some(Report::Created(session)) = reports.recv().await {
+            break session;
+        }
+    };
+    // The client names the session with its request's token, and the fake makes both handles
+    // from the caller and the token.
+    let request = session.as_str().replacen("/session/", "/request/", 1);
+    loop {
+        if let Some(Report::RequestClosed(closed)) = reports.recv().await {
+            assert_eq!(closed.as_str(), request, "CreateSession's request, closed at the deadline");
+            break;
+        }
+    }
 }
 
 #[tokio::test(start_paused = true)]
