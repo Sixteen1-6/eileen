@@ -124,7 +124,7 @@ pub struct RtLimits {
 }
 
 impl RtLimits {
-    /// The limits, unless one is out of range: a `RTTimeUSecMax` that is not positive, a
+    /// The limits, unless one is out of range: an `RTTimeUSecMax` that is not positive, a
     /// negative `MaxRealtimePriority`, or a `MinNiceLevel` that is no nice level.
     fn new(
         rttime_usec_max: i64,
