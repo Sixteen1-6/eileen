@@ -22,7 +22,7 @@ pub(crate) struct Retention {
     pub(crate) dir: PathBuf,
     /// The process name, which begins its file names.
     pub(crate) process: &'static str,
-    /// Daily files kept, today's included.
+    /// Daily files kept, today's included; 0 keeps them all.
     pub(crate) keep: usize,
 }
 
@@ -33,10 +33,14 @@ impl Retention {
     }
 
     /// Keeps `keep` days of the process's files, today's counted whether or not its file exists
-    /// yet: of the files dated before `today` it deletes all but the newest `keep - 1` (so 0
-    /// and 1 both keep today's alone). Files dated today or later stay, and so does every other
-    /// name, folder and link. Answers how many it deleted; a missing folder has none.
+    /// yet: of the files dated before `today` it deletes all but the newest `keep - 1`, so 1
+    /// keeps today's alone. A `keep` of 0 deletes nothing, as tracing-appender's
+    /// `max_log_files(0)` did. Files dated today or later stay, and so does every other name,
+    /// folder and link. Answers how many it deleted; a missing folder has none.
     pub(crate) fn prune(&self, today: Date) -> io::Result<usize> {
+        if self.keep == 0 {
+            return Ok(0);
+        }
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -199,6 +203,19 @@ mod tests {
         let today = Date::new(2026, 10, 25).unwrap();
         assert_eq!(rule(&dir, 14).prune(today).unwrap(), 0, "nothing to prune");
         assert!(!dir.exists(), "and no folder made");
+    }
+
+    #[test]
+    fn a_keep_of_zero_deletes_nothing() {
+        // tracing-appender's `max_log_files(0)` turned pruning off, and 0 still does.
+        let dir = TempDir::new("keep-zero");
+        let day = Date::new(2026, 10, 25).unwrap();
+        let all: BTreeSet<String> = (0..=5).map(|back| daily("eileen", day, back)).collect();
+        for name in &all {
+            touch(&dir.0, name);
+        }
+        assert_eq!(rule(&dir.0, 0).prune(day).unwrap(), 0, "nothing deleted");
+        assert_eq!(names(&dir.0), all, "every day stays");
     }
 
     #[test]

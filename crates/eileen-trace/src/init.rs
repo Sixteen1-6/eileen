@@ -120,11 +120,12 @@ pub struct TraceConfig {
     pub pii_key: Option<PiiKey>,
     /// Slow-span thresholds by span name, milliseconds.
     pub slow_span_ms: BTreeMap<String, u64>,
-    /// Daily files each process keeps of its own, today's included (at least today's stays):
-    /// the newest by the date in the name, matched exactly as `<process>.<YYYY-MM-DD>.jsonl`,
-    /// pruned when tracing starts and after each UTC midnight. Other processes' files and other
-    /// names are never touched; the core's janitor caps the whole folder at 14 days and 500 MB
-    /// (BUILD.md section 2.15).
+    /// Daily files each process keeps of its own, today's included: the newest by the date in
+    /// the name, matched exactly as `<process>.<YYYY-MM-DD>.jsonl`, pruned when tracing starts
+    /// and after each UTC midnight. 1 keeps today's alone, and 0 keeps every file, as
+    /// tracing-appender's `max_log_files(0)` did. Other processes' files and other names are
+    /// never touched; the core's janitor caps the whole folder at 14 days and 500 MB (BUILD.md
+    /// section 2.15).
     pub max_log_files: usize,
 }
 

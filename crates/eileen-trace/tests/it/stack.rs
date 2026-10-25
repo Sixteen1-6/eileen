@@ -107,6 +107,23 @@ fn a_first_start_makes_the_folder_and_todays_file() {
 }
 
 #[test]
+fn a_max_of_zero_keeps_every_daily_file() {
+    // tracing-appender's `max_log_files(0)` turned pruning off, and 0 keeps that meaning.
+    let dir = TempDir::new("keep-all");
+    let today = clock::system().wall().date();
+    for back in 1..=5 {
+        touch(&dir.0, &core_file(today, back));
+    }
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    config.max_log_files = 0;
+    let (_subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    drop(guard);
+    let every: BTreeSet<String> = (0..=5).map(|back| core_file(today, back)).collect();
+    assert_eq!(names_in(&dir.0), every, "today's and every older day stay");
+}
+
+#[test]
 fn file_lines_carry_their_span_and_reduce_pii() {
     let dir =
         TempDir(std::env::temp_dir().join(format!("eileen-trace-stack-{}", std::process::id())));
