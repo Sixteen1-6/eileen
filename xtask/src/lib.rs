@@ -65,9 +65,14 @@
 
 #![forbid(unsafe_code)]
 
+mod cargo_run;
 mod cli;
+mod guard;
+mod lint_repo;
+mod machine;
 mod pr_meta;
 mod repo;
+mod sha256;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -115,6 +120,24 @@ where
             Ok(ExitCode::SUCCESS)
         }
         Ok(cli::Command::PrMeta(options)) => pr_meta::main(&options, out),
+        Ok(cli::Command::LintRepo) => lint_repo::main(&repo_root(), out),
+        Ok(cli::Command::Cargo(command)) => cargo_run::cargo(&command, out),
+        Ok(cli::Command::Ci(guard)) => cargo_run::ci(guard, out),
+        Ok(cli::Command::PrePush(options)) => cargo_run::pre_push(&options, out),
+        Ok(cli::Command::Sim(options)) => cargo_run::sim(&options, out),
+        Ok(cli::Command::Setup) => machine::setup(out),
+        Ok(cli::Command::Slots(command)) => machine::slots(command, out),
+        Ok(cli::Command::DesktopLock(options)) => machine::desktop_lock(options, out),
+        Ok(cli::Command::FetchNative(options)) => machine::fetch_native(options, out),
+        Ok(cli::Command::Lock) => machine::lock(out),
+        Ok(cli::Command::Later { name, when }) => {
+            writeln!(
+                out,
+                "xtask: `cargo xtask {name}` is not built yet; it arrives with {when} \
+                 (BUILD.md section 4b.5)"
+            )?;
+            Ok(ExitCode::from(EXIT_ERROR))
+        }
         Err(problem) => {
             writeln!(out, "xtask: {problem}\n")?;
             out.write_all(cli::USAGE.as_bytes())?;
