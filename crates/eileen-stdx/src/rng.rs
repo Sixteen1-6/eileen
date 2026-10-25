@@ -197,9 +197,14 @@ mod tests {
     #[test]
     fn fill_bytes_covers_a_partial_word() {
         let mut rng = CoreRng::from_seed(9);
+        let mut words = rng.clone();
         let mut out = [0_u8; 11];
         rng.fill_bytes(&mut out);
-        assert!(out.iter().any(|b| *b != 0), "filled");
+        // Eight bytes from the first word, then the first three of the second, little-endian.
+        let mut expected = words.next_u64().to_le_bytes().to_vec();
+        expected.extend_from_slice(&words.next_u64().to_le_bytes()[..3]);
+        assert_eq!(out.as_slice(), expected.as_slice(), "the trailing partial word is filled");
+        assert_eq!(rng, words, "two words consumed, as the reference took");
         assert!(CoreRng::from_seed(3).ulid_random() < (1_u128 << 80), "80 bits");
     }
 
