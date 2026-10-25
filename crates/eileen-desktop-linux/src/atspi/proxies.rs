@@ -1,8 +1,9 @@
 //! The D-Bus interfaces the client calls, as zbus proxies, with the members it uses and no
 //! others: the session bus's `org.a11y.Bus` and `org.a11y.Status`, which at-spi-bus-launcher
-//! serves at `/org/a11y/bus`, and each accessible object's `org.a11y.atspi.Accessible` and
-//! `org.a11y.atspi.Text` (at-spi2-core 2.52's introspection). No property has a setter, so
-//! `IsEnabled` cannot be written through them.
+//! serves at `/org/a11y/bus`, and each accessible object's `org.a11y.atspi.Accessible`,
+//! `org.a11y.atspi.Text` and `org.a11y.atspi.Component` (at-spi2-core 2.52's introspection). The
+//! bus daemon's own `GetConnectionUnixProcessID` goes through zbus's `fdo::DBusProxy`. No
+//! property has a setter, so `IsEnabled` cannot be written through them.
 //!
 //! Every proxy is built with `CacheProperties::No`, so building one makes no call and none
 //! subscribes to a property's changes or its service's owner (test
@@ -52,6 +53,9 @@ pub(super) trait Accessible {
     /// How many children it says it has.
     #[zbus(property)]
     fn child_count(&self) -> zbus::Result<i32>;
+    /// The id its app gives it for automation, empty when it has none.
+    #[zbus(property)]
+    fn accessible_id(&self) -> zbus::Result<String>;
     /// Its role's number.
     fn get_role(&self) -> zbus::Result<u32>;
     /// Its states, in two words.
@@ -69,6 +73,17 @@ pub(super) trait Accessible {
 pub(super) trait Text {
     /// The text from `start_offset` to `end_offset`, in characters.
     fn get_text(&self, start_offset: i32, end_offset: i32) -> zbus::Result<String>;
+    /// How many ranges of the text are selected.
+    fn get_n_selections(&self) -> zbus::Result<i32>;
+    /// Where selected range `selection_num` starts, and the character after its last.
+    fn get_selection(&self, selection_num: i32) -> zbus::Result<(i32, i32)>;
+}
+
+/// An object's `org.a11y.atspi.Component`.
+#[zbus::proxy(interface = "org.a11y.atspi.Component", gen_blocking = false)]
+pub(super) trait Component {
+    /// Its box, `(x, y, width, height)`, in the coordinates `coord_type` names.
+    fn get_extents(&self, coord_type: u32) -> zbus::Result<(i32, i32, i32, i32)>;
 }
 
 /// The proxy `P` of `object`, at its app's unique name and its path.
