@@ -237,7 +237,7 @@ impl Drop for WriterThread {
 /// # fn main() -> Result<(), eileen_trace::TraceError> {
 /// let config = eileen_trace::TraceConfig::new(None);
 /// let _guard = eileen_trace::init(eileen_trace::ProcessKind::Cli, &config)?;
-/// // The rest of `main`: `_guard` drops when it returns.
+/// // The rest of `main`: `_guard` drops when it returns (`let _ =` would drop it at once).
 /// # Ok(())
 /// # }
 /// ```
