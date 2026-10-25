@@ -26,7 +26,7 @@ records when they exist.
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
-| 6 | `wp0/guidance` | Open on 2026-10-25 |
+| 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -244,7 +244,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   merges; only its Windows lanes would show it.
 - The next amendment of section 4b.3 adds the `zip` ban `deny.toml` carries since `wp0/stubs`
   (`zip` only as a direct dependency of `sherpa-onnx-sys`, so D78's ignores cover nothing
-  else) to the text and to D78's consequences.
+  else) to the text and to D78's consequences. (Done in pull request #101.)
+- `cargo xtask build -r` and `--profile release`, and the same flags on `check`, `test`,
+  `clippy` and `insta`, take both slots like `--release` since `wp0/release-slots`.
 - The fuzz workspace builds from a copy of the root `Cargo.lock` (`cp Cargo.lock fuzz/`), so its
   versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
   package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development

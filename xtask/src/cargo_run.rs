@@ -30,8 +30,8 @@ const WORKSPACE_FILES: [&str; 7] = [
 /// `cargo xtask check|test|clippy|build|insta`.
 pub(crate) fn cargo(command: &CargoCommand, out: &mut dyn Write) -> io::Result<ExitCode> {
     let mut options = command.guard;
-    // Release builds take both slots (section 6.1 rules 2 and 9).
-    if command.tool == CargoTool::Build && command.args.iter().any(|a| a == "--release") {
+    // Release builds take both slots (section 6.1 rules 2 and 9), however they are spelled.
+    if is_release(&command.args) {
         options.exclusive = true;
     }
     let steps = cargo_steps(command.tool, &command.args, cfg!(windows));
@@ -46,6 +46,16 @@ pub(crate) fn cargo(command: &CargoCommand, out: &mut dyn Write) -> io::Result<E
         )?;
     }
     finish(&ran, out)
+}
+
+/// Whether `args` ask cargo for the release profile: `--release`, `-r` or `--profile release`.
+fn is_release(args: &[String]) -> bool {
+    args.iter().enumerate().any(|(at, arg)| {
+        arg == "--release"
+            || arg == "-r"
+            || arg == "--profile=release"
+            || (arg == "--profile" && args.get(at + 1).is_some_and(|next| next == "release"))
+    })
 }
 
 /// The steps one cargo tool runs, with `args` from the command line; `windows` splits the
@@ -354,6 +364,19 @@ pub(crate) fn sim(options: &SimOptions, out: &mut dyn Write) -> io::Result<ExitC
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_spelling_of_a_release_build_takes_both_slots() {
+        let args = |list: &[&str]| list.iter().map(|&a| a.to_owned()).collect::<Vec<_>>();
+        for release in
+            [&["--release"][..], &["-r"], &["--profile", "release"], &["--profile=release"]]
+        {
+            assert!(is_release(&args(release)), "{release:?} is a release build");
+        }
+        for other in [&["--profile", "ci"][..], &["-p", "release"], &["--timings"], &[]] {
+            assert!(!is_release(&args(other)), "{other:?} is not a release build");
+        }
+    }
+
     use super::*;
 
     fn args_of(step: &Step) -> Vec<String> {
