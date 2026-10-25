@@ -151,7 +151,8 @@ pub struct CargoChild {
 
 /// Starts `invocation` in a kill-on-close Job Object at below-normal priority; on Unix, in a
 /// process group of its own that a watchdog kills when the [`CargoChild`] or the guard's
-/// process ends, through `nice -n 10` (see the module doc).
+/// process ends, through `nice -n 10` (see the module doc). On Unix a program `nice` cannot
+/// start is not an error here: the child exits with 127 (126 when it is not executable).
 #[expect(
     clippy::disallowed_methods,
     reason = "spawn_cargo: cargo inside the build guard's own kill-on-close Job Object (section 4b.2)"
@@ -230,7 +231,8 @@ fn start(mut command: Command, watchdog: Option<Command>) -> io::Result<CargoChi
     sh.args(["-c", WATCHDOG]).stdin(reader).stdout(Stdio::null()).stderr(Stdio::null());
     sh.process_group(0);
     let child = sh.spawn()?;
-    // `sh` still holds a copy of the read end; the write end stays this process's alone.
+    // Closes this process's copy of the read end, which `sh` held; the watchdog has its own,
+    // and the write end stays this process's alone.
     drop(sh);
     // Dropped, and so fired, if anything below fails: the group dies and the watchdog is reaped.
     let watchdog = Watchdog { child, writer: Some(writer) };
@@ -344,5 +346,18 @@ impl Drop for CargoChild {
         }
         // After this, on Windows the job's handle closes, and on Unix the watchdog is dropped
         // and so fired; either terminates anything left.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_cannot_start_exits_127_through_nice() {
+        use super::{CargoInvocation, spawn_cargo};
+
+        let missing = CargoInvocation::program("/nonexistent/eileen-buildguard-test", [""; 0]);
+        let mut child = spawn_cargo(&missing.quiet()).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(127), "nice could not start it");
     }
 }
