@@ -844,6 +844,27 @@ fn a_session_the_portal_closes_ends_the_holder_and_the_next_call_starts_another(
 }
 
 #[test]
+fn the_holder_closes_its_session_once_the_shell_drops() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let _portal = fakes.shortcuts(&bus, fake);
+    // A handle of the test's own keeps the bridge, and so the holder, past the shell's drop.
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let shell = LinuxShell::new(bridge.clone(), settings(DEFAULT_DEADLINE, None));
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let bind = bind_of(&mut reports, 1);
+    drop(shell);
+    let closed = loop {
+        if let Report::SessionClosed(session) = reports.blocking_recv().unwrap() {
+            break session;
+        }
+    };
+    assert_eq!(closed, bind.session, "the holder ends with the shell, and closes its session");
+    drop(bridge);
+}
+
+#[test]
 fn without_the_portal_hotkeys_and_input_are_unavailable() {
     let bus = PrivateBus::start();
     let shell = shell_on(&bus, DEFAULT_DEADLINE);
