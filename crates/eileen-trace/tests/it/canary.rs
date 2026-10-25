@@ -1,7 +1,8 @@
 //! The redaction canary: fake secrets written through the file and ring layers never appear
 //! raw on disk or in a ring dump (acceptance 6), and the console layer writes none of them
 //! either (BUILD.md section 2.13: no sink writes them where policy forbids). Nor does the home
-//! folder of the PC that built a dependency, which its events carry in their source path.
+//! folder of the PC that built a dependency, which its events carry in their source path. And
+//! values that only look like a card number reach every sink whole.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -37,6 +38,12 @@ const TRANSCRIPT: &str = "my bank pin is in the blue notebook";
 const KEY_HEADER_QUOTED: &str = "could not parse \"-----BEGIN RSA PRIVATE KEY-----\"";
 /// The card as a negative JSON number.
 const NEGATIVE_CARD: i64 = -4_111_111_111_111_111;
+/// The card on a line of its own, which `Debug` writes after an escaped newline (`\n`).
+const CARD_ON_ITS_OWN_LINE: &str = "Card number:\n4111 1111 1111 1111";
+/// 6/11, whose 16 digits after the point pass the card rule's Luhn check.
+const RATIO: f64 = 6.0 / 11.0;
+/// A `traceparent` whose trace id's last digit, parent id and flags make 19 digits that do too.
+const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcde2-0000000000000007-01";
 
 struct TempDir(PathBuf);
 
@@ -99,6 +106,7 @@ fn emit_secrets(pem: &str) {
     tracing::warn!(target: "eileen_desktop", "typed {QUOTED_PASSWORD:?} into the field");
     tracing::warn!(target: "eileen_desktop", line = KEY_HEADER_QUOTED, "a key header alone");
     tracing::info!(target: "eileen_core", balance = NEGATIVE_CARD, "a negative card number");
+    tracing::info!(target: "eileen_core", note = CARD_ON_ITS_OWN_LINE, shown = ?CARD_ON_ITS_OWN_LINE, "a card on its own line");
     tracing::debug!(target: "eileen_core", key = API_KEY, "ring only");
 }
 
@@ -263,4 +271,45 @@ fn fake_secrets_never_reach_the_console() {
     }
     assert!(text.contains("[redacted:"), "redacted in place:\n{text}");
     assert!(text.contains(TRANSCRIPT), "the console keeps pii fields, as the policy says");
+}
+
+/// Emits values that only look like card numbers: a fraction and a `traceparent`.
+fn emit_lookalikes() {
+    let action = tracing::info_span!(target: "eileen_desktop", names::DESKTOP_ACTION, traceparent = TRACEPARENT);
+    let _entered = action.enter();
+    tracing::warn!(target: "eileen_desktop", ratio = RATIO, "scored");
+}
+
+#[test]
+fn values_that_only_look_like_cards_reach_every_sink() {
+    let dir = TempDir(
+        std::env::temp_dir().join(format!("eileen-trace-lookalike-{}", std::process::id())),
+    );
+    let _ignored = std::fs::remove_dir_all(&dir.0);
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let (subscriber, guard) = eileen_trace::build(ProcessKind::Desktop, &config).unwrap();
+    tracing::subscriber::with_default(subscriber, emit_lookalikes);
+    let dump = String::from_utf8(guard.ring().dump(guard.redactor())).unwrap();
+    let parsed = guard.ring().records(guard.redactor());
+    drop(guard);
+    let console = Captured::default();
+    let layer = eileen_trace::init::console_layer::<Registry, _>(
+        console.clone(),
+        Arc::new(Redactor::new()),
+        "trace",
+    )
+    .unwrap();
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), emit_lookalikes);
+    for (what, text) in
+        [("a log file", read_all(&dir.0)), ("a ring dump", dump), ("the console", console.text())]
+    {
+        assert!(text.contains("0.5454545454545454"), "the ratio reached {what} whole:\n{text}");
+        assert!(text.contains(TRACEPARENT), "the traceparent reached {what} whole:\n{text}");
+        assert!(!text.contains("[redacted:"), "{what} redacted neither:\n{text}");
+    }
+    assert!(
+        parsed.spans.iter().any(|span| span.remote_parent.is_some()),
+        "the dumped span keeps its parent in the core"
+    );
 }

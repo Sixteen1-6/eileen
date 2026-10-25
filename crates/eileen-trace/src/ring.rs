@@ -318,6 +318,7 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::{Ring, RingLayer};
+    use crate::names;
     use crate::redact::Redactor;
 
     #[test]
@@ -380,6 +381,23 @@ mod tests {
         );
         assert_eq!(span.fields["nested"]["cards"][0], 0, "nested values are field values too");
         assert_eq!(span.fields["turn_id"], "turn_1", "other values stay");
+    }
+
+    #[test]
+    fn a_traceparent_keeps_its_parent_through_the_dump() {
+        // The trace id ends in a hex letter and a 2, which the parent id and the flags continue
+        // into 19 digits that pass the card rule's Luhn check.
+        let traceparent = "00-0123456789abcdef0123456789abcde2-0000000000000007-01";
+        let ring = Arc::new(Ring::new("eileen-desktop", 64 * 1024, Duration::from_secs(600)));
+        let subscriber = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&ring)));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info_span!(target: "eileen_desktop", names::DESKTOP_ACTION, traceparent)
+                .in_scope(|| {});
+        });
+        let spans = ring.records(&Redactor::new()).spans;
+        assert_eq!(spans.len(), 1, "the span read back");
+        assert_eq!(spans[0].fields["traceparent"], traceparent, "the traceparent is kept whole");
+        assert!(spans[0].remote_parent.is_some(), "so the span keeps its parent in the core");
     }
 
     #[test]

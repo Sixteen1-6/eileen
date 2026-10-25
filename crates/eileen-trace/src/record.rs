@@ -97,8 +97,9 @@ pub(crate) fn remote_parent(fields: &Map<String, Value>) -> Option<u64> {
 
 /// Runs every value of `fields` (nested ones included) through `redactor`, before the map is
 /// serialized, so a literal secret is matched raw rather than JSON-escaped. A string is
-/// redacted in place; a number whose digits hold a match (a card number) becomes `0`, so a
-/// negative or fractional one leaves valid JSON too. True when anything was replaced.
+/// redacted in place; a number whose digits hold a match (a card number, which the digits
+/// after a decimal point never are) becomes `0`, so a negative card or one written `.0` leaves
+/// valid JSON too. True when anything was replaced.
 pub(crate) fn redact_values(fields: &mut Map<String, Value>, redactor: &Redactor) -> bool {
     let mut replaced = false;
     for value in fields.values_mut() {
@@ -198,6 +199,16 @@ mod tests {
         );
         let mut clean = json!({"count": 7, "turn_id": "turn_1"});
         assert!(!redact_values(clean.as_object_mut().unwrap(), &r), "nothing to replace");
+    }
+
+    #[test]
+    fn a_fraction_keeps_its_digits() {
+        let r = Redactor::new();
+        // The 16 digits after each point pass the card rule's Luhn check.
+        let mut fields = json!({"ratio": 6.0_f64 / 11.0, "score": 0.590_089_667_194_192_1_f64});
+        let before = fields.clone();
+        assert!(!redact_values(fields.as_object_mut().unwrap(), &r), "nothing to replace");
+        assert_eq!(fields, before, "both numbers stay as they are");
     }
 
     #[test]

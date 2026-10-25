@@ -8,6 +8,11 @@
 //! standing alone as a JSON number becomes `0`, so the line stays valid JSON (a run of zeros
 //! would not be: JSON forbids leading zeros).
 //!
+//! A card number stands as a word of its own: no letter or digit right before or after it
+//! (except the letter of an escape such as `\n`), and no digit and decimal point before it.
+//! So the digits inside a hex id (a `traceparent`) or a token are not one, nor are the digits
+//! after a number's point, which pass the card rule for about one fraction in thirty.
+//!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
 //! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
 //! JSON-escaped, so a password holding a quote or a backslash is caught after serialization
@@ -431,12 +436,23 @@ fn match_at(bytes: &[u8], i: usize) -> Option<Finding> {
     if rest.starts_with(b"-----BEGIN") {
         return private_key(bytes, i);
     }
-    if rest.first().is_some_and(|b| (b'2'..=b'6').contains(b))
-        && !bytes.get(i.wrapping_sub(1)).is_some_and(u8::is_ascii_digit)
-    {
+    if rest.first().is_some_and(|b| (b'2'..=b'6').contains(b)) && card_starts(bytes, i) {
         return card(bytes, i);
     }
     None
+}
+
+/// True when a card number can start at `i`: at the start of a word, so not inside a hex id
+/// or a token, and not among the digits of a number, those after its decimal point included.
+/// The letter of an escape (the `n` of `\n` in a `Debug` or JSON string) ends a word.
+fn card_starts(bytes: &[u8], i: usize) -> bool {
+    let back = |n: usize| i.checked_sub(n).and_then(|at| bytes.get(at)).copied();
+    match back(1) {
+        None => true,
+        Some(b'.') => !back(2).is_some_and(|b| b.is_ascii_digit()),
+        Some(b) if b.is_ascii_alphabetic() => back(2) == Some(b'\\'),
+        Some(b) => !b.is_ascii_digit(),
+    }
 }
 
 fn jwt(bytes: &[u8], i: usize) -> Option<Finding> {
@@ -499,9 +515,10 @@ fn card(bytes: &[u8], i: usize) -> Option<Finding> {
             break;
         }
     }
-    let followed_by_digit = bytes.get(end).is_some_and(u8::is_ascii_digit);
+    // A word of its own at the end too: a run that a letter continues is part of an id.
+    let continued = bytes.get(end).is_some_and(u8::is_ascii_alphanumeric);
     let card_length = matches!(digits.len(), 15 | 16 | 19);
-    (card_length && !followed_by_digit && luhn(&digits))
+    (card_length && !continued && luhn(&digits))
         .then_some(Finding { kind: SecretKind::CardNumber, range: i..end })
 }
 
@@ -583,6 +600,82 @@ mod tests {
             r.redact(&format!("line={quoted:?}")),
             r#"line="could not parse \"[redacted:private_key]\"""#,
             "the console's form keeps its escaped quote"
+        );
+    }
+
+    #[test]
+    fn the_digits_after_a_decimal_point_are_no_card() {
+        let r = Redactor::new();
+        // 6/11 and a score: the 16 digits after each point start with 5 and pass the Luhn check.
+        for text in [
+            "0.5454545454545454",
+            "-0.5900896671941921",
+            r#"{"ratio":0.5454545454545454,"score":0.5900896671941921}"#,
+            "ratio=0.5454545454545454",
+        ] {
+            assert!(r.find(text).is_empty(), "{text}");
+        }
+        for text in
+            ["4111111111111111", "-4111111111111111", "4111111111111111.0", "No.4111111111111111"]
+        {
+            let kinds: Vec<_> = r.find(text).into_iter().map(|f| f.kind).collect();
+            assert_eq!(
+                kinds,
+                [SecretKind::CardNumber],
+                "a card's own digits are still one: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_number_is_a_word_of_its_own() {
+        let r = Redactor::new();
+        for text in [
+            // The trace id's last digit, the parent id and the flags: 19 digits that pass Luhn.
+            "00-0123456789abcdef0123456789abcde2-0000000000000007-01",
+            // A trace id that starts with a card's 16 digits.
+            "00-4111111111111111abcdef0123456789-0000000000000007-01",
+            "id x4111111111111111",
+            "4111111111111111x",
+        ] {
+            assert!(r.find(text).is_empty(), "{text}");
+        }
+        // The letter of an escape ends a word: a card on a line of its own, as `Debug` writes it,
+        // and `Debug` then JSON.
+        for text in [
+            r"Card:\n4111 1111 1111 1111",
+            r"Card:\\n4111 1111 1111 1111",
+            r"\t4111111111111111\r",
+            "card 4111 1111 1111 1111",
+            "pin:4111111111111111",
+        ] {
+            let kinds: Vec<_> = r.find(text).into_iter().map(|f| f.kind).collect();
+            assert_eq!(kinds, [SecretKind::CardNumber], "{text}");
+        }
+    }
+
+    #[test]
+    fn no_traceparent_is_a_card() {
+        let r = Redactor::new();
+        // Span ids as the registry hands them out: a slot's key plus 1, its generation at bit 51.
+        let spans = [7_u64, (1 << 51) + 3, (5 << 51) + 1, 0x00ab_cdef_0000_0001];
+        let mut lost = Vec::new();
+        for n in 0..4_096_u64 {
+            let hash = blake3::hash(&n.to_le_bytes());
+            let trace = u128::from_le_bytes(hash.as_bytes()[..16].try_into().unwrap());
+            for span in spans {
+                let traceparent = format!("00-{trace:032x}-{span:016x}-01");
+                if !r.find(&traceparent).is_empty() {
+                    lost.push(traceparent);
+                }
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "{} of {} traceparents matched, the first {:?}",
+            lost.len(),
+            4_096 * spans.len(),
+            lost.first()
         );
     }
 
