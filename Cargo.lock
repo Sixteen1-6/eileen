@@ -1047,6 +1047,22 @@ dependencies = [
 [[package]]
 name = "eileen-sim"
 version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "eileen-contracts",
+ "eileen-core",
+ "eileen-dictation",
+ "eileen-intent",
+ "eileen-skills",
+ "eileen-stdx",
+ "eileen-trace",
+ "schemars",
+ "serde",
+ "serde_json",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "eileen-skills"
