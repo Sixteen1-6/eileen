@@ -5,9 +5,9 @@
 //! A scenario folder passes when no file is binary (except consented audio), no file is over
 //! its size cap, `scenario.toml` never says `origin = "user"`, no text line holds a secret the
 //! [`Redactor`] finds or anything the PII scan finds (e-mail addresses, phone numbers but not
-//! dates with a time, user folders such as `C:\Users\<name>`, `/home/<name>`, `/media/<name>`
-//! and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not a web page's
-//! `https://<host>/users/...`, machine names and token prefixes), and:
+//! ISO 8601 or TOML dates with a time, user folders such as `C:\Users\<name>`, `/home/<name>`,
+//! `/media/<name>` and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not a web
+//! page's `https://<host>/users/...`, machine names and token prefixes), and:
 //!
 //! - **Audio only with its consent record.** `scenario.toml` parses as a [`Scenario`] with
 //!   `origin = "contributed-consented-audio"`, its `intent.audio.file` names the audio file,
@@ -274,8 +274,10 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
             i += 1;
             continue;
         }
-        if let Some(len) = date_time_len(bytes.get(i..).unwrap_or_default()) {
-            i += len;
+        // A date and time is no phone number, bare or in brackets: `(` can start a number too.
+        let open = usize::from(bytes.get(i) == Some(&b'('));
+        if let Some(len) = date_time_len(bytes.get(i + open..).unwrap_or_default()) {
+            i += open + len;
             continue;
         }
         let plus = bytes.get(i) == Some(&b'+');
@@ -655,6 +657,7 @@ mod tests {
     fn the_scan_finds_personal_data() {
         assert_eq!(kinds("mail sam.lee@quillpost.net now"), [PiiKind::Email], "e-mail");
         assert_eq!(kinds("call +1 (555) 123-4567"), [PiiKind::Phone], "phone");
+        assert_eq!(kinds("(555) 123-4567"), [PiiKind::Phone], "a number that starts with (");
         for (line, what) in [
             (r"C:\Users\samlee\Documents\cv.docx", "Windows user folder"),
             (r#"{"path":"C:\\Users\\samlee\\x"}"#, "JSON-escaped"),
@@ -744,6 +747,9 @@ mod tests {
             "created = 2026-10-21 15:30:00",
             "at = 1979-05-27T07:32:00.999999-07:00",
             "{\"at\": \"2026-10-21 15:30:00.5Z\"}",
+            "saved (2026-10-21 15:30)",
+            "(2026-10-21 15:30:00)",
+            "(1979-05-27T07:32:00.999999-07:00)",
             "https://api.example.com/users/42",
             "https://site.test/home/index.html",
             "[the guide](HTTPS://site.test/users/guide)",
