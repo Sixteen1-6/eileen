@@ -16,12 +16,12 @@ use eileen_contracts::ids::Personal;
 use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::PrivateBus;
 use eileen_platform::{AppEntry, AppKind, Apps, Deadline, PlatformError};
-use rustix::fs::{Mode, OFlags};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::index::session;
 use crate::open::{
-    Answer, AppCall, Behaviour, Event, Scratch, app, app_seen, call_seen, next, portal,
+    Answer, AppCall, Behaviour, Event, Scratch, app, app_seen, call_seen, next,
+    one_blocking_thread, portal,
 };
 
 /// The fixture's D-Bus-activatable Text Editor: its well-known name and its object path.
@@ -131,24 +131,36 @@ fn index_lists_the_menu_as_the_traits_entries() {
 
 #[test]
 fn an_index_that_a_read_holds_passes_its_deadline() {
-    // A FIFO named as a desktop entry: the index opens each entry without O_NONBLOCK, so its
-    // read waits for a writer, as one that a hung network mount holds would. A real wait: the
-    // deadline, the bridge's default, is real time.
+    // The index opens each entry without waiting and skips what is not a file, so no FIFO holds
+    // its read, and no unprivileged test can make a read hang as a hung network mount does. The
+    // adapter reads on a pool whose one thread the test holds instead, so its read waits behind
+    // it. A real wait: the deadline, the bridge's default, is real time.
+    let pool = one_blocking_thread();
     let bus = PrivateBus::start();
-    let scratch = Scratch::new();
-    std::fs::create_dir_all(scratch.path().join("applications")).unwrap();
-    let held = scratch.fifo("applications/held.desktop");
-    let mut session = session("en_US.UTF-8", "ubuntu:GNOME", None);
-    session.data_dirs.insert(0, scratch.path().to_owned());
-    let apps = LinuxApps::new(Bridge::on_private_bus(&bus).unwrap(), session);
+    let apps = apps(&bus).reading_files_on(pool.handle().clone());
+    let release = hold_the_blocking_thread(&pool);
     assert_eq!(
         apps.index(),
         Err(PlatformError::DeadlineExceeded { call: "app index" }),
-        "the read left to its thread"
+        "the read still waited for the pool's thread at the deadline, and was left to it"
     );
-    // A writer, which a read that waits lets open at once, ends the held read.
-    let writer = rustix::fs::open(&held, OFlags::WRONLY | OFlags::NONBLOCK, Mode::empty());
-    assert!(writer.is_ok(), "the read still waited on the FIFO: {writer:?}");
+    drop(release);
+    let listed = apps.index().map(|listed| listed.len());
+    assert_eq!(listed, Ok(7), "once the thread is free, the pool reads the whole index again");
+}
+
+/// Holds the one blocking thread of `pool`, from `one_blocking_thread`, until the returned sender
+/// drops, as a read hung on a network mount would, so a read given that pool waits behind it.
+/// It returns once the thread is held; a test that panics drops the sender as it unwinds.
+fn hold_the_blocking_thread(pool: &tokio::runtime::Runtime) -> oneshot::Sender<()> {
+    let (release, released) = oneshot::channel::<()>();
+    let (holding, held) = oneshot::channel();
+    let _held = pool.spawn_blocking(move || {
+        let _ignored = holding.send(());
+        released.blocking_recv()
+    });
+    assert_eq!(held.blocking_recv(), Ok(()), "the pool's thread held");
+    release
 }
 
 #[test]

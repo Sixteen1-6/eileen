@@ -66,7 +66,7 @@
 //! - `GLib` refuses a whole bookmark file over a bad date or a repeated `href`; the reader skips
 //!   that bookmark, and lists a path once at its newest time, as it does when two URIs name it.
 //!   A `private` bookmark is hidden from every app that did not register it, Eileen included.
-//! - Each read and check of a file has a thread of its own, which a hung mount may keep for good.
+//! - A hung mount may keep for good the thread a file read or check runs on, its own or a pool's.
 //! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are `eileen-dbus-linux`'s.
 //!   An [`MprisWatch`] has them; [`LinuxMedia`] runs it as a task on the bridge, which keeps them.
 //!   Its `subscribe` sink runs on the bridge's one thread: a sink that blocks stalls every call.

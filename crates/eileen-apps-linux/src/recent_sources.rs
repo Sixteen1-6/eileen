@@ -56,7 +56,7 @@ impl LinuxRecent {
 impl RecentSources for LinuxRecent {
     fn recent(&self, limit: usize) -> Result<Vec<platform::RecentItem>, PlatformError> {
         let list = self.list.clone();
-        let items = bounded::read(RECENT, move || list.recent(limit))??;
+        let items = bounded::read(RECENT, None, move || list.recent(limit))??;
         Ok(items.into_iter().map(to_platform).collect())
     }
 

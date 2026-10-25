@@ -323,8 +323,10 @@ impl Drop for Scratch {
 }
 
 /// A runtime whose blocking pool has one thread, for an opener that checks files there
-/// (`Opener::checking_files_on`), which a test can stall as no unprivileged test can stall a stat.
-fn one_blocking_thread() -> tokio::runtime::Runtime {
+/// (`Opener::checking_files_on`) or apps that read their index there
+/// (`LinuxApps::reading_files_on`), which a test can stall as no unprivileged test can stall a
+/// stat or a read.
+pub(crate) fn one_blocking_thread() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)

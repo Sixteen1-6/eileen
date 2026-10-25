@@ -20,7 +20,9 @@
 //! No method takes a `Deadline`, so each bridge call waits at most [`DEFAULT_DEADLINE`], the
 //! connection's method timeout and half a second. So does each read of the index, which a hung
 //! network mount can hold: past it the read is left to its thread, and the call answers
-//! `DeadlineExceeded` naming the app index.
+//! `DeadlineExceeded` naming the app index. [`LinuxApps::reading_files_on`] runs the reads on a
+//! runtime's blocking pool instead, which caps the threads that hung reads keep; a read's wait
+//! there for a free thread counts against the same deadline.
 //!
 //! An opening method's request gets [`REQUEST_BUDGET`] of the bridge's deadline, counted from the
 //! trait call's start: the opener's wait for the portal's `Response` gets what connecting and the
@@ -37,6 +39,7 @@ use std::time::Duration;
 use eileen_contracts::desktop::WindowRef;
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{self as platform, Apps, Deadline, PlatformError};
+use tokio::runtime::Handle;
 use tokio::time::Instant;
 
 use crate::bounded;
@@ -69,7 +72,8 @@ const MAIN_WINDOW: &str = "an app's main window";
 /// started and opened by [`Opener`] on a [`Bridge`]. The module's doc gives the rules.
 ///
 /// - `index` is [`index`] of the session. Each call reads the entries again, on a thread of its
-///   own within [`DEFAULT_DEADLINE`], as the trait gives no deadline, and keeps them.
+///   own or the pool that [`Self::reading_files_on`] gives, within [`DEFAULT_DEADLINE`], as the
+///   trait gives no deadline, and keeps them.
 /// - `launch` is [`Opener::launch`]: `Activate` on the app's `org.freedesktop.Application`,
 ///   which has the bus start the app. Its process ID is that of the connection that answered,
 ///   the app's own for an app on the host. A Flatpak app whose bus access is filtered answers
@@ -87,16 +91,30 @@ const MAIN_WINDOW: &str = "an app's main window";
 pub struct LinuxApps {
     bridge: Bridge,
     session: Session,
+    /// The runtime whose blocking pool reads the index, if not a thread for each read.
+    pool: Option<Handle>,
     /// The entries of the last index, for `launch` and `open_path` with an app.
     indexed: Mutex<Vec<DesktopEntry>>,
 }
 
 impl LinuxApps {
     /// The apps of `session`, [`Session::from_env`] in the apps process, started and opened on
-    /// `bridge`'s session bus. It reads nothing yet.
+    /// `bridge`'s session bus, each read of the index on a thread of its own. It reads nothing
+    /// yet.
     #[must_use]
     pub const fn new(bridge: Bridge, session: Session) -> Self {
-        Self { bridge, session, indexed: Mutex::new(Vec::new()) }
+        Self { bridge, session, pool: None, indexed: Mutex::new(Vec::new()) }
+    }
+
+    /// The same apps, each read of the index run on `pool`'s blocking pool instead, as
+    /// [`Opener::checking_files_on`] runs its checks: it caps the threads that reads hung on a
+    /// file system hold, at the cost of every later read waiting once they hold them all, until
+    /// its call's deadline. Once the runtime has shut down, a read answers `Io` at once, unrun.
+    /// Never the D-Bus bridge's runtime, whose blocking threads zbus needs to connect a bus.
+    #[must_use]
+    pub fn reading_files_on(mut self, pool: Handle) -> Self {
+        self.pool = Some(pool);
+        self
     }
 
     /// The indexed entry of `app`: from the last index, else from a new one, which is kept.
@@ -112,10 +130,11 @@ impl LinuxApps {
         Ok(found?)
     }
 
-    /// A new index of the session, read on a thread of its own within [`DEFAULT_DEADLINE`].
+    /// A new index of the session, read on a thread of its own or the pool's, within
+    /// [`DEFAULT_DEADLINE`].
     fn read_index(&self) -> Result<Vec<DesktopEntry>, PlatformError> {
         let session = self.session.clone();
-        bounded::read(INDEX, move || index(&session))
+        bounded::read(INDEX, self.pool.as_ref(), move || index(&session))
     }
 
     /// The kept entries. A thread that panicked while holding them left a whole list, so a
