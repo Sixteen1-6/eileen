@@ -642,6 +642,18 @@ mod tests {
             [PiiKind::UserPath],
             "a local path in a web address's query names a folder on a PC"
         );
+        for (line, what) in [
+            (r#"{"url":"https://a.test/x","path":"/home/samlee/notes.txt"}"#, "a quote"),
+            ("https://a.test/x,/home/samlee/notes.txt", "a comma"),
+            ("https://a.test/x#/home/samlee/notes.txt", "a fragment's #"),
+            ("(https://a.test/x)/home/samlee/notes.txt", "a bracket"),
+        ] {
+            assert_eq!(
+                kinds(line),
+                [PiiKind::UserPath],
+                "a path after a web address and {what} names a folder on a PC: {line}"
+            );
+        }
         assert_eq!(kinds("host DESKTOP-4F7Q2ZK"), [PiiKind::MachineName], "default machine name");
         assert_eq!(kinds(r"\\NAS01\photos"), [PiiKind::MachineName], "UNC host");
         assert!(
