@@ -214,8 +214,8 @@ async fn hold(buses: Buses, holder: Holder) {
         Err(error) => return refuse(asks, &error),
     };
     drop(buses);
-    // The set a new session binds at once, when the holder opened it to bind a set again.
-    let (mut wanted, mut first) = (Wanted::default(), None);
+    // What a new session binds at once, when the holder opened it to bind again.
+    let (mut wanted, mut rebind) = (Wanted::default(), None);
     loop {
         // The portal's answer waits the shell's deadline; its events come before any bind.
         let open = async {
@@ -227,22 +227,31 @@ async fn hold(buses: Buses, holder: Holder) {
             Ok(opened) => opened,
             Err(error) => {
                 // The session before is closed, so the desktop now binds none of the set.
-                if first.is_some() {
+                if rebind.is_some() {
                     report(LinuxShellEvent::ShortcutsRefused(error.clone()));
                 }
                 return refuse(asks, &error);
             }
         };
-        let again = first.take();
-        let served = serve(&session, &mut events, &mut asks, &mut wanted, &report, again).await;
+        let first = rebind.take();
+        let served = serve(&session, &mut events, &mut asks, &mut wanted, &report, first).await;
         drop(events);
         wanted.session_ended();
         let _ignored = session.close().await;
         match served {
-            Ok(list) => first = Some(list),
+            Ok(next) => rebind = Some(next),
             Err(ended) => return refuse(asks, &ended),
         }
     }
+}
+
+/// What a session the holder opened to bind again binds at once.
+#[derive(Debug, Clone, Copy)]
+enum Rebind {
+    /// The whole set, as it then stands.
+    Whole,
+    /// The set the desktop bound last, which the close of the session that held it unbound.
+    Accepted,
 }
 
 /// A bind under way: the set it sent, and the desktop's answer once the user has seen its
@@ -252,19 +261,19 @@ type Binding =
 
 /// Serves `session`: takes each ask in, binds the whole set [`SETTLE`] after the last ask that
 /// finds the session holding another, and hands the session's events on; a session opened to
-/// bind `first` binds it at once. A session takes one bind, so `Ok` asks for a new session that
-/// binds the set it gives at once: the whole set, for an ask that came once this session had
-/// had its bind, or the set the desktop bound before, once it refuses a changed set. So after a
-/// refusal any call binds again, and shows the dialog again. `Err` ends the holder, with what
-/// the asks still waiting are answered.
+/// bind again binds `first` at once. A session takes one bind, so `Ok` asks for a new session
+/// that binds again: the whole set, for an ask that came once this session had had its bind,
+/// or the set the desktop bound last, once it refuses a changed set. So after a refusal any
+/// call binds again, and shows the dialog again. `Err` ends the holder, with what the asks
+/// still waiting are answered.
 async fn serve(
     session: &ShortcutsSession,
     events: &mut ShortcutEvents,
     asks: &mut mpsc::Receiver<Ask>,
     wanted: &mut Wanted,
     report: &impl Fn(LinuxShellEvent),
-    mut first: Option<Vec<Shortcut>>,
-) -> Result<Vec<Shortcut>, DbusError> {
+    mut first: Option<Rebind>,
+) -> Result<Rebind, DbusError> {
     let mut bind_at = first.is_some().then(Instant::now);
     let mut binding: Option<Binding> = None;
     // Whether this session has had its bind, and what it sent, unless the desktop refused it.
@@ -282,10 +291,13 @@ async fn serve(
                 if bind_at.is_some() && binding.is_none() =>
             {
                 if had_bind {
-                    return Ok(wanted.whole());
+                    return Ok(Rebind::Whole);
                 }
                 (bind_at, had_bind) = (None, true);
-                let list = first.take().unwrap_or_else(|| wanted.whole());
+                let list = match first.take() {
+                    Some(Rebind::Accepted) => wanted.accepted.clone(),
+                    Some(Rebind::Whole) | None => wanted.whole(),
+                };
                 held = Some(list.clone());
                 let session = session.clone();
                 binding = Some(Box::pin(async move {
@@ -310,7 +322,7 @@ async fn serve(
                         report(LinuxShellEvent::ShortcutsRefused(error));
                         // The session before, which held them, is closed: bind them again.
                         if !wanted.accepted.is_empty() && list != wanted.accepted {
-                            return Ok(wanted.accepted.clone());
+                            return Ok(Rebind::Accepted);
                         }
                     }
                 }
