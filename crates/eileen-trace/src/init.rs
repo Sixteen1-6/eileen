@@ -227,9 +227,9 @@ fn parse_filter(which: &'static str, filter: &str) -> Result<EnvFilter, TraceErr
     EnvFilter::try_new(filter).map_err(|e| TraceError::Filter { which, detail: e.to_string() })
 }
 
-/// The console layer: `fmt`'s format on `writer` under `filter`, every write through
-/// `redactor`. `pii.` fields stay (a terminal the owner is watching, as the [`crate::pii`]
-/// table says); secrets do not. [`build`] gives it stderr.
+/// The console layer: `fmt`'s format on `writer` under `filter`, uncoloured, every write
+/// through `redactor`. `pii.` fields stay (a terminal the owner is watching, as the
+/// [`crate::pii`] table says); secrets do not. [`build`] gives it stderr.
 pub fn console_layer<S, W>(
     writer: W,
     redactor: Arc<Redactor>,
@@ -239,7 +239,11 @@ where
     S: Subscriber + for<'a> LookupSpan<'a> + 'static,
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
+    // Never coloured, whatever features the dependency graph turns on: the Redactor reads the
+    // text `fmt` has written, and a colour code would put its final `m` right before each
+    // value, where the card and token rules need a word to start.
     Ok(tracing_subscriber::fmt::layer()
+        .with_ansi(false)
         .with_writer(RedactingMakeWriter::new(writer, redactor))
         .with_filter(parse_filter("console", filter)?))
 }

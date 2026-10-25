@@ -269,6 +269,13 @@ fn fake_secrets_never_reach_the_console() {
             assert!(!text.contains(&form), "{form} reached the console:\n{text}");
         }
     }
+    // The card as a number too (`amount`, `balance`). The console redacts the text `fmt` wrote,
+    // so the card rule finds a value's first digit only while no colour code stands before it.
+    assert!(
+        !text.contains(&CARD_NUMBER.to_string()),
+        "the bare card reached the console:\n{text:?}"
+    );
+    assert!(!text.contains('\u{1b}'), "the console wrote a colour code:\n{text:?}");
     assert!(text.contains("[redacted:"), "redacted in place:\n{text}");
     assert!(text.contains(TRANSCRIPT), "the console keeps pii fields, as the policy says");
 }

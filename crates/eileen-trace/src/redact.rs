@@ -11,7 +11,9 @@
 //! A card number stands as a word of its own: no letter or digit right before or after it
 //! (except the letter of an escape such as `\n`), and no digit and decimal point before it.
 //! So the digits inside a hex id (a `traceparent`) or a token are not one, nor are the digits
-//! after a number's point, which pass the card rule for about one fraction in thirty.
+//! after a number's point, which pass the card rule for about one fraction in thirty. Nor is a
+//! card right after a colour code (`ESC[0m`) or a URL escape (`%3A`), whose last byte is a
+//! letter, which is why the console never colours what it writes.
 //!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
 //! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
