@@ -51,7 +51,10 @@ pub(crate) fn cargo_steps(tool: CargoTool, args: &[String], windows: bool) -> Ve
     };
     match tool {
         CargoTool::Check => {
-            vec![Step::cargo("check", with(&["check"], &or_workspace(&["--workspace", "--all-targets"])))]
+            vec![Step::cargo(
+                "check",
+                with(&["check"], &or_workspace(&["--workspace", "--all-targets"])),
+            )]
         }
         CargoTool::Clippy => vec![Step::cargo(
             "clippy",
@@ -139,10 +142,16 @@ fn has_cargo_tool(tool: &str) -> bool {
 
 /// The steps of the pull request lane that `cargo xtask ci` runs locally, in the lanes'
 /// order, with what it skipped and why.
-pub(crate) fn ci_steps(windows: bool, installed: &dyn Fn(&str) -> bool) -> (Vec<Step>, Vec<String>) {
+pub(crate) fn ci_steps(
+    windows: bool,
+    installed: &dyn Fn(&str) -> bool,
+) -> (Vec<Step>, Vec<String>) {
     let mut steps = vec![
         Step::cargo("fmt", ["fmt", "--all", "--check"]),
-        Step::cargo("clippy", ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]),
+        Step::cargo(
+            "clippy",
+            ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
+        ),
     ];
     let mut skipped = Vec::new();
     if installed("nextest") {
@@ -288,9 +297,19 @@ pub(crate) fn pre_push(options: &PrePushOptions, out: &mut dyn Write) -> io::Res
 /// `cargo xtask sim`: the simulator's binary through the guard. No arguments runs the pull
 /// request seed set.
 pub(crate) fn sim(options: &SimOptions, out: &mut dyn Write) -> io::Result<ExitCode> {
-    let args = with(&["run", "--locked", "-p", "eileen-sim", "--bin", "eileen-sim", "--"], &options.args);
+    let args =
+        with(&["run", "--locked", "-p", "eileen-sim", "--bin", "eileen-sim", "--"], &options.args);
     let steps = vec![Step::cargo("eileen-sim", args)];
-    finish(&guard::run(&command_line("cargo xtask sim", &options.args), options.guard, steps, false, out)?, out)
+    finish(
+        &guard::run(
+            &command_line("cargo xtask sim", &options.args),
+            options.guard,
+            steps,
+            false,
+            out,
+        )?,
+        out,
+    )
 }
 
 #[cfg(test)]
@@ -303,21 +322,27 @@ mod tests {
 
     #[test]
     fn the_desktop_filter_is_nextests() {
-        let text = std::fs::read_to_string(crate::repo_root().join(".config/nextest.toml")).unwrap();
+        let text =
+            std::fs::read_to_string(crate::repo_root().join(".config/nextest.toml")).unwrap();
         let config: toml::Table = toml::from_str(&text).unwrap();
         let overrides = config["profile"]["default"]["overrides"].as_array().unwrap();
         let desktop = overrides
             .iter()
             .find(|o| o.get("test-group").and_then(toml::Value::as_str) == Some("desktop"))
             .expect("the desktop group's override");
-        assert_eq!(desktop["filter"].as_str(), Some(DESKTOP_FILTER), "xtask splits on the same filter");
+        assert_eq!(
+            desktop["filter"].as_str(),
+            Some(DESKTOP_FILTER),
+            "xtask splits on the same filter"
+        );
     }
 
     #[test]
     fn a_bare_command_covers_the_workspace_and_arguments_replace_the_default() {
         let check = cargo_steps(CargoTool::Check, &[], false);
         assert_eq!(args_of(&check[0]), ["check", "--workspace", "--all-targets"], "the default");
-        let one = cargo_steps(CargoTool::Clippy, &["-p".to_owned(), "eileen-core".to_owned()], false);
+        let one =
+            cargo_steps(CargoTool::Clippy, &["-p".to_owned(), "eileen-core".to_owned()], false);
         assert_eq!(args_of(&one[0]), ["clippy", "-p", "eileen-core"], "the arguments given");
         let insta = cargo_steps(CargoTool::Insta, &[], false);
         assert_eq!(args_of(&insta[0]), ["insta", "test", "--unreferenced", "reject"], "insta");
@@ -328,14 +353,32 @@ mod tests {
         let steps = cargo_steps(CargoTool::Test { owner: true }, &[], true);
         assert_eq!(steps.len(), 2, "the rest, then the desktop group");
         let rest = args_of(&steps[0]);
-        assert!(rest.starts_with(&["nextest".to_owned(), "run".to_owned(), "--profile".to_owned(), "owner".to_owned()]), "{rest:?}");
-        assert!(rest.contains(&format!("not ({DESKTOP_FILTER})")), "everything but the group: {rest:?}");
+        assert!(
+            rest.starts_with(&[
+                "nextest".to_owned(),
+                "run".to_owned(),
+                "--profile".to_owned(),
+                "owner".to_owned()
+            ]),
+            "{rest:?}"
+        );
+        assert!(
+            rest.contains(&format!("not ({DESKTOP_FILTER})")),
+            "everything but the group: {rest:?}"
+        );
         assert!(!steps[0].desktop, "the rest takes no desktop lock");
         assert!(steps[1].desktop, "the group takes desktop.lock");
-        assert!(args_of(&steps[1]).contains(&"--no-tests=pass".to_owned()), "an empty group passes");
+        assert!(
+            args_of(&steps[1]).contains(&"--no-tests=pass".to_owned()),
+            "an empty group passes"
+        );
         let linux = cargo_steps(CargoTool::Test { owner: false }, &[], false);
         assert_eq!(args_of(&linux[0]), ["nextest", "run", "--workspace"], "one step off Windows");
-        let filtered = cargo_steps(CargoTool::Test { owner: false }, &["-E".to_owned(), "test(x)".to_owned()], true);
+        let filtered = cargo_steps(
+            CargoTool::Test { owner: false },
+            &["-E".to_owned(), "test(x)".to_owned()],
+            true,
+        );
         assert_eq!(filtered.len(), 1, "a filtered run stays whole");
         assert!(filtered[0].desktop, "and takes the lock for all of it");
     }
@@ -359,7 +402,10 @@ mod tests {
             ],
             "the pull request lane's steps"
         );
-        assert!(skipped.iter().any(|s| s.contains("cfg(not(windows))")), "Windows skips the Linux compile");
+        assert!(
+            skipped.iter().any(|s| s.contains("cfg(not(windows))")),
+            "Windows skips the Linux compile"
+        );
         assert!(skipped.iter().any(|s| s.contains("mutants")), "mutants never run locally");
         let (_, without_tools) = ci_steps(false, &|_| false);
         assert!(without_tools.iter().any(|s| s.contains("cargo-deny")), "a missing tool is named");
@@ -369,11 +415,19 @@ mod tests {
     fn pre_push_tests_the_changed_crates_or_everything() {
         let files = |list: &[&str]| -> Vec<String> { list.iter().map(|&f| f.to_owned()).collect() };
         assert_eq!(
-            changed_packages(&files(&["crates/eileen-core/src/lib.rs", "xtask/src/cli.rs", "docs/BUILD.md"])),
+            changed_packages(&files(&[
+                "crates/eileen-core/src/lib.rs",
+                "xtask/src/cli.rs",
+                "docs/BUILD.md"
+            ])),
             Some(vec!["eileen-core".to_owned(), "xtask".to_owned()]),
             "the two crates, not the docs"
         );
-        assert_eq!(changed_packages(&files(&["Cargo.lock"])), None, "the lockfile touches every crate");
+        assert_eq!(
+            changed_packages(&files(&["Cargo.lock"])),
+            None,
+            "the lockfile touches every crate"
+        );
         assert_eq!(changed_packages(&files(&[".config/nextest.toml"])), None, "so does .config/");
         assert_eq!(changed_packages(&files(&["README.md"])), Some(Vec::new()), "docs touch none");
     }

@@ -615,6 +615,14 @@ build guard and of the supervisor's `qos` module was linted by compiling it here
 `clippy.toml`; the supervisor's `cfg(unix)` process code uses Unix-only APIs and waits for
 `logic-linux`.
 
+The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
+the owner's PC writes its percentiles between these markers and its thresholds to
+`buildguard.toml`.
+
+<!-- baseline:start -->
+Not measured yet.
+<!-- baseline:end -->
+
 ## Outcome
 
 Open.

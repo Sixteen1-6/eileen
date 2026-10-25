@@ -1,67 +1,66 @@
-//! Repository tasks for Eileen, run as `cargo xtask <command>`.
-//!
-//! This first cut has one command, `pr-meta`, which checks a pull request's title, description
-//! and changed files exactly as the `pr-meta` workflow does: checks 7 and 8 and the fix half of
-//! check 19 in BUILD.md section 4b.3. The guarded build commands, `lint-repo` and the rest of
-//! section 4b.5 arrive with `wp0/xtask`.
+//! Repository tasks for Eileen, run as `cargo xtask <command>` (BUILD.md section 4b.5): the
+//! guarded build commands, the fast repository checks, the pull request checks and the machine
+//! commands. Every command section 4b.5 names parses; those later work builds say when it does.
 //!
 //! # Owns
 //!
-//! - The `cargo xtask` command line and its exit codes (0 pass, 1 findings, 2 usage, IO or git).
-//! - `pr-meta`: the title rule, the template and its Evidence grammar, the type-fits-files rule
-//!   and the rule that a fix adds or changes a regression.
-//! - The path classes of BUILD.md section 4.6 as `pr-meta` reads them.
+//! - The command line, its exit codes (0 pass, 1 findings, 2 usage or IO, 75 no build slot) and
+//!   the guard's use: one slot per command, the re-check, the waiting report and the guard's
+//!   log (`guard`, over `eileen-buildguard`).
+//! - `lint-repo` (checks 1, 2, 4, 6, 10, 14 and 16 with `xtask/tidy/*.toml`) and `pr-meta`
+//!   (checks 7, 8 and the fix half of 19), with the path classes of section 4.6.
+//! - `check`, `test`, `clippy`, `build`, `insta`, `ci`, `pre-push`, `sim`, `setup`, `slots`,
+//!   `desktop-lock`, `fetch-native` (the native table) and `lock`.
 //!
 //! # Does not own
 //!
-//! - The wording of `.github/PULL_REQUEST_TEMPLATE.md`, which the tests read as the placeholder.
-//! - The `evidence` job (a fix's tests run before and after), which arrives in phase B.
+//! - Admission, the slots and the machine-wide files (`eileen-buildguard`), the simulator
+//!   (`eileen-sim`, which `sim` runs), and the `evidence` job and `codegen` (phase B).
 //!
 //! # Invariants
 //!
-//! - `pr-meta` compiles nothing and reads only commits, never the working tree: every read goes
-//!   through the `Repo` trait, whose one real implementation asks `git` about the base and head.
-//! - Only `tests:` and `scenarios:` field lines are read as ids, so prose is never mistaken for an
-//!   id (test `hyphenated_prose_is_not_an_id`).
-//! - The path classes equal the `plan` job's filters in `.github/workflows/ci.yml` (test
-//!   `ci_filters_match_the_classifier`).
-//! - Every failure names its check, where it is, the fix and the command that reproduces it.
+//! - Every command that runs cargo takes a slot first and exits 75 without one (tests
+//!   `guard::tests::a_refused_command_exits_75_and_logs_the_refusal` and
+//!   `guard::tests::an_admitted_command_runs_its_steps_and_logs_the_admission`).
+//! - `pr-meta` reads only commits, never the working tree, and only `tests:` and `scenarios:`
+//!   lines as ids (test `hyphenated_prose_is_not_an_id`); its path classes equal the `plan`
+//!   job's filters (test `ci_filters_match_the_classifier`).
+//! - The desktop group's filter equals `.config/nextest.toml`'s (test
+//!   `cargo_run::tests::the_desktop_filter_is_nextests`).
+//! - Every failure names its check or step, where it is, the fix and the command to rerun.
 //!
 //! # Boundaries
 //!
-//! - Called by people and agents at the shell, and by `.github/workflows/pr-meta.yml`.
-//! - May depend on std and `toml`; BUILD.md section 3.1 adds `eileen-buildguard` and
-//!   `serde_json` when the guarded commands arrive. Nothing else, so it compiles in seconds.
-//! - Must not depend on any other Eileen crate.
-//! - Wire types: none. It reads Markdown, TOML and git output, and writes a plain report.
+//! - Called by people and agents at the shell, `.githooks/pre-push` and the workflows.
+//! - May depend on `eileen-buildguard`, `serde_json` and `toml` (section 4b.5).
+//! - Must not depend on any other Eileen crate, so it compiles in seconds (check 15).
+//! - Wire types: the guard's log lines; it reads Markdown, TOML and git output.
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo nextest run -p xtask`.
-//! - Layers: unit tests over an in-memory repository for every rule, and tests against scratch
-//!   git repositories for the git plumbing (they need `git` on `PATH`).
-//! - A bug here starts as a fixture test: the title, description and changed files misjudged.
+//! - Fast command: `cargo nextest run -p xtask` (it cannot guard its own build).
+//! - Layers: unit tests over in-memory trees and repositories for every check, the guard with
+//!   fake memory and a manual clock, and scratch git repositories (they need `git` on `PATH`).
+//! - A bug here starts as a fixture test: a tree, description or memory reading misjudged.
 //!
 //! # Traps
 //!
-//! - Descriptions edited in the browser arrive with CRLF line endings; parsing normalises first.
-//! - A `## ` line inside a fenced code block is not a heading, and HTML comments outside code are
-//!   removed before anything is read, so the template's guidance never counts as evidence while
-//!   a `<!--` quoted in a code span or block stays text.
-//! - Changed files come from the merge base (`base...head`), not from `base` itself, so commits
-//!   that landed on `main` after the branch started are not counted as the pull request's own.
+//! - Descriptions edited in the browser arrive with CRLF; parsing normalises first.
 //! - git exports `GIT_DIR` and friends to hooks, and in a worktree they beat `-C`; every git
 //!   command xtask starts removes them.
+//! - A `## ` line inside a fenced code block is not a heading, and HTML comments outside code
+//!   are removed before anything is read.
+//! - Under `fetch-native --print-env`, standard output carries only the variables.
 //!
 //! # Logs and tracing
 //!
-//! - No tracing. The report goes to standard output and, on GitHub Actions, each finding is also
-//!   an `::error` annotation. Reproduce any run with the `reproduce:` line it prints.
+//! - No tracing. Reports go to standard output, and on GitHub Actions each finding is also an
+//!   `::error` annotation. The guard's log is `buildguard-log.jsonl` in the machine root.
 //!
 //! # Do not change without a decision record
 //!
 //! - The Evidence field grammar, the type values and the type-fits-files rule (D63, D68).
-//! - The exit codes, which workflows and agents read.
+//! - The exit codes, which workflows and agents read, and the guard's log format.
 
 #![forbid(unsafe_code)]
 

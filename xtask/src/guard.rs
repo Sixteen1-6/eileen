@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use eileen_buildguard::clock::{Clock as _, RealClock};
+use eileen_buildguard::clock::RealClock;
 use eileen_buildguard::guard::RECHECK_EVERY;
 use eileen_buildguard::slots::Holder;
 use eileen_buildguard::{
@@ -345,9 +345,13 @@ mod tests {
 
     #[test]
     fn a_log_line_names_the_event_the_slots_and_the_window() {
-        let window =
-            Window { paging_kb_s: Some(1_200), headroom_min_mb: Some(4_000), avail_mb: Some(1_300) };
-        let line = log_line(1_000, "admitted", "cargo xtask test", Some((Slots::Zero, 2)), None, window);
+        let window = Window {
+            paging_kb_s: Some(1_200),
+            headroom_min_mb: Some(4_000),
+            avail_mb: Some(1_300),
+        };
+        let line =
+            log_line(1_000, "admitted", "cargo xtask test", Some((Slots::Zero, 2)), None, window);
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(value["event"], "admitted", "the event");
         assert_eq!(value["slots"], "0", "slot 0");
@@ -401,7 +405,8 @@ mod tests {
         ] {
             let mut memory = FakeMemory::steady(8_000, 16_000, 100);
             let request = Request::new("cargo xtask ci", "worktree");
-            let (ran, _, _) = run_scratch("guard-steps", &mut memory, &request, steps(), keep_going);
+            let (ran, _, _) =
+                run_scratch("guard-steps", &mut memory, &request, steps(), keep_going);
             assert_eq!(ran, Ran::Steps(expected), "keep going: {keep_going}");
         }
     }

@@ -12,7 +12,9 @@ use eileen_buildguard::baseline::{compute_baseline, hours_covered, utc_date};
 use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::samples::{self, Sample, Source};
 use eileen_buildguard::slots::{self, Holder};
-use eileen_buildguard::{MemorySource as _, Reason, Store, SystemMemory, acquire_desktop, pressure};
+use eileen_buildguard::{
+    MemorySource as _, Reason, Store, SystemMemory, acquire_desktop, pressure,
+};
 
 use crate::cli::{DesktopLockOptions, FetchNativeOptions, SlotsCommand};
 use crate::sha256;
@@ -303,8 +305,8 @@ pub(crate) fn baseline_report(samples: &[Sample], hours: usize) -> String {
             cell(values, 95)
         )
     };
-    let first = kept.iter().map(|s| s.at_ms).min().map_or_else(String::new, |ms| utc_date(ms));
-    let last = kept.iter().map(|s| s.at_ms).max().map_or_else(String::new, |ms| utc_date(ms));
+    let first = kept.iter().map(|s| s.at_ms).min().map_or_else(String::new, utc_date);
+    let last = kept.iter().map(|s| s.at_ms).max().map_or_else(String::new, utc_date);
     [
         format!(
             "Measured {first} to {last}: {} samples in {hours} separate hours, {} left out because \
@@ -332,7 +334,10 @@ pub(crate) fn replace_between(text: &str, start: &str, end: &str, block: &str) -
 
 /// `cargo xtask desktop-lock --hold`: holds `desktop.lock` until Enter, standard input closing,
 /// or the process being stopped (the OS releases the lock then).
-pub(crate) fn desktop_lock(options: DesktopLockOptions, out: &mut dyn Write) -> io::Result<ExitCode> {
+pub(crate) fn desktop_lock(
+    options: DesktopLockOptions,
+    out: &mut dyn Write,
+) -> io::Result<ExitCode> {
     let store = Store::machine()?;
     fs::create_dir_all(store.root())?;
     let clock = RealClock;
@@ -343,8 +348,7 @@ pub(crate) fn desktop_lock(options: DesktopLockOptions, out: &mut dyn Write) -> 
         started_ms: clock.now_ms(),
     };
     let mut report = |reason: &Reason, holders: &[Holder]| {
-        let who: Vec<String> =
-            holders.iter().map(|h| holder_text(h, clock.now_ms())).collect();
+        let who: Vec<String> = holders.iter().map(|h| holder_text(h, clock.now_ms())).collect();
         // Nobody is left to tell if standard error is closed; the wait goes on either way.
         let _reported: io::Result<()> =
             writeln!(io::stderr().lock(), "desktop-lock: waiting: {reason}; {}", who.join("; "));
@@ -390,7 +394,8 @@ pub(crate) fn native_env() -> Vec<(String, String)> {
 /// The variables for `archive` under `root`, when its verified marker and its unpacked `lib`
 /// folder are there.
 pub(crate) fn env_for(root: &Path, archive: &NativeArchive) -> Option<Vec<(String, String)>> {
-    let marker = fs::read_to_string(root.join(format!("{}{VERIFIED_SUFFIX}", archive.file))).ok()?;
+    let marker =
+        fs::read_to_string(root.join(format!("{}{VERIFIED_SUFFIX}", archive.file))).ok()?;
     let lib = root.join(archive.folder).join("lib");
     (marker.trim() == archive.sha256 && lib.is_dir()).then(|| {
         vec![
@@ -434,7 +439,10 @@ pub(crate) fn stale_entries(root: &Path, archive: &NativeArchive) -> io::Result<
 /// missing or wrong, checks its size and hash, unpacks it with tar, removes what older pins
 /// left, and says (or with `--print-env` prints) the variables cargo gets. Off Windows there is
 /// nothing to fetch: the native libraries are Windows only.
-pub(crate) fn fetch_native(options: FetchNativeOptions, out: &mut dyn Write) -> io::Result<ExitCode> {
+pub(crate) fn fetch_native(
+    options: FetchNativeOptions,
+    out: &mut dyn Write,
+) -> io::Result<ExitCode> {
     if !cfg!(windows) {
         if !options.print_env {
             writeln!(
@@ -445,28 +453,28 @@ pub(crate) fn fetch_native(options: FetchNativeOptions, out: &mut dyn Write) -> 
         }
         return Ok(ExitCode::SUCCESS);
     }
-    // Under --print-env, standard output is for the variables alone, so progress goes to
-    // standard error.
-    let mut stderr = io::stderr().lock();
-    let say: &mut dyn Write = if options.print_env { &mut stderr } else { out };
     let root = native_root()?;
     fs::create_dir_all(&root)?;
     let archive = SHERPA_ONNX;
     let path = root.join(archive.file);
     if !path.is_file() || !verify(&path, &archive)? {
-        writeln!(say, "fetch-native: downloading {}", archive.url)?;
+        note(options.print_env, out, &format!("fetch-native: downloading {}", archive.url))?;
         let partial = root.join(format!("{}.partial", archive.file));
         let mut curl = Command::new("curl");
         curl.args(["--fail", "--location", "--retry", "5", "--silent", "--show-error", "--output"])
             .arg(&partial)
             .arg(archive.url);
         if !run_tool(&mut curl) {
-            writeln!(say, "fetch-native: the download failed")?;
+            note(options.print_env, out, "fetch-native: the download failed")?;
             return Ok(ExitCode::from(crate::EXIT_ERROR));
         }
         if !verify(&partial, &archive)? {
             fs::remove_file(&partial)?;
-            writeln!(say, "fetch-native: the download does not match the pinned size and hash")?;
+            note(
+                options.print_env,
+                out,
+                "fetch-native: the download does not match the pinned size and hash",
+            )?;
             return Ok(ExitCode::from(crate::EXIT_FINDINGS));
         }
         fs::rename(&partial, &path)?;
@@ -476,33 +484,52 @@ pub(crate) fn fetch_native(options: FetchNativeOptions, out: &mut dyn Write) -> 
         let mut tar = Command::new("tar");
         tar.arg("-xjf").arg(&path).arg("-C").arg(&root);
         if !run_tool(&mut tar) {
-            writeln!(say, "fetch-native: unpacking {} failed", archive.file)?;
+            note(
+                options.print_env,
+                out,
+                &format!("fetch-native: unpacking {} failed", archive.file),
+            )?;
             return Ok(ExitCode::from(crate::EXIT_ERROR));
         }
     }
     for stale in stale_entries(&root, &archive)? {
-        writeln!(say, "fetch-native: removing {}, left by an older pin", stale.display())?;
+        note(
+            options.print_env,
+            out,
+            &format!("fetch-native: removing {}, left by an older pin", stale.display()),
+        )?;
         if stale.is_dir() { fs::remove_dir_all(&stale)? } else { fs::remove_file(&stale)? }
     }
     let Some(env) = env_for(&root, &archive) else {
-        writeln!(say, "fetch-native: the archive did not unpack to {}/lib", archive.folder)?;
+        note(
+            options.print_env,
+            out,
+            &format!("fetch-native: the archive did not unpack to {}/lib", archive.folder),
+        )?;
         return Ok(ExitCode::from(crate::EXIT_ERROR));
     };
     for (name, value) in &env {
         if options.print_env {
             writeln!(out, "{name}={value}")?;
         } else {
-            writeln!(say, "fetch-native: {name}={value}")?;
+            writeln!(out, "fetch-native: {name}={value}")?;
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Progress of `fetch-native`: on standard error under `--print-env`, whose standard output is
+/// for the variables alone, else on `out`.
+fn note(print_env: bool, out: &mut dyn Write, text: &str) -> io::Result<()> {
+    if print_env { writeln!(io::stderr().lock(), "{text}") } else { writeln!(out, "{text}") }
 }
 
 /// The third-party packages of a `Cargo.lock`: name and version of every package with a
 /// source.
 pub(crate) fn third_party(lockfile: &str) -> Result<Vec<(String, String)>, String> {
     let value: toml::Table = toml::from_str(lockfile).map_err(|e| format!("Cargo.lock: {e}"))?;
-    let packages = value.get("package").and_then(toml::Value::as_array).cloned().unwrap_or_default();
+    let packages =
+        value.get("package").and_then(toml::Value::as_array).cloned().unwrap_or_default();
     let mut found: Vec<(String, String)> = packages
         .iter()
         .filter(|p| p.get("source").is_some())
@@ -592,8 +619,7 @@ mod tests {
         let text = "intro\n<!-- baseline:start -->\nold\n<!-- baseline:end -->\nafter\n";
         let replaced = replace_between(text, BASELINE_START, BASELINE_END, "new").unwrap();
         assert_eq!(
-            replaced,
-            "intro\n<!-- baseline:start -->\nnew\n<!-- baseline:end -->\nafter\n",
+            replaced, "intro\n<!-- baseline:start -->\nnew\n<!-- baseline:end -->\nafter\n",
             "the block and nothing else"
         );
         assert_eq!(replace_between("no markers", BASELINE_START, BASELINE_END, "x"), None, "none");
@@ -645,10 +671,8 @@ mod tests {
         scratch.write("sherpa-onnx-v1.13.7-win-x64-shared-MT-Release-lib.tar.bz2", "old");
         scratch.write("buildguard.toml", "not native");
         let stale = stale_entries(scratch.path(), &current).unwrap();
-        let names: Vec<String> = stale
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
+        let names: Vec<String> =
+            stale.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(
             names,
             [
@@ -663,8 +687,7 @@ mod tests {
     fn the_pinned_archive_is_section_4_1s() {
         assert_eq!(SHERPA_ONNX.size, 8_032_957, "the size section 4.1 gives");
         assert_eq!(
-            SHERPA_ONNX.sha256,
-            "b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7",
+            SHERPA_ONNX.sha256, "b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7",
             "the hash section 4.1 gives"
         );
         assert!(SHERPA_ONNX.url.ends_with(SHERPA_ONNX.file), "the URL names the file");
