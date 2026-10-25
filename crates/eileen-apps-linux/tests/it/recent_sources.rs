@@ -3,6 +3,7 @@
 //! the list holds is pinned by the `recent` tests: these pin the conversions.
 
 use std::fmt::Write as _;
+use std::fs;
 
 use eileen_apps_linux::{LinuxRecent, RecentlyUsed};
 use eileen_contracts::ids::{Personal, Untrusted};
@@ -10,7 +11,7 @@ use eileen_contracts::tools::apps::FileKind;
 use eileen_platform::{PlatformError, RecentItem, RecentSources};
 
 use crate::open::Scratch;
-use crate::recent::{fixtures, gtk, list};
+use crate::recent::{fixtures, gtk, list, sparse};
 
 /// A bookmark file with a file for each of `names`, opened by an app of that name as XML writes
 /// it, each a day older than the one before.
@@ -116,6 +117,13 @@ fn the_lists_errors_are_platform_errors() {
         recent(RecentlyUsed::at(scratch.fifo("recently-used.xbel"))),
         Err(PlatformError::Invalid { what, detail: "not a file".to_owned() }),
         "a FIFO, refused unread"
+    );
+    // GLib's file, padded with zeros to one byte over 16 MiB, the most the reader lists.
+    let glib = fs::read(fixtures().join("home/sam/.local/share/recently-used.xbel")).unwrap();
+    assert_eq!(
+        recent(sparse(&scratch, "over-the-limit.xbel", &glib, (16 << 20) + 1)),
+        Err(PlatformError::Invalid { what, detail: "larger than 16 MiB".to_owned() }),
+        "a file over 16 MiB, refused whole rather than listed from its start"
     );
 }
 

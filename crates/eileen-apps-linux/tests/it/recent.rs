@@ -340,7 +340,7 @@ fn a_fifo_or_a_device_in_the_files_place_is_refused_unread() {
 
 /// A file in `scratch`, named `name`, that holds `text` and then zeros to `len` bytes.
 /// `File::set_len` adds the zeros without writing them, so they take no disk space.
-fn sparse(scratch: &Scratch, name: &str, text: &[u8], len: u64) -> RecentlyUsed {
+pub(crate) fn sparse(scratch: &Scratch, name: &str, text: &[u8], len: u64) -> RecentlyUsed {
     let path = scratch.path().join(name);
     fs::write(&path, text).unwrap();
     fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(len).unwrap();
