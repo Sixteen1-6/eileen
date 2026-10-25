@@ -342,6 +342,13 @@ impl App {
         Self { conn: bus.connect().await }
     }
 
+    /// An app with no objects yet on the bus at `address`, as a child process reaches the
+    /// test's bus.
+    pub(crate) async fn at(address: &str) -> Self {
+        let builder = zbus::connection::Builder::address(address).unwrap();
+        Self { conn: builder.build().await.unwrap() }
+    }
+
     /// The unique name of the app's connection.
     pub(crate) fn name(&self) -> String {
         self.conn.unique_name().unwrap().to_string()

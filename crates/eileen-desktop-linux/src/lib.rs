@@ -30,13 +30,13 @@
 //! - Every app text is sanitized (`eileen_contracts::desktop::sanitize`) and bounded, and errors
 //!   never carry it, nor an error name an app chose. A role, a state or an interface means only
 //!   what this crate's tables say: a window's class is its role's name, never the app's text.
-//! - A window's process is the one the bus's daemon gives for its app's connection, never what
-//!   the app says, and its id is the same in every process (`window_id`'s golden vector).
+//! - A window's pid is the one the bus's daemon gives for its app's connection, never what the
+//!   app says, and its process is named from that pid (test `a_window_names_its_apps_own_process`).
+//!   Its id is the same in every process (`window_id`'s golden vector).
 //! - Every call is bounded: on the accessibility bus by its connection's call timeout, a walk by
 //!   its `TreeLimits` and its budget, checked between reads, and a trait call by its deadline on
 //!   the bridge, with no timer of its own around a call (`eileen-dbus-linux`'s deadline model).
-//! - Unix sockets only: `eileen_dbus_linux::bus_at_within` refuses any other accessibility bus
-//!   address, so the launcher's answer never starts a program or leaves the machine.
+//! - Unix sockets only (`bus_at_within`): no launcher's answer runs a program or leaves the PC.
 //!
 //! # Boundaries
 //!
@@ -47,8 +47,8 @@
 //!
 //! - Fast command: `cargo nextest run -p eileen-desktop-linux`.
 //! - Layers: unit tests of the tables and the window id; integration tests in `tests/it/` with a
-//!   fake launcher on one private bus and a fake registry and apps on a second, each object a
-//!   `#[zbus::interface]` that counts its calls, and `Grounding` through `Bridge::on_private_bus`.
+//!   fake launcher on one private bus and a fake registry and apps on a second, one app in a
+//!   process of its own, and `Grounding` through `Bridge::on_private_bus`.
 //!   A walk's budget passes in paused time; real time only waits a 100 ms timeout or deadline.
 //! - A bug here starts as a window list or a tree that misses what is on screen, a call that runs
 //!   long, or a read of a field Eileen must not read.
