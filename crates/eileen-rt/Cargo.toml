@@ -21,7 +21,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-eileen-trace = { workspace = true, features = ["test-support"] }
+eileen-trace = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

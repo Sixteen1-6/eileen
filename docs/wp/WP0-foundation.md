@@ -507,8 +507,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   incident. The span-parent table follows the observability report's section 2.5: `speech.segment`,
   `turn.detect`, `tts.synth`, `desktop.capture`, `desktop.action` and `apps.call` take only their
   remote parent, so a lost `traceparent` fails the check; `speak` alone keeps `Root`, for an
-  announcement with neither turn nor job. `test_support` sits behind the `test-support` feature,
-  which only dev-dependencies turn on. The PII scan reports each kind once per line, in plain words.
+  announcement with neither turn nor job. `test_support` sits behind the `testing` feature,
+  which only dev-dependencies turn on (`test-support` would trip `clippy::redundant_feature_names`).
+  The PII scan reports each kind once per line, in plain words.
 - Base crates, trace: the scenario privacy rules parse `scenario.toml` into the contracts'
   `Scenario` (so `eileen-trace` depends on `toml`). Audio passes only when the origin is
   `contributed-consented-audio`, `intent.audio.file` names it and the record at

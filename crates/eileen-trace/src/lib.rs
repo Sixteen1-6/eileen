@@ -10,7 +10,7 @@
 //! - [`names`] and the span-parent check ([`schema`]); the `pii.` policy ([`pii`]), the
 //!   [`redact::Redactor`] and the scenario privacy rules and PII scan ([`privacy`]).
 //! - The [`chrome`] converter, [`traceparent`] parsing, and `test_support` (feature
-//!   `test-support`, which only dev-dependencies turn on).
+//!   `testing`, which only dev-dependencies turn on).
 //!
 //! # Does not own
 //!
@@ -78,7 +78,7 @@ pub mod redact;
 pub mod ring;
 pub mod schema;
 pub mod slow;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 pub mod traceparent;
 
