@@ -455,6 +455,23 @@ async fn a_count_that_says_too_many_keeps_the_children_read() {
 }
 
 #[tokio::test]
+async fn a_count_that_says_too_few_keeps_the_node_limit() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    let children = app.references(&["/c0", "/c1", "/c2", "/c3", "/c4"]);
+    app.add("/root", Node { child_count: 1, ..Node::showing("root", children) }).await;
+    app.tree(&[("/c0", &[]), ("/c1", &[]), ("/c2", &[]), ("/c3", &[]), ("/c4", &[])]).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    let walk = atspi.walk(&app.object("/root"), limits(12, 3), later()).await.unwrap();
+    assert_eq!(
+        shape(&walk),
+        [("root", None, 0), ("c0", Some(0), 1), ("c1", Some(0), 1)],
+        "GetChildren listed five where ChildCount said one, and three nodes are read"
+    );
+    assert!(walk.truncated, "c2 to c4 were left out");
+}
+
+#[tokio::test]
 async fn an_app_without_get_children_is_read_child_by_child() {
     let a11y = PrivateBus::start();
     let app = App::start(&a11y).await;
