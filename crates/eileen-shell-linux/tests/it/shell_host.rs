@@ -865,6 +865,29 @@ fn the_holder_closes_its_session_once_the_shell_drops() {
 }
 
 #[test]
+fn a_rebind_whose_session_cannot_open_reaches_the_sink_as_a_refusal() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let _first = bind_of(&mut reports, 1);
+    let answered = events.blocking_recv();
+    assert!(matches!(answered, Some(LinuxShellEvent::ShortcutsBound(_))), "{answered:?}");
+    let released = fakes.runtime.block_on(portal.release_name(SHORTCUTS_PORTAL)).unwrap();
+    assert!(released, "the portal has left the bus, so no new session can open");
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let unavailable = DbusError::Unavailable { what: "GlobalShortcuts session" };
+    assert_eq!(
+        events.blocking_recv(),
+        Some(LinuxShellEvent::ShortcutsRefused(unavailable)),
+        "the changed set is bound nowhere, and the sink hears it"
+    );
+}
+
+#[test]
 fn without_the_portal_hotkeys_and_input_are_unavailable() {
     let bus = PrivateBus::start();
     let shell = shell_on(&bus, DEFAULT_DEADLINE);
