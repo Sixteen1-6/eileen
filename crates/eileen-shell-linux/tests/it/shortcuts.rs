@@ -355,6 +355,34 @@ async fn the_app_registers_before_the_session_and_the_bind_reports_triggers() {
 }
 
 #[tokio::test]
+async fn a_nul_in_the_app_id_or_a_description_never_reaches_the_bus() {
+    let bus = PrivateBus::start();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let _portal = serve_portal(&bus, fake).await;
+    let client = bus.connect().await;
+    let session = ShortcutsSession::open(&client, "org.eileen\0.Eileen", WAIT).await.unwrap();
+    let registered = Report::Registered { app_id: APP_ID.to_owned(), options: vec![], first: true };
+    assert_eq!(reports.recv().await, Some(registered), "U+0000 removed from the app ID");
+    let shortcut = Shortcut { description: "Mute\0 or unmute".to_owned(), ..mute() };
+    session.bind(&[shortcut], WAIT).await.unwrap();
+    let bind = loop {
+        if let Some(Report::Bound(bind)) = reports.recv().await {
+            break bind;
+        }
+    };
+    let expected = listed(&[("hotkey-1", Some("Mute or unmute"), Some("CTRL+ALT+m"))]);
+    assert_eq!(bind.shortcuts, expected, "and from the description");
+    let handle = OwnedObjectPath::from(session.handle().to_owned());
+    session.close().await.unwrap();
+    loop {
+        if let Some(Report::SessionClosed(closed)) = reports.recv().await {
+            assert_eq!(closed, handle, "the bus kept the connection, which closes the session");
+            break;
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_cancelled_bind_is_refused() {
     let bus = PrivateBus::start();
     let (fake, _reports) = FakeShortcuts::new(Modes { bind: Mode::Code(1), ..Modes::GRANT });
