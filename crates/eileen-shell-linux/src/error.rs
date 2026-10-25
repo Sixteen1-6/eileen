@@ -2,14 +2,17 @@
 //! Linux kernel provides is unreadable or incomplete, and [`AutostartError`], Eileen's autostart
 //! entry could not be written or removed. D-Bus failures are [`crate::DbusError`].
 //!
-//! Each keeps only an I/O error's kind, never its text, which can carry a path.
+//! Each keeps only an I/O error's kind, never its text, which can carry a path, and each becomes
+//! a `PlatformError` where the traits are served: [`LinuxSystemMemory`](crate::LinuxSystemMemory)'s
+//! `SystemMemory` and [`LinuxShell`](crate::LinuxShell)'s `ShellHost`.
 
 use std::io;
 
+use eileen_platform::PlatformError;
+
 /// A file every Linux kernel provides is unreadable, or lacks the line Eileen needs, so no
 /// facts or no memory sample could be read at all. Everything else that cannot be read is a
-/// `degraded` entry, not an error. It becomes `PlatformError::Io` once the probe and the
-/// sampler implement the `eileen-platform` traits.
+/// `degraded` entry, not an error. It becomes `PlatformError::Io`, with the same file.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
     /// The file could not be read.
@@ -40,9 +43,9 @@ impl ReadError {
 
 /// Eileen's autostart entry could not be written or removed. The variants are
 /// `eileen-platform`'s `PlatformError::NotFound`, `Refused`, `Invalid` and `Io`, field for field
-/// and with the same messages, so `ShellHost::set_run_at_sign_in` maps each one to one when the
-/// trait lands. An I/O error becomes the variant that `eileen-apps-linux`'s `FileError` gives the
-/// same cause. None holds a path.
+/// and with the same messages, and `ShellHost::set_run_at_sign_in` maps each to its twin. An I/O
+/// error becomes the variant that `eileen-apps-linux`'s `FileError` gives the same cause. None
+/// holds a path.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AutostartError {
     /// A folder or file the write needs went away, such as the autostart folder removed while the
@@ -99,11 +102,37 @@ impl AutostartError {
     }
 }
 
+impl From<ReadError> for PlatformError {
+    /// [`PlatformError::Io`] naming the same file; a missing line is its detail.
+    fn from(error: ReadError) -> Self {
+        match error {
+            ReadError::Io { what, detail } => Self::Io { what, detail },
+            ReadError::Missing { what, field } => {
+                Self::Io { what, detail: format!("no {field} line") }
+            }
+        }
+    }
+}
+
+impl From<AutostartError> for PlatformError {
+    /// Each variant to its twin, field for field.
+    fn from(error: AutostartError) -> Self {
+        match error {
+            AutostartError::NotFound { what } => Self::NotFound { what },
+            AutostartError::Refused { what, reason } => Self::Refused { what, reason },
+            AutostartError::Invalid { what, detail } => Self::Invalid { what, detail },
+            AutostartError::Io { what, detail } => Self::Io { what, detail },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
 
-    use super::AutostartError;
+    use eileen_platform::PlatformError;
+
+    use super::{AutostartError, ReadError};
 
     #[test]
     fn an_autostart_io_error_maps_as_a_file_error_does() {
@@ -146,6 +175,47 @@ mod tests {
         ];
         for (error, text) in texts {
             assert_eq!(error.to_string(), text, "{error:?}");
+            assert_eq!(PlatformError::from(error).to_string(), text, "the same text as its twin");
         }
+    }
+
+    #[test]
+    fn each_autostart_error_becomes_its_platform_twin() {
+        let twins = [
+            (AutostartError::NotFound { what: "e" }, PlatformError::NotFound { what: "e" }),
+            (
+                AutostartError::Refused { what: "e", reason: "r" },
+                PlatformError::Refused { what: "e", reason: "r" },
+            ),
+            (
+                AutostartError::Invalid { what: "e", detail: "d".to_owned() },
+                PlatformError::Invalid { what: "e", detail: "d".to_owned() },
+            ),
+            (
+                AutostartError::Io { what: "e", detail: "d".to_owned() },
+                PlatformError::Io { what: "e", detail: "d".to_owned() },
+            ),
+        ];
+        for (error, twin) in twins {
+            assert_eq!(PlatformError::from(error), twin, "field for field");
+        }
+    }
+
+    #[test]
+    fn a_read_error_becomes_an_io_error_naming_the_same_file() {
+        let unreadable = ReadError::Io { what: "/proc/vmstat", detail: "permission denied".into() };
+        assert_eq!(
+            PlatformError::from(unreadable),
+            PlatformError::Io { what: "/proc/vmstat", detail: "permission denied".to_owned() },
+            "unreadable"
+        );
+        let missing = ReadError::Missing { what: "/proc/meminfo", field: "MemAvailable" };
+        let error = PlatformError::from(missing);
+        assert_eq!(
+            error,
+            PlatformError::Io { what: "/proc/meminfo", detail: "no MemAvailable line".to_owned() },
+            "a missing line"
+        );
+        assert_eq!(error.to_string(), "/proc/meminfo: no MemAvailable line", "reads well");
     }
 }

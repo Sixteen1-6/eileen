@@ -22,17 +22,17 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 /// The reason the tests give.
 const WHY: &str = "An armed test run is in progress";
 
-const LOGIND: &str = "org.freedesktop.login1";
-const MANAGER_PATH: &str = "/org/freedesktop/login1";
-const GNOME: &str = "org.gnome.SessionManager";
-const GNOME_PATH: &str = "/org/gnome/SessionManager";
-const PORTAL: &str = "org.freedesktop.portal.Desktop";
-const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+pub(super) const LOGIND: &str = "org.freedesktop.login1";
+pub(super) const MANAGER_PATH: &str = "/org/freedesktop/login1";
+pub(super) const GNOME: &str = "org.gnome.SessionManager";
+pub(super) const GNOME_PATH: &str = "/org/gnome/SessionManager";
+pub(super) const PORTAL: &str = "org.freedesktop.portal.Desktop";
+pub(super) const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const REQUEST: &str = "org.freedesktop.portal.Request";
 /// The request handle a portal before 0.9 names, whatever the token.
 const OLD_REQUEST_PATH: &str = "/org/freedesktop/portal/desktop/request/old/1";
 /// The cookie the fake GNOME session manager hands out.
-const COOKIE: u32 = 7;
+pub(super) const COOKIE: u32 = 7;
 /// The deadline for a portal that answers: far longer than a private bus needs.
 const WAIT: Duration = Duration::from_secs(30);
 /// The deadline a silent portal passes, in tokio's paused time.
@@ -52,16 +52,16 @@ fn sender_part(connection: &zbus::Connection) -> String {
 }
 
 /// One `Inhibit` call to the fake logind: what, who, why and mode.
-type InhibitCall = (String, String, String, String);
+pub(super) type InhibitCall = (String, String, String, String);
 
 /// A fake logind manager that records each `Inhibit` call and keeps logind's end of each lock,
 /// or refuses as polkit does when `refuse` is set.
 #[derive(Debug, Default, Clone)]
-struct FakeManager {
+pub(super) struct FakeManager {
     refuse: bool,
-    calls: Arc<Mutex<Vec<InhibitCall>>>,
+    pub(super) calls: Arc<Mutex<Vec<InhibitCall>>>,
     /// logind's ends: each reads end of file once every copy of the caller's end has closed.
-    watches: Arc<Mutex<Vec<UnixStream>>>,
+    pub(super) watches: Arc<Mutex<Vec<UnixStream>>>,
 }
 
 #[zbus::interface(name = "org.freedesktop.login1.Manager")]
@@ -102,9 +102,9 @@ impl NumberManager {
 
 /// One `Inhibit` call to the fake GNOME session manager.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GnomeCall {
+pub(super) struct GnomeCall {
     /// The caller's unique bus name.
-    sender: String,
+    pub(super) sender: String,
     app_id: String,
     toplevel_xid: u32,
     reason: String,
@@ -112,12 +112,14 @@ struct GnomeCall {
 }
 
 /// A fake GNOME session manager that records its inhibitors and their ends, or refuses as during
-/// a forced logout when `refuse` is set.
+/// a forced logout when `refuse` is set. With `forget` set, each `Uninhibit` fails, as GNOME's
+/// does for a cookie it does not know.
 #[derive(Debug, Default, Clone)]
-struct FakeGnome {
-    refuse: bool,
-    calls: Arc<Mutex<Vec<GnomeCall>>>,
-    uninhibits: Arc<Mutex<Vec<u32>>>,
+pub(super) struct FakeGnome {
+    pub(super) refuse: bool,
+    pub(super) forget: bool,
+    pub(super) calls: Arc<Mutex<Vec<GnomeCall>>>,
+    pub(super) uninhibits: Arc<Mutex<Vec<u32>>>,
 }
 
 #[zbus::interface(name = "org.gnome.SessionManager")]
@@ -146,8 +148,12 @@ impl FakeGnome {
         Ok(COOKIE)
     }
 
-    fn uninhibit(&self, inhibit_cookie: u32) {
+    fn uninhibit(&self, inhibit_cookie: u32) -> zbus::fdo::Result<()> {
         self.uninhibits.lock().unwrap().push(inhibit_cookie);
+        if self.forget {
+            return Err(zbus::fdo::Error::Failed("Unable to uninhibit: Invalid cookie".to_owned()));
+        }
+        Ok(())
     }
 }
 
@@ -164,7 +170,7 @@ enum PortalError {
 
 /// What the fake portal does with an `Inhibit` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub(super) enum Answer {
     /// Emits `Response` with this code before it replies, as a quick portal can.
     Now(u32),
     /// Replies and stays silent: the test answers after the reply, or lets the deadline pass.
@@ -198,10 +204,20 @@ struct PortalCall {
 /// caller's unique name and its `handle_token`, serves a [`FakeRequest`] there and answers as
 /// `answer` says.
 #[derive(Debug, Clone)]
-struct FakePortal {
+pub(super) struct FakePortal {
     answer: Answer,
     calls: mpsc::Sender<PortalCall>,
     on_close: mpsc::Sender<OwnedObjectPath>,
+}
+
+impl FakePortal {
+    /// A portal that answers as `answer` says and reports only the requests that are closed, for
+    /// a test that serves it itself.
+    pub(super) fn reporting_closes(answer: Answer) -> (Self, mpsc::Receiver<OwnedObjectPath>) {
+        let (calls, _unseen) = mpsc::channel(1);
+        let (on_close, closed) = mpsc::channel(1);
+        (Self { answer, calls, on_close }, closed)
+    }
 }
 
 #[zbus::interface(name = "org.freedesktop.portal.Inhibit")]
@@ -353,7 +369,7 @@ async fn watch_leaving(observer: &zbus::Connection, connection: &zbus::Connectio
 }
 
 /// Waits until the watched connection has left the bus: its name has no owner any more.
-async fn left(changes: &mut OwnerChanges) -> bool {
+pub(super) async fn left(changes: &mut OwnerChanges) -> bool {
     changes.next().await.is_some_and(|change| change.new.is_none())
 }
 
@@ -365,14 +381,14 @@ async fn still_on_the_bus(observer: &zbus::Connection, changes: &mut OwnerChange
 }
 
 /// logind's end of the fake's latest lock, which reads without waiting.
-fn watch_end(manager: &FakeManager) -> UnixStream {
+pub(super) fn watch_end(manager: &FakeManager) -> UnixStream {
     let watch = manager.watches.lock().unwrap().pop().unwrap();
     watch.set_nonblocking(true).unwrap();
     watch
 }
 
 /// Whether the caller holds the lock now: logind's end has nothing to read, not even its end.
-fn still_held(watch: &mut UnixStream) -> bool {
+pub(super) fn still_held(watch: &mut UnixStream) -> bool {
     let mut byte = [0_u8; 1];
     matches!(watch.read(&mut byte), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
 }

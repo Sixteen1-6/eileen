@@ -11,12 +11,18 @@
 //!   it understates the rate by that ratio, and so does the guard, so a fix changes both.
 //! - The largest process is the one with the most resident memory outside Eileen's own tree:
 //!   this process and everything it started.
+//!
+//! It serves `eileen-platform`'s `SystemMemory`: `sample` is [`LinuxSystemMemory::sample_at`] at
+//! the monotonic time of the sampler's clock, a port (`clippy.toml`), so tests set the time.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, PoisonError};
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use eileen_contracts::ids::Personal;
 use eileen_contracts::jobs::MemoryPressure;
+use eileen_platform::{PlatformError, SystemMemory};
+use eileen_stdx::clock::{self, Clock};
 
 use crate::memory::{Overcommit, commit_headroom_kb, kb_to_mb, parse_meminfo, parse_overcommit};
 use crate::{ReadError, SysRoot};
@@ -27,6 +33,9 @@ pub const MIN_RATE_INTERVAL_MS: u64 = 1_000;
 
 /// What one major fault reads at least, KB.
 const KB_PER_FAULT: u64 = 4;
+
+/// Nanoseconds in a millisecond: the clock's monotonic nanoseconds to the sampler's ms.
+const NS_PER_MS: u64 = 1_000_000;
 
 /// The paging counter at the previous sample.
 #[derive(Debug, Clone, Copy)]
@@ -40,36 +49,33 @@ struct Counter {
 }
 
 /// Samples the machine's memory on Linux, as `eileen-shell-win`'s `SystemMemory` does on
-/// Windows. It takes time from its caller, because the clock is a port (`clippy.toml`): the
-/// `SystemMemory` implementation passes `eileen_stdx::clock`'s monotonic time once
-/// `eileen-platform` merges.
-#[derive(Debug)]
+/// Windows. Its time comes from the clock it is opened with, because the clock is a port
+/// (`clippy.toml`): `eileen_stdx::clock::system()` on the real machine, a `ManualClock` in tests.
 pub struct LinuxSystemMemory {
     root: SysRoot,
     own_pid: u32,
+    clock: Arc<dyn Clock>,
     counter: Mutex<Counter>,
 }
 
 impl LinuxSystemMemory {
-    /// Opens the sampler at monotonic time `now_ms`, priming the paging counter so the first
+    /// Opens the sampler at `clock`'s monotonic time, priming the paging counter so the first
     /// sample's rate covers the time since. `own_pid` roots Eileen's own process tree, which
-    /// the largest process is never taken from.
-    pub fn open(root: SysRoot, own_pid: u32, now_ms: u64) -> Result<Self, ReadError> {
+    /// the largest process is never taken from. `SystemMemory::sample` reads `clock` again.
+    pub fn open(root: SysRoot, own_pid: u32, clock: Arc<dyn Clock>) -> Result<Self, ReadError> {
         let majfaults = read_majfaults(&root)?;
-        Ok(Self {
-            root,
-            own_pid,
-            counter: Mutex::new(Counter { at_ms: now_ms, majfaults, rate_kb_s: 0 }),
-        })
+        let counter = Counter { at_ms: mono_ms(&*clock), majfaults, rate_kb_s: 0 };
+        Ok(Self { root, own_pid, clock, counter: Mutex::new(counter) })
     }
 
-    /// The real machine, with this process as the root of Eileen's tree.
-    pub fn system(now_ms: u64) -> Result<Self, ReadError> {
-        Self::open(SysRoot::system(), std::process::id(), now_ms)
+    /// The real machine and the process's real clock, with this process as the root of
+    /// Eileen's tree.
+    pub fn system() -> Result<Self, ReadError> {
+        Self::open(SysRoot::system(), std::process::id(), Arc::new(*clock::system()))
     }
 
-    /// One sample at monotonic time `now_ms`. `paging_limit_kb_s` is left 0: the effective
-    /// limit is the runtime's to fill (BUILD.md 2.5 rule 3).
+    /// One sample at monotonic time `now_ms`, on the clock's scale. `paging_limit_kb_s` is left
+    /// 0: the effective limit is the runtime's to fill (BUILD.md 2.5 rule 3).
     pub fn sample_at(&self, now_ms: u64) -> Result<MemoryPressure, ReadError> {
         let text = self.root.read("proc/meminfo").map_err(ReadError::io("/proc/meminfo"))?;
         let meminfo = parse_meminfo(&text);
@@ -110,6 +116,29 @@ impl LinuxSystemMemory {
         *counter = Counter { at_ms: now_ms, majfaults, rate_kb_s };
         rate_kb_s
     }
+}
+
+impl SystemMemory for LinuxSystemMemory {
+    /// [`LinuxSystemMemory::sample_at`] at the clock's time. An unreadable file or a missing line
+    /// is `PlatformError::Io`, naming the file.
+    fn sample(&self) -> Result<MemoryPressure, PlatformError> {
+        Ok(self.sample_at(mono_ms(&*self.clock))?)
+    }
+}
+
+impl fmt::Debug for LinuxSystemMemory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinuxSystemMemory")
+            .field("root", &self.root)
+            .field("own_pid", &self.own_pid)
+            .field("counter", &self.counter)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `clock`'s monotonic time, ms.
+fn mono_ms(clock: &dyn Clock) -> u64 {
+    clock.mono().0 / NS_PER_MS
 }
 
 /// `pgmajfault` from `/proc/vmstat`.

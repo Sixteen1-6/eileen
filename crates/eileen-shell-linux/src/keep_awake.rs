@@ -333,8 +333,9 @@ async fn inhibit_sleep(system: &zbus::Connection, why: &str) -> Result<OwnedFd, 
 }
 
 /// The desktop's hold on suspend and idle: GNOME's session manager, else the portal. The error is
-/// GNOME's unless GNOME's session manager was absent. On an error `session` drops here, which
-/// ends any portal request that does not hold.
+/// GNOME's unless GNOME's session manager was absent. On an error `session` drops here: when it
+/// is the request's own, as [`LinuxPowerRequest::keep_awake`] asks, it closes, which ends any
+/// portal request that does not hold.
 async fn hold_desktop(
     session: zbus::Connection,
     why: &str,

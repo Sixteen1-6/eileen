@@ -9,7 +9,7 @@ use eileen_shell_linux::{DbusError, SessionLock};
 /// logind's name.
 const LOGIND: &str = "org.freedesktop.login1";
 /// The caller's session object.
-const SESSION_PATH: &str = "/org/freedesktop/login1/session/auto";
+pub(super) const SESSION_PATH: &str = "/org/freedesktop/login1/session/auto";
 /// Another session's object, such as a greeter's.
 const OTHER_SESSION_PATH: &str = "/org/freedesktop/login1/session/c1";
 /// The interface of a session object.
@@ -21,9 +21,9 @@ const SESSION: &str = "logind session";
 
 /// A fake logind session: its `LockedHint`, and how many times it was asked to lock.
 #[derive(Debug, Default, Clone)]
-struct FakeSession {
-    locked: Arc<AtomicBool>,
-    locks: Arc<AtomicU32>,
+pub(super) struct FakeSession {
+    pub(super) locked: Arc<AtomicBool>,
+    pub(super) locks: Arc<AtomicU32>,
 }
 
 #[zbus::interface(name = "org.freedesktop.login1.Session")]
