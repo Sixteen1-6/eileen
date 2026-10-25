@@ -38,6 +38,8 @@ const HOTKEY: &str = "hotkey-";
 /// What the holder's own errors name.
 const HOLDER: &str = "GlobalShortcuts holder";
 const SESSION: &str = "GlobalShortcuts session";
+/// Why the holder ended when the portal closed its session.
+const CLOSED: &str = "the portal closed it";
 
 /// What the shell reports beyond `ShellHost`'s answers, to the sink of
 /// [`LinuxShell::with_events`](super::LinuxShell::with_events).
@@ -242,17 +244,12 @@ async fn serve(
     loop {
         tokio::select! {
             ask = asks.recv() => {
-                let ask = ask.ok_or(DbusError::Unavailable { what: HOLDER })?;
+                let ask = ask.ok_or_else(|| ended(HOLDER, "the shell is gone"))?;
                 if wanted.take(ask) || refused {
                     bind_at = Instant::now().checked_add(SETTLE);
                 }
             }
-            event = events.next() => match event {
-                Some(ShortcutEvent::Closed) | None => {
-                    return Err(DbusError::Unavailable { what: SESSION });
-                }
-                Some(event) => wanted.hand_on(event, report),
-            },
+            event = events.next() => wanted.hand_on(event, report)?,
             () = tokio::time::sleep_until(bind_at.unwrap_or_else(Instant::now)),
                 if bind_at.is_some() && binding.is_none() =>
             {
@@ -303,10 +300,16 @@ impl Wanted {
         self.shortcuts.insert(shortcut.id.clone(), shortcut.clone()).as_ref() != Some(&shortcut)
     }
 
-    /// Hands `event` on: a hotkey's press to `report`, and the dictation key's edges to each
-    /// listener. A hotkey's release says nothing.
-    fn hand_on(&mut self, event: ShortcutEvent, report: &impl Fn(LinuxShellEvent)) {
-        match event {
+    /// Hands `event`, the session's next, on: a hotkey's press to `report`, and the dictation
+    /// key's edges to each listener. A hotkey's release says nothing. `Err` once the session has
+    /// ended, the portal having closed it or its signals having stopped, which the asks still
+    /// waiting are answered with.
+    fn hand_on(
+        &mut self,
+        event: Option<ShortcutEvent>,
+        report: &impl Fn(LinuxShellEvent),
+    ) -> Result<(), DbusError> {
+        match event.ok_or_else(|| ended(SESSION, "its signals ended"))? {
             ShortcutEvent::Activated(id) => match ShortcutId::of(&id) {
                 Some(ShortcutId::Hotkey(number)) => report(LinuxShellEvent::Hotkey(number)),
                 Some(ShortcutId::Dictation) => self.send(KeyEdge::Down),
@@ -317,8 +320,9 @@ impl Wanted {
                     self.send(KeyEdge::Up);
                 }
             }
-            ShortcutEvent::Closed => {}
+            ShortcutEvent::Closed => return Err(ended(SESSION, CLOSED)),
         }
+        Ok(())
     }
 
     /// Sends `edge` to each listener, dropping one that is full or gone.
@@ -335,10 +339,35 @@ fn hotkeys(bound: Vec<BoundShortcut>) -> Vec<BoundHotkey> {
     bound.into_iter().filter_map(hotkey).collect()
 }
 
+/// What the holder ends with when `what` ends for `detail`: an `Io` error, never `Unavailable`,
+/// which a call would read as a desktop without the portal's `GlobalShortcuts`.
+fn ended(what: &'static str, detail: &str) -> DbusError {
+    DbusError::Io { what, detail: detail.to_owned() }
+}
+
 /// Ends the holder: it takes no ask any more, and each one still waiting is answered `error`.
 fn refuse(mut asks: mpsc::Receiver<Ask>, error: &DbusError) {
     asks.close();
     while let Ok(ask) = asks.try_recv() {
         let _ignored = ask.answer.send(Err(error.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eileen_platform::PlatformError;
+
+    use super::{ShortcutEvent, Wanted};
+
+    #[test]
+    fn a_session_that_ends_reaches_a_waiting_call_as_no_missing_portal() {
+        for event in [Some(ShortcutEvent::Closed), None] {
+            let ended = Wanted::default().hand_on(event.clone(), &|_event| {}).unwrap_err();
+            let answered = super::super::unavailable("global hotkey")(ended);
+            assert!(
+                matches!(answered, PlatformError::Io { what: "GlobalShortcuts session", .. }),
+                "{event:?} reached a waiting call as {answered:?}, not as Unavailable"
+            );
+        }
     }
 }
