@@ -52,11 +52,10 @@
 //!
 //! A second holder task on the bridge's thread keeps Eileen's shortcuts in a session of the
 //! `GlobalShortcuts` portal ([`ShortcutsSession`](crate::ShortcutsSession)), on a session
-//! connection of its own, whose
-//! first portal call registers the settings' desktop entry as the app's ID. The first
-//! `register_hotkey` or `watch_input` starts it, and each call returns once the holder has a
-//! session that will bind its shortcut: `Ok` means the desktop has the request, not that the
-//! user has agreed.
+//! connection of its own, whose first portal call registers the settings' desktop entry as the
+//! app's ID. The first `register_hotkey` or `watch_input` starts it, and each call returns once
+//! the holder has a session that will bind its shortcut: `Ok` means the desktop has the
+//! request, not that the user has agreed.
 //!
 //! - The holder binds the whole set [`SETTLE`] after its last change: `hotkey-<id>` for each
 //!   hotkey, and `dictation` once `watch_input` has asked, described as the settings'
@@ -65,9 +64,8 @@
 //! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer and each hotkey's
 //!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
 //!   user makes later in the desktop's settings does not yet. The dictation key's press and
-//!   release reach each `watch_input`
-//!   sink as `DictationKey(Down)` and `DictationKey(Up)`; `PhysicalActivity` never does, since
-//!   no source of it is chosen yet.
+//!   release reach each `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`;
+//!   `PhysicalActivity` never does, since no source of it is chosen yet.
 //! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
 //!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
 //!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`.
