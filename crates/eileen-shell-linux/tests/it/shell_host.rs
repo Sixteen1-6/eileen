@@ -673,7 +673,8 @@ fn a_held_key_is_one_press_and_one_release_though_the_desktop_repeats_it() {
         fakes.runtime.block_on(press(&portal, &bind.caller, member, &bind.session, id));
     };
     // GNOME sends `Activated` again for each repeat of a held key, then `Deactivated` once.
-    for member in ["Activated", "Activated", "Activated", "Deactivated", "Activated", "Deactivated"] {
+    for member in ["Activated", "Activated", "Activated", "Deactivated", "Activated", "Deactivated"]
+    {
         send(member, "dictation");
     }
     let down = ShellInputEvent::DictationKey(KeyEdge::Down);
@@ -681,7 +682,8 @@ fn a_held_key_is_one_press_and_one_release_though_the_desktop_repeats_it() {
     let edges: Vec<_> = (0..4).map(|_| input.blocking_recv().unwrap()).collect();
     assert_eq!(edges, [down, up, down, up], "a press and a release for each of two holds");
     let held = [("Activated", "hotkey-1"), ("Activated", "hotkey-1"), ("Activated", "hotkey-1")];
-    let then = [("Activated", "hotkey-2"), ("Deactivated", "hotkey-2"), ("Deactivated", "hotkey-1")];
+    let then =
+        [("Activated", "hotkey-2"), ("Deactivated", "hotkey-2"), ("Deactivated", "hotkey-1")];
     for (member, id) in held.into_iter().chain(then).chain([("Activated", "hotkey-1")]) {
         send(member, id);
     }
@@ -745,6 +747,47 @@ fn a_hotkey_added_while_a_bind_waits_rebinds_everything_in_a_new_session() {
     assert!(closed, "the first session is closed before the next bind");
     assert_ne!(second.session, first.session, "which is in a new session");
     assert_eq!(ids(&second), ["hotkey-1", "hotkey-2"], "and binds the whole set");
+}
+
+#[test]
+fn a_refused_rebind_binds_what_the_desktop_had_again_and_the_next_call_asks_again() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { bind: Mode::Later, ..Modes::GRANT });
+    let portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    let reply = |bind: &Bind, code: u32| {
+        let granted = HashMap::from([("shortcuts", triggers(&bind.shortcuts))]);
+        let results = if code == 0 { granted } else { HashMap::new() };
+        fakes.runtime.block_on(answer(&portal, &bind.caller, &bind.request, code, results));
+    };
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let first = bind_of(&mut reports, 1);
+    reply(&first, 0);
+    let bound = |events: &mut mpsc::Receiver<LinuxShellEvent>| match events.blocking_recv() {
+        Some(LinuxShellEvent::ShortcutsBound(bound)) => bound.into_iter().map(|hotkey| hotkey.id),
+        other => panic!("not a bind's answer: {other:?}"),
+    };
+    assert_eq!(bound(&mut events).collect::<Vec<_>>(), [ShortcutId::Hotkey(1)], "mute is bound");
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let changed = bind_of(&mut reports, 2);
+    // 2, as GNOME answers a dialog the user dismissed: the first session is closed by now.
+    reply(&changed, 2);
+    let refused =
+        DbusError::Refused { what: "GlobalShortcuts binding", reason: "refused or cancelled" };
+    let refusal = Some(LinuxShellEvent::ShortcutsRefused(refused));
+    assert_eq!(events.blocking_recv(), refusal, "the changed set is refused");
+    let again = bind_of(&mut reports, 1);
+    assert_eq!(ids(&again), ["hotkey-1"], "what the desktop had is bound again, the new one not");
+    assert_ne!(again.session, changed.session, "in a session of its own");
+    reply(&again, 0);
+    assert_eq!(bound(&mut events).collect::<Vec<_>>(), [ShortcutId::Hotkey(1)], "and bound");
+    fakes.runtime.block_on(press(&portal, &again.caller, "Activated", &again.session, "hotkey-1"));
+    assert_eq!(events.blocking_recv(), Some(LinuxShellEvent::Hotkey(1)), "so mute works again");
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let asked = bind_of(&mut reports, 2);
+    assert_ne!(asked.session, again.session, "the next call asks for the new one again");
 }
 
 #[test]

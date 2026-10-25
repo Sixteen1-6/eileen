@@ -60,7 +60,11 @@
 //! - The holder binds the whole set [`SETTLE`] after its last change: `hotkey-<id>` for each
 //!   hotkey, and `dictation` once `watch_input` has asked, described as the settings'
 //!   [`ShortcutNames`] say. A session takes one bind, so a set that changes once it has had
-//!   one is bound again in a new session, after the bind under way is answered.
+//!   one is bound again in a new session, after the bind under way is answered. The session
+//!   before closes first, so the shortcuts it bound are off until the new bind is answered, for
+//!   as long as its dialog waits. If the desktop refuses the changed set, the holder binds the
+//!   set it had again in another session, which GNOME answers without a dialog, and the new
+//!   shortcut waits for the next call, which shows the dialog again.
 //! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer and each hotkey's
 //!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
 //!   user makes later in the desktop's settings does not yet. The dictation key's press and
