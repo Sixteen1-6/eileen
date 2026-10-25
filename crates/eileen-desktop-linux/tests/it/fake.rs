@@ -186,8 +186,8 @@ pub(crate) struct Node {
     pub(crate) error_name: Option<&'static str>,
     /// `GetChildren` and `GetChildAtIndex` answer this error name, and every other read answers.
     pub(crate) listing_error: Option<&'static str>,
-    /// `GetChildren` and `GetChildAtIndex` each wait this long on tokio's clock first, for a
-    /// test in paused time.
+    /// `GetChildren` and `GetChildAtIndex` each wait this long on tokio's clock first: in paused
+    /// time, to spend a walk's budget; in real time, an hour, so the call timeout ends the call.
     pub(crate) slow_listing: Option<Duration>,
     /// `GetRole` never answers.
     pub(crate) silent: bool,

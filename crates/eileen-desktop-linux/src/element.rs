@@ -39,8 +39,8 @@ const ROLE_NAMES: &str = "invalid,accelerator label,alert,animation,arrow,calend
     subscript,superscript,description list,description term,description value,footnote,\
     content deletion,content insertion,mark,suggestion,push button menu";
 
-/// `role`'s name in at-spi2-core 2.52's table, such as `push button`; `unknown`, as libatspi
-/// says, for a number past the table.
+/// `role`'s name in at-spi2-core 2.52's table, such as `push button`; `unknown` for a number past
+/// the table, where libatspi gives `last defined` for 130, its sentinel, and nothing beyond.
 pub(crate) fn role_name(role: Role) -> &'static str {
     let name = usize::try_from(role.0).ok().and_then(|index| ROLE_NAMES.split(',').nth(index));
     name.unwrap_or("unknown")

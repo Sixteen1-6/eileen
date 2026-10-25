@@ -3,9 +3,8 @@
 //!
 //! # Owns
 //!
-//! - [`LinuxDesktop`], with [`LinuxDesktopSettings`]: `Grounding` over `eileen-dbus-linux`'s
-//!   bridge, from each app's windows ([`window_id`] gives their `hwnd`), the foreground window,
-//!   the focused element and its selection; what Wayland withholds is `Unavailable`.
+//! - [`LinuxDesktop`], with [`LinuxDesktopSettings`]: `Grounding` on the bridge, from each app's
+//!   windows ([`window_id`] is their `hwnd`), the focus and its selection; the rest `Unavailable`.
 //! - [`Atspi`], Eileen's own client of the accessibility bus on zbus (no `atspi` crate is pinned):
 //!   the registry's apps and their processes, each object's name, role, states and interfaces
 //!   ([`Accessible`]), children, text, selection, box and automation id, and a bounded walk
@@ -45,10 +44,11 @@
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-desktop-linux`.
-//! - Layers: unit tests of the tables and the window id; integration tests in `tests/it/` with a
-//!   fake launcher on one private bus and a fake registry and apps on a second, one app in a
-//!   process of its own, and `Grounding` through `Bridge::on_private_bus`.
-//!   A walk's budget passes in paused time; real time only waits a 100 ms timeout or deadline.
+//! - Layers: unit tests of the tables, the window id and process names; integration tests in
+//!   `tests/it/` of the client and of `Grounding` through `Bridge::on_private_bus`, on fakes on
+//!   two private buses, one app in a process of its own. The client's walk tests run in paused
+//!   time; in real time, 100 ms deadlines and call timeouts, and one 250 ms call timeout under a
+//!   300 ms deadline, each kept by the code under test.
 //! - A bug starts as a list or tree that misses what is on screen, a slow call or a forbidden read.
 //!
 //! # Traps
@@ -72,7 +72,7 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet: spans join with the trait implementations, named from `eileen_trace::names`.
+//! - None yet: neither the client nor `Grounding` logs. A span should first mark an app left out.
 //!
 //! # Do not change without a decision record
 //!

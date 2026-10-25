@@ -34,8 +34,10 @@ const MIC: &str = "microphone use elsewhere";
 const CHANGES: &str = "desktop changes";
 
 impl Grounding for LinuxDesktop {
-    /// `Unavailable`: Wayland gives a client no monitor layout. GNOME's
-    /// `org.gnome.Mutter.DisplayConfig` or `wl_output` brings it, which phase L2 measures.
+    /// `Unavailable`: this crate has no Wayland client (BUILD.md section 4.1 pins none), whose
+    /// `wl_output` and `xdg-output` would give each output's place and size, and GNOME's
+    /// `org.gnome.Mutter.DisplayConfig` on the session bus is not measured yet. Phase L2 brings
+    /// one of the two.
     fn monitors(&self) -> Result<Vec<Monitor>, PlatformError> {
         Err(PlatformError::Unavailable { what: MONITORS })
     }
@@ -159,7 +161,8 @@ impl Grounding for LinuxDesktop {
         Err(PlatformError::Unavailable { what: PRESENTATION })
     }
 
-    /// `Unavailable`: `PipeWire`'s capture streams tell it, which `eileen-audio-linux` reads.
+    /// `Unavailable`: `PipeWire`'s capture streams tell it, which `eileen-audio-linux`, not
+    /// built yet, will read.
     fn mic_in_use_elsewhere(&self) -> Result<bool, PlatformError> {
         Err(PlatformError::Unavailable { what: MIC })
     }
