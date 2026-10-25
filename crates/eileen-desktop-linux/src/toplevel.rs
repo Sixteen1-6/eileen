@@ -239,10 +239,16 @@ fn plain(name: &str) -> String {
 mod tests {
     use std::path::Path;
 
+    use eileen_contracts::desktop::Rect;
+    use eileen_contracts::ids::Untrusted;
     use zbus::names::OwnedUniqueName;
     use zbus::zvariant::OwnedObjectPath;
 
-    use super::{ObjectRef, ProcessName, comm_name, exe_name, plain, process_name, window_id};
+    use super::{
+        ObjectRef, ProcessName, Toplevel, comm_name, exe_name, plain, process_name, window_id,
+        window_infos,
+    };
+    use crate::atspi::{Accessible, Interfaces, Role, StateSet};
 
     /// The object at `path` of the app at `bus`.
     fn object(bus: &str, path: &str) -> ObjectRef {
@@ -310,5 +316,21 @@ mod tests {
         assert!(named("eileen-hud", true).is_one_of(&own), "the executable's name");
         assert!(!named("eileen-hud", false).is_one_of(&own), "a comm, which any process can set");
         assert!(!named("eileen-hub", true).is_one_of(&own), "another executable");
+        // Wherever the tests run unprivileged, pid 1 is another user's process, named by its comm.
+        let init = process_name(1);
+        if !init.from_exe {
+            let window = Accessible {
+                object: object(":1.1", "/init"),
+                name: Untrusted::new("init".to_owned()),
+                role: Role::FRAME,
+                states: StateSet::default(),
+                interfaces: Interfaces::default(),
+                child_count: 0,
+            };
+            let toplevel = Toplevel { window, rect: Rect::default(), pid: 1 };
+            let listed = window_infos(vec![toplevel], true, std::slice::from_ref(&init.name));
+            let info = &listed[0].0;
+            assert_eq!((&info.process, info.is_eileen), (&init.name, false), "a window of pid 1");
+        }
     }
 }
