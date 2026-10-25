@@ -6,7 +6,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use eileen_dbus_linux::testing::PrivateBus;
+use eileen_dbus_linux::testing::{PrivateBus, ready_now, round_trip};
 use eileen_dbus_linux::{Names, owner_changes};
 use eileen_desktop_linux::{
     Accessible, Atspi, CALL_TIMEOUT, DbusError, Interfaces, Role, State, Walk, accessibility_bus,
@@ -30,6 +30,18 @@ fn later() -> Instant {
 const BUDGET: Duration = Duration::from_millis(500);
 /// How long a slow listing waits on tokio's clock in those tests: past the budget.
 const SLOW: Duration = Duration::from_secs(1);
+
+/// The members of the method calls `stream`'s connection has received so far.
+fn members(stream: &mut zbus::MessageStream) -> Vec<String> {
+    let mut members = Vec::new();
+    while let Some(message) = ready_now(stream) {
+        let message = message.unwrap();
+        if message.message_type() == zbus::message::Type::MethodCall {
+            members.extend(message.header().member().map(ToString::to_string));
+        }
+    }
+    members
+}
 
 /// Each node of `walk` as its name, its parent's index and its depth.
 fn shape(walk: &Walk) -> Vec<(&str, Option<u32>, u16)> {
@@ -618,4 +630,32 @@ async fn toolkit_accessibility_is_read_and_never_written() {
     session.enabled.store(false, Ordering::SeqCst);
     assert!(!toolkit_accessibility(&session.conn).await.unwrap(), "off again");
     assert_eq!(count(&session.writes), 0, "IsEnabled is never written");
+}
+
+#[tokio::test]
+async fn no_proxy_fills_a_property_cache() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    app.add(ROOT, Node { text: Some("text".to_owned()), ..Node::showing("app", vec![]) }).await;
+    let registry = registry(&a11y, vec![app.reference(ROOT)]).await;
+    let session = Session::start(a11y.address()).await;
+    let mut calls = [app.connection(), &registry, &session.launcher].map(zbus::MessageStream::from);
+    let client = a11y.connect().await;
+    let atspi = Atspi::new(&client);
+    let root = atspi.applications().await.unwrap().remove(0);
+    let read = atspi.accessible(&root).await.unwrap();
+    assert_eq!(atspi.children(&read, 10).await.unwrap(), [], "no children");
+    assert_eq!(atspi.text(&root, 10).await.unwrap().get(), "text", "its text");
+    let _atspi = accessibility_bus(&session.conn, CALL_TIMEOUT).await.unwrap();
+    assert!(!toolkit_accessibility(&session.conn).await.unwrap(), "off");
+    round_trip(&client, Some(&app.name())).await;
+    round_trip(&client, Some("org.a11y.atspi.Registry")).await;
+    round_trip(&session.conn, Some("org.a11y.Bus")).await;
+    let [to_app, to_registry, to_launcher] = calls.each_mut().map(members);
+    assert!(to_app.iter().any(|member| member == "Get"), "Name is read alone: {to_app:?}");
+    for (callee, members) in [("app", to_app), ("registry", to_registry), ("launcher", to_launcher)]
+    {
+        let all = members.iter().any(|member| member == "GetAll");
+        assert!(!all, "no GetAll, which a cache would ask for, reached the {callee}: {members:?}");
+    }
 }

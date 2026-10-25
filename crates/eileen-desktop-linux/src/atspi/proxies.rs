@@ -5,8 +5,9 @@
 //! `IsEnabled` cannot be written through them.
 //!
 //! Every proxy is built with `CacheProperties::No`, so building one makes no call and none
-//! subscribes to a property's changes or its service's owner; an object's proxy names the app's
-//! unique name, never a well-known one.
+//! subscribes to a property's changes or its service's owner (test
+//! `no_proxy_fills_a_property_cache`); an object's proxy names the app's unique name, never a
+//! well-known one.
 
 use zbus::proxy::{CacheProperties, Defaults};
 use zbus::zvariant::OwnedObjectPath;

@@ -120,7 +120,8 @@ pub(crate) struct Session {
     pub(crate) enabled: Arc<AtomicBool>,
     /// How many times `IsEnabled` was written.
     pub(crate) writes: Arc<AtomicU32>,
-    _launcher: zbus::Connection,
+    /// The launcher's connection, which receives every call to it.
+    pub(crate) launcher: zbus::Connection,
     _bus: PrivateBus,
 }
 
@@ -135,7 +136,7 @@ impl Session {
         let status = Status { enabled: Arc::clone(&enabled), writes: Arc::clone(&writes) };
         assert!(launcher.object_server().at(LAUNCHER, status).await.unwrap(), "Status is served");
         let conn = bus.connect().await;
-        Self { conn, address, enabled, writes, _launcher: launcher, _bus: bus }
+        Self { conn, address, enabled, writes, launcher, _bus: bus }
     }
 }
 
@@ -301,6 +302,11 @@ impl App {
     /// The unique name of the app's connection.
     pub(crate) fn name(&self) -> String {
         self.conn.unique_name().unwrap().to_string()
+    }
+
+    /// The app's connection, which receives every call to its objects.
+    pub(crate) fn connection(&self) -> &zbus::Connection {
+        &self.conn
     }
 
     /// Closes the app's connection, as an app that quits does.
