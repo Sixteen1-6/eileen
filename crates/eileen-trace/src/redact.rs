@@ -459,7 +459,9 @@ fn private_key(bytes: &[u8], i: usize) -> Option<Finding> {
     if !rest.get(..header_end)?.windows(11).any(|w| w == b"PRIVATE KEY") {
         return None;
     }
-    // To the matching END line, or else to the end of the JSON string or the text.
+    // To the matching END line, or else to the end of the JSON string or the text: before the
+    // first quote and the backslashes in front of it, so a quote escaped once (`\"`) or twice
+    // (`\\\"`) keeps its escape and a JSON line stays JSON.
     let end = rest
         .windows(8)
         .position(|w| w == b"-----END")
@@ -467,7 +469,11 @@ fn private_key(bytes: &[u8], i: usize) -> Option<Finding> {
             let after = at + 8;
             rest.get(after..)?.windows(5).position(|w| w == b"-----").map(|p| after + p + 5)
         })
-        .or_else(|| rest.iter().position(|b| *b == b'"'))
+        .or_else(|| {
+            let quote = rest.iter().position(|b| *b == b'"')?;
+            let escapes = rest.get(..quote)?.iter().rev().take_while(|b| **b == b'\\').count();
+            Some(quote - escapes)
+        })
         .unwrap_or(rest.len());
     Some(Finding { kind: SecretKind::PrivateKey, range: i..i + end })
 }
@@ -555,6 +561,28 @@ mod tests {
         assert!(
             matches!(r.redact("nothing here"), std::borrow::Cow::Borrowed(_)),
             "borrowed when clean"
+        );
+    }
+
+    #[test]
+    fn a_key_header_without_its_end_line_stops_before_an_escaped_quote() {
+        let r = Redactor::new();
+        let quoted = "could not parse \"-----BEGIN RSA PRIVATE KEY-----\"";
+        // Serialized once (a field in a log line), and `Debug` then serialized (a `?value`).
+        let once = serde_json::json!({ "line": quoted }).to_string();
+        let twice = serde_json::json!({ "line": format!("{quoted:?}") }).to_string();
+        for line in [once, twice] {
+            let out = r.redact(&line);
+            assert!(!out.contains("-----BEGIN"), "{line} came out as {out}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&out).is_ok(),
+                "{line} came out as {out}, which is not JSON"
+            );
+        }
+        assert_eq!(
+            r.redact(&format!("line={quoted:?}")),
+            r#"line="could not parse \"[redacted:private_key]\"""#,
+            "the console's form keeps its escaped quote"
         );
     }
 
