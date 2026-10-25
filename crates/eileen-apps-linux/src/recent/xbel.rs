@@ -1,7 +1,8 @@
 //! The XBEL walk over `recently-used.xbel`, as the Desktop Bookmark Specification 0.8.5 lays it
 //! out (<https://www.freedesktop.org/wiki/Specifications/desktop-bookmark-spec/>), read as a
-//! stream with quick-xml's `NsReader`, so memory follows the number of bookmarks, not the
-//! file's size.
+//! stream with quick-xml's `NsReader`, so memory follows the number of bookmarks and the
+//! longest event. quick-xml holds an event whole, a run of text included, so the caller bounds
+//! how much of the file is read.
 //!
 //! - Every `bookmark` child of the `xbel` root is one entry. Anything else is skipped with all
 //!   it holds, including the `folder`, `alias` and `separator` elements the specification says
