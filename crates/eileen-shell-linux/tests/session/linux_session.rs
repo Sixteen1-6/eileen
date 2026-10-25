@@ -1,11 +1,13 @@
 //! The shell crate on the session's real services: `ShellHost` through `LinuxShell`, and the
 //! clients behind it where the trait does not show what they did. On the system bus: logind,
 //! `UPower` and power-profiles-daemon; on the session bus: the notification server and the
-//! Inhibit portal. What the tests share: the shell they test, a connection of the test's own to
-//! the system bus, to see what logind did, and a guard that sets the power profile back.
+//! Inhibit portal. What the tests share: the shell they test, a runtime of the test's own with a
+//! connection to the system bus, to see what logind did, and a guard that sets the power profile
+//! back.
 //!
-//! - Each test makes its own bridge with `Bridge::start()`, as the core makes one, and the
-//!   profile runs the tests one at a time, since they share the session's services.
+//! - A test of the shell makes its own bridge with `Bridge::start()`, as the core makes one, and
+//!   a test of a client gives it connections of the test's own. The profile runs the tests one at
+//!   a time, since they share the session's services.
 //! - The test's thread calls the shell as the core does, blocking, while the workers of a runtime
 //!   of the test's own read its connection, so a signal sent meanwhile waits in its stream.
 //! - No test waits for nothing to arrive. A signal check follows a round trip to its sender
@@ -41,7 +43,9 @@ const PROFILES_PATH: &str = "/org/freedesktop/UPower/PowerProfiles";
 const BALANCED: &str = "balanced";
 
 /// The test's own connection to the system bus, apart from the shell's bridge, on a runtime of
-/// its own whose two workers read it while the test's thread waits on the shell.
+/// its own whose two workers read it while the test's thread waits on the shell. Every test makes
+/// one for that runtime, where a client's test runs the client; the tests of logind and the power
+/// daemons use the connection too.
 struct Session {
     runtime: tokio::runtime::Runtime,
     /// `None` only while the session drops.
@@ -90,15 +94,14 @@ async fn set_profile(system: &zbus::Connection, profile: &str) -> zbus::Result<(
 /// Sets the power profile back to `balanced` when it drops, a panicking test's included, so the
 /// tests after one that switches the profile find the lane's. Make it before the switch and
 /// outside `Session::block_on`: it calls through the session's runtime from the test's thread,
-/// which the test's `block_on` has returned or unwound from by then, and the borrow drops it
-/// before the session. Best effort: a test that nextest's slow-timeout ends is killed, guard and
-/// all, and no other test asserts on the profile.
+/// which the test's `block_on` has returned or unwound from by then, and since it borrows the
+/// session it drops first. Best effort: a test that nextest's slow-timeout ends is killed, guard
+/// and all, and no other test asserts on the profile.
 struct Balanced<'s>(&'s Session);
 
 impl Drop for Balanced<'_> {
     fn drop(&mut self) {
-        let Self(session) = self;
-        let _ignored = session.block_on(set_profile(session.system(), BALANCED));
+        let _ignored = self.0.block_on(set_profile(self.0.system(), BALANCED));
     }
 }
 

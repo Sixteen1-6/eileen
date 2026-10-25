@@ -1,7 +1,7 @@
-//! The power facts over D-Bus, from the session's `UPower` and power-profiles-daemon on the
-//! system bus: one reading, and the stream of changes while the test switches the profile, as a
-//! user does. polkit lets only the active local session switch it, so the lane's session can and
-//! a process outside every session cannot. The runner is a VM on mains power.
+//! The power facts over D-Bus, from `UPower` and power-profiles-daemon on the runner's system
+//! bus: one reading, and the stream of changes while the test switches the profile, as a user
+//! does. polkit lets only the active local session switch it, so the lane's session can and a
+//! process outside every session cannot. The runner is a VM on mains power.
 
 use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon};
 
