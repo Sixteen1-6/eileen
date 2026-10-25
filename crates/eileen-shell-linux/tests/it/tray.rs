@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip, serve};
-use eileen_dbus_linux::{DEFAULT_DEADLINE, Names, Signals, name_owner, owner_changes, subscribe};
+use eileen_dbus_linux::{
+    Bridge, DEFAULT_DEADLINE, Names, Signals, name_owner, owner_changes, subscribe,
+};
 use eileen_platform::ShellHost;
 use eileen_platform::{TrayItem, TrayState};
 use eileen_shell_linux::{LinuxShell, LinuxShellEvent, LinuxShellSettings, TraySettings};
@@ -140,12 +142,7 @@ impl Rig {
         &self,
         settings: LinuxShellSettings,
     ) -> (LinuxShell, mpsc::Receiver<LinuxShellEvent>) {
-        let (events, received) = mpsc::channel(64);
-        let sink = move |event| {
-            let _ignored = events.try_send(event);
-        };
-        let bridge = eileen_dbus_linux::Bridge::on_private_bus(&self.bus).unwrap();
-        (LinuxShell::new(bridge, settings).with_events(Arc::new(sink)), received)
+        shell_on(Bridge::on_private_bus(&self.bus).unwrap(), settings)
     }
 
     /// A shell on a bridge to the bus with the tests' settings and the default icons.
@@ -226,6 +223,18 @@ impl Rig {
         self.runtime.block_on(round_trip(self.host(), Some(item)));
         nothing_ready(signals)
     }
+}
+
+/// A shell on `bridge` with `settings`, whose events reach the answered channel.
+fn shell_on(
+    bridge: Bridge,
+    settings: LinuxShellSettings,
+) -> (LinuxShell, mpsc::Receiver<LinuxShellEvent>) {
+    let (events, received) = mpsc::channel(64);
+    let sink = move |event| {
+        let _ignored = events.try_send(event);
+    };
+    (LinuxShell::new(bridge, settings).with_events(Arc::new(sink)), received)
 }
 
 /// The name of the error `result` holds; `None` for an answer.
@@ -440,7 +449,10 @@ fn the_item_leaves_the_bus_when_the_shell_drops() {
     let runtime = rig.runtime.handle().clone();
     let _context = runtime.enter();
     let mut registrations = rig.watcher();
-    let (shell, _events) = rig.shell();
+    // A clone of the bridge outlives the shell, as another adapter's does in the core, so the
+    // holder ends on its own, not with the bridge's thread.
+    let bridge = Bridge::on_private_bus(&rig.bus).unwrap();
+    let (shell, _events) = shell_on(bridge.clone(), settings(DEFAULT_DEADLINE, None));
     shell.set_tray(state()).unwrap();
     let (item, sender) = rig.registered(&mut registrations);
     let mut changes = rig.runtime.block_on(owner_changes(rig.host(), Names::Name(&item))).unwrap();
@@ -449,4 +461,5 @@ fn the_item_leaves_the_bus_when_the_shell_drops() {
     drop(shell);
     let change = rig.runtime.block_on(changes.next()).unwrap();
     assert_eq!((change.name.as_str(), change.new), (item.as_str(), None), "the name has gone");
+    drop(bridge);
 }
