@@ -130,8 +130,8 @@ pub struct Promoted {
     /// What the thread got.
     pub promotion: Promotion,
     /// The nice level [`RealtimeKit::revert`] asks for: the one the thread had, floored at
-    /// `MinNiceLevel`, below which rtkit refuses any level, so the revert always takes the thread
-    /// off real-time.
+    /// `MinNiceLevel`, below which rtkit refuses any level, so the revert asks for a level rtkit
+    /// accepts.
     pub restore: i32,
 }
 
