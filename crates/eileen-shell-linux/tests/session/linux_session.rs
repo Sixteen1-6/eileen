@@ -17,12 +17,13 @@
 //! - Streams and connections live and drop inside `Session::block_on`, within their runtime's
 //!   context, a panicking test's included (the stream traps of `eileen-dbus-linux`).
 
+use std::cell::Cell;
 use std::future::Future;
 use std::path::PathBuf;
 
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, system_bus};
 use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
-use zbus::zvariant::Value;
+use zbus::zvariant::{OwnedValue, Value};
 
 mod keep_awake;
 mod lock;
@@ -35,12 +36,11 @@ const LOGIND: &str = "org.freedesktop.login1";
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
 const MANAGER: &str = "org.freedesktop.login1.Manager";
 
-/// power-profiles-daemon's name, which is also its interface, and its object.
+/// power-profiles-daemon's name, which is also its interface, its object, and the interface of
+/// its properties.
 const PROFILES: &str = "org.freedesktop.UPower.PowerProfiles";
 const PROFILES_PATH: &str = "/org/freedesktop/UPower/PowerProfiles";
-
-/// The lane's power profile, the daemon's default, which the tests find and leave.
-const BALANCED: &str = "balanced";
+const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
 /// The test's own connection to the system bus, apart from the shell's bridge, on a runtime of
 /// its own whose two workers read it while the test's thread waits on the shell. Every test makes
@@ -86,22 +86,56 @@ impl Drop for Session {
 /// (`org.freedesktop.UPower.PowerProfiles.switch-profile` is `allow_active`), as the lane's is.
 async fn set_profile(system: &zbus::Connection, profile: &str) -> zbus::Result<()> {
     let property = (PROFILES, "ActiveProfile", Value::from(profile));
-    let properties = Some("org.freedesktop.DBus.Properties");
-    let reply = system.call_method(Some(PROFILES), PROFILES_PATH, properties, "Set", &property);
+    let reply =
+        system.call_method(Some(PROFILES), PROFILES_PATH, Some(PROPERTIES), "Set", &property);
     reply.await.map(|_reply| ())
 }
 
-/// Sets the power profile back to `balanced` when it drops, a panicking test's included, so the
-/// tests after one that switches the profile find the lane's. Make it before the switch and
-/// outside `Session::block_on`: it calls through the session's runtime from the test's thread,
-/// which the test's `block_on` has returned or unwound from by then, and since it borrows the
-/// session it drops first. Best effort: a test that nextest's slow-timeout ends is killed, guard
-/// and all, and no other test asserts on the profile.
-struct Balanced<'s>(&'s Session);
+/// power-profiles-daemon's active profile, with a `Get` of its `ActiveProfile`.
+async fn active_profile(system: &zbus::Connection) -> zbus::Result<String> {
+    let property = (PROFILES, "ActiveProfile");
+    let reply =
+        system.call_method(Some(PROFILES), PROFILES_PATH, Some(PROPERTIES), "Get", &property);
+    let value: OwnedValue = reply.await?.body().deserialize()?;
+    Ok(String::try_from(value)?)
+}
 
-impl Drop for Balanced<'_> {
+/// Sets the power profile back to the one a test found if it drops while armed, a panicking
+/// test's included. The test arms it once it has switched away from that profile and disarms it
+/// once it has switched back, so a test that fails before its switch changes nothing, and the
+/// tests after one that fails mid-switch find the profile as it was. Make it outside
+/// `Session::block_on`: it calls through the session's runtime from the test's thread, which the
+/// test's `block_on` has returned or unwound from by then, and since it borrows the session it
+/// drops first. Best effort: a test that nextest's slow-timeout ends is killed, guard and all, and
+/// no other test asserts on the profile.
+struct ProfileBack<'s> {
+    session: &'s Session,
+    /// The profile to set back, while armed.
+    found: Cell<Option<String>>,
+}
+
+impl<'s> ProfileBack<'s> {
+    /// A guard on the profile, not yet armed.
+    fn new(session: &'s Session) -> Self {
+        Self { session, found: Cell::new(None) }
+    }
+
+    /// Arms the guard with `found`, the profile the test has just switched away from.
+    fn arm(&self, found: &str) {
+        self.found.set(Some(found.to_owned()));
+    }
+
+    /// Disarms the guard once the test has switched back.
+    fn disarm(&self) {
+        self.found.set(None);
+    }
+}
+
+impl Drop for ProfileBack<'_> {
     fn drop(&mut self) {
-        let _ignored = self.0.block_on(set_profile(self.0.system(), BALANCED));
+        if let Some(found) = self.found.take() {
+            let _ignored = self.session.block_on(set_profile(self.session.system(), &found));
+        }
     }
 }
 

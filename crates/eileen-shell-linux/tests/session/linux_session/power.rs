@@ -1,11 +1,12 @@
 //! The power facts over D-Bus, from `UPower` and power-profiles-daemon on the runner's system
-//! bus: one reading, and the stream of changes while the test switches the profile, as a user
-//! does. polkit lets only the active local session switch it, so the lane's session can and a
-//! process outside every session cannot. The runner is a VM on mains power.
+//! bus: one reading, and the stream of changes while the test switches the profile to
+//! `power-saver` and back to the one it found, as a user does. polkit lets only the active local
+//! session switch it, so the lane's session can and a process outside every session cannot. The
+//! runner is a VM on mains power.
 
 use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon};
 
-use super::{BALANCED, Balanced, Session, set_profile};
+use super::{ProfileBack, Session, active_profile, set_profile};
 
 /// The profile that is battery saver.
 const POWER_SAVER: &str = "power-saver";
@@ -27,14 +28,17 @@ fn the_daemons_answer_with_nothing_degraded() {
 #[test]
 fn a_profile_switch_reaches_the_changes_stream() {
     let session = Session::new();
-    let _balanced = Balanced(&session);
+    let back = ProfileBack::new(&session);
     let system = session.system();
     session.block_on(async {
         let mut changes = LinuxPower::new(system).changes().await.unwrap();
         assert!(!changes.state().battery_saver, "battery saver starts off: {changes:?}");
+        let found = active_profile(system).await.unwrap();
         set_profile(system, POWER_SAVER).await.unwrap();
+        back.arm(&found);
         saver_turns(&mut changes, true).await;
-        set_profile(system, BALANCED).await.unwrap();
+        set_profile(system, &found).await.unwrap();
+        back.disarm();
         saver_turns(&mut changes, false).await;
     });
 }
