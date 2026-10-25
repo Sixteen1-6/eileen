@@ -21,6 +21,7 @@ publish = false
 eileen-buildguard = { path = "crates/eileen-buildguard" }
 eileen-contracts = { path = "crates/eileen-contracts" }
 eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
+eileen-desktop-linux = { path = "crates/eileen-desktop-linux" }
 eileen-platform = { path = "crates/eileen-platform" }
 eileen-rt = { path = "crates/eileen-rt" }
 eileen-stdx = { path = "crates/eileen-stdx" }
