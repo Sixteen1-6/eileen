@@ -4,11 +4,13 @@
 //! record of each thread: the real-time priority it last granted, which `MakeThreadHighPriority`
 //! leaves, forgotten at the start of a later call once the thread is neither real-time nor at a
 //! negative nice level, and made real-time again by [`FakeRtkit::resume`], as 0.14 does after a
-//! suspend.
+//! suspend. And like rtkit, whose one thread serves every call in turn and waits for polkit inside
+//! a call, the fake serves its methods in order: a call it holds keeps every later one waiting.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
 use eileen_dbus_linux::testing::{PrivateBus, serve};
@@ -34,6 +36,8 @@ pub(super) enum Call {
     Realtime(u64, u32),
     /// `MakeThreadHighPriority(thread, nice level)`.
     HighPriority(u64, i32),
+    /// A read of the property named, reported once [`FakeRtkit::report_reads`] is set.
+    Read(&'static str),
 }
 
 /// The limits the fake reports.
@@ -59,13 +63,16 @@ struct Record {
     now: Scheduling,
 }
 
-/// A fake rtkit that reports each `MakeThread` call. It answers `MakeThreadRealtime` once its
-/// gate, if it has one, opens, and refuses either call as its switches say.
+/// A fake rtkit that reports each `MakeThread` call, and each property read once asked to. It
+/// answers `MakeThreadRealtime` once its gate, if it has one, opens, and refuses either call as
+/// its switches say.
 #[derive(Debug, Clone)]
 pub(super) struct FakeRtkit {
     limits: Arc<Mutex<Limits>>,
     pub(super) refuse_realtime: Arc<AtomicBool>,
     pub(super) refuse_high_priority: Arc<AtomicBool>,
+    /// Reports each property read as a [`Call::Read`], after its garbage collection.
+    pub(super) report_reads: Arc<AtomicBool>,
     gate: Option<Arc<Notify>>,
     calls: mpsc::Sender<Call>,
     records: Arc<Mutex<BTreeMap<u64, Record>>>,
@@ -79,6 +86,7 @@ impl FakeRtkit {
             limits: Arc::new(Mutex::new(limits)),
             refuse_realtime: Arc::default(),
             refuse_high_priority: Arc::default(),
+            report_reads: Arc::default(),
             gate,
             calls,
             records: Arc::default(),
@@ -113,6 +121,15 @@ impl FakeRtkit {
             .retain(|_thread, record| !matches!(record.now, Scheduling::Nice(nice) if nice >= 0));
     }
 
+    /// What each property read does first: the garbage collection, then, once
+    /// [`Self::report_reads`] is set, the report.
+    async fn read(&self, property: &'static str) {
+        self.collect();
+        if self.report_reads.load(Ordering::SeqCst) {
+            let _ignored = self.calls.send(Call::Read(property)).await;
+        }
+    }
+
     fn limits(&self) -> Limits {
         *self.limits.lock().unwrap()
     }
@@ -130,7 +147,8 @@ fn refused() -> zbus::fdo::Error {
     zbus::fdo::Error::AccessDenied("Operation not permitted".to_owned())
 }
 
-#[zbus::interface(name = "org.freedesktop.RealtimeKit1")]
+/// Served in order (`spawn = false`): each call ends before the next begins, as in rtkit.
+#[zbus::interface(name = "org.freedesktop.RealtimeKit1", spawn = false)]
 impl FakeRtkit {
     #[zbus(name = "MakeThreadRealtime")]
     async fn make_thread_realtime(&self, thread: u64, priority: u32) -> zbus::fdo::Result<()> {
@@ -172,20 +190,20 @@ impl FakeRtkit {
     }
 
     #[zbus(property, name = "RTTimeUSecMax")]
-    fn rttime_usec_max(&self) -> i64 {
-        self.collect();
+    async fn rttime_usec_max(&self) -> i64 {
+        self.read("RTTimeUSecMax").await;
         self.limits().rttime_usec_max
     }
 
     #[zbus(property, name = "MaxRealtimePriority")]
-    fn max_realtime_priority(&self) -> i32 {
-        self.collect();
+    async fn max_realtime_priority(&self) -> i32 {
+        self.read("MaxRealtimePriority").await;
         self.limits().max_realtime_priority
     }
 
     #[zbus(property, name = "MinNiceLevel")]
-    fn min_nice_level(&self) -> i32 {
-        self.collect();
+    async fn min_nice_level(&self) -> i32 {
+        self.read("MinNiceLevel").await;
         self.limits().min_nice_level
     }
 }
@@ -204,6 +222,10 @@ pub(super) fn this_nice() -> i32 {
 async fn client(bus: &PrivateBus) -> RealtimeKit {
     RealtimeKit::new(&bus.connect().await)
 }
+
+/// The method timeout of a client whose fake holds its answer: it passes whatever its length,
+/// and a short one keeps the test short.
+const SHORT: Duration = Duration::from_millis(100);
 
 #[tokio::test]
 async fn the_limits_come_from_the_three_properties() {
@@ -357,4 +379,35 @@ async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimu
     assert_eq!(calls.try_recv(), Ok(Call::Realtime(this_thread(), 10)), "the promotion");
     assert_eq!(calls.try_recv(), Ok(Call::HighPriority(this_thread(), NICE + 2)), "the revert");
     assert_eq!(fake.resume(), [], "granted, so the thread is off real-time and forgotten");
+}
+
+#[tokio::test]
+async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
+    let bus = PrivateBus::start();
+    let gate = Arc::new(Notify::new());
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Arc::clone(&gate)));
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
+    let client = RealtimeKit::new(&bus.connect_within(SHORT).await);
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    assert_eq!(
+        promoted,
+        Err(DbusError::DeadlineExceeded {
+            call: "org.freedesktop.RealtimeKit1.MakeThreadRealtime"
+        }),
+        "rtkit holds its answer past the method timeout"
+    );
+    assert_eq!(calls.recv().await, Some(Call::Realtime(this_thread(), 10)), "the request it holds");
+    fake.report_reads.store(true, Ordering::SeqCst);
+    gate.notify_one();
+    assert_eq!(
+        calls.recv().await,
+        Some(Call::HighPriority(this_thread(), NICE)),
+        "the revert, which rtkit serves after the request it granted late"
+    );
+    assert_eq!(
+        calls.recv().await,
+        Some(Call::Read("RTTimeUSecMax")),
+        "and the read after it, sent although the revert's own answer never came"
+    );
+    assert_eq!(fake.resume(), [], "so the thread is off real-time and forgotten");
 }

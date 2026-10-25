@@ -18,6 +18,12 @@
 //! processes), 25 threads per user, its canary's lockout after a starved system and, on 0.14, a
 //! suspend under way. `eileen-dbus-linux` maps each to [`DbusError::Refused`], "not authorized".
 //!
+//! rtkit asks polkit inside the call, with libdbus's default reply timeout, and acts once polkit
+//! agrees, so a request whose call passed the connection's method timeout, or whose connection
+//! failed, may still be granted. `promote` then reverts the thread before it answers the error:
+//! rtkit serves its calls one at a time, in order, so the revert comes after the request. After
+//! a failed connection the revert fails as well, since it goes over the same connection.
+//!
 //! # Reverting
 //!
 //! [`RealtimeKit::revert`] asks for `SCHED_OTHER` at the nice level the thread had, floored at
@@ -26,7 +32,8 @@
 //! granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend makes every thread
 //! it still records real-time again. It forgets a thread only in the garbage collection it runs
 //! at the start of each call to its object, once the thread is neither real-time nor at a
-//! negative nice level, so the revert reads `RTTimeUSecMax` once more to start one.
+//! negative nice level, so the revert reads `RTTimeUSecMax` once more to start one, even when
+//! the revert failed: one whose answer never came still comes before the read.
 
 use zbus::proxy::CacheProperties;
 
@@ -236,8 +243,9 @@ impl RealtimeKit {
     }
 
     /// Makes `thread`, whose nice level is `nice`, real-time as `policy` asks, or high priority
-    /// when rtkit refuses or the bound fails; the module's doc says how. An error leaves the
-    /// thread as it was, except one past a method timeout, after which rtkit may still act.
+    /// when rtkit refuses or the bound fails; the module's doc says how. A request whose answer
+    /// never came is reverted before the error returns, since rtkit may still grant it; any
+    /// other error leaves the thread as it was.
     pub async fn promote(
         &self,
         thread: ThreadId,
@@ -245,21 +253,33 @@ impl RealtimeKit {
         policy: RealtimePolicy,
     ) -> Result<Promoted, DbusError> {
         let limits = self.limits().await?;
-        let promotion = self.request(thread, policy, limits).await?;
-        Ok(Promoted { promotion, restore: limits.nice_level(nice) })
+        let restore = limits.nice_level(nice);
+        let requested = self.request(thread, policy, limits).await;
+        if let Err(error) = &requested
+            && unsettled(error)
+        {
+            // The request's error is the one to answer, whatever the revert's.
+            let _ignored = self.revert(thread, restore).await;
+        }
+        Ok(Promoted { promotion: requested?, restore })
     }
 
     /// Puts `thread` back on `SCHED_OTHER` at nice level `nice`, then reads `RTTimeUSecMax`, so
-    /// that rtkit 0.14 forgets the thread (the module's doc says why). rtkit refuses a level
-    /// below `MinNiceLevel`, which [`Promoted::restore`] never is.
+    /// that rtkit 0.14 forgets the thread (the module's doc says why); the read goes out even
+    /// when the revert failed. rtkit refuses a level below `MinNiceLevel`, which
+    /// [`Promoted::restore`] never is.
     pub async fn revert(&self, thread: ThreadId, nice: i32) -> Result<(), DbusError> {
-        self.make_high_priority(thread, nice).await?;
-        self.proxy()
-            .await?
-            .rttime_usec_max()
-            .await
-            .map_err(|error| failed(RTTIME_USEC_MAX, &error))?;
+        let reverted = self.make_high_priority(thread, nice).await;
+        let read = self.read_rttime_usec_max().await;
+        reverted?;
+        read?;
         Ok(())
+    }
+
+    /// `RTTimeUSecMax`, read alone.
+    async fn read_rttime_usec_max(&self) -> Result<i64, DbusError> {
+        let rtkit = self.proxy().await?;
+        rtkit.rttime_usec_max().await.map_err(|error| failed(RTTIME_USEC_MAX, &error))
     }
 
     /// Real-time for `thread` as `policy` asks within `limits`, or high priority when rtkit
@@ -299,11 +319,38 @@ fn failed(what: &'static str, error: &zbus::Error) -> DbusError {
     DbusError::from_zbus(what, error)
 }
 
+/// Whether rtkit may still act on a request that failed with `error`: its answer never came,
+/// since its call passed the connection's method timeout (or the bus's), or the connection
+/// failed.
+const fn unsettled(error: &DbusError) -> bool {
+    matches!(error, DbusError::DeadlineExceeded { .. } | DbusError::Io { .. })
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
 
-    use super::{NICE_LEVELS, RtLimits};
+    use super::{NICE_LEVELS, RtLimits, unsettled};
+    use crate::DbusError;
+
+    #[test]
+    fn only_a_request_whose_answer_never_came_is_unsettled() {
+        let what = "the call";
+        let cases = [
+            (DbusError::DeadlineExceeded { call: what }, true),
+            (DbusError::Io { what, detail: "connection reset".to_owned() }, true),
+            (DbusError::Refused { what, reason: "not authorized" }, false),
+            (DbusError::Unavailable { what }, false),
+            (DbusError::NotFound { what }, false),
+            (
+                DbusError::Invalid { what, detail: "org.freedesktop.DBus.Error.Failed".to_owned() },
+                false,
+            ),
+        ];
+        for (error, may_still_act) in cases {
+            assert_eq!(unsettled(&error), may_still_act, "{error:?}");
+        }
+    }
 
     /// Limits rtkit could report: a positive `RTTimeUSecMax`, a priority from 0 to 99, the
     /// range of `SCHED_RR`, and any nice level.
