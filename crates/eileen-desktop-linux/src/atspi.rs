@@ -46,6 +46,8 @@ const REGISTRY: &str = "org.a11y.atspi.Registry";
 const ROOT: &str = "/org/a11y/atspi/accessible/root";
 /// The null reference's path, which names no object.
 const NULL: &str = "/org/a11y/atspi/null";
+/// The error an object answers for a method it does not have.
+const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 /// The most characters of a name kept.
 const NAME_CHARS: usize = 1_000;
 
@@ -214,16 +216,17 @@ impl Atspi {
         let crowded =
             parent.child_count > at_most || parent.states.contains(State::MANAGES_DESCENDANTS);
         if !crowded {
-            match proxy.get_children().await.map_err(failed) {
+            match proxy.get_children().await {
                 Ok(children) => {
                     let mut refs = references(&children);
                     let cut = refs.len() > room;
                     refs.truncate(room);
                     return Ok(Listing { refs, cut });
                 }
-                // The app has no GetChildren: read by index.
-                Err(DbusError::NotFound { .. }) => {}
-                Err(error) => return Err(error),
+                // The app has no GetChildren: read by index. Any other failure, an object or
+                // an app gone since its read included, is the listing's.
+                Err(error) if unknown_method(&error) => {}
+                Err(error) => return Err(failed(error)),
             }
         }
         let mut refs = Vec::new();
@@ -246,6 +249,11 @@ impl Atspi {
 /// The references in `children` that name an object.
 fn references(children: &[Reference]) -> Vec<ObjectRef> {
     children.iter().filter_map(|(bus, path)| ObjectRef::new(bus, path)).collect()
+}
+
+/// Whether `error` is an object's answer for a method it does not have.
+fn unknown_method(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::MethodError(name, ..) if name.as_str() == UNKNOWN_METHOD)
 }
 
 /// What a failed call on the accessibility bus means: [`DbusError::from_zbus`]'s answer, without

@@ -18,7 +18,7 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::fake::{
     App, DEFUNCT, FOCUSED, MANAGES_DESCENDANTS, NO_REPLY, NULL, Node, READ_ONLY, ROOT, SHOWING,
-    Session, count, registry, registry_root, words,
+    Session, UNKNOWN_OBJECT, count, registry, registry_root, words,
 };
 
 /// A budget no test reaches.
@@ -316,21 +316,42 @@ async fn a_node_that_does_not_answer_costs_its_subtree_not_the_walk() {
 async fn a_listing_that_fails_costs_the_subtree_not_the_walk() {
     let a11y = PrivateBus::start();
     let app = App::start(&a11y).await;
-    app.tree(&[("/root", &["/a", "/b"]), ("/b", &["/b1"]), ("/b1", &[]), ("/a1", &[])]).await;
+    app.tree(&[
+        ("/root", &["/a", "/b", "/c"]),
+        ("/c", &["/c1"]),
+        ("/c1", &[]),
+        ("/a1", &[]),
+        ("/b1", &[]),
+    ])
+    .await;
     let a = Node { listing_error: Some(NO_REPLY), ..Node::showing("a", app.references(&["/a1"])) };
     let a = app.add("/a", a).await;
+    let b = app.references(&["/b1"]);
+    let b = app.add("/b", Node { listing_error: Some(UNKNOWN_OBJECT), ..Node::showing("b", b) });
+    let b = b.await;
     let atspi = Atspi::new(&a11y.connect().await);
     let walk = atspi.walk(&app.object("/root"), TreeLimits::default(), later()).await.unwrap();
     assert_eq!(
         shape(&walk),
-        [("root", None, 0), ("a", Some(0), 1), ("b", Some(0), 1), ("b1", Some(2), 2)],
-        "a is kept without its children, and the walk goes on"
+        [
+            ("root", None, 0),
+            ("a", Some(0), 1),
+            ("b", Some(0), 1),
+            ("c", Some(0), 1),
+            ("c1", Some(3), 2)
+        ],
+        "a and b are kept without their children, and the walk goes on"
     );
-    assert!(walk.truncated, "a's listing failed, which left a1 out");
+    assert!(walk.truncated, "their listings failed, which left a1 and b1 out");
     assert_eq!(
         (count(&a.listings), count(&a.index_reads)),
         (1, 0),
         "a listing past its timeout is not tried again by index"
+    );
+    assert_eq!(
+        (count(&b.listings), count(&b.index_reads)),
+        (1, 0),
+        "nor one of an object gone since its read: only an app without GetChildren is"
     );
 }
 

@@ -36,6 +36,8 @@ pub(crate) const READ_ONLY: u32 = 43;
 pub(crate) const NO_REPLY: &str = "org.freedesktop.DBus.Error.NoReply";
 /// The error for a method the object does not have.
 const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
+/// The error for an object the app does not serve, or no longer does.
+pub(crate) const UNKNOWN_OBJECT: &str = "org.freedesktop.DBus.Error.UnknownObject";
 /// The error for arguments the object cannot use.
 const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
 
