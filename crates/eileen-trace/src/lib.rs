@@ -40,9 +40,9 @@
 //! # Boundaries
 //!
 //! - Called by every Eileen crate; `tools/repo-tools` uses [`redact`] and [`privacy`].
-//! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
-//!   and error crates, `serde_json`, `blake3`, `thiserror` and `toml` (for [`privacy`]); no
-//!   async runtime, no OpenTelemetry.
+//! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing`, `tracing-subscriber`,
+//!   `tracing-appender`, `tracing-error`, `serde_json`, `blake3`, `thiserror` and `toml` (for
+//!   [`privacy`]); no async runtime, no OpenTelemetry.
 //! - Wire types: the JSON-lines log and ring formats, described in [`file`](mod@file) and [`ring`].
 //!
 //! # Testing
@@ -100,3 +100,30 @@ pub mod traceparent;
 pub use init::{Console, ProcessKind, TraceConfig, TraceError, TraceGuard, build, init};
 pub use record::{EventRecord, SpanRecord};
 pub use redact::Redactor;
+
+#[cfg(test)]
+mod tests {
+    /// The crate doc's lines under `# Boundaries`, up to the next heading.
+    fn boundaries() -> String {
+        let doc: Vec<&str> =
+            include_str!("lib.rs").lines().map_while(|line| line.strip_prefix("//!")).collect();
+        let start = doc.iter().position(|line| line.trim() == "# Boundaries").unwrap();
+        let section = doc[start + 1..].iter().take_while(|line| !line.trim().starts_with("# "));
+        section.copied().collect::<Vec<_>>().join("\n")
+    }
+
+    /// BUILD.md section 4b.4: the Boundaries heading names what the crate may depend on, so it
+    /// names each dependency in the manifest.
+    #[test]
+    fn the_boundaries_name_every_dependency() {
+        let manifest: toml::Table = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+        let boundaries = boundaries();
+        let missing: Vec<&String> = manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .keys()
+            .filter(|name| !boundaries.contains(&format!("`{name}`")))
+            .collect();
+        assert!(missing.is_empty(), "the Boundaries leave out {missing:?}:\n{boundaries}");
+    }
+}
