@@ -1,8 +1,8 @@
 # Architecture
 
-This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [BUILD.md](BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [DECISIONS.md](DECISIONS.md). Last revisited 2026-10-25, after the reviews of the v0.1 specification, its four verification rounds, the owner's answers and his direction of 2026-10-22 (decision D77).
+This is the map of Eileen. Read it before changing code. It describes only what changes rarely; the detailed v0.1 specification, contracts and work packages are in [docs/BUILD.md](docs/BUILD.md), each crate's rules are in its crate doc (the `//!` comment at the top of `src/lib.rs`), and the reasons are in [docs/DECISIONS.md](docs/DECISIONS.md). Last revisited 2026-10-25, after the reviews of the v0.1 specification, its four verification rounds, the owner's answers and the owner's direction of 2026-10-22 (decision D77).
 
-WP0 moves this file to the repository root and adds the check that its code map lists exactly the workspace crates and that every path and type it names exists (BUILD.md section 4b). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D74 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
+WP0 moved this file to the repository root in its guidance pull request; check 3, from WP0 phase B, keeps its code map listing exactly the workspace crates and every path and type it names resolving (BUILD.md section 4b.3). The Python-era design that this file used to hold is in git history at the tag `python-scaffold-final`; decisions D17 to D74 record what replaced it. How the repository itself is built, written for other projects to adopt, is in `docs/PLAYBOOK.md` (WP0 writes it, with reusable files in `templates/`).
 
 ## Bird's eye view
 
@@ -75,6 +75,9 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-hud-win` | lib | Windows | The HUD renderer: DirectWrite, the overlay, the strip, the thumbnail |
 | `eileen-fleet` | lib | neutral | The opt-in test fleet runner and result upload |
 | `eileen-e2e` | lib and bin, dev | neutral, Windows fixtures | Benchmarks, soak, fleet ingest and clustering |
+| `eileen-shell-linux` | lib | Linux | The core process's platform implementations on Linux: machine facts, memory samples, toasts, session calls and power over D-Bus (WP10) |
+| `eileen-apps-linux` | lib | Linux | The apps process's platform implementations on Linux: the app index, launching and opening, recent files and media sessions over XDG files and D-Bus (WP10) |
+| `eileen-dbus-linux` | lib | Linux | The D-Bus helpers the `-linux` crates share: errors, buses with a method timeout, name owners, the portal request client, the bridge from the synchronous traits (WP10) |
 | `xtask` | bin, tool | neutral | `cargo xtask`: CI, repository checks, the build guard, generators |
 | `repo-tools` (`tools/repo-tools`) | bin, tool | neutral | The `syn`-based checks and the generated code map |
 

@@ -37,8 +37,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-harness` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-harness`).
+//! - Fast command: `cargo xtask test -p eileen-harness`.
 //! - Layers: unit tests for the parser and the flags, runs against `eileen-stub-harness`, the
 //!   two fuzz targets, and `real_claude::` tests on the owner's PC.
 //! - A bug here starts as a stream-json line that became `Unknown`, or a session whose init

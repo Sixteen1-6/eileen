@@ -36,8 +36,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-hud-win` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-hud-win`).
+//! - Fast command: `cargo xtask test -p eileen-hud-win`.
 //! - Layers: desktop tests of the overlay in the `desktop` group, and idle cost through
 //!   `cargo xtask measure-idle`.
 //! - A bug here starts as the HUD showing in a screen share, or a click that was not physical

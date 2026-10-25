@@ -42,8 +42,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-cli` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-cli`).
+//! - Fast command: `cargo xtask test -p eileen-cli`.
 //! - Layers: every command form parsed and dispatched in-process, and the binary run through
 //!   the supervisor.
 //! - A bug here starts as a subcommand that reaches the wrong crate, or a component not wired.

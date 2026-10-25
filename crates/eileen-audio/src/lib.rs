@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-audio` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-audio`).
+//! - Fast command: `cargo xtask test -p eileen-audio`.
 //! - Layers: unit tests for the DSP, loom for the ring buffer, `RoomMixer` echo tests, and
 //!   device tests on the owner's PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.

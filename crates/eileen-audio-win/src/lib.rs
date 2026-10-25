@@ -36,8 +36,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-audio-win` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-audio-win`).
+//! - Fast command: `cargo xtask test -p eileen-audio-win`.
 //! - Layers: device tests on the owner's PC under `desktop.lock`; the hosted runner has no audio
 //!   device.
 //! - A bug here starts as echo cancellation fed the wrong reference.

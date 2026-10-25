@@ -36,8 +36,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-record` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-record`).
+//! - Fast command: `cargo xtask test -p eileen-record`.
 //! - Layers: round-trip property tests, the `recording` fuzz target and its corpus replay.
 //! - A bug here starts as a recording that does not replay, or a blob nothing refers to.
 //!

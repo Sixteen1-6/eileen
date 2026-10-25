@@ -35,8 +35,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-fleet` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-fleet`).
+//! - Fast command: `cargo xtask test -p eileen-fleet`.
 //! - Layers: unit tests for consent, scheduling and the result lines, and the `fleet_result`
 //!   fuzz target.
 //! - A bug here starts as a result line with a personal value, or a run that touched a window it

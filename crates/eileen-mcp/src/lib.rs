@@ -37,8 +37,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-mcp` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-mcp`).
+//! - Fast command: `cargo xtask test -p eileen-mcp`.
 //! - Layers: unit tests for the handshake; WP2 adds the client against stand-in sidecars, the
 //!   shuttle test of a dropped shim pipe, and the three fuzz targets.
 //! - A bug here starts as a session whose `system/init` lists no `eileen` server.

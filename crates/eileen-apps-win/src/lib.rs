@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-apps-win` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-apps-win`).
+//! - Fast command: `cargo xtask test -p eileen-apps-win`.
 //! - Layers: desktop tests in the `desktop` group with the apps a test starts itself, and
 //!   Resolve tests on the owner's PC.
 //! - A bug here starts as a COM call that never returned, or a media control the session

@@ -41,8 +41,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-skills` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-skills`).
+//! - Fast command: `cargo xtask test -p eileen-skills`.
 //! - Layers: table tests for the ladder and the linter, property tests for replay, and the
 //!   `skill_record` fuzz target.
 //! - A bug here starts as a skill promoted on too little evidence, or a replay that ran on an

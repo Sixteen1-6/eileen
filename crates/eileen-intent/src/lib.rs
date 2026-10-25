@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-intent` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-intent`).
+//! - Fast command: `cargo xtask test -p eileen-intent`.
 //! - Layers: the resolver golden file, latency tests with loose bounds in CI, and the
 //!   `command_grammar` fuzz target.
 //! - A bug here starts as a phrase that reached the brain when the grammar has it, or the

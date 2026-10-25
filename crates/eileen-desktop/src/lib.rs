@@ -39,8 +39,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-desktop` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-desktop`).
+//! - Fast command: `cargo xtask test -p eileen-desktop`.
 //! - Layers: neutral unit tests on Linux against the platform fakes, and desktop tests in the
 //!   `desktop` group under `desktop.lock`, on windows the test created.
 //! - A bug here starts as a click that landed somewhere it should not have.
