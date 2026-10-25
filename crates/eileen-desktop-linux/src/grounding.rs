@@ -46,12 +46,13 @@ impl Grounding for LinuxDesktop {
     /// the registry's order, the minimized ones only when asked for. A window's class is its
     /// role's name (`frame`, `dialog`), its frame `(0, 0, width, height)` in its own
     /// coordinates, and `z_order` counts the minimized windows too. Its process is the file name
-    /// of its app's executable, else the `comm` the process chose, empty when either holds a
-    /// control, bidirectional or invisible character; only an executable's name among the
-    /// settings' `own_processes` makes it `is_eileen`. A Flatpak app's pid and process are
+    /// of its app's executable, else the `comm` the process chose, empty when the name holds a
+    /// control character or anything `sanitize` would change (a bidirectional control, or one of
+    /// the invisible formatting characters `sanitize` removes); only an executable's name among
+    /// the settings' `own_processes` makes it `is_eileen`. A Flatpak app's pid and process are
     /// those of its `xdg-dbus-proxy`, through which it reaches the accessibility bus. No
     /// monitor, executable version, cloaking or page host is known: `url_host` is `None`, which
-    /// keeps BUILD.md section 2.12's URL rule closed. The windows of an app that does not answer
+    /// keeps BUILD.md section 2.12's URL rule closed. The windows of an app that cannot be read
     /// are left out, and while one is, no window is `is_foreground`: the front window is
     /// unknown, as [`Self::foreground`] says.
     ///
