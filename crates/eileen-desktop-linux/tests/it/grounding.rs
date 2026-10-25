@@ -4,8 +4,10 @@
 //! the fakes run on a runtime of their own, whose workers serve them meanwhile. Every fake app but
 //! one is a connection of the test's own process, so its windows' process is the test binary;
 //! `a_window_names_its_apps_own_process` serves that one from a copy of this binary under
-//! another name, a process of its own.
+//! another name, which runs the same test in a process of its own: there, [`OTHER_BUS`] makes
+//! the test serve the app instead of checking it.
 
+use std::convert::Infallible;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -155,17 +157,21 @@ fn this_process() -> String {
     exe.file_name().unwrap().to_str().unwrap().to_owned()
 }
 
-/// Where a copy of this binary in another process finds the bus to serve its app on.
+/// Where a copy of this binary in another process finds the bus to serve its app on. Set, it
+/// makes [`OTHER_TEST`] serve that app rather than check it.
 const OTHER_BUS: &str = "EILEEN_TEST_OTHER_BUS";
 /// That copy's file name, which names its process.
 const OTHER_EXE: &str = "eileen-fake-app";
+/// The test the copy runs, as the test harness names it: the one that starts the copy.
+const OTHER_TEST: &str = "grounding::a_window_names_its_apps_own_process";
 /// What the copy prints before its app's unique name, after the test harness's own words on the
 /// same line.
 const OTHER_SAYS: &str = "fake app at ";
 
-/// A copy of this test binary, named [`OTHER_EXE`], running `serve_an_app_in_this_process` in a
-/// process of its own. Its fields drop in order, a panicking test's included: the process is
-/// killed and reaped, then its folder removed.
+/// A copy of this test binary, named [`OTHER_EXE`], running [`OTHER_TEST`] in a process of its
+/// own, where [`OTHER_BUS`] makes the test serve its app until it is killed
+/// ([`serve_until_killed`]). Its fields drop in order, a panicking test's included: the process
+/// is killed and reaped, then its folder removed.
 struct OtherProcess {
     child: Running,
     _folder: Folder,
@@ -204,14 +210,13 @@ impl OtherProcess {
         if std::fs::hard_link(&this, &exe).is_err() {
             std::fs::copy(&this, &exe).unwrap();
         }
-        let test = "grounding::serve_an_app_in_this_process";
         #[expect(
             clippy::disallowed_methods,
             reason = "a test starts a copy of itself; the supervisor rule is for product code"
         )]
         let mut command = Command::new(&exe);
         let spawned = command
-            .args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"])
+            .args(["--exact", OTHER_TEST, "--nocapture", "--test-threads=1"])
             .env(OTHER_BUS, bus.address())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -232,24 +237,22 @@ impl OtherProcess {
     }
 }
 
-/// Not a test of its own: [`OtherProcess`] runs it in a copy of this binary, to serve an app
-/// with one window, `Elsewhere`, from another process until it is killed. Run without its bus,
-/// it does nothing.
-#[test]
-#[ignore = "run in another process by a_window_names_its_apps_own_process"]
-fn serve_an_app_in_this_process() {
-    let Ok(address) = std::env::var(OTHER_BUS) else { return };
+/// What [`OTHER_TEST`] does in [`OtherProcess`]'s copy: serves an app with one window,
+/// `Elsewhere`, on the bus at `address`, says the app's name, and serves it until the process is
+/// killed, so the copy's test never ends, let alone passes.
+fn serve_until_killed(address: &str) -> ! {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    runtime.block_on(async {
-        let app = App::at(&address).await;
+    let serve = async {
+        let app = App::at(address).await;
         let nodes =
             [root(&app, &["/elsewhere"]), ("/elsewhere", window(FRAME, "Elsewhere", &[], vec![]))];
         for (path, node) in nodes {
             app.add(path, node).await;
         }
         println!("{OTHER_SAYS}{}", app.name());
-        std::future::pending::<()>().await;
-    });
+        std::future::pending::<Infallible>().await
+    };
+    match runtime.block_on(serve) {}
 }
 
 /// Each window as its id, class, z-order, foreground flag and frame.
@@ -732,6 +735,10 @@ fn eileens_own_windows_are_marked_by_process() {
 
 #[test]
 fn a_window_names_its_apps_own_process() {
+    // In the copy this test starts, the test is the other process's app.
+    if let Ok(address) = std::env::var(OTHER_BUS) {
+        serve_until_killed(&address);
+    }
     let mut world = World::new();
     world.app(|app| vec![root(app, &["/here"]), ("/here", window(FRAME, "Here", &[], vec![]))]);
     let other = OtherProcess::start(&world.a11y);
