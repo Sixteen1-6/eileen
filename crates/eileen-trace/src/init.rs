@@ -205,6 +205,7 @@ impl Drop for WriterThread {
     fn drop(&mut self) {
         let Some(flush) = self.flush.take() else { return };
         // The guard goes to a thread of its own, so a guard stuck on stdout stays behind there.
+        // If no thread can start, the guard drops here, with the closure.
         let (done_tx, done) = sync_channel(1);
         let flusher = eileen_stdx::thread::spawn_named(FLUSH_THREAD, move || {
             drop(flush);
