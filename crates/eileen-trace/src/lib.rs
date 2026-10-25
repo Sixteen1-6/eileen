@@ -5,8 +5,8 @@
 //!
 //! # Owns
 //!
-//! - [`init()`] per [`ProcessKind`]: JSON files, the console, the [`ring`] and the [`slow`]
-//!   layer.
+//! - [`init()`] per [`ProcessKind`]: JSON files, each process pruning only its own
+//!   ([`TraceConfig::max_log_files`]), the console, the [`ring`] and the [`slow`] layer.
 //! - [`names`] and the span-parent check ([`schema`]); the `pii.` policy ([`pii`]), the
 //!   [`redact::Redactor`] and the scenario privacy rules and PII scan ([`privacy`]).
 //! - The [`chrome`] converter, [`traceparent`] parsing, and `test_support` (feature
@@ -15,7 +15,8 @@
 //! # Does not own
 //!
 //! - Spawning tasks (`eileen-rt`), the panic hook and minidumps (`eileen-crash`), assembling
-//!   incidents and the log janitor (`eileen-runtime`), OpenTelemetry export (v0.2).
+//!   incidents and the log janitor over every process's files (`eileen-runtime`: 14 days and
+//!   500 MB, BUILD.md section 2.15), OpenTelemetry export (v0.2).
 //!
 //! # Invariants
 //!
@@ -27,6 +28,9 @@
 //! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
 //!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
 //!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
+//! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
+//!   exactly, and never today's (tests `it::stack::the_core_keeps_the_other_processes_files`
+//!   and `it::stack::the_core_prunes_its_own_files_by_the_date_in_their_names`).
 //!
 //! # Boundaries
 //!
@@ -52,11 +56,15 @@
 //! - User content goes in `pii.` fields only, never in a span name or a message.
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
+//! - The core's process name, `eileen`, begins every other process's file name: match log
+//!   file names exactly, never by prefix (tracing-appender's `max_log_files` matches by
+//!   prefix, so it stays off).
 //!
 //! # Logs and tracing
 //!
 //! - Emits `span.slow` (target `eileen_trace::slow`) and `soft_assert.failed` (target
 //!   `eileen_trace`); owns no spans.
+//! - Pruning old log files writes nothing to the logs or to stderr.
 //! - Read back with `eileen trace <id>`, or open an incident's `timeline.json` in Perfetto.
 //!
 //! # Do not change without a decision record
@@ -75,6 +83,7 @@ pub mod pii;
 pub mod privacy;
 pub mod record;
 pub mod redact;
+mod retention;
 pub mod ring;
 pub mod schema;
 pub mod slow;
