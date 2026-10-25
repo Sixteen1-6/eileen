@@ -426,11 +426,12 @@ fn a_focus_search_stops_at_four_fifths_of_its_deadline() {
             ("/field", field),
         ]
     });
-    // The listing costs the 800 ms call timeout, past four fifths of 950 ms: the search stops
-    // there, where one that read on would find the field at about 810 ms.
-    let deadline = Deadline::after(Duration::from_millis(950));
+    // The listing costs the 250 ms call timeout, past four fifths of 300 ms: the search stops
+    // there, where one that read on would find the field at about 255 ms.
+    let quick = LinuxDesktopSettings { call_timeout: Duration::from_millis(250), ..settings() };
+    let deadline = Deadline::after(Duration::from_millis(300));
     assert_eq!(
-        world.desktop(settings()).focused_element(deadline),
+        world.desktop(quick).focused_element(deadline),
         Err(PlatformError::DeadlineExceeded { call: "focused element" }),
         "the search leaves the last fifth of its deadline unread"
     );
