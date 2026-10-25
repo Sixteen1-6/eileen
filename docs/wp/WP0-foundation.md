@@ -24,8 +24,8 @@ records when they exist.
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
-| 4 | `wp0/stubs` | Open on 2026-10-25; its amendment, pull request #95 (decision D78), goes first |
-| 5 | `wp0/xtask` | Not started |
+| 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
+| 5 | `wp0/xtask` | Open on 2026-10-25 |
 | 6 | `wp0/guidance` | Not started |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
@@ -83,6 +83,31 @@ ban, and `.config/nextest.toml` takes back the `package()` terms it left out unt
 existed. The stubs were cut off on the owner's PC before their first build; this cloud session
 merged `main` into them, compiled them on Linux and for Windows, and fixed what the build, clippy
 and rustdoc found.
+
+`wp0/xtask` completes `cargo xtask` (section 4b.5) on top of the build guard: one build slot per
+command through `eileen-buildguard` (admission, the re-check before each cargo invocation, the
+reason and holders every 30 s while refused, exit code 75 after `--wait-max`), and the guard's log,
+one JSON line per admission and refusal in `buildguard-log.jsonl` under the machine root, which
+acceptance 4's owner's-PC half reads. The commands: `check`, `test` (with `--owner`; on Windows the
+`desktop` group runs apart under `desktop.lock`, with the filter `.config/nextest.toml` gives it),
+`clippy`, `build` (cargo's own `--timings`; `--release` takes both slots), `insta`, `ci` (the pull
+request lane's steps, then `lint-repo`, then what it skipped and why), `pre-push` (fmt, clippy, the
+changed crates' tests and `lint-repo`; `.githooks/pre-push` runs it once `setup` sets
+`core.hooksPath`), `sim`, `lint-repo`, `setup` (the pinned toolchain, the prebuilt tools through
+cargo-binstall, never from source, the hooks and, on Windows, `fetch-native`), `slots` (the holders,
+`--kill-stale`, `--baseline [--hours <n>]`, which keeps `buildguard.toml` and the percentiles in the
+section below current every 5 minutes, and `--pressure <GB>`), `desktop-lock --hold`,
+`fetch-native` (the native table's one entry, checked by size and SHA-256 with xtask's own std-only
+SHA-256, unpacked with tar, older pins removed; `--print-env` gives the variables the Windows CI
+jobs now take) and `lock`. Every other command of section 4b.5 parses and says which later pull
+request builds it. `lint-repo` runs checks 1, 2, 4, 6, 10, 14 and 16 with a failing fixture test
+each, over the data in `xtask/tidy/` (the hashed denylist with its salt and no entries yet, the
+exempt research reports, the long modules, the nested guidance folders, the sanctioned
+`disallowed_methods` sites and the credential boundary). `eileen-sim` gets its skeleton: a `World`
+around the stub core, TOML profiles with a checked-in JSON Schema, seeded runs from an
+`arbitrary::Unstructured` buffer, the fixed-column step log, `--doublecheck` over a stable FNV-1a
+trace hash, `crates/eileen-sim/regressions/`, invariants 6, 10 and 13, a 64 MiB simulator stack,
+one test per pull request seed, and the `eileen-sim` binary `cargo xtask sim` runs.
 
 ## Acceptance records
 
@@ -222,6 +247,12 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   per admission and per refusal (the time, the slot or slots, the reason, the job count, and the
   window's paging average, lowest headroom and available memory) to a machine-wide JSON-lines
   file under `samples::machine_root()`, and the acceptance record is taken from it.
+- `cargo xtask lint-repo` stays out of CI in phase A. On `main` after `wp0/xtask` it finds the
+  root `AGENTS.md` and `CLAUDE.md` missing, which `wp0/guidance` adds; `## Owns` sections of more
+  than three bullets in `eileen-apps-linux`, `eileen-dbus-linux` and `eileen-shell-linux`; and
+  check 14 at `crates/eileen-dbus-linux/src/testing.rs` lines 70 and 74 (`Command::new` outside
+  the sanctioned sites). Those three crates are WP10's, so WP10 fixes them, and the CI step
+  joins once the tree is clean.
 - Check 14's list of `#[expect(clippy::disallowed_methods)]` functions after `wp0/base-crates`,
   which differs from section 4b.2's shorter names: `eileen_stdx::clock::SystemClock::now` and
   `::system_now`, `eileen_stdx::ids::OsIds::ulid` (its `Ids` impl),
@@ -670,6 +701,14 @@ request's push to `main` saves, so `wp0/xtask` records them. The per-worktree ta
 this cloud session (Ubuntu 24.04, debug, after `check`, `clippy`, `nextest` and the doc tests of
 the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows cross-check and
 `cargo doc` beside it. The owner's PC's Windows figure waits for a build there.
+
+The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
+the owner's PC writes its percentiles between these markers and its thresholds to
+`buildguard.toml`.
+
+<!-- baseline:start -->
+Not measured yet.
+<!-- baseline:end -->
 
 ## Outcome
 

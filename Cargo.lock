@@ -1038,6 +1038,22 @@ dependencies = [
 [[package]]
 name = "eileen-sim"
 version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "eileen-contracts",
+ "eileen-core",
+ "eileen-dictation",
+ "eileen-intent",
+ "eileen-skills",
+ "eileen-stdx",
+ "eileen-trace",
+ "schemars",
+ "serde",
+ "serde_json",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "eileen-skills"
@@ -3932,6 +3948,8 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 name = "xtask"
 version = "0.0.0"
 dependencies = [
+ "eileen-buildguard",
+ "serde_json",
  "toml",
 ]
 
