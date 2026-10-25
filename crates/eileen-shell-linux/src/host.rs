@@ -65,13 +65,14 @@
 //!   as long as its dialog waits. If the desktop refuses the changed set, the holder binds the
 //!   set it had again in another session, which GNOME answers without a dialog, and the new
 //!   shortcut waits for the next call, which shows the dialog again.
-//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer and each hotkey's
-//!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
-//!   user makes later in the desktop's settings does not yet. The dictation key's press and
-//!   release reach each `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`;
-//!   `PhysicalActivity` never does, since no source of it is chosen yet. Each press counts once,
-//!   though GNOME repeats `Activated` while a key is held, and a dictation key still down when
-//!   its session ends is released then.
+//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog, which GNOME leaves up past it: a
+//!   late accept binds at the next call. Its answer and each hotkey's press reach the sink of
+//!   [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the user makes later in the
+//!   desktop's settings does not yet. The dictation key's press and release reach each
+//!   `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`; `PhysicalActivity` never
+//!   does, since no source of it is chosen yet. Each press counts once, though GNOME repeats
+//!   `Activated` while a key is held, and a dictation key still down when its session ends is
+//!   released then.
 //! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
 //!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
 //!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`.

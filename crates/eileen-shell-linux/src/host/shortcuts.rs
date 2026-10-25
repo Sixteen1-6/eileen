@@ -23,8 +23,10 @@ use crate::{BoundShortcut, DbusError, Shortcut, ShortcutEvent, ShortcutEvents, S
 /// calls Eileen makes as it starts bind together, in one dialog.
 pub const SETTLE: Duration = Duration::from_millis(100);
 
-/// How long a bind waits for the desktop's answer, past which its request is closed, which
-/// dismisses the dialog: GNOME's has no timeout of its own.
+/// How long a bind waits for the desktop's answer, since GNOME's dialog has no timeout of its
+/// own; past it the request is closed and the bind is refused. GNOME leaves the dialog up all
+/// the same: an accept that comes later is stored but binds nothing, and the next call that
+/// binds the shortcut, or Eileen's next start, gets it without a dialog.
 pub const CONSENT_WAIT: Duration = Duration::from_secs(300);
 
 /// How many asks wait for the holder, at most.
