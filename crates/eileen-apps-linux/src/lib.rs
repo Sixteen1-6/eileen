@@ -1,6 +1,5 @@
 //! The apps process's platform implementations on Linux: what `eileen-apps-win` does on Windows
-//! (BUILD.md section 3.4; docs/LINUX.md section 4). Phase L1 starts with the app index, [`index`]:
-//! every app the desktop's menu shows, as `shell:AppsFolder` gives it on Windows.
+//! (BUILD.md section 3.4; docs/LINUX.md section 4), on XDG files and the desktop's D-Bus services.
 //!
 //! # Owns
 //!
@@ -11,21 +10,21 @@
 //! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
 //!   which bookmarks are local files, when each was last opened, by which app, of what kind.
 //!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
-//! - For `MediaSessions`: the MPRIS client, [`MprisSessions`]: which bus names are players, their
-//!   properties as `MediaState`s, each `MediaAction`'s call, and [`MprisWatch`]'s rules: which
-//!   signals read a player again, folded into one read per player, and `Gone` when a player loses
-//!   its name.
+//! - The `MediaSessions` implementation, [`LinuxMedia`], a thin adapter that runs the MPRIS client
+//!   on a `Bridge`: [`MprisSessions`] (which bus names are players, their properties as
+//!   `MediaState`s, each `MediaAction`'s call) and [`MprisWatch`]'s rules: which signals read a
+//!   player again, folded into one read per player, and `Gone` when a player loses its name.
 //!
 //! # Does not own
 //!
-//! - The traits (`eileen-platform`, WP0). Thin adapters will serve them; until they merge,
-//!   [`AppEntry`], [`AppKind`], [`RecentItem`] and [`FileError`] (`PlatformError` for files) mirror
-//!   `eileen-platform`'s types field for field, but for `RecentItem`'s app name.
+//! - The traits (`eileen-platform`, WP0), and the D-Bus plumbing and the bridge
+//!   (`eileen-dbus-linux`'s, [`DbusError`] re-exported here). Until the `Apps` and `RecentSources`
+//!   adapters land, [`AppEntry`], [`AppKind`], [`RecentItem`] and [`FileError`] (`PlatformError`
+//!   for files) mirror the platform's types field for field, but for `RecentItem`'s app name.
 //! - Launching apps that are not D-Bus activatable, and opening files with packaged apps: they need
 //!   `eileen_supervisor::user_launch` and its Linux process model (docs/LINUX.md section 5).
 //! - Ranking recent files, and the media history: the recent-work index (BUILD.md section 2.7).
 //! - Matching a spoken name to an app (the app-name scorer, WP5).
-//! - D-Bus plumbing: `eileen-dbus-linux`'s, [`DbusError`] (re-exported here) included.
 //!
 //! # Invariants
 //!
@@ -44,18 +43,18 @@
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-contracts` (the `ids` types, `FileKind` and the media types),
-//!   `eileen-dbus-linux` (the D-Bus helpers), `zbus`, `tokio` (files open on its blocking pool),
-//!   `rustix` (open flags) and `quick-xml` (the bookmark file). Nothing in the workspace may depend
-//!   on it except the apps process's composition root on Linux.
+//! - May depend on `eileen-platform` (the traits), `eileen-contracts` (the `ids` types, `FileKind`
+//!   and the media types), `eileen-dbus-linux` (the D-Bus helpers and the bridge), `zbus`, `tokio`
+//!   (files open on its blocking pool), `rustix` (open flags) and `quick-xml` (the bookmark file).
+//!   Nothing in the workspace may depend on it except the apps process's composition root on Linux.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-apps-linux`.
 //! - Layers: unit tests for the formats and the MPRIS values and calls; property tests for the
-//!   desktop entry lists and locale keys; the fuzz target `desktop_entry`, whose seed corpus
-//!   replays as a test; integration tests over `tests/fixtures/`, which its README describes, and
-//!   over the live session; fakes on `eileen-dbus-linux`'s private bus for the D-Bus clients.
+//!   desktop entry lists and locale keys; the fuzz target `desktop_entry`, whose seed corpus runs
+//!   as a test; integration tests over `tests/fixtures/` (see its README), the live session, and
+//!   fakes on `eileen-dbus-linux`'s private bus, the adapters' through `Bridge::on_private_bus`.
 //!
 //! # Traps
 //!
@@ -69,11 +68,12 @@
 //!   that bookmark, and lists a path once at its newest time, as it does when two URIs name it.
 //!   A `private` bookmark is hidden from every app that did not register it, Eileen included.
 //! - The D-Bus traps (unpolled streams, streams dropped off the runtime) are `eileen-dbus-linux`'s.
-//!   An [`MprisWatch`] has them, so a `Subscription`'s release must drop it inside the runtime.
+//!   An [`MprisWatch`] has them; [`LinuxMedia`] runs it as a task on the bridge, which keeps them.
+//!   Its `subscribe` sink runs on the bridge's one thread: a sink that blocks stalls every call.
 //!
 //! # Logs and tracing
 //!
-//! - None yet: spans join with the trait implementations, around the calls and the watch's stream.
+//! - None yet: spans, whose names `eileen-trace` lists, join around the trait calls and the watch.
 //!
 //! # Do not change without a decision record
 //!
@@ -88,6 +88,7 @@ mod error;
 pub mod fuzz_entry;
 mod index;
 mod keyfile;
+mod media;
 mod mpris;
 mod open;
 mod recent;
@@ -96,6 +97,7 @@ pub use eileen_dbus_linux::DbusError;
 pub use entry::DesktopEntry;
 pub use error::FileError;
 pub use index::{AppEntry, AppKind, Session, entry_for, index};
+pub use media::LinuxMedia;
 pub use mpris::{MprisEvent, MprisSessions, MprisWatch};
 pub use open::{OpenError, Opener};
 pub use recent::{RecentItem, RecentlyUsed};
