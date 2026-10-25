@@ -20,7 +20,8 @@
 //!
 //! # Reverting
 //!
-//! [`RealtimeKit::revert`] asks for `SCHED_OTHER` at the nice level the thread had: neither std
+//! [`RealtimeKit::revert`] asks for `SCHED_OTHER` at the nice level the thread had, floored at
+//! `MinNiceLevel` ([`Promoted::restore`]), since rtkit refuses any level below it: neither std
 //! nor rustix has a safe `sched_setscheduler`. rtkit 0.14 records the real-time priority it last
 //! granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend makes every thread
 //! it still records real-time again. It forgets a thread only in the garbage collection it runs
@@ -114,6 +115,17 @@ impl Promotion {
             Self::HighPriority { .. } => "RealtimeKit high priority",
         }
     }
+}
+
+/// What [`RealtimeKit::promote`] made of a thread, and the level that puts it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Promoted {
+    /// What the thread got.
+    pub promotion: Promotion,
+    /// The nice level [`RealtimeKit::revert`] asks for: the one the thread had, floored at
+    /// `MinNiceLevel`, below which rtkit refuses any level, so the revert always takes the thread
+    /// off real-time.
+    pub restore: i32,
 }
 
 /// `RealtimeKit`'s limits, from its three properties.
@@ -223,15 +235,41 @@ impl RealtimeKit {
             .map_err(|error| failed(MAKE_HIGH_PRIORITY, &error))
     }
 
-    /// Makes `thread` real-time as `policy` asks, or high priority when rtkit refuses or the
-    /// bound fails; the module's doc says how. An error leaves the thread as it was, except one
-    /// past a method timeout, after which rtkit may still act.
+    /// Makes `thread`, whose nice level is `nice`, real-time as `policy` asks, or high priority
+    /// when rtkit refuses or the bound fails; the module's doc says how. An error leaves the
+    /// thread as it was, except one past a method timeout, after which rtkit may still act.
     pub async fn promote(
         &self,
         thread: ThreadId,
+        nice: i32,
         policy: RealtimePolicy,
-    ) -> Result<Promotion, DbusError> {
+    ) -> Result<Promoted, DbusError> {
         let limits = self.limits().await?;
+        let promotion = self.request(thread, policy, limits).await?;
+        Ok(Promoted { promotion, restore: limits.nice_level(nice) })
+    }
+
+    /// Puts `thread` back on `SCHED_OTHER` at nice level `nice`, then reads `RTTimeUSecMax`, so
+    /// that rtkit 0.14 forgets the thread (the module's doc says why). rtkit refuses a level
+    /// below `MinNiceLevel`, which [`Promoted::restore`] never is.
+    pub async fn revert(&self, thread: ThreadId, nice: i32) -> Result<(), DbusError> {
+        self.make_high_priority(thread, nice).await?;
+        self.proxy()
+            .await?
+            .rttime_usec_max()
+            .await
+            .map_err(|error| failed(RTTIME_USEC_MAX, &error))?;
+        Ok(())
+    }
+
+    /// Real-time for `thread` as `policy` asks within `limits`, or high priority when rtkit
+    /// refuses or the bound fails: the requests of [`Self::promote`].
+    async fn request(
+        &self,
+        thread: ThreadId,
+        policy: RealtimePolicy,
+        limits: RtLimits,
+    ) -> Result<Promotion, DbusError> {
         if let Some(priority) = limits.realtime_priority(policy.priority)
             && bound_rttime(limits.rttime_usec_max()).is_ok()
         {
@@ -244,18 +282,6 @@ impl RealtimeKit {
         let nice = limits.nice_level(policy.fallback_nice);
         self.make_high_priority(thread, nice).await?;
         Ok(Promotion::HighPriority { nice })
-    }
-
-    /// Puts `thread` back on `SCHED_OTHER` at nice level `nice`, the level it had, then reads
-    /// `RTTimeUSecMax`, so that rtkit 0.14 forgets the thread (the module's doc says why).
-    pub async fn revert(&self, thread: ThreadId, nice: i32) -> Result<(), DbusError> {
-        self.make_high_priority(thread, nice).await?;
-        self.proxy()
-            .await?
-            .rttime_usec_max()
-            .await
-            .map_err(|error| failed(RTTIME_USEC_MAX, &error))?;
-        Ok(())
     }
 
     /// rtkit's object on the system bus, with no property cache.

@@ -17,7 +17,8 @@
 //! leave a thread real-time with no ticket to revert it. Once promoted, the task answers with a
 //! channel and waits. When the ticket drops, or at once when nothing took the answer (the call
 //! had given up, or its answer arrived too late), the task reverts the thread with
-//! [`RealtimeKit::revert`], to the nice level read before.
+//! [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
+//! ([`Promoted::restore`]).
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
 //! that, the task finishes on its own. The ticket keeps a handle to the bridge, so a registration
@@ -32,7 +33,7 @@ use eileen_platform::{
 };
 use tokio::sync::oneshot;
 
-use crate::{DbusError, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
 
 /// How long dropping a ticket waits for the revert, at most. rtkit answers in milliseconds, and
 /// a drop should not stall the audio thread for a call's whole deadline; past it, the promoter
@@ -55,7 +56,7 @@ type Reverted = oneshot::Sender<Result<(), DbusError>>;
 /// The channel through which a ticket asks its promoter task to revert.
 type Revert = oneshot::Sender<Reverted>;
 /// What the promoter task answers the registration.
-type Promoted = Result<(Promotion, Revert), PlatformError>;
+type Answer = Result<(Promotion, Revert), PlatformError>;
 
 /// What a [`LinuxAudioEndpoints`] needs besides its bridge, given by the composition root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,22 +131,22 @@ impl AudioEndpoints for LinuxAudioEndpoints {
     }
 }
 
-/// The promoter task: promotes `thread` as `policy` asks and answers with a channel to revert it
-/// through. It reverts `thread` to `nice` once asked through that channel, or once the channel or
-/// the wait for the answer is gone without asking.
+/// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, and
+/// answers with a channel to revert it through. It reverts `thread` once asked through that
+/// channel, or once the channel or the wait for the answer is gone without asking.
 async fn promoter(
     buses: Buses,
     thread: ThreadId,
     nice: i32,
     policy: RealtimePolicy,
-    answer: oneshot::Sender<Promoted>,
+    answer: oneshot::Sender<Answer>,
 ) {
     let promoted = match buses.system().await {
-        Ok(system) => RealtimeKit::new(&system).promote(thread, policy).await,
+        Ok(system) => RealtimeKit::new(&system).promote(thread, nice, policy).await,
         Err(error) => Err(error),
     };
-    let promotion = match promoted {
-        Ok(promotion) => promotion,
+    let Promoted { promotion, restore } = match promoted {
+        Ok(promoted) => promoted,
         Err(error) => {
             let _ignored = answer.send(Err(error.into()));
             return;
@@ -157,7 +158,7 @@ async fn promoter(
         if answer.send(Ok((promotion, revert))).is_ok() { asked.await.ok() } else { None };
     // The system bus of the moment: the bridge connects it again if it has closed since.
     let outcome = match buses.system().await {
-        Ok(system) => RealtimeKit::new(&system).revert(thread, nice).await,
+        Ok(system) => RealtimeKit::new(&system).revert(thread, restore).await,
         Err(error) => Err(error),
     };
     if let Some(reverted) = reverted {

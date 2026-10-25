@@ -5,8 +5,9 @@
 //! # Owns
 //!
 //! - [`RealtimeKit`], the client of `rtkit-daemon` on the system bus: its limits ([`RtLimits`]),
-//!   promoting a thread to real-time or high priority ([`RealtimePolicy`], [`Promotion`]) and the
-//!   revert, with [`ThreadId`] and the bound on the process's `RLIMIT_RTTIME`.
+//!   promoting a thread to real-time or high priority ([`RealtimePolicy`], [`Promoted`],
+//!   [`Promotion`]) and the revert, with [`ThreadId`] and the bound on the process's
+//!   `RLIMIT_RTTIME`.
 //! - [`LinuxAudioEndpoints`]: `eileen-platform`'s `AudioEndpoints` on `eileen-dbus-linux`'s
 //!   bridge. It serves `register_audio_thread`; the default endpoints wait for phase L2.
 //!
@@ -23,7 +24,7 @@
 //!   elsewhere, as the `-win` crates do off Windows.
 //! - It never raises a limit (the `RLIMIT_RTTIME` bound only lowers), and never asks for more than
 //!   `RealtimeKit` grants: a priority capped at `MaxRealtimePriority`, a nice level floored at
-//!   `MinNiceLevel`.
+//!   `MinNiceLevel`, the revert's included.
 //! - Real-time comes only through `RealtimeKit`. It starts no process (a call may let the bus
 //!   start `rtkit-daemon`), needs no elevation, and changes only the threads that register.
 //! - A promotion that answers after its call gave up is reverted at once, and a ticket reverts its
@@ -78,5 +79,5 @@ mod thread;
 
 pub use eileen_dbus_linux::DbusError;
 pub use endpoints::{LinuxAudioEndpoints, LinuxAudioSettings, REVERT_WAIT};
-pub use rtkit::{Promotion, RealtimeKit, RealtimePolicy, RtLimits};
+pub use rtkit::{Promoted, Promotion, RealtimeKit, RealtimePolicy, RtLimits};
 pub use thread::ThreadId;

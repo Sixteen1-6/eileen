@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use eileen_audio_linux::{DbusError, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use rustix::process::{Resource, getrlimit};
 use tokio::sync::{Notify, mpsc};
@@ -22,6 +22,10 @@ pub(super) const RTKIT_PATH: &str = "/org/freedesktop/RealtimeKit1";
 /// rtkit's defaults: 200 ms of real-time CPU, priority 20 and nice -15.
 pub(super) const DEFAULTS: Limits =
     Limits { rttime_usec_max: 200_000, max_realtime_priority: 20, min_nice_level: -15 };
+
+/// The nice level the client's tests say their thread has: not 0, so that a revert to nice 0
+/// cannot pass for one to it.
+const NICE: i32 = 3;
 
 /// A call the fake reports, refused or not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,8 +254,13 @@ async fn a_thread_is_made_real_time_within_the_maximum_after_the_rttime_bound() 
     let limits = Limits { rttime_usec_max: 150_000, max_realtime_priority: 8, ..DEFAULTS };
     let (fake, mut calls) = FakeRtkit::new(limits, None);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
-    let promoted = client(&bus).await.promote(ThreadId::current(), RealtimePolicy::default()).await;
-    assert_eq!(promoted, Ok(Promotion::Realtime { priority: 8 }), "10, capped at the maximum");
+    let client = client(&bus).await;
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    assert_eq!(
+        promoted,
+        Ok(Promoted { promotion: Promotion::Realtime { priority: 8 }, restore: NICE }),
+        "10, capped at the maximum"
+    );
     assert_eq!(
         calls.try_recv(),
         Ok(Call::Realtime(this_thread(), 8)),
@@ -269,8 +278,13 @@ async fn a_refused_real_time_request_falls_back_to_high_priority() {
     let (fake, mut calls) = FakeRtkit::new(Limits { min_nice_level: -8, ..DEFAULTS }, None);
     fake.refuse_realtime.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
-    let promoted = client(&bus).await.promote(ThreadId::current(), RealtimePolicy::default()).await;
-    assert_eq!(promoted, Ok(Promotion::HighPriority { nice: -8 }), "-11, floored at the minimum");
+    let client = client(&bus).await;
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    assert_eq!(
+        promoted,
+        Ok(Promoted { promotion: Promotion::HighPriority { nice: -8 }, restore: NICE }),
+        "-11, floored at the minimum"
+    );
     let thread = this_thread();
     assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time first");
     assert_eq!(calls.try_recv(), Ok(Call::HighPriority(thread, -8)), "then high priority");
@@ -283,7 +297,8 @@ async fn refusing_both_is_refused_not_authorized() {
     fake.refuse_realtime.store(true, Ordering::SeqCst);
     fake.refuse_high_priority.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
-    let promoted = client(&bus).await.promote(ThreadId::current(), RealtimePolicy::default()).await;
+    let client = client(&bus).await;
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
     assert_eq!(
         promoted,
         Err(DbusError::Refused {
@@ -297,7 +312,8 @@ async fn refusing_both_is_refused_not_authorized() {
 #[tokio::test]
 async fn no_realtimekit_on_the_bus_is_unavailable() {
     let bus = PrivateBus::start();
-    let promoted = client(&bus).await.promote(ThreadId::current(), RealtimePolicy::default()).await;
+    let client = client(&bus).await;
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
     assert_eq!(
         promoted,
         Err(DbusError::Unavailable { what: "org.freedesktop.RealtimeKit1.RTTimeUSecMax" }),
@@ -312,14 +328,33 @@ async fn a_reverted_thread_is_forgotten_so_a_resume_leaves_it_alone() {
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = client(&bus).await;
     let thread = ThreadId::current();
-    client.promote(thread, RealtimePolicy::default()).await.unwrap();
+    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await.unwrap();
     assert_eq!(
         fake.resume(),
         [(this_thread(), 10)],
         "recorded while real-time, as rtkit 0.14 does"
     );
-    client.revert(thread, 0).await.unwrap();
+    client.revert(thread, promoted.restore).await.unwrap();
     assert_eq!(calls.try_recv(), Ok(Call::Realtime(this_thread(), 10)), "the promotion");
-    assert_eq!(calls.try_recv(), Ok(Call::HighPriority(this_thread(), 0)), "the revert");
+    assert_eq!(calls.try_recv(), Ok(Call::HighPriority(this_thread(), NICE)), "the revert");
     assert_eq!(fake.resume(), [], "forgotten, so a resume after a suspend leaves it alone");
+}
+
+#[tokio::test]
+async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimum() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(Limits { min_nice_level: NICE + 2, ..DEFAULTS }, None);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
+    let client = client(&bus).await;
+    let thread = ThreadId::current();
+    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await;
+    assert_eq!(
+        promoted,
+        Ok(Promoted { promotion: Promotion::Realtime { priority: 10 }, restore: NICE + 2 }),
+        "rtkit refuses any level below its minimum, the thread's own included"
+    );
+    client.revert(thread, NICE + 2).await.unwrap();
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(this_thread(), 10)), "the promotion");
+    assert_eq!(calls.try_recv(), Ok(Call::HighPriority(this_thread(), NICE + 2)), "the revert");
+    assert_eq!(fake.resume(), [], "granted, so the thread is off real-time and forgotten");
 }

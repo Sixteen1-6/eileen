@@ -11,7 +11,7 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{AudioEndpoints, Deadline, PlatformError, StreamCategory};
 use tokio::sync::Notify;
 
-use crate::rtkit::{Call, DEFAULTS, FakeRtkit, RTKIT, RTKIT_PATH, this_nice, this_thread};
+use crate::rtkit::{Call, DEFAULTS, FakeRtkit, Limits, RTKIT, RTKIT_PATH, this_nice, this_thread};
 
 /// The deadline of a registration whose fake holds its answer: it passes whatever its length,
 /// and a short one keeps the test short.
@@ -77,6 +77,24 @@ fn register_audio_thread_promotes_the_calling_thread_and_its_ticket_reverts_it()
         "back to the nice level it had, by then"
     );
     assert_eq!(fake.resume(), [], "and forgotten, so a resume after a suspend leaves it alone");
+}
+
+#[test]
+fn a_ticket_reverts_a_thread_whose_nice_level_is_below_the_minimum_to_the_minimum() {
+    let bus = PrivateBus::start();
+    let (thread, nice) = (this_thread(), lower_priority());
+    assert!(nice < 19, "a nice level that a minimum can be above: {nice}");
+    let (fake, mut calls) = FakeRtkit::new(Limits { min_nice_level: nice + 1, ..DEFAULTS }, None);
+    let _fakes = Fakes::serve(&bus, fake.clone());
+    let ticket = endpoints_on(&bus, DEFAULT_DEADLINE).register_audio_thread().unwrap();
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time");
+    drop(ticket);
+    assert_eq!(
+        calls.try_recv(),
+        Ok(Call::HighPriority(thread, nice + 1)),
+        "the minimum: rtkit refuses the level the thread had, which is below it"
+    );
+    assert_eq!(fake.resume(), [], "granted, so the thread is off real-time and forgotten");
 }
 
 #[test]
