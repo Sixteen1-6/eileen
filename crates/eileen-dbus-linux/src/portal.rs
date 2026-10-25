@@ -201,10 +201,7 @@ pub async fn close_request(
 }
 
 /// The first `Response` in `responses` that `portal` sent.
-async fn response(
-    responses: &mut Signals,
-    portal: &UniqueName<'_>,
-) -> Result<Response, DbusError> {
+async fn response(responses: &mut Signals, portal: &UniqueName<'_>) -> Result<Response, DbusError> {
     loop {
         let message = responses.next().await.ok_or_else(|| DbusError::Io {
             what: WHAT,

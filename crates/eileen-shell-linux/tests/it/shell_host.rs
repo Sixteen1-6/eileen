@@ -1,9 +1,11 @@
 //! `ShellHost` on Linux: `LinuxShell` through a bridge on the private bus, against the fake
-//! logind, logind session, GNOME session manager, Inhibit portal and notification server of the
-//! clients' own tests, and a GNOME session manager that reports what it is asked; a silent bus
-//! stands in for a bus that has hung. The test's thread calls the shell as the core does,
-//! blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
+//! logind, logind session, GNOME session manager, Inhibit portal, `GlobalShortcuts` portal and
+//! notification server of the clients' own tests, and a GNOME session manager that reports what
+//! it is asked; a silent bus stands in for a bus that has hung. The test's thread calls the shell
+//! as the core does, blocking; the fakes run on a runtime of their own, whose workers serve them
+//! meanwhile.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
@@ -12,11 +14,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use eileen_contracts::core_io::Toast;
+use eileen_contracts::core_io::{KeyEdge, Toast};
+use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::{PrivateBus, SilentBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_changes};
-use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
-use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
+use eileen_platform::{Deadline, PlatformError, ShellHost, ShellInputEvent, TrayState, VirtualKey};
+use eileen_shell_linux::{
+    BoundHotkey, DbusError, LinuxShell, LinuxShellEvent, LinuxShellSettings, NotifierSettings,
+    ShortcutId, ShortcutNames,
+};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
@@ -27,6 +33,11 @@ use crate::keep_awake::{
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
+use crate::shortcuts::{
+    Bind, FakeRegistry, FakeShortcuts, Mode, Modes, PORTAL as SHORTCUTS_PORTAL,
+    PORTAL_PATH as SHORTCUTS_PATH, Report, listed, press, respond as answer, serve_portal,
+    triggers,
+};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
 /// its length, and a short one keeps the test short. Not for `keep_awake`, whose connects have
@@ -85,6 +96,14 @@ impl Fakes {
         iface: I,
     ) -> zbus::Connection {
         let service = self.runtime.block_on(serve(bus, name, path, iface));
+        self.services.push(service.clone());
+        service
+    }
+
+    /// Serves `fake` as the `GlobalShortcuts` portal, with its host registry, until the fakes drop,
+    /// and answers the portal's connection.
+    fn shortcuts(&mut self, bus: &PrivateBus, fake: FakeShortcuts) -> zbus::Connection {
+        let service = self.runtime.block_on(serve_portal(bus, fake));
         self.services.push(service.clone());
         service
     }
@@ -170,6 +189,7 @@ fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSet
         autostart_id: "eileen".to_owned(),
         program: PathBuf::from(PROGRAM),
         deadline,
+        shortcut_names: ShortcutNames::default(),
     }
 }
 
@@ -537,23 +557,175 @@ fn run_at_sign_in_maps_its_errors_and_needs_a_folder() {
 }
 
 #[test]
-fn hotkeys_the_tray_and_input_wait_for_phase_l2() {
+fn the_tray_waits_for_phase_l2() {
     let bus = PrivateBus::start();
     let shell = shell_on(&bus, DEFAULT_DEADLINE);
-    assert_eq!(
-        shell.register_hotkey("Ctrl+Alt+Space", 1),
-        Err(PlatformError::Unavailable { what: "global hotkey" }),
-        "the GlobalShortcuts portal"
-    );
     assert_eq!(
         shell.set_tray(TrayState::default()),
         Err(PlatformError::Unavailable { what: "tray" }),
         "StatusNotifierItem"
     );
+}
+
+/// A sink for the shell's events, and what it receives.
+fn events_sink() -> (Arc<dyn Fn(LinuxShellEvent) + Send + Sync>, mpsc::Receiver<LinuxShellEvent>) {
+    let (events, received) = mpsc::channel(64);
+    let sink = move |event| {
+        let _ignored = events.try_send(event);
+    };
+    (Arc::new(sink), received)
+}
+
+/// The next bind the fake reports that lists `count` shortcuts, passing over its other reports.
+fn bind_of(reports: &mut mpsc::Receiver<Report>, count: usize) -> Bind {
+    loop {
+        if let Report::Bound(bind) = reports.blocking_recv().unwrap()
+            && bind.shortcuts.len() == count
+        {
+            return bind;
+        }
+    }
+}
+
+/// The IDs a bind lists.
+fn ids(bind: &Bind) -> Vec<&str> {
+    bind.shortcuts.iter().map(|(id, _, _)| id.as_str()).collect()
+}
+
+#[test]
+fn hotkeys_and_the_dictation_key_are_bound_together_and_report_presses() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let mut settings = settings(DEFAULT_DEADLINE, None);
+    settings.shortcut_names.hotkeys = BTreeMap::from([(1, "Mute or unmute".to_owned())]);
+    let (sink, mut events) = events_sink();
+    let shell = LinuxShell::new(Bridge::on_private_bus(&bus).unwrap(), settings).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    shell.register_hotkey("Ctrl+Alt+Shift+B", 2).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let bind = bind_of(&mut reports, 3);
+    let expected = listed(&[
+        ("dictation", Some("Hold to dictate"), Some("Caps_Lock")),
+        ("hotkey-1", Some("Mute or unmute"), Some("CTRL+ALT+m")),
+        ("hotkey-2", Some("Eileen shortcut 2"), Some("CTRL+ALT+SHIFT+b")),
+    ]);
+    assert_eq!(bind.shortcuts, expected, "one bind of the whole set, described and triggered");
+    let bound = loop {
+        if let LinuxShellEvent::ShortcutsBound(bound) = events.blocking_recv().unwrap()
+            && bound.len() == 3
+        {
+            break bound;
+        }
+    };
+    let hotkey = BoundHotkey {
+        id: ShortcutId::Hotkey(1),
+        trigger: Untrusted::new("Press CTRL+ALT+m".to_owned()),
+    };
+    assert_eq!(bound.get(1), Some(&hotkey), "the desktop's answer reaches the sink");
+    let pressed = |member: &str, id: &str| {
+        fakes.runtime.block_on(press(&portal, &bind.caller, member, &bind.session, id));
+    };
+    pressed("Activated", "hotkey-1");
+    assert_eq!(events.blocking_recv(), Some(LinuxShellEvent::Hotkey(1)), "the hotkey's press");
+    pressed("Activated", "dictation");
+    pressed("Deactivated", "dictation");
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the dictation key's press");
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "and its release");
+}
+
+#[test]
+fn a_hotkey_added_while_a_bind_waits_rebinds_everything_in_a_new_session() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { bind: Mode::Later, ..Modes::GRANT });
+    let portal = fakes.shortcuts(&bus, fake);
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let first = bind_of(&mut reports, 1);
+    // Answered at once, since the holder has a session, while the first bind's dialog waits.
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let granted = HashMap::from([("shortcuts", triggers(&first.shortcuts))]);
+    fakes.runtime.block_on(answer(&portal, &first.caller, &first.request, 0, granted));
+    let mut closed = false;
+    let second = loop {
+        match reports.blocking_recv().unwrap() {
+            Report::SessionClosed(session) => closed |= session == first.session,
+            Report::Bound(bind) => break bind,
+            Report::Registered { .. } | Report::Created(_) | Report::RequestClosed(_) => {}
+        }
+    };
+    assert!(closed, "the first session is closed before the next bind");
+    assert_ne!(second.session, first.session, "which is in a new session");
+    assert_eq!(ids(&second), ["hotkey-1", "hotkey-2"], "and binds the whole set");
+}
+
+#[test]
+fn without_the_portal_hotkeys_and_input_are_unavailable() {
+    let bus = PrivateBus::start();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    let hotkey = PlatformError::Unavailable { what: "global hotkey" };
+    assert_eq!(shell.register_hotkey("ctrl+alt+m", 1), Err(hotkey.clone()), "no portal");
     let watch = shell.watch_input(VirtualKey(0x14), Box::new(|_event| {}));
     assert_eq!(
         watch.unwrap_err(),
         PlatformError::Unavailable { what: "input watch" },
-        "the GlobalShortcuts portal, and a source of physical activity not chosen yet"
+        "nor for the dictation key"
     );
+    let mut fakes = Fakes::new();
+    let (fake, _reports) = FakeShortcuts::new(Modes::GRANT);
+    fakes.serve(&bus, SHORTCUTS_PORTAL, SHORTCUTS_PATH, FakeRegistry(fake));
+    assert_eq!(
+        shell.register_hotkey("ctrl+alt+m", 1),
+        Err(hotkey),
+        "a portal without GlobalShortcuts, as GNOME 46's, which a new holder asks"
+    );
+}
+
+#[test]
+fn a_chord_the_portal_cannot_name_is_invalid() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let _portal = fakes.shortcuts(&bus, fake);
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    let detail = "a key no trigger can name".to_owned();
+    assert_eq!(
+        shell.register_hotkey("ctrl+hyper+m", 1),
+        Err(PlatformError::Invalid { what: "hotkey chord", detail }),
+        "no keysym is called hyper"
+    );
+    shell.register_hotkey("ctrl+alt+m", 2).unwrap();
+    assert_eq!(
+        ids(&bind_of(&mut reports, 1)),
+        ["hotkey-2"],
+        "the first bind holds the valid chord alone: the other never reached the holder"
+    );
+}
+
+#[test]
+fn a_cancelled_dialog_reaches_the_sink_as_a_refusal() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { bind: Mode::Code(1), ..Modes::GRANT });
+    let _portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let refused =
+        DbusError::Refused { what: "GlobalShortcuts binding", reason: "cancelled by the user" };
+    let refusal = Some(LinuxShellEvent::ShortcutsRefused(refused));
+    assert_eq!(events.blocking_recv(), refusal, "the user closed the dialog");
+    let first = bind_of(&mut reports, 1);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let again = bind_of(&mut reports, 1);
+    assert_ne!(again.session, first.session, "the same call again shows the dialog again");
+    assert_eq!(events.blocking_recv(), refusal, "which the user closed again");
 }
