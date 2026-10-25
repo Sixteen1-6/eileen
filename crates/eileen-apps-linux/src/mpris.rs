@@ -373,9 +373,11 @@ async fn read(
 
 /// Awaits all of `futures` at once, in this task, and gives their outputs in the order the
 /// futures came: the join takes as long as its slowest future, not the sum of them. It is
-/// written here because the workspace has no `futures` crate, tokio's `join!` takes a fixed
-/// number of futures, and its `JoinSet` spawns a task for each, which clippy.toml's spawn rules
-/// keep out. Each wake polls every future still running, which suits the few players on a bus.
+/// written here because the workspace has no `futures` crate and tokio's `join!` takes a fixed
+/// number of futures. tokio's `JoinSet` and zbus's `Executor` would spawn a task per future, but
+/// every task is started through `eileen_rt::task::spawn` (BUILD.md section 2.13), and this
+/// crate's Boundaries do not list `eileen-rt`. Each wake polls every future still running, which
+/// suits the few players on a bus.
 async fn join_all<F: Future>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output> {
     let mut joined: Vec<Joined<F>> =
         futures.into_iter().map(|future| Joined::Running(Box::pin(future))).collect();
