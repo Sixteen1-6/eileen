@@ -135,6 +135,39 @@ mod tests {
         }
     }
 
+    /// Every key of the table, named in lower case without its `_`, gives its exact xkbcommon
+    /// keysym name, whose case the desktop's parser keeps.
+    #[test]
+    fn each_named_key_gives_its_exact_keysym() {
+        let keysyms = [
+            ("space", "space"),
+            ("return", "Return"),
+            ("tab", "Tab"),
+            ("escape", "Escape"),
+            ("backspace", "BackSpace"),
+            ("delete", "Delete"),
+            ("insert", "Insert"),
+            ("home", "Home"),
+            ("end", "End"),
+            ("pageup", "Page_Up"),
+            ("pagedown", "Page_Down"),
+            ("up", "Up"),
+            ("down", "Down"),
+            ("left", "Left"),
+            ("right", "Right"),
+            ("pause", "Pause"),
+            ("print", "Print"),
+            ("menu", "Menu"),
+            ("capslock", "Caps_Lock"),
+            ("scrolllock", "Scroll_Lock"),
+        ];
+        assert_eq!(keysyms.len(), super::KEYS.split(' ').count(), "one case for each key");
+        for (key, keysym) in keysyms {
+            let trigger = format!("CTRL+{keysym}");
+            assert_eq!(trigger_of_chord(&format!("ctrl+{key}")), Ok(trigger), "{key}");
+        }
+    }
+
     #[test]
     fn a_chord_without_exactly_one_known_key_is_invalid() {
         let cases = [
@@ -154,20 +187,49 @@ mod tests {
 
     #[test]
     fn windows_key_codes_name_their_keysyms() {
-        let cases = [
-            (0x14, Some("Caps_Lock")),
-            (0x7C, Some("F13")),
-            (0xA3, Some("Control_R")),
-            (0x41, Some("a")),
-            (0x30, Some("0")),
-            (0x28, Some("Down")),
-            (0x5D, Some("Menu")),
-            (0x07, None),
-            // Past a byte, though its low byte is Caps Lock's.
-            (0x0114, None),
+        let named = [
+            // Pause, Caps Lock, Space, Insert and Scroll Lock.
+            (0x13, "Pause"),
+            (0x14, "Caps_Lock"),
+            (0x20, "space"),
+            (0x2D, "Insert"),
+            (0x91, "Scroll_Lock"),
+            // VK_PRIOR to VK_DOWN.
+            (0x21, "Page_Up"),
+            (0x22, "Page_Down"),
+            (0x23, "End"),
+            (0x24, "Home"),
+            (0x25, "Left"),
+            (0x26, "Up"),
+            (0x27, "Right"),
+            (0x28, "Down"),
+            // VK_LWIN, VK_RWIN and VK_APPS.
+            (0x5B, "Super_L"),
+            (0x5C, "Super_R"),
+            (0x5D, "Menu"),
+            // VK_LSHIFT to VK_RMENU.
+            (0xA0, "Shift_L"),
+            (0xA1, "Shift_R"),
+            (0xA2, "Control_L"),
+            (0xA3, "Control_R"),
+            (0xA4, "Alt_L"),
+            (0xA5, "Alt_R"),
+            // Both ends of the F-keys, the letters and the digits.
+            (0x70, "F1"),
+            (0x7C, "F13"),
+            (0x87, "F24"),
+            (0x41, "a"),
+            (0x5A, "z"),
+            (0x30, "0"),
+            (0x39, "9"),
         ];
-        for (code, keysym) in cases {
-            assert_eq!(trigger_of_key(VirtualKey(code)).as_deref(), keysym, "{code:#x}");
+        for (code, keysym) in named {
+            assert_eq!(trigger_of_key(VirtualKey(code)).as_deref(), Some(keysym), "{code:#x}");
+        }
+        // No name: an unassigned code, Backspace, the codes just past F24, the menu key and the
+        // right Alt, and one past a byte, though its low byte is Caps Lock's.
+        for code in [0x07, 0x08, 0x88, 0x5E, 0xA6, 0x0114] {
+            assert_eq!(trigger_of_key(VirtualKey(code)), None, "{code:#x}");
         }
     }
 
