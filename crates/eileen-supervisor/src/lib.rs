@@ -8,6 +8,7 @@
 //! - The one `Command::new` for every child of the running product, and how it is wrapped.
 //! - [`spawn_detached`] for `eileen-guard.exe`: `CREATE_BREAKAWAY_FROM_JOB`, null handles.
 //! - [`watch`] (deadlines, heartbeats, restart backoff) and [`qos`] (`EcoQoS`, MMCSS).
+//! - The Linux process model (LINUX.md section 5): own session, parent-death signal, group kills.
 //!
 //! # Does not own
 //!
@@ -22,6 +23,9 @@
 //! - Stderr forwarding survives bytes that are not UTF-8 and keeps at most
 //!   [`MAX_STDERR_LINE`] bytes of a line in memory
 //!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
+//! - On Linux a child leads its own session, and its whole group dies before the reap: on drop,
+//!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
+//!   spawned it, from any thread (a test of `tests::linux` for each).
 //! - The detached spawn outlives its parent (Windows test
 //!   `tests::the_guard_spawn_outlives_its_parent`).
 //! - A failing child restarts at most `max_restarts` times per window
@@ -36,7 +40,7 @@
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
 //! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `thiserror`, `tokio` and
-//!   `tracing`; `windows` on Windows.
+//!   `tracing`; `windows` on Windows; `eileen-stdx` and `rustix` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -44,13 +48,18 @@
 //! - Fast command: `cargo xtask test -p eileen-supervisor` (until `wp0/xtask` merges,
 //!   `cargo nextest run -p eileen-supervisor`).
 //! - Layers: unit tests for the watch logic; process tests that run the test binary again
-//!   as a helper child (Job Object semantics on Windows, stderr forwarding on both).
+//!   as a helper child (Job Object semantics on Windows, sessions, process groups and parent
+//!   death on Linux, stderr forwarding on both).
 //! - A bug here starts as an orphaned process after Eileen exits, or a restart storm.
 //!
 //! # Traps
 //!
-//! - A [`Child`] kills its tree when dropped: keep it for as long as the child should live.
-//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime (tokio's process driver).
+//! - A [`Child`] kills its tree when dropped (its Job Object, or on Linux its process group,
+//!   which a descendant can leave, or outlive in a crash): keep it while the child should live.
+//! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
+//!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
+//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime with I/O (tokio's process
+//!   driver, and on Linux the child's pidfd).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
@@ -64,7 +73,8 @@
 //!
 //! # Do not change without a decision record
 //!
-//! - The one `#[expect]`ed `Command::new` and the flags every child gets; the breakaway rule.
+//! - The one `#[expect]`ed `Command::new` and the flags every child gets (on Linux its own
+//!   session, its parent-death signal and the fork thread); the breakaway rule.
 
 mod child;
 mod detached;
