@@ -654,6 +654,25 @@ fn presses(events: &mut mpsc::Receiver<LinuxShellEvent>, count: usize) -> Vec<Li
 }
 
 #[test]
+fn the_holder_first_registers_the_desktop_entry_as_the_apps_id() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let _portal = fakes.shortcuts(&bus, fake);
+    let mut settings = settings(DEFAULT_DEADLINE, None);
+    settings.notifier.desktop_entry = format!("{DESKTOP_ENTRY}.desktop");
+    let shell = LinuxShell::new(Bridge::on_private_bus(&bus).unwrap(), settings);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let registered =
+        Report::Registered { app_id: DESKTOP_ENTRY.to_owned(), options: vec![], first: true };
+    assert_eq!(
+        reports.blocking_recv(),
+        Some(registered),
+        "the desktop file's ID, without .desktop, in the first portal call of the connection"
+    );
+}
+
+#[test]
 fn a_held_key_is_one_press_and_one_release_though_the_desktop_repeats_it() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::new();
