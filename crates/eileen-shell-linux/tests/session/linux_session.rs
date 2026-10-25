@@ -43,9 +43,9 @@ const PROFILES_PATH: &str = "/org/freedesktop/UPower/PowerProfiles";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
 /// The test's own connection to the system bus, apart from the shell's bridge, on a runtime of
-/// its own whose two workers read it while the test's thread waits on the shell. Every test makes
-/// one for that runtime, where a client's test runs the client; the tests of logind and the power
-/// daemons use the connection too.
+/// its own whose two workers read it while the test's thread waits on the shell. Each test that
+/// runs async code makes one: a client's test runs the client on its runtime, and the tests of
+/// logind and the power daemons use the connection too.
 struct Session {
     runtime: tokio::runtime::Runtime,
     /// `None` only while the session drops.
