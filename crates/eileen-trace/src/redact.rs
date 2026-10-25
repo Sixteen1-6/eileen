@@ -18,12 +18,12 @@
 //! A card's digits come in groups joined by single spaces or hyphens. A run of groups that is
 //! not a card as a whole can still begin with one: the longest part of it that passes and ends
 //! before a space, or before a hyphen once the part holds a separator of its own, is taken. So
-//! a card read out with its CVV or expiry date after it (`4111 1111 1111 1111 12 27`, or
-//! `4111-1111-1111-1111-123`) becomes `[redacted:card] 12 27` (`[redacted:card]-123`). A part
-//! that is a single group never ends at a hyphen, since a hyphen joins the parts of one id: a
-//! `traceparent`'s parent id can be 16 digits that pass, and its flags follow after a hyphen,
-//! so `4111111111111111-123` is not found. Each group of a run is tried as a start, so a number
-//! in front of a card never hides any of it.
+//! a card read out with its CVV or expiry date after it is found: `4111 1111 1111 1111 12 27`
+//! becomes `[redacted:card] 12 27`, and `4111-1111-1111-1111-123` becomes `[redacted:card]-123`.
+//! A part that is a single group never ends at a hyphen, since a hyphen joins the parts of one
+//! id: a `traceparent`'s parent id can be 16 digits that pass, and its flags follow after a
+//! hyphen, so `4111111111111111-123` is not found. Each group of a run is tried as a start, so
+//! a number in front of a card never hides any of it.
 //!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
 //! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
