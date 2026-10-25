@@ -23,7 +23,7 @@ records when they exist.
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
-| 3 | `wp0/base-crates` | Branch built and tested locally, 2026-10-21, with the review fixes: 310 workspace tests pass on Windows; not pushed yet; its amendment of section 6.1, pull request #22, merged on 2026-10-21 |
+| 3 | `wp0/base-crates` | Pull request opened on 2026-10-25 from the shared branch `backup/wp0-base-crates`, with the review fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21 |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
