@@ -6,8 +6,8 @@
 //! its size cap, `scenario.toml` never says `origin = "user"`, no text line holds a secret the
 //! [`Redactor`] finds or anything the PII scan finds (e-mail addresses, phone numbers but not
 //! dates with a time, user folders such as `C:\Users\<name>`, `/home/<name>`, `/media/<name>`
-//! and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not the path of a web
-//! address, machine names and token prefixes), and:
+//! and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not a web page's
+//! `https://<host>/users/...`, machine names and token prefixes), and:
 //!
 //! - **Audio only with its consent record.** `scenario.toml` parses as a [`Scenario`] with
 //!   `origin = "contributed-consented-audio"`, its `intent.audio.file` names the audio file,
@@ -310,19 +310,30 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
     }
 }
 
-/// True when `before`, the text in front of a folder marker, ends in the path of a web address:
-/// after `http://` or `https://`, with no space, quote, bracket, comma, `?`, `#` or `=` between,
-/// so the marker names a page, not a folder on a PC. A local path in a web address's query, a
-/// `file://` address and an `sftp://` one name a folder, so they are still scanned.
-fn in_web_address(before: &str) -> bool {
-    let start = before.rfind("http://").max(before.rfind("https://"));
-    start.and_then(|at| before.get(at..)).is_some_and(|address| {
-        !address.contains(|c: char| {
-            c.is_whitespace()
-                || matches!(c, '"' | '\'' | '`' | '<' | '>' | '(' | ')' | ',' | ';' | '|')
-                || matches!(c, '?' | '#' | '=')
-        })
-    })
+/// True when `before`, the text in front of a `/home/` or `/users/` marker, ends with the
+/// scheme and host of an `http://` or `https://` address (a name or an IPv4 address, with any
+/// port), so the marker is the first folder of a page's path, as in
+/// `https://api.example.com/users/42`, and no folder on a PC. Anywhere else the marker is
+/// scanned: further in a path, where a dev server puts a PC's own paths (Vite's
+/// `/@fs/home/<name>/...`); on a host of this PC (`localhost`, a name under `.localhost`,
+/// `127.*`, `0.0.0.0`), where a server run from `/` shows its folders; on an IPv6 host in
+/// brackets, `[::1]` among them; and after any other scheme, `file://` and `sftp://` among them.
+fn at_web_root(before: &str) -> bool {
+    let Some((scheme, host)) = before.rsplit_once("://") else {
+        return false;
+    };
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(host, |(name, _)| name);
+    let this_pc = name == "localhost"
+        || name.ends_with(".localhost")
+        || name.starts_with("127.")
+        || name == "0.0.0.0";
+    (scheme.ends_with("http") || scheme.ends_with("https"))
+        && !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        && !this_pc
 }
 
 /// True when `before`, the text in front of a `/media/` marker, ends where an absolute path
@@ -349,12 +360,15 @@ fn under_wsl_distro(before: &str) -> bool {
 /// Where a marker of [`USER_FOLDERS`] names a user's folder.
 #[derive(Debug, Clone, Copy)]
 enum Counts {
-    /// Anywhere but in the path of a web address ([`in_web_address`]).
-    NotInWebAddress,
+    /// Anywhere: a drive's `Users` folder, which a web address holds only as a PC's own path
+    /// (Vite's `/@fs/C:/Users/<name>/...`).
+    Anywhere,
+    /// Anywhere but as the first folder of a web page's path ([`at_web_root`]).
+    NotAtWebRoot,
     /// Only where an absolute path starts ([`at_path_start`]), as a mount point does.
     AtPathStart,
     /// Only under a WSL distro's root ([`under_wsl_distro`]), so a Windows folder named Home is
-    /// not read as one, and not in the path of a web address.
+    /// not read as one.
     UnderWslDistro,
 }
 
@@ -364,11 +378,11 @@ enum Counts {
 /// too), and the Linux home a Windows app shows for a WSL distro's files, `\home\` plain and
 /// JSON-escaped.
 const USER_FOLDERS: [(&str, Counts); 8] = [
-    (":\\users\\", Counts::NotInWebAddress),
-    (":\\\\users\\\\", Counts::NotInWebAddress),
-    (":/users/", Counts::NotInWebAddress),
-    ("/home/", Counts::NotInWebAddress),
-    ("/users/", Counts::NotInWebAddress),
+    (":\\users\\", Counts::Anywhere),
+    (":\\\\users\\\\", Counts::Anywhere),
+    (":/users/", Counts::Anywhere),
+    ("/home/", Counts::NotAtWebRoot),
+    ("/users/", Counts::NotAtWebRoot),
     ("/media/", Counts::AtPathStart),
     ("\\home\\", Counts::UnderWslDistro),
     ("\\\\home\\\\", Counts::UnderWslDistro),
@@ -380,9 +394,10 @@ fn user_paths(line: &str, out: &mut Vec<PiiFinding>) {
         for (at, _) in lower.match_indices(marker) {
             let before = lower.get(..at).unwrap_or_default();
             let names_a_user = match counts {
-                Counts::NotInWebAddress => !in_web_address(before),
+                Counts::Anywhere => true,
+                Counts::NotAtWebRoot => !at_web_root(before),
                 Counts::AtPathStart => at_path_start(before),
-                Counts::UnderWslDistro => under_wsl_distro(before) && !in_web_address(before),
+                Counts::UnderWslDistro => under_wsl_distro(before),
             };
             if !names_a_user {
                 continue;
@@ -640,67 +655,52 @@ mod tests {
     fn the_scan_finds_personal_data() {
         assert_eq!(kinds("mail sam.lee@quillpost.net now"), [PiiKind::Email], "e-mail");
         assert_eq!(kinds("call +1 (555) 123-4567"), [PiiKind::Phone], "phone");
-        assert_eq!(
-            kinds(r"C:\Users\samlee\Documents\cv.docx"),
-            [PiiKind::UserPath],
-            "Windows user folder"
-        );
-        assert_eq!(
-            kinds(r#"{"path":"C:\\Users\\samlee\\x"}"#),
-            [PiiKind::UserPath],
-            "JSON-escaped"
-        );
-        assert_eq!(kinds("/home/samlee/notes"), [PiiKind::UserPath], "Linux home");
         for (line, what) in [
+            (r"C:\Users\samlee\Documents\cv.docx", "Windows user folder"),
+            (r#"{"path":"C:\\Users\\samlee\\x"}"#, "JSON-escaped"),
+            ("/home/samlee/notes", "Linux home"),
             (r"\\wsl.localhost\Ubuntu\home\samlee\notes.txt", "a WSL home as Windows shows it"),
             (r"\\wsl$\Ubuntu-24.04\home\samlee\notes.txt", "the older wsl$ form"),
             (r#"{"path":"\\\\wsl.localhost\\Ubuntu\\home\\samlee\\notes.txt"}"#, "JSON-escaped"),
             (r#"{"path":"\\\\wsl$\\Ubuntu\\home\\samlee\\notes.txt"}"#, "wsl$ JSON-escaped"),
+            // A drive mount, wherever its absolute path starts.
             ("/media/samlee/USB/cv.pdf", "Ubuntu's drive mounts"),
             ("/run/media/samlee/USB/cv.pdf", "Fedora's and Arch's"),
+            ("opened /media/samlee/USB/cv.pdf", "a mount after a space"),
+            ("path = \"/media/samlee/USB/cv.pdf\"", "a mount after a quote"),
+            ("path = '/media/samlee/USB/cv.pdf'", "a mount after a single quote"),
+            ("`/media/samlee/USB/cv.pdf`", "a mount after a backtick"),
+            ("path=/media/samlee/USB/cv.pdf", "a mount after ="),
+            ("(/media/samlee/USB/cv.pdf)", "a mount after a bracket"),
+            ("a.pdf,/media/samlee/USB/cv.pdf", "a mount after a comma"),
+            ("file:///media/samlee/USB/cv.pdf", "a mount in a file address"),
+            ("file:///run/media/samlee/USB/cv.pdf", "a mount under /run in a file address"),
+            // A folder on a PC in or after an address; only a web page's first folder is not one.
+            ("file:///home/samlee/notes.txt", "a file address names a folder on a PC"),
+            ("see https://site.test/docs or /home/samlee/notes", "a path after a space"),
+            ("https://files.example.com/open?path=/home/samlee/notes.txt", "a path in a query"),
+            (r#"{"url":"https://a.test/x","path":"/home/samlee/notes.txt"}"#, "a quoted path"),
+            ("https://a.test/x,/home/samlee/notes.txt", "a path after a comma"),
+            ("https://a.test/x#/home/samlee/notes.txt", "a path after a fragment's #"),
+            ("(https://a.test/x)/home/samlee/notes.txt", "a path after a bracket"),
+            ("https://a.test/x/home/samlee/notes", "a path past the first folder"),
+            ("https://a.test/x]/home/samlee/notes", "a bracket in the path"),
+            ("http://localhost:5173/@fs/home/samlee/app/src/App.tsx", "Vite's /@fs/"),
+            ("http://localhost:8888/files/home/samlee/nb.ipynb", "Jupyter's /files/"),
+            ("http://localhost:8000/home/samlee/notes.txt", "a server on this PC run from /"),
+            ("http://127.0.0.1/home/samlee/notes.txt", "127.*"),
+            ("http://0.0.0.0:8000/home/samlee/notes.txt", "0.0.0.0"),
+            ("http://app.localhost:3000/home/samlee/notes.txt", "a name under .localhost"),
+            ("http://[::1]:8000/home/samlee/notes.txt", "an IPv6 host"),
+            ("sftp://nas.example.com/home/samlee/notes.txt", "a scheme other than http"),
         ] {
             assert_eq!(kinds(line), [PiiKind::UserPath], "{what}: {line}");
         }
-        for line in [
-            "opened /media/samlee/USB/cv.pdf",
-            "path = \"/media/samlee/USB/cv.pdf\"",
-            "path = '/media/samlee/USB/cv.pdf'",
-            "`/media/samlee/USB/cv.pdf`",
-            "path=/media/samlee/USB/cv.pdf",
-            "(/media/samlee/USB/cv.pdf)",
-            "a.pdf,/media/samlee/USB/cv.pdf",
-            "file:///media/samlee/USB/cv.pdf",
-            "file:///run/media/samlee/USB/cv.pdf",
-        ] {
-            assert_eq!(kinds(line), [PiiKind::UserPath], "a drive mount starts a path: {line}");
-        }
         assert_eq!(
-            kinds("file:///home/samlee/notes.txt"),
-            [PiiKind::UserPath],
-            "a file address names a folder on a PC"
+            kinds("at main (http://localhost:5173/@fs/C:/Users/samlee/app/src/main.ts:3:1)"),
+            [PiiKind::UserPath, PiiKind::UserPath],
+            "a drive's Users folder in a dev server's path, as Vite's stack traces show it"
         );
-        assert_eq!(
-            kinds("see https://site.test/docs or /home/samlee/notes"),
-            [PiiKind::UserPath],
-            "a web address ends with its word"
-        );
-        assert_eq!(
-            kinds("https://files.example.com/open?path=/home/samlee/notes.txt"),
-            [PiiKind::UserPath],
-            "a local path in a web address's query names a folder on a PC"
-        );
-        for (line, what) in [
-            (r#"{"url":"https://a.test/x","path":"/home/samlee/notes.txt"}"#, "a quote"),
-            ("https://a.test/x,/home/samlee/notes.txt", "a comma"),
-            ("https://a.test/x#/home/samlee/notes.txt", "a fragment's #"),
-            ("(https://a.test/x)/home/samlee/notes.txt", "a bracket"),
-        ] {
-            assert_eq!(
-                kinds(line),
-                [PiiKind::UserPath],
-                "a path after a web address and {what} names a folder on a PC: {line}"
-            );
-        }
         assert_eq!(kinds("host DESKTOP-4F7Q2ZK"), [PiiKind::MachineName], "default machine name");
         assert_eq!(kinds(r"\\NAS01\photos"), [PiiKind::MachineName], "UNC host");
         assert!(
@@ -747,6 +747,7 @@ mod tests {
             "https://api.example.com/users/42",
             "https://site.test/home/index.html",
             "[the guide](HTTPS://site.test/users/guide)",
+            "https://api.example.com:8443/users/42",
             "server 192.168.100.200",
             r"C:\Users\Public\Desktop",
             r"\\wsl.localhost\Ubuntu\home\{NAME}\notes.txt",
