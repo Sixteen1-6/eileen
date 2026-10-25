@@ -358,27 +358,49 @@ fn soft_assert_hook(failure: &Failure<'_>) {
 
 /// Starts tracing for this process: installs the stack as the global default, bridges the
 /// `log` crate, and switches soft assertions to reporting (log, count, request a dump). Call
-/// it once, at the start of `main`, outside any `with_default`.
+/// it once, at the start of `main`.
 ///
-/// Only a global default set before is an error. When a `log` logger was set first (an
-/// `env_logger::init()`, say), records logged through `log` stay with it: the rest starts all
-/// the same, and a [`names::LOG_BRIDGE_FAILED`] warning says so.
+/// A global default set before (an earlier `init`, say) is [`TraceError::AlreadyInitialised`].
+/// When a `log` logger was set first (an `env_logger::init()`, say), records logged through
+/// `log` stay with it: the rest starts all the same, and a [`names::LOG_BRIDGE_FAILED`]
+/// warning says so. Under a scoped default (inside `with_default`, or while a `set_default`
+/// guard is held) the stack starts too, but this thread's events go to that default until it
+/// ends.
 pub fn init(kind: ProcessKind, config: &TraceConfig) -> Result<TraceGuard, TraceError> {
     let (subscriber, guard) = build(kind, config)?;
     let stack = Dispatch::new(subscriber);
     let installed = stack.clone().try_init();
-    // `try_init` sets the global default, then the bridge: an error with this stack as this
-    // thread's default, the global one outside any `with_default`, is the bridge's alone.
-    if installed.is_err() && !tracing::dispatcher::get_default(|now| same_stack(now, &stack)) {
+    // `try_init` sets the global default, then the bridge: an error with this stack as the
+    // global default is the bridge's alone.
+    if installed.is_err() && !is_global_default(&stack) {
         return Err(TraceError::AlreadyInitialised);
     }
     let _first = GLOBAL_RING.set(Arc::clone(&guard.ring));
     soft_assert::set_hook(soft_assert_hook);
     soft_assert::set_mode(Mode::Report);
     if let Err(error) = installed {
-        tracing::warn!(name: names::LOG_BRIDGE_FAILED, target: "eileen_trace", error = %error);
+        // To the stack itself, past any scoped default this thread has.
+        tracing::dispatcher::with_default(&stack, || {
+            tracing::warn!(name: names::LOG_BRIDGE_FAILED, target: "eileen_trace", error = %error);
+        });
     }
     Ok(guard)
+}
+
+/// The thread that reads the global default for [`init`]: 12 bytes, within Linux's 15.
+const DEFAULT_CHECK_THREAD: &str = "eileen-trace";
+
+/// True when `stack` is the global default. A new thread has no scoped default, so its default
+/// is the global one. If no thread can start, this thread's default stands in, which is the
+/// global one outside any `with_default`.
+fn is_global_default(stack: &Dispatch) -> bool {
+    let ours = stack.clone();
+    eileen_stdx::thread::spawn_named(DEFAULT_CHECK_THREAD, move || {
+        tracing::dispatcher::get_default(|now| same_stack(now, &ours))
+    })
+    .ok()
+    .and_then(|thread| thread.join().ok())
+    .unwrap_or_else(|| tracing::dispatcher::get_default(|now| same_stack(now, stack)))
 }
 
 /// True when `a` and `b` dispatch to the same stack.
