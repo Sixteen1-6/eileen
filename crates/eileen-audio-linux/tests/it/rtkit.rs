@@ -6,9 +6,11 @@
 //! negative nice level, and made real-time again by [`FakeRtkit::resume`], as 0.14 does after a
 //! suspend. And like rtkit, whose one thread serves every call in turn and waits for polkit inside
 //! a call, the fake serves its methods in order: a call it holds keeps every later one waiting.
+//! zbus answers `Properties.GetAll` for it, which rtkit 0.13 does not, so the fake counts the
+//! reads that come that way.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +18,7 @@ use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePo
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use rustix::process::{Resource, getrlimit};
 use tokio::sync::{Notify, mpsc};
+use zbus::message::Header;
 
 /// rtkit's name and object.
 pub(super) const RTKIT: &str = "org.freedesktop.RealtimeKit1";
@@ -85,6 +88,8 @@ pub(super) struct FakeRtkit {
     gate: Option<Gate>,
     calls: mpsc::Sender<Call>,
     records: Arc<Mutex<BTreeMap<u64, Record>>>,
+    /// How many property reads came through `GetAll`, one for each property it read.
+    get_alls: Arc<AtomicUsize>,
 }
 
 impl FakeRtkit {
@@ -99,6 +104,7 @@ impl FakeRtkit {
             gate,
             calls,
             records: Arc::default(),
+            get_alls: Arc::default(),
         };
         (fake, reports)
     }
@@ -130,11 +136,19 @@ impl FakeRtkit {
             .retain(|_thread, record| !matches!(record.now, Scheduling::Nice(nice) if nice >= 0));
     }
 
-    /// What each property read does first: the garbage collection, then, once
-    /// [`Self::report_reads`] is set, the report.
-    async fn read(&self, property: &'static str) {
+    /// How many property reads came through `GetAll`.
+    pub(super) fn get_alls(&self) -> usize {
+        self.get_alls.load(Ordering::SeqCst)
+    }
+
+    /// What each property read does first: the garbage collection, then the count of a read
+    /// through `GetAll`, as `header` says, or the report of one through `Get` once
+    /// [`Self::report_reads`] is set.
+    async fn read(&self, property: &'static str, header: Option<&Header<'_>>) {
         self.collect();
-        if self.report_reads.load(Ordering::SeqCst) {
+        if header.and_then(Header::member).is_some_and(|member| member.as_str() == "GetAll") {
+            self.get_alls.fetch_add(1, Ordering::SeqCst);
+        } else if self.report_reads.load(Ordering::SeqCst) {
             let _ignored = self.calls.send(Call::Read(property)).await;
         }
     }
@@ -202,20 +216,20 @@ impl FakeRtkit {
     }
 
     #[zbus(property, name = "RTTimeUSecMax")]
-    async fn rttime_usec_max(&self) -> i64 {
-        self.read("RTTimeUSecMax").await;
+    async fn rttime_usec_max(&self, #[zbus(header)] header: Option<Header<'_>>) -> i64 {
+        self.read("RTTimeUSecMax", header.as_ref()).await;
         self.limits().rttime_usec_max
     }
 
     #[zbus(property, name = "MaxRealtimePriority")]
-    async fn max_realtime_priority(&self) -> i32 {
-        self.read("MaxRealtimePriority").await;
+    async fn max_realtime_priority(&self, #[zbus(header)] header: Option<Header<'_>>) -> i32 {
+        self.read("MaxRealtimePriority", header.as_ref()).await;
         self.limits().max_realtime_priority
     }
 
     #[zbus(property, name = "MinNiceLevel")]
-    async fn min_nice_level(&self) -> i32 {
-        self.read("MinNiceLevel").await;
+    async fn min_nice_level(&self, #[zbus(header)] header: Option<Header<'_>>) -> i32 {
+        self.read("MinNiceLevel", header.as_ref()).await;
         self.limits().min_nice_level
     }
 }
@@ -249,6 +263,23 @@ async fn the_limits_come_from_the_three_properties() {
     assert_eq!(read.rttime_usec_max(), 150_000, "RTTimeUSecMax");
     assert_eq!(read.max_realtime_priority(), 8, "MaxRealtimePriority");
     assert_eq!(read.min_nice_level(), -9, "MinNiceLevel");
+}
+
+#[tokio::test]
+async fn every_property_is_read_alone_since_rtkit_0_13_answers_no_get_all() {
+    let bus = PrivateBus::start();
+    let (fake, _calls) = FakeRtkit::new(DEFAULTS, None);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
+    let client = client(&bus).await;
+    let thread = ThreadId::current();
+    client.limits().await.unwrap();
+    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await.unwrap();
+    client.revert(thread, promoted.restore).await.unwrap();
+    assert_eq!(
+        fake.get_alls(),
+        0,
+        "each through Properties.Get: zbus's property cache would call GetAll before its first read"
+    );
 }
 
 #[tokio::test]
