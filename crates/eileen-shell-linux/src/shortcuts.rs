@@ -45,6 +45,12 @@
 //!   steadily or drop it, inside the tokio runtime's context. It takes every signal the portal
 //!   sends under its object, other portals' broadcasts among them, which keeps the session's
 //!   `Closed` in order with its shortcuts' signals.
+//! - On GNOME, `Activated` and `Deactivated` are not a key's state, and the stream passes each
+//!   on as it comes. GNOME's compositor, mutter, runs a shortcut's handler again on each
+//!   auto-repeat of a held key, and xdg-desktop-portal-gnome, which keeps no pressed state,
+//!   sends `Activated` each time. A key's release is looked up with the modifiers held as it is
+//!   let go, so a key let go after one of its chord's modifiers matches no shortcut and brings
+//!   no `Deactivated`.
 //! - A portal that restarts loses the session without a word: the stream sees no `Closed`.
 
 mod trigger;
@@ -100,12 +106,15 @@ pub struct BoundShortcut {
     pub trigger: Untrusted<String>,
 }
 
-/// What the portal says of a session.
+/// What the portal says of a session, each signal passed on as the portal sends it. On GNOME
+/// neither edge is a key's state, as each says and the module's Traps explain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShortcutEvent {
-    /// The shortcut with this ID went down (`Activated`).
+    /// The shortcut with this ID was pressed (`Activated`). GNOME sends it again on each
+    /// auto-repeat while the key is held, so one press can bring many.
     Activated(String),
-    /// It came back up (`Deactivated`).
+    /// It was let go (`Deactivated`). GNOME sends it only when the key is let go while the
+    /// chord's modifiers are still held: when a modifier is let go first, none comes.
     Deactivated(String),
     /// The portal closed the session (the session's `Closed`), and the stream ends.
     Closed,
