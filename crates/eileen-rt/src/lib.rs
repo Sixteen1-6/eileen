@@ -27,7 +27,7 @@
 //!   `unbounded_channel`).
 //! - A panic message reaches the log files only as length and hash, in `pii.message` (test
 //!   `it::tasks::a_panic_message_reaches_the_log_files_only_as_its_length`).
-//! - On Linux the kernel keeps the whole name of a runtime's every thread, worker and
+//! - On Linux the kernel keeps the whole name of every thread a runtime starts, worker and
 //!   blocking (test `runtime::tests::every_thread_keeps_its_whole_name_on_linux`).
 //!
 //! # Boundaries
