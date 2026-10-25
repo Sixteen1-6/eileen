@@ -697,6 +697,8 @@ mod tests {
             ("4111-1111-1111-1111 123", "[redacted:card] 123"),
             ("4111111111111111 12/27", "[redacted:card] 12/27"),
             ("4111 1111 1111 1111 12 27 123 3rd try", "[redacted:card] 12 27 123 3rd try"),
+            // A letter after the last group makes the whole run part of a word, not the card.
+            ("card 4111 1111 1111 1111 2nd try", "card [redacted:card] 2nd try"),
             // An American Express card's 15 digits and its four-digit code.
             ("3782 822463 10005 1234", "[redacted:card] 1234"),
             // Its first 16 digits pass too, and the longest part that passes is the card.
