@@ -1,13 +1,13 @@
 //! The deterministic simulator (BUILD.md section 4.7): a `World` of simulated parts around the
-//! real core, inputs generated from an `arbitrary::Unstructured` buffer, faults through
-//! `buggify!`, and the sixteen invariants checked after every step. Development only. A stub
-//! until WP0's `wp0/xtask` pull request builds its skeleton; WP1 owns it from then on.
+//! real core, inputs drawn from an `arbitrary::Unstructured` buffer, and invariants checked
+//! after every step. Development only. WP0's `wp0/xtask` built this skeleton; WP1 owns it from
+//! phase A's merge and grows it to every part, every fault and all sixteen invariants.
 //!
 //! # Owns
 //!
-//! - The `World`, the TOML profiles, seeded runs, the fixed-column step log, `--doublecheck`,
-//!   minimised `SimRegression` files in `crates/eileen-sim/regressions/`, and the invariants.
-//! - The `sim` fuzz target's entry (`fuzz_entry`).
+//! - [`World`], the TOML [`Profile`]s with their schema, seeded and byte-driven runs, the
+//!   fixed-column step log, `--doublecheck`, `SimRegression` replay and the invariants.
+//! - The `eileen-sim` binary ([`cli`]) and the `sim` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
 //!
@@ -16,32 +16,40 @@
 //!
 //! # Invariants
 //!
-//! - One seed gives one trace on every OS: `--doublecheck` runs a seed twice and compares the
-//!   trace hashes.
-//! - The simulator thread runs on an explicit large stack.
+//! - One seed gives one trace on every OS (`--doublecheck`; test
+//!   `run::tests::one_seed_gives_one_hash_and_two_seeds_two`).
+//! - Every run uses the large stack of [`run::SIM_STACK_BYTES`] ([`run::on_sim_thread`]).
+//! - Each invariant can fail: a hand-built violating trace per rule (`invariants::tests`).
 //! - Never linked into a shipped binary (development only).
 //!
 //! # Boundaries
 //!
-//! - Called by `xtask` (`cargo xtask sim`) and the fuzz target `sim`.
+//! - Called by `xtask` (`cargo xtask sim` runs the binary) and the fuzz target `sim`.
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-replay`, `eileen-intent`,
-//!   `eileen-dictation`, `eileen-skills`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
-//! - Wire types: `SimRegression` (a contract type).
+//!   `eileen-dictation`, `eileen-skills`, `eileen-contracts`, `eileen-stdx` and
+//!   `eileen-trace`; not on `eileen-config`, so it carries its own settings validator.
+//! - Wire types: `SimRegression` and `InputRecord` (contract types).
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask sim` (the pull request seed set).
-//! - Layers: one test per pull request seed, the regressions, exhaustive turn-taking.
+//! - Fast command: `cargo xtask sim` (the pull request seed set, [`run::PR_SEEDS`]).
+//! - Layers: unit tests per module, one test per pull request seed
+//!   (`it::pr_seeds`), every stored regression (`it::regressions`).
 //! - A bug here starts as a seed that fails only on one OS.
 //!
 //! # Traps
 //!
+//! - The core and the generator take separate random streams from the seed, so a replay,
+//!   which mints no IDs, hands the core the numbers the run did.
 //! - A fault site is named where it is written (`buggify!("store.write")`), never by file and
 //!   line, so a `SimRegression` written on one OS replays on the other.
+//! - Hash with [`hash::TraceHash`], never std's `DefaultHasher`, whose algorithm may change.
 //!
 //! # Logs and tracing
 //!
-//! - None yet: the step log is the simulator's own output, not tracing.
+//! - The step log is the simulator's own output. The core's spans and log lines go to a
+//!   flight-recorder ring on the simulator's thread, which invariant 13 checks; replay a
+//!   failure with the `replay:` command it prints.
 //!
 //! # Do not change without a decision record
 //!
@@ -49,5 +57,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cli;
 #[doc(hidden)]
 pub mod fuzz_entry;
+pub mod hash;
+pub mod inputs;
+pub mod invariants;
+pub mod profile;
+pub mod run;
+pub mod world;
+
+pub use profile::Profile;
+pub use run::{RunReport, run_seed};
+pub use world::World;

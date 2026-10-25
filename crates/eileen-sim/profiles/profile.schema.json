@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profile",
+  "description": "One simulation profile.",
+  "type": "object",
+  "properties": {
+    "bus_subscriber_capacity": {
+      "description": "The slow bus subscriber's queue (invariant 6).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "bus_subscriber_drain": {
+      "description": "How many events the slow subscriber takes off its queue per step.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "input_mix": {
+      "description": "The relative weights of the input kinds the generator draws.",
+      "$ref": "#/$defs/InputMix"
+    },
+    "max_step_ms": {
+      "description": "The longest virtual time between two inputs, ms.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "name": {
+      "description": "The profile's name, which a `SimRegression` records.",
+      "type": "string"
+    },
+    "seeds": {
+      "description": "How many fresh seeds a random run of this profile takes (`main` and nightly).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "speech_queue_max": {
+      "description": "The most utterances the simulated speech process may hold queued (invariant 10).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "steps": {
+      "description": "Steps in one run.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "steps",
+    "seeds",
+    "max_step_ms",
+    "input_mix",
+    "speech_queue_max",
+    "bus_subscriber_capacity",
+    "bus_subscriber_drain"
+  ],
+  "$defs": {
+    "InputMix": {
+      "description": "The relative weights of the input kinds. A weight of 0 leaves the kind out.",
+      "type": "object",
+      "properties": {
+        "playback": {
+          "description": "Playback accounting: drained utterances, device changes and stalls.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "timer": {
+          "description": "A timer the core set firing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "user": {
+          "description": "Mute, unmute and typed or command-line text.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "voice": {
+          "description": "Speech from the microphone: speech start, partials, speech end, end of turn.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "voice",
+        "user",
+        "playback",
+        "timer"
+      ]
+    }
+  }
+}
