@@ -17,6 +17,7 @@ use std::time::Duration;
 use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use rustix::process::{Resource, getrlimit};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{Notify, mpsc};
 use zbus::message::Header;
 
@@ -82,6 +83,9 @@ struct Record {
 pub(super) struct FakeRtkit {
     limits: Arc<Mutex<Limits>>,
     pub(super) refuse_realtime: Arc<AtomicBool>,
+    /// Fails `MakeThreadRealtime` with `org.freedesktop.DBus.Error.Failed`, rtkit's answer for
+    /// any error but a refusal (`EPERM`, `EACCES`, `EBUSY`) or `ENOMEM`.
+    pub(super) fail_realtime: Arc<AtomicBool>,
     pub(super) refuse_high_priority: Arc<AtomicBool>,
     /// Reports each property read as a [`Call::Read`], after its garbage collection.
     pub(super) report_reads: Arc<AtomicBool>,
@@ -99,6 +103,7 @@ impl FakeRtkit {
         let fake = Self {
             limits: Arc::new(Mutex::new(limits)),
             refuse_realtime: Arc::default(),
+            fail_realtime: Arc::default(),
             refuse_high_priority: Arc::default(),
             report_reads: Arc::default(),
             gate,
@@ -179,6 +184,9 @@ impl FakeRtkit {
         let _ignored = self.calls.send(Call::Realtime(thread, priority)).await;
         if let Some(Gate::Realtime(gate)) = &self.gate {
             gate.notified().await;
+        }
+        if self.fail_realtime.load(Ordering::SeqCst) {
+            return Err(zbus::fdo::Error::Failed("Input/output error".to_owned()));
         }
         let limits = self.limits();
         let within = i64::from(priority) <= i64::from(limits.max_realtime_priority);
@@ -353,6 +361,30 @@ async fn a_refused_real_time_request_falls_back_to_high_priority() {
     let thread = this_thread();
     assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time first");
     assert_eq!(calls.try_recv(), Ok(Call::HighPriority(thread, -8)), "then high priority");
+}
+
+#[tokio::test]
+async fn a_real_time_request_that_fails_otherwise_answers_its_error_with_no_fallback() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    fake.fail_realtime.store(true, Ordering::SeqCst);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
+    let client = client(&bus).await;
+    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    assert_eq!(
+        promoted,
+        Err(DbusError::Invalid {
+            what: "org.freedesktop.RealtimeKit1.MakeThreadRealtime",
+            detail: "org.freedesktop.DBus.Error.Failed".to_owned(),
+        }),
+        "rtkit's Failed, which is no refusal"
+    );
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(this_thread(), 10)), "real-time asked");
+    assert_eq!(
+        calls.try_recv(),
+        Err(TryRecvError::Empty),
+        "and nothing after: rtkit answered, so neither a fallback nor a revert"
+    );
 }
 
 #[tokio::test]
