@@ -162,6 +162,8 @@ What the owner has asked Eileen to be, in dated entries. Design documents (BUILD
   - The assistant's reading, recorded so the idea is not taken as "anything goes": flexible at the edges, fixed at the centre. Routes, models, speech stages, voices, the intent matcher, app routes, connectors, job kinds, skills and platform crates are the parts that change shape. The deterministic core, the contracts between processes, the permission tiers and consent are what keep the shape, and no plug-in, skill or connector can skip a confirmation or raise its own permission.
   - Recorded as principle 9 ("Made for the AI to use, not to wrap") in `README.md` and as the section "Extension points" in `ARCHITECTURE.md`. No decision in `docs/DECISIONS.md` changes, and nothing in the roadmap's non-goals conflicts: v0.1 still builds only its own use cases.
 
+- **Pocket TTS's license is treated as open.** The owner: "Pocket TTS, we will assume its license is open." The sherpa-onnx Pocket TTS archive's LICENSE file (CC-BY-4.0) governs over its README's non-commercial note, so no confirmation from the maintainers is needed before a downloader ships; the attribution "Pocket TTS by Kyutai" stays required. This replaces owner answer 14's confirmation step for Pocket TTS only; WP4 still checks the Chatterbox-Nano export's license with its maintainer.
+
 ## Proposed 2026-10-20 (by the assistant, not yet confirmed by the owner)
 
 Ideas to make Eileen genuinely easier to use and more trusted. The architect adopts for v0.1 the ones that are cheap and high value and schedules the rest; the owner can strike any of them.
