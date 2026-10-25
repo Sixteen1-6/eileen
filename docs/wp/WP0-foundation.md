@@ -23,7 +23,7 @@ records when they exist.
 |---|---|---|
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
-| 3 | `wp0/base-crates` | Pull request opened on 2026-10-25 from the shared branch `backup/wp0-base-crates`, with the review fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21 |
+| 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in `wp0/base-crates-review` |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
 | 6 | `wp0/guidance` | Not started |
@@ -55,9 +55,61 @@ channels, `runtime::build`), `eileen-platform` (every trait of section 3.4 with 
 it, and the `machine` module), `eileen-supervisor` (supervised children in kill-on-close Job
 Objects, the guard's detached spawn, deadlines, heartbeats, restart backoff, `qos`) and
 `eileen-buildguard` (slots, admission, the samples module, the baseline, `spawn_cargo`,
-`desktop.lock`). Acceptance 4 (all but the owner's-PC measurements), 5, 6 and 12 are covered
-by tests in those crates; the owner's-PC half of acceptance 4 waits for `wp0/xtask`'s
-`slots --baseline`.
+`desktop.lock`). Acceptance 4 (all but the owner's-PC measurements), 5, 6 and 12 are recorded
+below; the owner's-PC half of acceptance 4 waits for `wp0/xtask`'s `slots --baseline`.
+
+A second review of the six crates had started when the owner merged #73 so that WP10's drafts
+could retarget to `main`; its findings ship as `wp0/base-crates-review`. That pull request
+moves the machine root off Windows to the XDG state folder and drops the `HOME` fallback on
+Windows, runs every guard wait on the caller's clock, keeps secrets and the per-install key out
+of `Debug`, keeps dependencies' absolute source paths out of the logs, logs panic messages and
+child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTicket` thread-bound,
+removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
+span-parent table, with a test for each.
+
+## Acceptance records
+
+Acceptance 4 (its fake-memory half), 5, 6 and 12 passed in pull request #73's CI run on its
+head ecd80d2, run 40162319168: `logic-linux` ran 640 of 640 tests on `ubuntu-latest` and
+`windows-test` 311 of 311 on `windows-latest`. The tests, by acceptance clause (crate-relative
+paths; `it::` is a crate's integration test target):
+
+- Acceptance 4, in `eileen-buildguard`: slot 0 at 1.3 GB with low paging and 2 jobs, with its
+  holder recorded (`it::admission::slot0_is_admitted_at_1_3_gb_with_low_paging_and_two_jobs_and_records_its_holder`);
+  refused while paging is high, then exit 75 after `--wait-max`
+  (`it::admission::slot0_is_refused_while_paging_is_high_and_exits_75_after_wait_max`); slot 1
+  refused below its requirement, also when the free slot is slot 0
+  (`it::admission::slot1_is_refused_below_its_requirement`,
+  `it::admission::a_second_build_on_slot0_meets_slot1s_requirement_while_slot1_runs`); 2 jobs at
+  2.0, 2.4 and 2.5 GB and never fewer as memory rises
+  (`admission::tests::jobs_are_two_up_to_two_and_a_half_gigabytes`, the property test
+  `admission::tests::jobs_never_fall_as_memory_rises`); a decision from 30 s of fresh shared
+  samples (`it::admission::a_command_with_fresh_shared_samples_decides_without_sampling`); a
+  sample from another process read back, and two processes writing one paging window leaving one
+  line (`it::processes::a_sample_appended_by_another_process_is_read_back_by_recent`,
+  `it::processes::two_processes_appending_one_window_leave_one_line`); `baseline()` reading back
+  the keys (`it::admission::baseline_reads_back_the_keys_slots_baseline_wrote`); the baseline
+  leaving out slot-held samples, with a re-check limit of at least twice slot 0's and a 1 GB
+  floor (`baseline::tests::slot_held_samples_are_left_out`,
+  `baseline::tests::the_recheck_limit_is_at_least_twice_slot0_and_the_floor_at_least_a_gigabyte`);
+  the headroom refusal
+  (`it::admission::slot0_is_refused_when_headroom_minus_the_estimate_is_under_the_floor`); the
+  bounded re-check (`it::admission::a_recheck_past_its_wait_max_releases_the_slot_and_exits_75`);
+  `--kill-stale` (`it::processes::kill_stale_frees_a_dead_holders_slot`); and, on Windows, no
+  `rustc` left after xtask is killed (`it::processes::killing_xtask_mid_build_leaves_no_rustc_running`).
+- Acceptance 5, in `eileen-supervisor`, on Windows: `tests::killing_the_job_kills_the_grandchild`
+  and `tests::the_guard_spawn_outlives_its_parent`. The second test does not yet check that its
+  parent sits outside every kill-on-close job, which depends on the Job Object the test runner
+  holds each test in; the second review's nit on it stays open for phase B's `user_launch`,
+  whose own Windows test needs the same job reading.
+- Acceptance 6, in `eileen-trace`: `it::canary::fake_secrets_never_reach_disk_or_a_dump` and
+  `it::canary::fake_secrets_never_reach_the_console`, joined in `wp0/base-crates-review` by
+  `it::canary::no_home_folder_reaches_disk_or_a_dump`.
+- Acceptance 12, in `eileen-platform`, on both runners: `it::machine::the_golden_vector_is_stable`,
+  `it::machine::windows_guid_form_and_linux_form_give_one_hash`,
+  `it::machine::a_cloned_image_with_two_install_ids_gives_two_hashes`,
+  `it::machine::an_unusable_os_id_gives_the_install_id_only_hash` and
+  `it::machine::file_identity_reads_etc_then_falls_back_to_dbus`.
 
 ## Switching main's required checks
 
@@ -118,7 +170,7 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   <version>` to its newest older release, or named in the description with the reason it stays.
 
 - `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
-  `SystemMemory::new()`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
+  `SystemMemory::new(&RealClock)`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
   `EILEEN_BUILD_SLOT_HELD` from the environment; the ticket's `env()` on every cargo it starts
   through `spawn_cargo`; `Ticket::recheck` before each invocation and `Ticket::sample` as the
   10 s tick of `CargoChild::wait_ticking`; the reason and holders printed by the `report`
@@ -225,8 +277,9 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   inside the 14-day window. They are held back with `cargo update --precise` to `cc` 1.6.0
   (2026-10-03), `find-msvc-tools` 0.1.14 (2026-09-25), `deranged` 0.5.8 (2026-02-21) and
   `smallvec` 1.16.2 (2026-09-25). `tokio` 1.54.0 (2026-10-19) was young too but was then section
-  4.1's pin; it was yanked afterwards, and pull request #27 moved the pin to 1.53.2, which this
-  branch locks. The other 82 new entries were published on or before 2026-10-07.
+  4.1's pin; it was yanked afterwards; pull request #27 moved the pin to 1.53.2, and pull request
+  #59 to 1.53.3 for RUSTSEC-2026-0386, which `main` locks. The other 82 new entries were
+  published on or before 2026-10-07.
 - Base crates: the Linux lane's first look at this branch came from WP10, not CI: an Ubuntu 24.04
   run over `backup/wp0-base-crates` at `ca336be` (docs/LINUX.md section 10) passed 305 of 305
   tests and found three things the Windows jobs cannot show. A test's `drop` of an `AudioBoost`,
@@ -241,6 +294,11 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - Base crates: the review fixes were committed by an agent cut off by a usage limit before it
   had built them; the resume found one parse error, two lints, a rustdoc error and nine
   unformatted files. A fix batch is committed only after the build, clippy and the tests pass.
+- Base crates: the squash merge of #73 dropped the shared history WP10's drafts were built on
+  (they sat on WP10's merge 3fde1ab of the shared branch), so each draft then conflicted with
+  `main` in this file, which none of them touches. WP10 rebases its stack with
+  `git rebase --onto origin/main 3fde1ab`, which replays only its own commits; WP0 changes
+  nothing on those branches.
 
 ## Decisions
 
@@ -339,13 +397,15 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - Contracts: the fuzz entry points return `Result` instead of asserting, because every Eileen
   binary links the crate; the corpus test and the cargo-fuzz targets fail on an `Err`.
 
-- Base crates, platform: the handle and value types only the traits use are
-  `eileen-platform`'s, by the contracts rule above: `PlatformError`, `Deadline` (a budget, since
-  the crate may depend on `eileen-contracts` only), `Subscription`, `ThreadTicket`,
-  `PowerRequest`, `RgbaImage`, the element, input, insertion, tray and draw-list values, and
-  `AppOp` (the contracts' Office, Explorer and Photoshop ops). `ForegroundOutcome::Taken` carries
-  the `RestoreToken` that `Input::restore` takes. An owning package moves a type into the
-  contracts by amendment when it starts crossing a process.
+- Base crates, platform: the handle and value types only the traits use are `eileen-platform`'s, by
+  the contracts rule above: `PlatformError`, `Deadline` (a budget, since the crate may depend on
+  `eileen-contracts` only), `Subscription`, `ThreadTicket`, `PowerRequest`, `RgbaImage`, the
+  element, input, insertion, tray and draw-list values, and `AppOp` (the contracts' Office, Explorer
+  and Photoshop ops). `ForegroundOutcome::Taken` carries the `RestoreToken` that `Input::restore`
+  takes. An owning package moves a type into the contracts by amendment when it starts crossing a
+  process. `ThreadTicket` is not `Send` on any OS, as the supervisor's `AudioBoost` is not, and its
+  revert need not be `Send`; the fakes call their subscribers after letting go of their lock, so a
+  subscriber may unsubscribe from inside its own callback.
 - Base crates, platform: `machine_hash` normalises its OS id itself, so an empty, malformed,
   all-zero or `uninitialized` id gives the install-id-only hash. The normalised id enters the
   hash as its 32 ASCII characters and the install id as its 16 bytes, each after an 8-byte
@@ -366,38 +426,48 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   The name feeds the activation hash, is what `buggify::fired` reports and is a
   `FaultRecord.site`; a test pins the activation for one seed and name, computed with an
   independent implementation, so both lanes check the same answer.
-- Base crates, buildguard: paging is judged as the 30 s average, because the baseline's limits
-  are percentiles of 30 s averages; the headroom rule uses the lowest headroom in the window;
-  slot 1 applies the headroom rule as well as its memory requirement; exclusive work takes both
-  slots under slot 0's rules, slot 1's requirement and the 8-job ceiling. Slot 1's rule is the
-  second-build rule: it applies whenever another build holds a slot, whichever index is free
-  (slot 0's build often ends while slot 1's runs), with the peak measured from the running
-  holder's start; slot 0's rule applies only when no slot is held. Admission decides from the
-  slots as they stand and takes a lock only when the rules admit, so a waiting command never
-  holds a slot or writes a record between its 5 s attempts; a take that loses a race, or a held
-  lock whose record is not written yet, refuses for that tick and the next decides again.
-  `slots --kill-stale` reads and removes a stale record only while it holds that slot's lock.
-  Every lock the guard takes for a moment (a probe, `--kill-stale`, the samples lock) or for a
-  build is unlocked explicitly before its handle closes, because Windows releases a lock left
-  on a closed handle only when the system gets to it. Samples cover the last 30 s when the
-  oldest in the window is at least 25 s old (one 5 s interval of slack) and the newest is under
-  10 s old. `SystemMemory` primes its paging counter when it opens, and a reading taken less
-  than a second after the prime or the previous reading first waits for the rest, so a guarded
-  command that samples straight after opening it never adds a rate over a few microseconds to
-  the shared file; off Windows it primes from `/proc/vmstat` the same way. It is not `Send` on
-  any OS, so code that moves one to another thread fails on Linux as on Windows.
+- Base crates, buildguard: paging is judged as the 30 s average, because the baseline's limits are
+  percentiles of 30 s averages; the headroom rule uses the lowest headroom in the window; slot 1
+  applies the headroom rule as well as its memory requirement; exclusive work takes both slots under
+  slot 0's rules, slot 1's requirement and the 8-job ceiling. Slot 1's rule is the second-build
+  rule: it applies whenever another build holds a slot, whichever index is free (slot 0's build
+  often ends while slot 1's runs), with the peak measured from the running holder's start; slot 0's
+  rule applies only when no slot is held. Admission decides from the slots as they stand and takes a
+  lock only when the rules admit, so a waiting command never holds a slot or writes a record between
+  its 5 s attempts; a take that loses a race, or a held lock whose record is not written yet,
+  refuses for that tick and the next decides again. `slots --kill-stale` reads and removes a stale
+  record only while it holds that slot's lock. Every lock the guard takes for a moment (a probe,
+  `--kill-stale`, the samples lock) or for a build is unlocked explicitly before its handle closes,
+  because Windows releases a lock left on a closed handle only when the system gets to it. Samples
+  cover the last 30 s when the oldest in the window is at least 25 s old (one 5 s interval of slack)
+  and the newest is under 10 s old. `SystemMemory` primes its paging counter when it opens, and a
+  reading taken less than a second after the prime or the previous reading first waits for the rest,
+  so a guarded command that samples straight after opening it never adds a rate over a few
+  microseconds to the shared file; off Windows it primes from `/proc/vmstat` the same way. It is not
+  `Send` on any OS, so code that moves one to another thread fails on Linux as on Windows.
   `samples::slot_held_now` (and `Store::slot_held`) probes both slot locks, so the runtime fills
-  `slot_held` from the samples module alone, as section 3.1 requires. Percentiles are
-  nearest-rank; "plus 25 percent" rounds to the nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is
-  `<slots>:<jobs>:<holder pid>` and counts only while that holder's record names the PID and its
-  lock is held, so a stale variable inherited by a shell cannot bypass the guard. Low disk
-  refuses at once with exit 75. `procs::process_alive` waits on the process with a zero timeout
-  rather than reading its exit code, because a process may exit with 259, which is
-  `STILL_ACTIVE`. Off Windows the machine root falls back to
-  `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`, and the sampler reads `/proc`:
-  `MemAvailable`, major faults times 4 KB, and commit headroom by `vm.overcommit_memory` as
-  `eileen-shell-linux` reads it (`CommitLimit` minus `Committed_AS` under strict overcommit,
-  else `MemAvailable` plus `SwapFree`), so the guard's samples and the runtime's agree.
+  `slot_held` from the samples module alone, as section 3.1 requires. The second-build rule's code
+  says so (`decide_second_build`, `Reason::SecondBuildMemory` and `Reason::SecondBuildBeforePeak`),
+  and a held lock whose record is not written yet refuses as `Reason::HolderUnknown` rather than as
+  "before the peak". Every wait runs on the caller's `Clock`, a real reading's one-second minimum
+  interval and the samples lock included, so a test on a `ManualClock` waits for nothing real;
+  `MemorySource::sample` and `SystemMemory::new` take the clock, and `Store::append` and
+  `append_paging` take it for the lock wait, while the module functions the runtime calls pass the
+  real one. One constant per quantity: `samples::DEFAULT_PAGING_LIMIT_KB_S` is admission's slot-0
+  default, the `auto` limit's 24-hour rule is `samples::AUTO_LIMIT_COVERAGE`, and the baseline
+  groups by `admission::WINDOW_MS`. Percentiles are nearest-rank; "plus 25 percent" rounds to the
+  nearest KB/s. `EILEEN_BUILD_SLOT_HELD` is `<slots>:<jobs>:<holder pid>` and counts only while that
+  holder's record names the PID and its lock is held, so a stale variable inherited by a shell
+  cannot bypass the guard. Low disk refuses at once with exit 75. `procs::process_alive` waits on
+  the process with a zero timeout rather than reading its exit code, because a process may exit with
+  259, which is `STILL_ACTIVE`. The machine root comes from `LOCALAPPDATA` alone on Windows: a
+  process whose environment lacks it gets an error rather than a second, always-free set of slot
+  locks under `HOME`. Off Windows, when it is unset, the root is `$XDG_STATE_HOME/eileen`, else
+  `$HOME/.local/state/eileen`, beside WP10's `machine/` files (docs/LINUX.md section 5), and the
+  sampler reads `/proc`: `MemAvailable`, major faults times 4 KB, and commit headroom by
+  `vm.overcommit_memory` as `eileen-shell-linux` reads it (`CommitLimit` minus `Committed_AS` under
+  strict overcommit, else `MemAvailable` plus `SwapFree`), so the guard's samples and the runtime's
+  agree.
 - Base crates, buildguard: `spawn_cargo` creates cargo suspended, puts it in a fresh
   kill-on-close Job Object, then resumes its threads (process-wrap's technique), so nothing it
   starts escapes the job; the guard's process holds the only handle. Its process tests run the
@@ -425,6 +495,20 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   derives. The PII scan accepts the reserved example domains and generic user folders
   (`Public`, `Default`, the CI runner's); a scenario's text files are capped at 256 KiB,
   consented audio at 5 MiB and the folder at 8 MiB.
+- Base crates, trace, second review: a literal secret stays registered while the `LiteralGuard` that
+  `Redactor::add_literal` returns lives (the guard holds the redactor weakly), at most 64 at once
+  (`MAX_LITERALS`, refusals counted), with each form counted so two registrations of one secret need
+  two drops; a secret under 6 bytes is refused as an error rather than ignored. The `Debug` of a
+  `Redactor` shows how many literals it holds, and the per-install key is a `PiiKey` whose `Debug`
+  is `PiiKey(..)`. A log line's `filename`, and a ring record's default event name
+  (`event <file>:<line>`), keep a workspace or standard-library path as it is and cut an absolute
+  one to the part from its crate's `<name>-<version>` folder in Cargo's registry (else to its file
+  name), so a dependency built on the owner's PC never writes the account name into a log or an
+  incident. The span-parent table follows the observability report's section 2.5: `speech.segment`,
+  `turn.detect`, `tts.synth`, `desktop.capture`, `desktop.action` and `apps.call` take only their
+  remote parent, so a lost `traceparent` fails the check; `speak` alone keeps `Root`, for an
+  announcement with neither turn nor job. `test_support` sits behind the `test-support` feature,
+  which only dev-dependencies turn on. The PII scan reports each kind once per line, in plain words.
 - Base crates, trace: the scenario privacy rules parse `scenario.toml` into the contracts'
   `Scenario` (so `eileen-trace` depends on `toml`). Audio passes only when the origin is
   `contributed-consented-audio`, `intent.audio.file` names it and the record at
@@ -435,22 +519,28 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   `scenario.toml` or replay line that does not parse fails as unreadable; problems name the
   file, the line and a JSON pointer, never the text.
 - Base crates, rt: a spawned task also carries the caller's subscriber (and a blocking task its
-  dispatcher), so a scoped subscriber in a test or a tool sees what the task logs; a panic
-  message loses any backtick-quoted text before it is logged, as the observability report asks
-  of the panic hook.
+  dispatcher), so a scoped subscriber in a test or a tool sees what the task logs. A panic
+  message is logged whole as `pii.message`, which the files reduce to its length and keyed hash
+  while the ring and the console keep it; the first cut replaced backtick-quoted text instead,
+  which left an unwrapped error's `Debug`, an `expect` message and an assertion's values in the
+  files. A blocking task is listed in `task::dump` from when a pool thread takes it, so a queued
+  task never reads as blocking and a call outside a runtime leaves no entry.
 - Base crates, supervisor: it uses `windows` rather than `windows-sys`, because process-wrap's
-  `CreationFlags` takes `windows`' flag type; the root manifest's comment on `windows-sys` now
-  names only the build guard and the dependencies whose features it lists. Children are of class
-  `Sidecar`, `ClaudeSession` (below normal priority) or `Tool`; stderr lines are forwarded at
-  INFO, cut at 4 KB; restarts default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset
-  after 2 stable minutes. The detached spawn falls back to a plain spawn only on access denied,
-  and a supervised child's own detached spawn cannot leave its job (the test checks `broke_away`
-  is false there). Stderr is read as bytes with at most 4 KB of a line kept and decoded lossily,
-  so a tool writing in the ANSI code page or a megabyte with no newline neither stops the
+  `CreationFlags` takes `windows`' flag type; the root manifest's comment on `windows-sys` now names
+  only the build guard and the dependencies whose features it lists. Children are of class
+  `Sidecar`, `ClaudeSession` (below normal priority) or `Tool`; stderr lines are forwarded at INFO
+  as `pii.line` (a Claude session's stderr quotes paths and prompt text), cut at 4 KB; restarts
+  default to 250 ms doubling to 30 s, at most 5 in 10 minutes, reset after 2 stable minutes; the
+  first delay never exceeds the maximum, doubling saturates, and a heartbeat whose deadline lies
+  past the clock's range has none, so no policy value panics. A `ChildSpec`'s `Debug` lists its
+  environment's names, never the values. The detached spawn falls back to a plain spawn only on
+  access denied, and a supervised child's own detached spawn cannot leave its job (the test checks
+  `broke_away` is false there). Stderr is read as bytes with at most 4 KB of a line kept and decoded
+  lossily, so a tool writing in the ANSI code page or a megabyte with no newline neither stops the
   forwarding nor grows memory. `AudioBoost` is not `Send` on any OS. The off-Windows bodies of
-  `opt_out_of_ecoqos` and `boost_audio_thread` are constants, so they carry a `cfg_attr`
-  `expect` of `missing_const_for_fn` and `unnecessary_wraps` there; `free_disk_gb` keeps one
-  body and splits the platform into a helper.
+  `opt_out_of_ecoqos` and `boost_audio_thread` are constants, so they carry a `cfg_attr` `expect` of
+  `missing_const_for_fn` and `unnecessary_wraps` there; `free_disk_gb` keeps one body and splits the
+  platform into a helper.
 
 ## Measurements
 
