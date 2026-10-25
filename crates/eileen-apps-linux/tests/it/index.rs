@@ -1,6 +1,7 @@
 //! The app index over the fixture session: precedence, masking, the desktop's filters,
 //! `TryExec`, locales and packaged apps, and finding the entry of a trait's `AppEntry`; and over
-//! a scratch folder, what it skips: a FIFO, a device and an entry over a mebibyte.
+//! a scratch folder, what it skips (a FIFO, a device and an entry over a mebibyte) and how it
+//! walks links to folders.
 
 use std::ffi::OsString;
 use std::fs;
@@ -46,6 +47,10 @@ fn session_with(lang: &str, language: Option<&str>, desktop: &str, path: Option<
 
 fn names(apps: &[DesktopEntry]) -> Vec<&str> {
     apps.iter().map(|app| app.name.as_str()).collect()
+}
+
+fn ids(apps: &[DesktopEntry]) -> Vec<&str> {
+    apps.iter().map(|app| app.id.as_str()).collect()
 }
 
 fn find<'a>(apps: &'a [DesktopEntry], id: &str) -> &'a DesktopEntry {
@@ -298,4 +303,82 @@ fn an_entry_over_a_mebibyte_is_skipped() {
     fs::write(applications.join("at.desktop"), entry("At the cap", CAP)).unwrap();
     fs::write(applications.join("over.desktop"), entry("Over the cap", CAP + 1)).unwrap();
     assert_eq!(names(&index(&session)), ["At the cap", "Plain"], "one byte over is skipped");
+}
+
+#[test]
+fn a_folder_that_links_lead_back_to_is_walked_once() {
+    // Ten links to `.`, and one to the data folder above, which holds only `applications/`. A
+    // walk that followed each of them again at every level, down to its depth limit of 8, would
+    // read the folder about 1.3e8 times and not return for hours.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    for n in 0..10 {
+        symlink(".", applications.join(format!("here-{n}"))).unwrap();
+    }
+    symlink("..", applications.join("up")).unwrap();
+    assert_eq!(ids(&index(&session)), ["plain.desktop"], "once, under its own path");
+}
+
+#[test]
+fn a_folder_two_links_lead_to_is_walked_once_under_the_first() {
+    // Some installs link their own folder into `applications/`. Here two links name one folder:
+    // the walk follows `tools`, the first in its sorted order, and `tools-old` leads nowhere new,
+    // so the folder's entry is listed once, with the first path's desktop file ID.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let install = scratch.path().join("install");
+    fs::create_dir_all(&install).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(install.join("tool.desktop"), tool).unwrap();
+    symlink(&install, applications.join("tools")).unwrap();
+    symlink(&install, applications.join("tools-old")).unwrap();
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "tools-tool.desktop"],
+        "a link to a new folder is followed, and a second path to it is not"
+    );
+}
+
+#[test]
+fn a_link_into_a_lower_data_folder_leaves_it_its_ids() {
+    // The user's folder links to the system's `applications/`, so the user's walk reads it
+    // first. Each data folder's walk keeps its own record of what it read, so the system's walk
+    // reads it too, and its entry keeps the ID it has there.
+    let scratch = Scratch::new();
+    let (mut session, applications) = beside_a_plain_entry(&scratch);
+    let system = scratch.path().join("system");
+    fs::create_dir_all(system.join("applications")).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(system.join("applications").join("tool.desktop"), tool).unwrap();
+    symlink(system.join("applications"), applications.join("system")).unwrap();
+    session.data_dirs.push(system);
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "system-tool.desktop", "tool.desktop"],
+        "the link's path in the user's folder, and the system's own"
+    );
+}
+
+#[test]
+fn a_link_to_a_big_tree_leads_the_walk_through_at_most_1024_folders() {
+    // Through a link to `/`, a walk that read each folder once would still read every folder of
+    // the machine down to its depth limit, `/proc` and the mounts included: minutes or more where
+    // a mount is slow. Here the link leads to 1100 folders that each hold an entry. With
+    // `applications/` and the link's own folder, the walk reads 1024 folders: the first 1022.
+    let scratch = Scratch::new();
+    let (session, applications) = beside_a_plain_entry(&scratch);
+    let tree = scratch.path().join("tree");
+    let app = "[Desktop Entry]\nType=Application\nName=App\nExec=app\n";
+    for n in 0..1100 {
+        let folder = tree.join(format!("{n:04}"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("app.desktop"), app).unwrap();
+    }
+    symlink(&tree, applications.join("big")).unwrap();
+    let apps = index(&session);
+    let listed = ids(&apps);
+    assert_eq!(listed.len(), 1022 + 1, "the first 1022 folders' entries, and the plain one");
+    assert!(listed.contains(&"big-1021-app.desktop"), "the last folder read");
+    assert!(!listed.contains(&"big-1022-app.desktop"), "the first folder not read");
+    assert!(listed.contains(&"plain.desktop"), "a file listed before the cap is kept");
 }
