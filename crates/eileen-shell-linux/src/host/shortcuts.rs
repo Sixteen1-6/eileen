@@ -52,8 +52,8 @@ pub enum LinuxShellEvent {
     ///
     /// A press names no device. The portal does not say whether a keyboard sent the chord
     /// (xdg-desktop-portal-gnome drops the device gnome-shell names), and input injected through
-    /// libei, as the RemoteDesktop portal hands it to Eileen's desktop server or any app the user
-    /// granted it, fires the shortcut too. So a press cannot meet the rule that the approve, deny
+    /// libei, as the `RemoteDesktop` portal hands it to Eileen's desktop server or any app the
+    /// user granted it, fires the shortcut too. So a press cannot meet the rule that the approve, deny
     /// and unmute hotkeys count only when a keyboard sent them (BUILD.md sections 2.5 and 2.9,
     /// and `UserInput`'s doc in `eileen-contracts`): a root must not map one to `Approve`,
     /// `Deny` or an unmuting `SetMute` or `ToggleMute` until the owner decides how Linux meets

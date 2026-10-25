@@ -101,7 +101,7 @@
 //!   way, so a sink must not lock what the dropping thread holds.
 //! - The events sink and each `watch_input` sink run on the bridge's thread: one that blocks
 //!   stalls every call, and one that calls the shell is refused.
-//! - A hotkey's press names no device, and injected input (libei through the RemoteDesktop
+//! - A hotkey's press names no device, and injected input (libei through the `RemoteDesktop`
 //!   portal) fires it as a keyboard does, so it cannot meet the rule that the approve, deny and
 //!   unmute hotkeys count only when a keyboard sent them (BUILD.md sections 2.5 and 2.9):
 //!   [`LinuxShellEvent::Hotkey`] says what a root must not map it to, until the owner decides.
