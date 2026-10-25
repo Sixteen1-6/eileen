@@ -588,7 +588,7 @@ One integration test binary per crate is matklad's advice, because each file in 
 
 **Adopt it.** Use the test runner's filters, not `#[ignore]`. Record the stub scripts from real sessions and redact them. Compare types and fields, not text. Run desktop tests one at a time in their own group, on windows the test created.
 
-**In Eileen.** Modules `owner_pc::` and `real_claude::`, nextest's `default-filter` and an `owner` profile; check 16 bans `#[ignore]`, `#[should_panic]` and real-time sleeps in tests; `eileen-stub-harness` plays `tests/harness-scripts/*.ndjson`; the leak timeout fails a test that leaves a child process running ([BUILD §4.7](BUILD.md#47-test-strategy), [§4b.3](BUILD.md#4b3-cargo-deny-nextest-and-ci)).
+**In Eileen.** Modules `owner_pc::`, `real_claude::` and `linux_session::`, nextest's `default-filter`, an `owner` profile, and a `linux-session` profile that only the Linux desktop lane runs, inside its headless session; check 16 bans `#[ignore]`, `#[should_panic]` and real-time sleeps in tests; `eileen-stub-harness` plays `tests/harness-scripts/*.ndjson`; the leak timeout fails a test that leaves a child process running ([BUILD §4.7](BUILD.md#47-test-strategy), [§4b.3](BUILD.md#4b3-cargo-deny-nextest-and-ci)).
 
 **Sources.** [BUILD §4.7](BUILD.md#47-test-strategy), [§4b.3](BUILD.md#4b3-cargo-deny-nextest-and-ci); [engineering-practice §3.5](research/2026-10-engineering-practice.md#35-windows-end-to-end-harness-eileen-e2e).
 
