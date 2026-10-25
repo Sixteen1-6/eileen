@@ -419,10 +419,11 @@ mod tests {
             lengths.push(line.len());
             ring.push(1_761_134_400_000_000 + n, line);
         }
-        let held = {
+        let (held, spare) = {
             let inner = ring.lock();
-            inner.lines.iter().map(|(_, line)| line.capacity()).sum::<usize>()
-                + inner.lines.capacity() * size_of::<(i64, String)>()
+            let held = inner.lines.iter().map(|(_, line)| line.capacity()).sum::<usize>()
+                + inner.lines.capacity() * size_of::<(i64, String)>();
+            (held, inner.lines.iter().map(|(_, line)| line.capacity() - line.len()).sum::<usize>())
         };
         assert!(
             held <= 4_096,
@@ -430,6 +431,7 @@ mod tests {
             lengths.first()
         );
         assert_eq!(ring.bytes(), held, "bytes() reports what the lines and the queue hold");
+        assert_eq!(spare, 0, "each line keeps only what it needs, so the ring keeps more of them");
     }
 
     #[test]
