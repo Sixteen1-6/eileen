@@ -6,6 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use eileen_desktop_linux::ObjectRef;
@@ -173,6 +174,9 @@ pub(crate) struct Node {
     pub(crate) error_name: Option<&'static str>,
     /// `GetChildren` and `GetChildAtIndex` answer this error name, and every other read answers.
     pub(crate) listing_error: Option<&'static str>,
+    /// `GetChildren` and `GetChildAtIndex` each wait this long on tokio's clock first, for a
+    /// test in paused time.
+    pub(crate) slow_listing: Option<Duration>,
     /// `GetRole` never answers.
     pub(crate) silent: bool,
     /// The text `Text.GetText` answers, whatever range is asked for; `None` serves no `Text`.
@@ -210,8 +214,12 @@ impl Node {
         self.error_name.map_or(Ok(()), |name| Err(Failure(name)))
     }
 
-    /// Fails a listing, by index or not, when the node says so.
-    fn listing(&self) -> Result<(), Failure> {
+    /// What a listing, by index or not, does first: waits when the node is slow, and fails when
+    /// the node says so.
+    async fn listing(&self) -> Result<(), Failure> {
+        if let Some(wait) = self.slow_listing {
+            tokio::time::sleep(wait).await;
+        }
         self.listing_error.map_or(Ok(()), |name| Err(Failure(name)))
     }
 }
@@ -246,18 +254,18 @@ impl Object {
         self.0.read().map(|()| self.0.interfaces.clone())
     }
 
-    fn get_children(&self) -> Result<Vec<Reference>, Failure> {
+    async fn get_children(&self) -> Result<Vec<Reference>, Failure> {
         self.0.calls.listings.fetch_add(1, Ordering::SeqCst);
-        self.0.listing()?;
+        self.0.listing().await?;
         if self.0.no_get_children {
             return Err(Failure(UNKNOWN_METHOD));
         }
         self.0.read().map(|()| self.0.children.clone())
     }
 
-    fn get_child_at_index(&self, index: i32) -> Result<Reference, Failure> {
+    async fn get_child_at_index(&self, index: i32) -> Result<Reference, Failure> {
         self.0.calls.index_reads.fetch_add(1, Ordering::SeqCst);
-        self.0.listing()?;
+        self.0.listing().await?;
         self.0.read()?;
         let child = usize::try_from(index).ok().and_then(|index| self.0.children.get(index));
         child.cloned().ok_or(Failure(INVALID_ARGS))

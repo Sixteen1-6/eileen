@@ -26,6 +26,11 @@ fn later() -> Instant {
     Instant::now() + Duration::from_secs(60)
 }
 
+/// A walk's budget in the tests that pass it in paused time.
+const BUDGET: Duration = Duration::from_millis(500);
+/// How long a slow listing waits on tokio's clock in those tests: past the budget.
+const SLOW: Duration = Duration::from_secs(1);
+
 /// Each node of `walk` as its name, its parent's index and its depth.
 fn shape(walk: &Walk) -> Vec<(&str, Option<u32>, u16)> {
     walk.nodes
@@ -280,6 +285,45 @@ async fn a_spent_budget_reads_the_root_alone_and_marks_the_walk_truncated() {
     let leaf =
         atspi.walk(&app.object("/leaf"), TreeLimits::default(), Instant::now()).await.unwrap();
     assert_eq!((leaf.nodes.len(), leaf.truncated), (1, false), "nothing was left to read");
+}
+
+#[tokio::test]
+async fn a_budget_spent_during_a_listing_reads_no_child() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    let root = Node { slow_listing: Some(SLOW), ..Node::showing("root", app.references(&["/a"])) };
+    app.add("/root", root).await;
+    app.tree(&[("/a", &[])]).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    // Paused only now. The client's connection has no method timeout, so the fake's wait is the
+    // one timer, and tokio fires it as soon as the runtime is idle.
+    tokio::time::pause();
+    let until = Instant::now() + BUDGET;
+    let walk = atspi.walk(&app.object("/root"), TreeLimits::default(), until).await.unwrap();
+    assert_eq!(shape(&walk), [("root", None, 0)], "the budget passed while the root was listed");
+    assert!(walk.truncated, "a was left out");
+}
+
+#[tokio::test]
+async fn a_budget_spent_during_index_reads_ends_them() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    let table = Node {
+        states: words(&[SHOWING, MANAGES_DESCENDANTS]),
+        child_count: 10_000,
+        slow_listing: Some(SLOW),
+        ..Node::showing("table", app.references(&["/c0", "/c1", "/c2", "/c3", "/c4"]))
+    };
+    let table = app.add("/table", table).await;
+    app.tree(&[("/c0", &[]), ("/c1", &[]), ("/c2", &[]), ("/c3", &[]), ("/c4", &[])]).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    // Paused only now, as in the test above.
+    tokio::time::pause();
+    let until = Instant::now() + BUDGET;
+    let walk = atspi.walk(&app.object("/table"), TreeLimits::default(), until).await.unwrap();
+    assert_eq!(count(&table.index_reads), 1, "no index read starts once the budget has passed");
+    assert_eq!(shape(&walk), [("table", None, 0)], "nor a read of the child it found");
+    assert!(walk.truncated, "the budget cut the walk");
 }
 
 #[tokio::test]
