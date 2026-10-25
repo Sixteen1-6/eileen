@@ -31,7 +31,7 @@ fn a_profile_switch_reaches_the_changes_stream() {
     let system = session.system();
     session.block_on(async {
         let mut changes = LinuxPower::new(system).changes().await.unwrap();
-        assert!(!changes.state().battery_saver, "the lane's profile is balanced: {changes:?}");
+        assert!(!changes.state().battery_saver, "battery saver starts off: {changes:?}");
         set_profile(system, POWER_SAVER).await.unwrap();
         saver_turns(&mut changes, true).await;
         set_profile(system, BALANCED).await.unwrap();
