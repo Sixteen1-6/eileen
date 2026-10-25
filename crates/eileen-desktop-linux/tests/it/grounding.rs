@@ -463,7 +463,7 @@ fn the_focused_element_is_found_in_the_foreground_window() {
             states: focused,
             interfaces: vec!["org.a11y.atspi.Action".to_owned()],
             extents: Some((5, -3, -1, 20)),
-            accessible_id: Some("row-\u{202E}2".to_owned()),
+            accessible_id: Some(format!("row-\u{202E}2{}", "x".repeat(1_500))),
             ..Node::showing("Inbox \u{200F}row", vec![])
         };
         let panel = Node { role: PANEL, ..Node::showing("panel", app.references(&["/list"])) };
@@ -480,7 +480,7 @@ fn the_focused_element_is_found_in_the_foreground_window() {
     let expected = ElementInfo {
         control_type: "list item".to_owned(),
         name: Untrusted::new("Inbox row".to_owned()),
-        automation_id: Some(Untrusted::new("row-2".to_owned())),
+        automation_id: Some(Untrusted::new(format!("row-2{}", "x".repeat(995)))),
         rect: Rect { x: 5, y: -3, w: 0, h: 20 },
         patterns: vec!["Action".to_owned(), "Component".to_owned()],
         is_password: false,
@@ -492,8 +492,9 @@ fn the_focused_element_is_found_in_the_foreground_window() {
     assert_eq!(
         desktop.focused_element(Deadline::UIA).unwrap(),
         Some(expected),
-        "the focused row inside the focused list, named and identified as sanitized, its box in \
-         its window with a negative width as 0, and its interfaces' short names"
+        "the focused row inside the focused list, named and identified as sanitized, its id kept \
+         to 1,000 characters, its box in its window with a negative width as 0, and its \
+         interfaces' short names"
     );
     assert_eq!(desktop.selection(false, Deadline::UIA).unwrap(), None, "a row without Text");
 }
