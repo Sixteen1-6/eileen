@@ -499,6 +499,23 @@ fn the_focused_element_is_found_in_the_foreground_window() {
 }
 
 #[test]
+fn an_automation_id_a_gdbus_app_lacks_is_none() {
+    let mut world = World::new();
+    world.app(|app| {
+        let states = words(&[SHOWING, FOCUSED]);
+        let field = Node { role: TEXT, states, id_invalid_args: true, ..Node::default() };
+        let front = window(FRAME, "Front", &[ACTIVE], app.references(&["/field"]));
+        vec![root(app, &["/front"]), ("/front", front), ("/field", field)]
+    });
+    let element = world.desktop(settings()).focused_element(Deadline::UIA).unwrap().unwrap();
+    assert_eq!(
+        (element.control_type.as_str(), element.automation_id),
+        ("text", None),
+        "the field is found, the InvalidArgs a GDBus server answers for AccessibleId leaving it out"
+    );
+}
+
+#[test]
 fn a_focus_search_cut_short_is_unknown_not_none() {
     let mut world = World::new();
     world.app(|app| {

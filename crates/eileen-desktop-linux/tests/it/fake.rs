@@ -163,6 +163,7 @@ pub(crate) struct Calls {
 
 /// What a fake object answers. The default has no name, role 0, no states and no children.
 #[derive(Debug, Clone, Default)]
+#[expect(clippy::struct_excessive_bools, reason = "each is a fault a test turns on by itself")]
 pub(crate) struct Node {
     /// `Name`.
     pub(crate) name: String,
@@ -197,8 +198,11 @@ pub(crate) struct Node {
     /// The box `Component.GetExtents` answers in window coordinates, `(x, y, width, height)`;
     /// `None` serves no `Component`.
     pub(crate) extents: Option<(i32, i32, i32, i32)>,
-    /// `AccessibleId`; `None` answers `UnknownProperty`, as an app that predates it does.
+    /// `AccessibleId`; `None` answers `UnknownProperty`, as an app that predates it does through
+    /// libdbus, as atk-bridge does.
     pub(crate) accessible_id: Option<String>,
+    /// `AccessibleId` answers `InvalidArgs`, as a `GDBus` server does for a property it lacks.
+    pub(crate) id_invalid_args: bool,
     /// The calls it receives.
     pub(crate) calls: Calls,
 }
@@ -260,6 +264,9 @@ impl Object {
     #[zbus(property)]
     fn accessible_id(&self) -> fdo::Result<String> {
         self.0.property()?;
+        if self.0.id_invalid_args {
+            return Err(fdo::Error::InvalidArgs("No such property AccessibleId".to_owned()));
+        }
         let unknown = || fdo::Error::UnknownProperty("AccessibleId".to_owned());
         self.0.accessible_id.clone().ok_or_else(unknown)
     }
