@@ -131,11 +131,7 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     assert_eq!(entries.len(), 1, "one daily file");
     let name = entries[0].to_string_lossy().into_owned();
     assert!(name.starts_with("eileen-desktop."), "{name}");
-    assert_eq!(
-        Path::new(&name).extension().and_then(|e| e.to_str()),
-        Some("jsonl"),
-        "{name}"
-    );
+    assert_eq!(Path::new(&name).extension().and_then(|e| e.to_str()), Some("jsonl"), "{name}");
     let text = std::fs::read_to_string(dir.0.join(&name)).unwrap();
     let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     let focused = lines.iter().find(|l| l["fields"]["message"] == "focused").unwrap();

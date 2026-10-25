@@ -168,6 +168,28 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_a_folder_with_a_daily_name_stays() {
+        let dir = TempDir::new("links");
+        let day = Date::new(2026, 10, 25).unwrap();
+        touch(&dir.0, "elsewhere.txt");
+        std::os::unix::fs::symlink(
+            dir.0.join("elsewhere.txt"),
+            dir.0.join(daily("eileen", day, 5)),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.0.join(daily("eileen", day, 6))).unwrap();
+        touch(&dir.0, &daily("eileen", day, 7));
+        assert_eq!(rule(&dir.0, 1).prune(day).unwrap(), 1, "only the plain file went");
+        let left = BTreeSet::from([
+            "elsewhere.txt".to_owned(),
+            daily("eileen", day, 5),
+            daily("eileen", day, 6),
+        ]);
+        assert_eq!(names(&dir.0), left, "the link and the folder stay");
+    }
+
     #[test]
     fn a_missing_folder_has_nothing_to_prune() {
         let parent = TempDir::new("missing");
