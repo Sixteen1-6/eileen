@@ -86,8 +86,8 @@ impl ShortcutId {
 /// chord and an ID, and no description.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShortcutNames {
-    /// Each hotkey's description, by its `register_hotkey` ID; one not listed is "Eileen
-    /// shortcut <ID>".
+    /// Each hotkey's description, by its `register_hotkey` ID; one not listed is `Eileen
+    /// shortcut 7` for the ID 7.
     pub hotkeys: BTreeMap<u32, String>,
     /// The dictation key's: "Hold to dictate" by default.
     pub dictation: String,
