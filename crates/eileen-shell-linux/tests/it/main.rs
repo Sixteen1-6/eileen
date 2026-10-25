@@ -4,8 +4,9 @@
 //! that a guard removes; the session's lock state and keeping it awake, against fake logind,
 //! GNOME session manager and Inhibit portal services on `eileen-dbus-linux`'s private bus; the
 //! notification client against fake servers on the same bus; the power facts over D-Bus against
-//! fake daemons there too; the `GlobalShortcuts` client against a fake portal; and `ShellHost`
-//! through `LinuxShell` on a bridge to that bus, against the same fakes. Linux only, as the crate
+//! fake daemons there too; the `GlobalShortcuts` client against a fake portal; the tray as a host
+//! reads it, with a fake watcher; and `ShellHost` through `LinuxShell` on a bridge to that bus,
+//! against the same fakes. Linux only, as the crate
 //! is. Each module is `cfg(test)`, so clippy holds it to the test rules (`clippy.toml`'s test
 //! allowances and `tests_outside_test_module`).
 
@@ -33,6 +34,8 @@ mod session_lock;
 mod shell_host;
 #[cfg(test)]
 mod shortcuts;
+#[cfg(test)]
+mod tray;
 #[cfg(test)]
 mod tree;
 #[cfg(test)]

@@ -14,8 +14,8 @@
 //!   process outside Eileen's tree.
 //! - `ShellHost`'s clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state
 //!   over logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
-//!   ([`Notifier`], with [`NotificationEvents`]), and global shortcuts from the `GlobalShortcuts`
-//!   portal ([`ShortcutsSession`], with [`ShortcutEvents`] and [`trigger_of_chord`]'s triggers).
+//!   ([`Notifier`], [`NotificationEvents`]), the `GlobalShortcuts` portal ([`ShortcutsSession`],
+//!   [`ShortcutEvents`], [`trigger_of_chord`]) and the tray's item and menu ([`TraySettings`]).
 //! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) and a
 //!   stream of their changes ([`PowerChanges`]); [`LinuxMachineProbe`] does not use them yet.
 //!
@@ -35,8 +35,9 @@
 //! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, asks the
 //!   session to lock only in [`SessionLock::lock_workstation`], keeps it awake no longer than a
 //!   [`LinuxPowerRequest`] and the connections it was given, shows a toast only in
-//!   [`Notifier::notify`] and binds shortcuts only in [`ShortcutsSession::bind`]. It starts no
-//!   process itself (a call may let the bus start a service) and never needs elevation.
+//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`] and shows the tray
+//!   only from `set_tray`. It starts no process itself (a call may let the bus start a service)
+//!   and never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -48,7 +49,7 @@
 //!
 //! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
-//!   `tokio` (the portal's deadline, the keep-awake holder), `rustix` (`statvfs`) and `thiserror`.
+//!   `tokio` (the portal's deadline, the holder tasks), `rustix` (`statvfs`) and `thiserror`.
 //!   Only the composition root on Linux may depend on it. Wire types: none of its own.
 //!
 //! # Testing
@@ -66,8 +67,7 @@
 //!
 //! # Traps
 //!
-//! - Each source's traps are in its own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`, `host`,
-//!   `session_lock`, `keep_awake`, `notifications`, `shortcuts`, `upower`; D-Bus's in its crate.
+//! - Each module's doc keeps its traps, `host`'s for the trait calls; D-Bus's are in its crate.
 //!
 //! # Logs and tracing
 //!
@@ -104,13 +104,14 @@ mod probe;
 mod root;
 mod session_lock;
 mod shortcuts;
+mod tray;
 mod upower;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
 pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
-pub use host::{LinuxShell, LinuxShellSettings, RELEASE_WAIT};
+pub use host::{LinuxShell, LinuxShellEvent, LinuxShellSettings, RELEASE_WAIT};
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use notifications::{
     NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,
@@ -124,4 +125,5 @@ pub use shortcuts::{
     BoundShortcut, Shortcut, ShortcutEvent, ShortcutEvents, ShortcutsSession, trigger_of_chord,
     trigger_of_key,
 };
+pub use tray::TraySettings;
 pub use upower::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};
