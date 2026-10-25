@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use eileen_apps_linux::{LinuxApps, index};
 use eileen_contracts::ids::Personal;
-use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::PrivateBus;
+use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{AppEntry, AppKind, Apps, Deadline, PlatformError};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use crate::index::session;
 use crate::open::{
@@ -134,15 +135,24 @@ fn an_index_that_a_read_holds_passes_its_deadline() {
     // The index opens each entry without waiting and skips what is not a file, so no FIFO holds
     // its read, and no unprivileged test can make a read hang as a hung network mount does. The
     // adapter reads on a pool whose one thread the test holds instead, so its read waits behind
-    // it. A real wait: the deadline, the bridge's default, is real time.
+    // it. A real wait: the deadline, the bridge's default, is real time, and the call waits all
+    // of it. The time is checked from below only, which no slow machine can break: the wait for
+    // the read's answer never ends before its deadline.
     let pool = one_blocking_thread();
     let bus = PrivateBus::start();
     let apps = apps(&bus).reading_files_on(pool.handle().clone());
     let release = hold_the_blocking_thread(&pool);
+    let started = Instant::now();
+    let held = apps.index();
+    let waited = started.elapsed();
     assert_eq!(
-        apps.index(),
+        held,
         Err(PlatformError::DeadlineExceeded { call: "app index" }),
         "the read still waited for the pool's thread at the deadline, and was left to it"
+    );
+    assert!(
+        waited >= DEFAULT_DEADLINE.budget(),
+        "the call waited the whole default deadline, not less: {waited:?}"
     );
     drop(release);
     let listed = apps.index().map(|listed| listed.len());
