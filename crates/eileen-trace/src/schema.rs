@@ -4,17 +4,21 @@
 //! in every simulation run, and on the records of an incident.
 //!
 //! A span's parent is the record its `parent` names in its own process. A span without one
-//! sits under the span its `traceparent` names in another process: the one with that span id,
-//! open at the child's start, in the traceparent's trace. Every process hands out span ids
-//! from the same small range, so the trace is what tells their spans apart; where two
-//! processes still share an id within one trace, the span the child's row allows is taken. A
-//! span is in the trace of each turn and job its process's records name for it or an ancestor
+//! sits under the span its `traceparent` names in another process: one with that span id,
+//! open at the child's start, and not shown to be in another trace. Every process hands out
+//! span ids from the same small range, so the trace is what tells their spans apart. A span
+//! is in the trace of each turn and job its process's records name for it or an ancestor
 //! (`turn_id`, and a job's `job_id` and `origin_turn`; the trace id is the turn's ULID, or a
-//! turnless job's), and in the one its local root's `traceparent` names.
+//! turnless job's) and in the one its local root's `traceparent` names, and in no other once
+//! the walk up its parents reaches that root.
 //!
 //! An incident's records are partial: a ring drops its oldest lines, so the `open` line of a
 //! long job or turn is often gone while its children remain. A parent whose record is not
-//! among them is accepted when the row allows a parent of that kind at all.
+//! among them is accepted when the row allows a parent of that kind at all, and a span whose
+//! ancestor's record is missing is in a trace the records cannot show. Of several spans that
+//! could be the remote parent, the first the row allows is taken, else the first shown to be
+//! in the trace: a span the row does not allow is reported only when the records show it in
+//! the child's trace.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -224,34 +228,36 @@ impl<'a> Parents<'a> {
         }
     }
 
-    /// The span that `span`'s `traceparent` names in another process: the one with that span
-    /// id, open at `span`'s start, in the traceparent's trace. Where there are several, the
-    /// first whose name `span`'s row allows as a remote parent, else the first.
+    /// The span that `span`'s `traceparent` names in another process: one with that span id,
+    /// open at `span`'s start and not shown to be in another trace. Of several, the first whose
+    /// name `span`'s row allows as a remote parent, else the first shown to be in the trace;
+    /// one the row does not allow, whose trace the records cannot show, is never taken.
     pub(crate) fn remote(&self, span: &SpanRecord) -> Option<&'a SpanRecord> {
         let named = span.remote_parent?;
         let row = names::lookup(&span.name).map(|def| def.parents).unwrap_or_default();
-        let mut first = None;
+        let mut shown = None;
         for &parent in self.by_span_id.get(&named.parent_id)? {
             let open_then = parent.start_us <= span.start_us
                 && parent.end_us.is_none_or(|end| end >= span.start_us);
-            if parent.process == span.process
-                || !open_then
-                || !self.in_trace(parent, named.trace_id)
-            {
+            if parent.process == span.process || !open_then {
                 continue;
             }
-            if row.iter().any(|rule| matches!(rule, Parent::Remote(p) if *p == parent.name)) {
-                return Some(parent);
+            let allowed =
+                row.iter().any(|rule| matches!(rule, Parent::Remote(p) if *p == parent.name));
+            match (allowed, self.in_trace(parent, named.trace_id)) {
+                (true, InTrace::Yes | InTrace::Unknown) => return Some(parent),
+                (false, InTrace::Yes) => shown = shown.or(Some(parent)),
+                (_, InTrace::No) | (false, InTrace::Unknown) => {}
             }
-            first = first.or(Some(parent));
         }
-        first
+        shown
     }
 
-    /// Whether `span` is in `trace`: the trace of a turn or job its process's records name for
-    /// it or an ancestor, or the one its local root's `traceparent` names. `false` where an
-    /// ancestor's record is missing before any of them is found.
-    fn in_trace(&self, span: &'a SpanRecord, trace: u128) -> bool {
+    /// Whether `span` is in `trace`, as far as the records show: `Yes` when its process's
+    /// records name a turn or job of that trace for it or an ancestor, or its local root's
+    /// `traceparent` names the trace; `No` when the walk up its parents reaches that root
+    /// first; `Unknown` when an ancestor's record is missing first.
+    fn in_trace(&self, span: &'a SpanRecord, trace: u128) -> InTrace {
         let mut at = span;
         // A walk longer than the records can only follow a parent loop in damaged records.
         for _ in 0..=self.local.len() {
@@ -259,18 +265,33 @@ impl<'a> Parents<'a> {
                 at.fields.get(field).and_then(Value::as_str).and_then(read) == Some(trace)
             });
             if named {
-                return true;
+                return InTrace::Yes;
             }
             let Some(parent) = at.parent else {
-                return at.remote_parent.is_some_and(|tp| tp.trace_id == trace);
+                return if at.remote_parent.is_some_and(|tp| tp.trace_id == trace) {
+                    InTrace::Yes
+                } else {
+                    InTrace::No
+                };
             };
             let Some(&up) = self.local.get(&(at.process.as_str(), parent)) else {
-                return false;
+                return InTrace::Unknown;
             };
             at = up;
         }
-        false
+        InTrace::Unknown
     }
+}
+
+/// What the records show about whether a span is in a trace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InTrace {
+    /// It is.
+    Yes,
+    /// It is in another: the walk up its parents reached its local root without meeting it.
+    No,
+    /// The records cannot show it: an ancestor's record is missing (or they loop).
+    Unknown,
 }
 
 #[cfg(test)]
@@ -316,6 +337,11 @@ mod tests {
     /// A turn's context, from which the core writes a `traceparent`.
     const fn in_turn(turn: TurnId) -> TraceCtx {
         TraceCtx { turn: Some(turn), job: None, call: None }
+    }
+
+    /// The span among `spans` that `child`'s `traceparent` resolves to.
+    fn remote<'a>(spans: &'a [SpanRecord], child: &SpanRecord) -> Option<&'a SpanRecord> {
+        Parents::new(spans).remote(child)
     }
 
     #[test]
@@ -540,6 +566,59 @@ mod tests {
     }
 
     #[test]
+    fn a_span_whose_trace_is_unknown_is_taken_only_where_the_row_allows_it() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        let capture = |start, end| {
+            recorded(
+                "eileen-desktop",
+                span(1, None, names::DESKTOP_CAPTURE, start, end),
+                &json!({"traceparent": in_turn(turn).traceparent(3)}),
+            )
+        };
+        // The core's mcp.call holds span id 3 under a dispatch.call whose open line the ring
+        // dropped, so the records cannot show its trace; an apps call of the turn holds span
+        // id 3 too.
+        let spans = [
+            SpanRecord { span_id: 3, ..span(7, Some(6), names::MCP_CALL, 10, 50) },
+            recorded(
+                "eileen-apps",
+                span(3, None, names::APPS_CALL, 15, 40),
+                &json!({"traceparent": in_turn(turn).traceparent(9)}),
+            ),
+            capture(20, 30),
+        ];
+        assert_eq!(check(&spans), Vec::new(), "beside an apps call of the turn");
+        assert_eq!(remote(&spans, &spans[2]), Some(&spans[0]), "under the core's call");
+        // A speech segment of the turn first in the records, and the call two records below a
+        // worker.tool_use whose worker.session the ring dropped.
+        let spans = [
+            recorded(
+                "eileen-speech",
+                span(3, None, names::SPEECH_SEGMENT, 0, 300),
+                &json!({"turn_id": turn.to_string(), "traceparent": in_turn(turn).traceparent(1)}),
+            ),
+            span(12, Some(11), names::WORKER_TOOL_USE, 100, 200),
+            span(13, Some(12), names::DISPATCH_CALL, 110, 190),
+            SpanRecord { span_id: 3, ..span(14, Some(13), names::MCP_CALL, 120, 180) },
+            capture(130, 140),
+        ];
+        assert_eq!(check(&spans), Vec::new(), "beside a speech segment of the turn");
+        assert_eq!(remote(&spans, &spans[4]), Some(&spans[3]), "under the core's call again");
+        // A span the row does not allow, whose trace is unknown, is never taken: here a
+        // stt.stream whose speech.segment's record is missing.
+        let spans = [
+            recorded(
+                "eileen-speech",
+                SpanRecord { span_id: 3, ..span(4, Some(2), names::STT_STREAM, 10, 50) },
+                &json!({}),
+            ),
+            capture(20, 30),
+        ];
+        assert_eq!(remote(&spans, &spans[1]), None, "not the stt.stream");
+        assert_eq!(check(&spans), Vec::new(), "so the capture's parent is not among the records");
+    }
+
+    #[test]
     fn a_missing_parent_of_a_kind_the_row_never_allows_fails() {
         let turn = TurnId::from_parts(1_761_000_000_000, 1);
         let spans = [
@@ -583,7 +662,12 @@ mod tests {
                 name: names::DISPATCH_CALL.to_owned(),
                 parent: Some(names::MCP_CALL.to_owned())
             }],
-            "the walk up the loop gives up, so the mcp.call is not shown to be in the trace"
+            "the walk up the loop gives up"
+        );
+        assert_eq!(
+            remote(&spans, &spans[2]),
+            Some(&spans[1]),
+            "and the mcp.call, whose trace the records cannot show, takes the apps call"
         );
     }
 

@@ -5,7 +5,9 @@
 //! events of a track to nest, and async spans hop threads, so each track root (a span with no
 //! parent in its process, and every `turn`, `job` and `speak`) gets its own track with its
 //! descendants on it. A span whose `traceparent` names a span in another process gets a flow
-//! arrow from it, found as [`crate::schema`] finds a remote parent: by trace and span id.
+//! arrow from it, found as [`crate::schema`] finds a remote parent: by span id among the spans
+//! not shown to be in another trace, so the arrow stays when a ring dropped the parent's
+//! ancestors.
 
 use std::collections::BTreeMap;
 
@@ -87,13 +89,19 @@ pub fn to_chrome(spans: &[SpanRecord]) -> Value {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use eileen_contracts::ids::{TraceCtx, TurnId};
+    use eileen_contracts::ids::{JobId, TraceCtx, TurnId};
     use serde_json::{Value, json};
+    use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::to_chrome;
     use crate::names;
     use crate::record::{SpanRecord, remote_parent, sorted};
+    use crate::redact::Redactor;
+    use crate::ring::{Ring, RingLayer, parse_lines};
+    use crate::traceparent;
 
     fn span(
         process: &str,
@@ -201,5 +209,98 @@ mod tests {
             (&core["pid"], &call["tid"]),
             "the flow starts on the core's mcp.call, not on the speech segment"
         );
+    }
+
+    /// The `pid` that `trace` gives `process`.
+    fn pid_of<'a>(trace: &'a Value, process: &str) -> &'a Value {
+        let events = trace["traceEvents"].as_array().unwrap();
+        let named = |e: &&Value| e["name"] == "process_name" && e["args"]["name"] == process;
+        &events.iter().find(named).unwrap()["pid"]
+    }
+
+    #[test]
+    fn a_flow_starts_at_a_parent_whose_trace_is_unknown() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        // The core's mcp.call, two records below a worker.tool_use whose worker.session's
+        // record is missing, so the records cannot show its trace.
+        let core = [
+            span("eileen", 12, Some(11), names::WORKER_TOOL_USE, 0, 100),
+            span("eileen", 13, Some(12), names::DISPATCH_CALL, 5, 90),
+            span("eileen", 14, Some(13), names::MCP_CALL, 10, 80),
+        ];
+        let action = with_fields(
+            span("eileen-desktop", 1, None, names::DESKTOP_ACTION, 20, 30),
+            &json!({"traceparent": in_turn(turn).traceparent(14)}),
+        );
+        // An apps call of the turn that holds span id 14 too.
+        let apps = with_fields(
+            span("eileen-apps", 14, None, names::APPS_CALL, 15, 40),
+            &json!({"traceparent": in_turn(turn).traceparent(9)}),
+        );
+        for (case, clash) in [("alone", None), ("beside an apps call", Some(apps))] {
+            let spans: Vec<SpanRecord> =
+                core.iter().cloned().chain(clash).chain([action.clone()]).collect();
+            let trace = to_chrome(&spans);
+            let events = trace["traceEvents"].as_array().unwrap();
+            let flows: Vec<&Value> =
+                events.iter().filter(|e| e["ph"] == "s" || e["ph"] == "f").collect();
+            assert_eq!(flows.len(), 2, "{case}: one flow arrow");
+            let call =
+                events.iter().find(|e| e["ph"] == "X" && e["name"] == names::MCP_CALL).unwrap();
+            let start = flows.iter().find(|e| e["ph"] == "s").unwrap();
+            assert_eq!(
+                (&start["pid"], &start["tid"]),
+                (pid_of(&trace, "eileen"), &call["tid"]),
+                "{case}: from the core's mcp.call"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flow_starts_at_a_parent_whose_ancestors_a_ring_dropped() {
+        let job = JobId::from_parts(1_761_000_000_000, 2);
+        let ring = |process| Arc::new(Ring::new(process, 4_096, Duration::from_secs(600)));
+        let (core, desktop) = (ring("eileen"), ring("eileen-desktop"));
+        let in_core = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&core)));
+        let in_desktop = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&desktop)));
+        tracing::subscriber::with_default(in_core, || {
+            let job_span = tracing::info_span!(names::JOB, job_id = %job);
+            let _job = job_span.enter();
+            let session = tracing::info_span!(names::WORKER_SESSION, route = "claude");
+            let _session = session.enter();
+            for n in 0..100 {
+                tracing::debug!(n, "filler");
+            }
+            let tool_use = tracing::info_span!(names::WORKER_TOOL_USE, tool = "capture");
+            let _tool_use = tool_use.enter();
+            let dispatch = tracing::info_span!(names::DISPATCH_CALL, tool = "capture");
+            let _dispatch = dispatch.enter();
+            let call = tracing::info_span!(names::MCP_CALL);
+            let _call = call.enter();
+            let ctx = TraceCtx { turn: None, job: Some(job), call: None };
+            let parent = traceparent::current(&ctx).unwrap();
+            tracing::subscriber::with_default(in_desktop, || {
+                tracing::info_span!(names::DESKTOP_CAPTURE, traceparent = parent.as_str())
+                    .in_scope(|| {});
+            });
+        });
+        let redactor = Redactor::new();
+        let lines = [core.dump(&redactor), desktop.dump(&redactor)].concat();
+        let spans = parse_lines(String::from_utf8_lossy(&lines).lines()).spans;
+        let kept = |process: &str| -> Vec<&str> {
+            spans.iter().filter(|s| s.process == process).map(|s| s.name.as_str()).collect()
+        };
+        assert_eq!(
+            kept("eileen"),
+            [names::WORKER_TOOL_USE, names::DISPATCH_CALL, names::MCP_CALL],
+            "the core's ring dropped the job's and the session's opens"
+        );
+        assert_eq!(kept("eileen-desktop"), [names::DESKTOP_CAPTURE], "the capture");
+        let trace = to_chrome(&spans);
+        let events = trace["traceEvents"].as_array().unwrap();
+        let starts: Vec<&Value> = events.iter().filter(|e| e["ph"] == "s").collect();
+        assert_eq!(starts.len(), 1, "one flow arrow");
+        assert_eq!(events.iter().filter(|e| e["ph"] == "f").count(), 1, "with one end");
+        assert_eq!(&starts[0]["pid"], pid_of(&trace, "eileen"), "from the core");
     }
 }
