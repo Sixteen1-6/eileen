@@ -120,8 +120,15 @@ impl Bridge {
     /// meets the real buses.
     #[cfg(feature = "private-bus")]
     pub fn on_private_bus(bus: &crate::testing::PrivateBus) -> Result<Self, PlatformError> {
-        let address = bus.address();
-        Self::start_with(Source::Address(address.to_owned()), Source::Address(address.to_owned()))
+        Self::on_addresses(bus.address(), bus.address())
+    }
+
+    /// Starts a bridge whose session bus is at the address `session` and whose system bus is at
+    /// `system`, for tests whose two buses differ: two private buses, or one and a
+    /// [`SilentBus`](crate::testing::SilentBus) that never answers.
+    #[cfg(feature = "private-bus")]
+    pub fn on_addresses(session: &str, system: &str) -> Result<Self, PlatformError> {
+        Self::start_with(Source::Address(session.to_owned()), Source::Address(system.to_owned()))
     }
 
     /// Starts the thread, its buses at `session` and `system`.
@@ -371,7 +378,7 @@ impl Lazy {
 enum Source {
     Session,
     System,
-    /// A private bus's address, for tests.
+    /// A test bus's address: a private bus's, or a silent one's.
     #[cfg(feature = "private-bus")]
     Address(String),
 }
