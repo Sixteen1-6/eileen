@@ -533,6 +533,125 @@ mod tests {
     }
 
     #[test]
+    fn a_sidecar_root_is_in_the_trace_its_traceparent_names() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        let other = TurnId::from_parts(1_761_000_000_000, 2);
+        // An apps call has no turn_id or job_id field, so only its traceparent puts it in a
+        // trace. A capture in a third process names its span id, which no row allows.
+        let records = |apps_turn: TurnId| {
+            [
+                recorded(
+                    "eileen-apps",
+                    span(5, None, names::APPS_CALL, 10, 50),
+                    &json!({"traceparent": in_turn(apps_turn).traceparent(3)}),
+                ),
+                recorded(
+                    "eileen-desktop",
+                    span(1, None, names::DESKTOP_CAPTURE, 20, 30),
+                    &json!({"traceparent": in_turn(turn).traceparent(5)}),
+                ),
+            ]
+        };
+        let spans = records(turn);
+        assert_eq!(remote(&spans, &spans[1]), Some(&spans[0]), "in the capture's trace");
+        assert_eq!(
+            check(&spans),
+            [Violation::WrongParent {
+                name: names::DESKTOP_CAPTURE.to_owned(),
+                parent: Some(names::APPS_CALL.to_owned())
+            }],
+            "so the capture sits under it"
+        );
+        let spans = records(other);
+        assert_eq!(remote(&spans, &spans[1]), None, "in another turn's trace");
+    }
+
+    #[test]
+    fn a_call_of_another_turn_holding_the_span_id_is_not_a_remote_parent() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        let other = TurnId::from_parts(1_761_000_000_000, 2);
+        // The capture's own call closed before the sidecar opened the capture (its deadline
+        // passed), and a call of another turn took its span id: the walk up from that call
+        // reaches its turn without meeting the capture's trace.
+        let spans = [
+            recorded(
+                "eileen",
+                span(1, None, names::TURN, 0, 100),
+                &json!({"turn_id": other.to_string()}),
+            ),
+            span(2, Some(1), names::BRAIN_TURN, 1, 90),
+            span(4, Some(2), names::DISPATCH_CALL, 5, 85),
+            SpanRecord { span_id: 3, ..span(5, Some(4), names::MCP_CALL, 10, 60) },
+            recorded(
+                "eileen-desktop",
+                span(1, None, names::DESKTOP_CAPTURE, 20, 30),
+                &json!({"traceparent": in_turn(turn).traceparent(3)}),
+            ),
+        ];
+        assert_eq!(remote(&spans, &spans[4]), None, "another turn's call");
+        assert_eq!(check(&spans), Vec::new(), "so the capture's parent is not among the records");
+    }
+
+    #[test]
+    fn a_span_of_the_childs_own_process_is_not_its_remote_parent() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        // The desktop sidecar's own action holds the span id that the capture's traceparent
+        // names, open at the capture's start and in its trace; the core's records are gone.
+        let spans = [
+            recorded(
+                "eileen-desktop",
+                SpanRecord { span_id: 3, ..span(1, None, names::DESKTOP_ACTION, 10, 50) },
+                &json!({"traceparent": in_turn(turn).traceparent(7)}),
+            ),
+            recorded(
+                "eileen-desktop",
+                span(2, None, names::DESKTOP_CAPTURE, 20, 30),
+                &json!({"traceparent": in_turn(turn).traceparent(3)}),
+            ),
+        ];
+        assert_eq!(remote(&spans, &spans[1]), None, "not a span of its own process");
+        assert_eq!(check(&spans), Vec::new(), "so its parent is not among the records");
+    }
+
+    #[test]
+    fn a_remote_parent_is_open_at_the_childs_start() {
+        let turn = TurnId::from_parts(1_761_000_000_000, 1);
+        // Three tries of one dispatch.call held span id 3 one after another: one closed before
+        // the capture opened, one was open, and one opened after.
+        let calls = [
+            SpanRecord { span_id: 3, ..span(5, Some(4), names::MCP_CALL, 10, 20) },
+            SpanRecord { span_id: 3, ..span(6, Some(4), names::MCP_CALL, 30, 60) },
+            SpanRecord { span_id: 3, ..span(7, Some(4), names::MCP_CALL, 70, 80) },
+        ];
+        let capture = recorded(
+            "eileen-desktop",
+            span(1, None, names::DESKTOP_CAPTURE, 40, 50),
+            &json!({"traceparent": in_turn(turn).traceparent(3)}),
+        );
+        let records = |kept: &[usize]| -> Vec<SpanRecord> {
+            [
+                recorded(
+                    "eileen",
+                    span(1, None, names::TURN, 0, 100),
+                    &json!({"turn_id": turn.to_string()}),
+                ),
+                span(2, Some(1), names::BRAIN_TURN, 1, 90),
+                span(4, Some(2), names::DISPATCH_CALL, 5, 85),
+            ]
+            .into_iter()
+            .chain(kept.iter().map(|&n| calls[n].clone()))
+            .chain([capture.clone()])
+            .collect()
+        };
+        assert_eq!(remote(&records(&[0, 1, 2]), &capture), Some(&calls[1]), "the open one");
+        assert_eq!(
+            remote(&records(&[0, 2]), &capture),
+            None,
+            "neither the one that had closed nor the one that had not opened"
+        );
+    }
+
+    #[test]
     fn a_parent_missing_from_the_records_is_not_a_misplaced_root() {
         assert_eq!(
             check(&[span(2, Some(1), names::ROUTER_DECIDE, 5, 6)]),
