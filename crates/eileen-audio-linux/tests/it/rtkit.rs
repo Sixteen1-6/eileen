@@ -40,6 +40,15 @@ pub(super) enum Call {
     Read(&'static str),
 }
 
+/// The call the fake holds until its gate opens, and the gate.
+#[derive(Debug, Clone)]
+pub(super) enum Gate {
+    /// `MakeThreadRealtime`.
+    Realtime(Arc<Notify>),
+    /// `MakeThreadHighPriority`.
+    HighPriority(Arc<Notify>),
+}
+
 /// The limits the fake reports.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Limits {
@@ -64,8 +73,8 @@ struct Record {
 }
 
 /// A fake rtkit that reports each `MakeThread` call, and each property read once asked to. It
-/// answers `MakeThreadRealtime` once its gate, if it has one, opens, and refuses either call as
-/// its switches say.
+/// answers the call its gate holds, if it has one, once the gate opens, and refuses either call
+/// as its switches say.
 #[derive(Debug, Clone)]
 pub(super) struct FakeRtkit {
     limits: Arc<Mutex<Limits>>,
@@ -73,14 +82,14 @@ pub(super) struct FakeRtkit {
     pub(super) refuse_high_priority: Arc<AtomicBool>,
     /// Reports each property read as a [`Call::Read`], after its garbage collection.
     pub(super) report_reads: Arc<AtomicBool>,
-    gate: Option<Arc<Notify>>,
+    gate: Option<Gate>,
     calls: mpsc::Sender<Call>,
     records: Arc<Mutex<BTreeMap<u64, Record>>>,
 }
 
 impl FakeRtkit {
     /// A fake reporting `limits`, behind `gate`, with the receiver of its reports.
-    pub(super) fn new(limits: Limits, gate: Option<Arc<Notify>>) -> (Self, mpsc::Receiver<Call>) {
+    pub(super) fn new(limits: Limits, gate: Option<Gate>) -> (Self, mpsc::Receiver<Call>) {
         let (calls, reports) = mpsc::channel(16);
         let fake = Self {
             limits: Arc::new(Mutex::new(limits)),
@@ -154,7 +163,7 @@ impl FakeRtkit {
     async fn make_thread_realtime(&self, thread: u64, priority: u32) -> zbus::fdo::Result<()> {
         self.collect();
         let _ignored = self.calls.send(Call::Realtime(thread, priority)).await;
-        if let Some(gate) = &self.gate {
+        if let Some(Gate::Realtime(gate)) = &self.gate {
             gate.notified().await;
         }
         let limits = self.limits();
@@ -178,6 +187,9 @@ impl FakeRtkit {
     ) -> zbus::fdo::Result<()> {
         self.collect();
         let _ignored = self.calls.send(Call::HighPriority(thread, nice_level)).await;
+        if let Some(Gate::HighPriority(gate)) = &self.gate {
+            gate.notified().await;
+        }
         if self.refuse_high_priority.load(Ordering::SeqCst)
             || nice_level < self.limits().min_nice_level
         {
@@ -385,7 +397,7 @@ async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimu
 async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     let bus = PrivateBus::start();
     let gate = Arc::new(Notify::new());
-    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Arc::clone(&gate)));
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = RealtimeKit::new(&bus.connect_within(SHORT).await);
     let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;

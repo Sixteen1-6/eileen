@@ -29,6 +29,7 @@
 //!   start `rtkit-daemon`), needs no elevation, and changes only the threads that register.
 //! - A request that rtkit may still grant after its call gave up, past the bridge's deadline or
 //!   the method timeout, is reverted behind it, and a ticket reverts its thread when it drops.
+//!   The promoter keeps the bridge until it has reverted, so no handle's drop cuts that short.
 //!
 //! # Boundaries
 //!

@@ -22,8 +22,12 @@
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
 //! that, the task finishes on its own. The ticket keeps a handle to the bridge, so a registration
-//! outlives the [`LinuxAudioEndpoints`] that made it. A ticket is not `Send`, and registering on
-//! the bridge's own thread is refused, so no ticket is ever dropped there.
+//! outlives the [`LinuxAudioEndpoints`] that made it, and the task keeps one until it has
+//! reverted, so no drop of the bridge's last other handle (the endpoints before a late promotion
+//! answers, or a ticket whose wait ended first) ends the bridge's thread under it. The task's
+//! handle, when it is the last, drops on the bridge's own thread, which then ends on its own. A
+//! ticket is not `Send`, and registering on the bridge's own thread is refused, so no ticket is
+//! ever dropped there.
 
 use std::time::Duration;
 
@@ -37,7 +41,7 @@ use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadI
 
 /// How long dropping a ticket waits for the revert, at most. rtkit answers in milliseconds, and
 /// a drop should not stall the audio thread for a call's whole deadline; past it, the promoter
-/// task reverts on its own.
+/// task reverts on its own, since it keeps the bridge until it has.
 pub const REVERT_WAIT: Duration = Duration::from_secs(1);
 
 /// What the calls' errors name.
@@ -118,9 +122,10 @@ impl AudioEndpoints for LinuxAudioEndpoints {
         let thread = ThreadId::current();
         let nice = thread.nice()?;
         let policy = self.settings.policy;
+        let bridge = self.bridge.clone();
         let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
-            drop(tokio::task::spawn_local(promoter(buses, thread, nice, policy, answer)));
+            drop(tokio::task::spawn_local(promoter(bridge, buses, thread, nice, policy, answer)));
             // Cancelled, the job drops `answered`, which makes the promoter revert what it got.
             answered.await.unwrap_or_else(|_gone| {
                 Err(PlatformError::Io { what: REGISTER, detail: PROMOTER_GONE.to_owned() })
@@ -132,8 +137,10 @@ impl AudioEndpoints for LinuxAudioEndpoints {
 }
 
 /// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, hands the
-/// promotion over ([`hand_over`]), then reverts `thread` and answers the ask, if one came.
+/// promotion over ([`hand_over`]), then reverts `thread` and answers the ask, if one came. It
+/// keeps `bridge` until it has reverted, so the bridge's thread, which runs it, lives as long.
 async fn promoter(
+    bridge: Bridge,
     buses: Buses,
     thread: ThreadId,
     nice: i32,
@@ -157,6 +164,9 @@ async fn promoter(
         Ok(system) => RealtimeKit::new(&system).revert(thread, restore).await,
         Err(error) => Err(error),
     };
+    // Before the outcome goes out, so a ticket still waiting for it holds the last handle, if
+    // this was the other one, and its drop ends the bridge's thread and waits for it.
+    drop(bridge);
     if let Some(reverted) = asked {
         let _ignored = reverted.send(outcome);
     }

@@ -3,6 +3,7 @@
 //! blocking; the fake runs on a runtime of its own, whose workers serve it meanwhile.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eileen_audio_linux::{LinuxAudioEndpoints, LinuxAudioSettings};
@@ -11,7 +12,9 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{AudioEndpoints, Deadline, PlatformError, StreamCategory};
 use tokio::sync::Notify;
 
-use crate::rtkit::{Call, DEFAULTS, FakeRtkit, Limits, RTKIT, RTKIT_PATH, this_nice, this_thread};
+use crate::rtkit::{
+    Call, DEFAULTS, FakeRtkit, Gate, Limits, RTKIT, RTKIT_PATH, this_nice, this_thread,
+};
 
 /// The deadline of a registration whose fake holds its answer: it passes whatever its length,
 /// and a short one keeps the test short.
@@ -101,7 +104,7 @@ fn a_ticket_reverts_a_thread_whose_nice_level_is_below_the_minimum_to_the_minimu
 fn a_promotion_answered_after_the_deadline_is_reverted() {
     let bus = PrivateBus::start();
     let gate = Arc::new(Notify::new());
-    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Arc::clone(&gate)));
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
     let _fakes = Fakes::serve(&bus, fake);
     let endpoints = endpoints_on(&bus, SHORT);
     let (thread, nice) = (this_thread(), this_nice());
@@ -117,6 +120,55 @@ fn a_promotion_answered_after_the_deadline_is_reverted() {
         Some(Call::HighPriority(thread, nice)),
         "the promotion rtkit granted after the call gave up is reverted at once"
     );
+}
+
+#[test]
+fn a_late_promotion_is_reverted_after_the_endpoints_drop() {
+    let bus = PrivateBus::start();
+    let gate = Arc::new(Notify::new());
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
+    let _fakes = Fakes::serve(&bus, fake);
+    let endpoints = endpoints_on(&bus, SHORT);
+    let (thread, nice) = (this_thread(), this_nice());
+    assert_eq!(
+        endpoints.register_audio_thread().unwrap_err(),
+        PlatformError::DeadlineExceeded { call: "audio thread registration" },
+        "rtkit has not answered"
+    );
+    assert_eq!(calls.blocking_recv(), Some(Call::Realtime(thread, 10)), "the request it holds");
+    // The bridge's last handle but the promoter's, which keeps the bridge's thread running.
+    drop(endpoints);
+    gate.notify_one();
+    assert_eq!(
+        calls.blocking_recv(),
+        Some(Call::HighPriority(thread, nice)),
+        "the promotion rtkit granted after the call gave up is reverted all the same"
+    );
+}
+
+#[test]
+fn a_ticket_that_holds_the_bridges_last_handle_leaves_a_slow_revert_to_finish() {
+    let bus = PrivateBus::start();
+    let gate = Arc::new(Notify::new());
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::HighPriority(Arc::clone(&gate))));
+    let _fakes = Fakes::serve(&bus, fake.clone());
+    let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE);
+    let (thread, nice) = (this_thread(), lower_priority());
+    let ticket = endpoints.register_audio_thread().unwrap();
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time");
+    drop(endpoints);
+    fake.report_reads.store(true, Ordering::SeqCst);
+    // Waits REVERT_WAIT for the revert the gate holds, then drops the bridge's last handle but
+    // the promoter's.
+    drop(ticket);
+    gate.notify_one();
+    assert_eq!(calls.blocking_recv(), Some(Call::HighPriority(thread, nice)), "the revert");
+    assert_eq!(
+        calls.blocking_recv(),
+        Some(Call::Read("RTTimeUSecMax")),
+        "and the read after it, which only a promoter that outlived the ticket's wait sends"
+    );
+    assert_eq!(fake.resume(), [], "so the thread is off real-time and forgotten");
 }
 
 #[test]
