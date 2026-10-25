@@ -95,3 +95,20 @@ impl MediaSessions for LinuxMedia {
         self.bridge.watch(SUBSCRIBE, self.deadline, open, each)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
+
+    use super::LinuxMedia;
+
+    // No fake can hold a listing past the default deadline without a timer, since the listing
+    // reads the players at once: what `new` gives is checked here, and the integration tests
+    // check that a listing waits the deadline it is given.
+    #[test]
+    fn new_waits_the_default_deadline() {
+        // The bridge connects nothing until a call needs a bus.
+        let media = LinuxMedia::new(Bridge::start().unwrap());
+        assert_eq!(media.deadline, DEFAULT_DEADLINE, "as for any trait method that takes none");
+    }
+}
