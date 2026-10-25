@@ -1,9 +1,12 @@
 //! Keeping the session awake. Through the shell, on logind: its lock is listed while the request
 //! lives, as `systemd-inhibit --list` shows it, and gone once the request drops; the trait's
 //! `PowerRequest` does not say what holds. Through the client, `LinuxPowerRequest`, which does:
-//! the session has no GNOME session manager, so the desktop's hold is the Inhibit portal's (its
-//! GTK backend then refuses suspend with idle and takes idle alone, which the client asks next),
-//! and releasing the request closes the portal's.
+//! with no GNOME session manager in the session, the desktop's request goes to the Inhibit
+//! portal, whose GTK backend refuses suspend with idle and takes idle alone, which the client asks
+//! next. Taking it is all the portal's `Response` 0 says: the backend answers before its own call
+//! to `org.freedesktop.ScreenSaver` returns (xdg-desktop-portal-gtk's `handle_inhibit_fdo`), and
+//! in the lane that call fails, since nothing owns the name. So the test checks the portal's
+//! protocol, not that the screen stays on. Releasing the request closes the portal's.
 
 use std::time::Duration;
 
@@ -79,7 +82,7 @@ fn logind_lists_the_lock_until_the_request_drops() {
 }
 
 #[test]
-fn the_desktop_hold_comes_from_the_inhibit_portal() {
+fn the_inhibit_portal_takes_the_desktop_request() {
     let session = Session::new();
     let system = session.system();
     session.block_on(async {
@@ -92,7 +95,7 @@ fn the_desktop_hold_comes_from_the_inhibit_portal() {
         assert_eq!(
             request.desktop(),
             Some(DesktopHolder::Portal),
-            "with no GNOME session manager on the bus, the portal holds: {request:?}"
+            "with no GNOME session manager, the portal took the request (Response 0): {request:?}"
         );
         assert!(request.missed().is_empty(), "neither holder missed: {request:?}");
         assert_eq!(request.release().await, Ok(()), "the portal answered the request's Close");
