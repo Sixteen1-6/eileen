@@ -65,7 +65,9 @@
 //!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
 //!   user makes later in the desktop's settings does not yet. The dictation key's press and
 //!   release reach each `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`;
-//!   `PhysicalActivity` never does, since no source of it is chosen yet.
+//!   `PhysicalActivity` never does, since no source of it is chosen yet. Each press counts once,
+//!   though GNOME repeats `Activated` while a key is held, and a dictation key still down when
+//!   its session ends is released then.
 //! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
 //!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
 //!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`.
@@ -93,10 +95,10 @@
 //! - The events sink and each `watch_input` sink run on the bridge's thread: one that blocks
 //!   stalls every call, and one that calls the shell is refused.
 //! - A portal that restarts loses the session without a word, so the shortcuts stay dead until
-//!   a changed set is bound in a new session; one that closes the session ends the holder, and
-//!   the next call starts one that binds that call's shortcut alone. Either way `watch_input`
-//!   hears nothing more, which nothing reports yet, and a dictation key held then never
-//!   reports its release. Following the portal is a follow-up.
+//!   a changed set is bound in a new session, and a dictation key held then never reports its
+//!   release; one that closes the session ends the holder, and the next call starts one that
+//!   binds that call's shortcut alone. Either way `watch_input` hears nothing more, which
+//!   nothing reports yet. Following the portal is a follow-up.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 

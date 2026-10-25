@@ -641,6 +641,86 @@ fn hotkeys_and_the_dictation_key_are_bound_together_and_report_presses() {
     assert_eq!(input.blocking_recv(), up, "and its release");
 }
 
+/// The next `count` hotkey presses `events` reports, passing over the desktop's answers.
+fn presses(events: &mut mpsc::Receiver<LinuxShellEvent>, count: usize) -> Vec<LinuxShellEvent> {
+    let mut presses = Vec::new();
+    while presses.len() < count {
+        let event = events.blocking_recv().unwrap();
+        if let LinuxShellEvent::Hotkey(_) = event {
+            presses.push(event);
+        }
+    }
+    presses
+}
+
+#[test]
+fn a_held_key_is_one_press_and_one_release_though_the_desktop_repeats_it() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let bind = bind_of(&mut reports, 3);
+    let send = |member: &str, id: &str| {
+        fakes.runtime.block_on(press(&portal, &bind.caller, member, &bind.session, id));
+    };
+    // GNOME sends `Activated` again for each repeat of a held key, then `Deactivated` once.
+    for member in ["Activated", "Activated", "Activated", "Deactivated", "Activated", "Deactivated"] {
+        send(member, "dictation");
+    }
+    let down = ShellInputEvent::DictationKey(KeyEdge::Down);
+    let up = ShellInputEvent::DictationKey(KeyEdge::Up);
+    let edges: Vec<_> = (0..4).map(|_| input.blocking_recv().unwrap()).collect();
+    assert_eq!(edges, [down, up, down, up], "a press and a release for each of two holds");
+    let held = [("Activated", "hotkey-1"), ("Activated", "hotkey-1"), ("Activated", "hotkey-1")];
+    let then = [("Activated", "hotkey-2"), ("Deactivated", "hotkey-2"), ("Deactivated", "hotkey-1")];
+    for (member, id) in held.into_iter().chain(then).chain([("Activated", "hotkey-1")]) {
+        send(member, id);
+    }
+    assert_eq!(
+        presses(&mut events, 3),
+        [LinuxShellEvent::Hotkey(1), LinuxShellEvent::Hotkey(2), LinuxShellEvent::Hotkey(1)],
+        "one press for a hotkey held down, none for a release, and one for the next press"
+    );
+}
+
+#[test]
+fn a_dictation_key_held_as_its_session_ends_is_released() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let first = bind_of(&mut reports, 2);
+    let send = |bind: &Bind, member: &str| {
+        fakes.runtime.block_on(press(&portal, &bind.caller, member, &bind.session, "dictation"));
+    };
+    send(&first, "Activated");
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the key went down");
+    // A changed set: the first session closes, and its Deactivated can no longer come.
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "released as its session ended");
+    let second = bind_of(&mut reports, 3);
+    send(&second, "Activated");
+    assert_eq!(input.blocking_recv(), down, "and down again, a new press in the new session");
+}
+
 #[test]
 fn a_hotkey_added_while_a_bind_waits_rebinds_everything_in_a_new_session() {
     let bus = PrivateBus::start();

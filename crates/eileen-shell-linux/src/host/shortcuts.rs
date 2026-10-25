@@ -2,7 +2,7 @@
 //! thread that keeps Eileen's shortcuts in a `GlobalShortcuts` portal session ([`super`]'s doc,
 //! "Hotkeys and the dictation key"), with what the shell's events and settings name them by.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -45,7 +45,8 @@ const CLOSED: &str = "the portal closed it";
 /// [`LinuxShell::with_events`](super::LinuxShell::with_events).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinuxShellEvent {
-    /// The hotkey `register_hotkey` was given this ID for went down.
+    /// The hotkey `register_hotkey` was given this ID for went down: once for each press, though
+    /// GNOME repeats its `Activated` while the key is held.
     Hotkey(u32),
     /// The shortcuts the desktop bound, as a bind's answer, each with its trigger. A change the
     /// user makes later in the desktop's settings is not reported yet.
@@ -215,6 +216,7 @@ async fn hold(buses: Buses, holder: Holder) {
         };
         let served = serve(&session, &mut events, &mut asks, &mut wanted, &report, again).await;
         drop(events);
+        wanted.session_ended();
         let _ignored = session.close().await;
         if let Err(ended) = served {
             return refuse(asks, &ended);
@@ -279,13 +281,16 @@ async fn serve(
     }
 }
 
-/// The set the holder binds, kept across its sessions, and where the dictation key's edges go.
+/// The set the holder binds, kept across its sessions, where the dictation key's edges go, and
+/// which of Eileen's shortcuts are down in the session.
 #[derive(Debug, Default)]
 struct Wanted {
     /// The shortcuts, by their portal IDs.
     shortcuts: BTreeMap<String, Shortcut>,
     /// One sender for each `watch_input` that is still subscribed.
     listeners: Vec<mpsc::Sender<KeyEdge>>,
+    /// The shortcuts that went down in this session and have not come up.
+    down: BTreeSet<ShortcutId>,
 }
 
 impl Wanted {
@@ -301,28 +306,38 @@ impl Wanted {
     }
 
     /// Hands `event`, the session's next, on: a hotkey's press to `report`, and the dictation
-    /// key's edges to each listener. A hotkey's release says nothing. `Err` once the session has
-    /// ended, the portal having closed it or its signals having stopped, which the asks still
-    /// waiting are answered with.
+    /// key's edges to each listener. Only a change is an edge: GNOME repeats `Activated` while a
+    /// key is held, so one that is down already says nothing, nor does a hotkey's release. `Err`
+    /// once the session has ended, the portal having closed it or its signals having stopped,
+    /// which the asks still waiting are answered with.
     fn hand_on(
         &mut self,
         event: Option<ShortcutEvent>,
         report: &impl Fn(LinuxShellEvent),
     ) -> Result<(), DbusError> {
-        match event.ok_or_else(|| ended(SESSION, "its signals ended"))? {
-            ShortcutEvent::Activated(id) => match ShortcutId::of(&id) {
-                Some(ShortcutId::Hotkey(number)) => report(LinuxShellEvent::Hotkey(number)),
-                Some(ShortcutId::Dictation) => self.send(KeyEdge::Down),
-                None => {}
-            },
-            ShortcutEvent::Deactivated(id) => {
-                if ShortcutId::of(&id) == Some(ShortcutId::Dictation) {
-                    self.send(KeyEdge::Up);
-                }
-            }
+        let (id, down) = match event.ok_or_else(|| ended(SESSION, "its signals ended"))? {
+            ShortcutEvent::Activated(id) => (id, true),
+            ShortcutEvent::Deactivated(id) => (id, false),
             ShortcutEvent::Closed => return Err(ended(SESSION, CLOSED)),
+        };
+        let Some(shortcut) = ShortcutId::of(&id) else { return Ok(()) };
+        let changed = if down { self.down.insert(shortcut) } else { self.down.remove(&shortcut) };
+        match shortcut {
+            _ if !changed => {}
+            ShortcutId::Hotkey(number) if down => report(LinuxShellEvent::Hotkey(number)),
+            ShortcutId::Hotkey(_) => {}
+            ShortcutId::Dictation => self.send(if down { KeyEdge::Down } else { KeyEdge::Up }),
         }
         Ok(())
+    }
+
+    /// Ends the session's part: a dictation key still down is released, since the session's
+    /// `Deactivated` can no longer come, and the next session starts with every key up.
+    fn session_ended(&mut self) {
+        if self.down.remove(&ShortcutId::Dictation) {
+            self.send(KeyEdge::Up);
+        }
+        self.down.clear();
     }
 
     /// Sends `edge` to each listener, dropping one that is full or gone.
