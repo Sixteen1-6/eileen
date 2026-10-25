@@ -1,0 +1,29 @@
+[package]
+name = "eileen-supervisor"
+description = "How Eileen starts every child: a kill-on-close Job Object, no console window, stderr into tracing, deadlines, heartbeats, bounded restarts, and the guard's detached spawn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "all"
+owns = "WP0"
+unsafe = "ffi"
+
+[dependencies]
+eileen-rt.workspace = true
+eileen-trace.workspace = true
+# process-group gives the Unix side the same kill-the-whole-tree behaviour as the Job Object.
+process-wrap = { workspace = true, features = ["process-group"] }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true

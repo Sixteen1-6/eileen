@@ -1,0 +1,382 @@
+//! Apps: COM hosts, the app index and launch, media sessions and recent files.
+
+use eileen_contracts::desktop::{MediaState, WindowRef};
+use eileen_contracts::ids::{Personal, WallTime};
+use eileen_contracts::tools::apps::{ExplorerOp, FileKind, MediaAction, OfficeOp, PhotoshopOp};
+
+use crate::{Deadline, PlatformError, RgbaImage, Subscription};
+
+/// An operation for one app's host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppOp {
+    /// Word or Excel.
+    Office(OfficeOp),
+    /// File Explorer.
+    Explorer(ExplorerOp),
+    /// Photoshop.
+    Photoshop(PhotoshopOp),
+}
+
+/// A running app's process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppProcess {
+    /// Its process id.
+    pub pid: u32,
+    /// Its version, when the host can read it.
+    pub version: Option<String>,
+}
+
+/// One scriptable app (`eileen-apps-win`: Word, Excel, Explorer and Photoshop over COM, and
+/// the Resolve process gate; Linux later: per app).
+pub trait AppHost: Send + Sync {
+    /// The app's name, for example `"word"`.
+    fn app(&self) -> &'static str;
+    /// Its process and version, or `None` when it is not running.
+    fn running(&self) -> Result<Option<AppProcess>, PlatformError>;
+    /// Runs `op` within `deadline`.
+    fn call(&self, op: &AppOp, deadline: Deadline) -> Result<serde_json::Value, PlatformError>;
+}
+
+/// How an app is installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppKind {
+    /// A packaged app, started by its AUMID.
+    Packaged,
+    /// A classic desktop app, started from its path or shortcut.
+    Desktop,
+}
+
+/// One app in the index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppEntry {
+    /// Its AUMID, or its executable's path for a desktop app.
+    pub id: String,
+    /// The name the Start menu shows.
+    pub name: String,
+    /// How it is installed.
+    pub kind: AppKind,
+    /// Where its executable or shortcut lives, which may be under the user's profile.
+    pub path: Option<Personal<String>>,
+}
+
+/// The app index and launch.
+pub trait Apps: Send + Sync {
+    /// Every app the Start menu knows.
+    fn index(&self) -> Result<Vec<AppEntry>, PlatformError>;
+    /// Starts `app` through the shell; returns its process id.
+    fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError>;
+    /// The main window of `pid`, waiting up to `deadline` for it to appear.
+    fn main_window(&self, pid: u32, deadline: Deadline)
+    -> Result<Option<WindowRef>, PlatformError>;
+    /// Opens a web address in the default browser.
+    fn open_url(&self, url: &str) -> Result<(), PlatformError>;
+    /// Opens a URI (a settings page, a deep link) with its registered handler.
+    fn open_uri(&self, uri: &str) -> Result<(), PlatformError>;
+    /// Opens a file or folder, with `with_app` when given.
+    fn open_path(&self, path: &str, with_app: Option<&AppEntry>) -> Result<(), PlatformError>;
+}
+
+/// Media sessions (`eileen-apps-win`: SMTC; Linux later: MPRIS).
+pub trait MediaSessions: Send + Sync {
+    /// Every session the OS lists.
+    fn sessions(&self) -> Result<Vec<MediaState>, PlatformError>;
+    /// Sends `action` to `session`.
+    fn control(&self, session: &str, action: &MediaAction) -> Result<(), PlatformError>;
+    /// Calls `sink` with every change.
+    fn subscribe(
+        &self,
+        sink: Box<dyn Fn(MediaState) + Send + Sync>,
+    ) -> Result<Subscription, PlatformError>;
+}
+
+/// A recently used file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentItem {
+    /// Its path.
+    pub path: Personal<String>,
+    /// The app that opened it, when known.
+    pub app: Option<String>,
+    /// What kind of file.
+    pub kind: Option<FileKind>,
+    /// When it was last opened.
+    pub opened_at: WallTime,
+}
+
+/// Recent files.
+pub trait RecentSources: Send + Sync {
+    /// The most recent `limit` items, newest first.
+    fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError>;
+    /// Calls `sink` for every file opened or saved under `roots`.
+    fn watch(
+        &self,
+        roots: &[String],
+        sink: Box<dyn Fn(RecentItem) + Send + Sync>,
+    ) -> Result<Subscription, PlatformError>;
+    /// The shell's thumbnail of `item`, at most `edge_px` on its longer side.
+    fn thumbnail(
+        &self,
+        item: &RecentItem,
+        edge_px: u32,
+    ) -> Result<Option<RgbaImage>, PlatformError>;
+}
+
+#[cfg(any(test, feature = "fake"))]
+pub use fake::{FakeAppHost, FakeApps, FakeMediaSessions, FakeRecentSources};
+
+#[cfg(any(test, feature = "fake"))]
+mod fake {
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::Mutex;
+
+    use eileen_contracts::desktop::{MediaState, WindowRef};
+    use eileen_contracts::tools::apps::MediaAction;
+
+    use super::{
+        AppEntry, AppHost, AppOp, AppProcess, Apps, MediaSessions, RecentItem, RecentSources,
+    };
+    use crate::fake_util::{Sinks, lock};
+    use crate::{Deadline, PlatformError, RgbaImage, Subscription};
+
+    /// A host that answers queued replies and records every operation.
+    #[derive(Debug)]
+    pub struct FakeAppHost {
+        app: &'static str,
+        process: Mutex<Option<AppProcess>>,
+        replies: Mutex<VecDeque<Result<serde_json::Value, PlatformError>>>,
+        calls: Mutex<Vec<AppOp>>,
+    }
+
+    impl FakeAppHost {
+        /// A host for `app`, not running.
+        #[must_use]
+        pub const fn new(app: &'static str) -> Self {
+            Self {
+                app,
+                process: Mutex::new(None),
+                replies: Mutex::new(VecDeque::new()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Sets the app's process (`None`: not running).
+        pub fn set_running(&self, process: Option<AppProcess>) {
+            *lock(&self.process) = process;
+        }
+
+        /// Queues the answer to the next call.
+        pub fn push_reply(&self, reply: Result<serde_json::Value, PlatformError>) {
+            lock(&self.replies).push_back(reply);
+        }
+
+        /// The operations called, in order.
+        #[must_use]
+        pub fn calls(&self) -> Vec<AppOp> {
+            lock(&self.calls).clone()
+        }
+    }
+
+    impl AppHost for FakeAppHost {
+        fn app(&self) -> &'static str {
+            self.app
+        }
+
+        fn running(&self) -> Result<Option<AppProcess>, PlatformError> {
+            Ok(lock(&self.process).clone())
+        }
+
+        fn call(&self, op: &AppOp, _: Deadline) -> Result<serde_json::Value, PlatformError> {
+            lock(&self.calls).push(op.clone());
+            lock(&self.replies)
+                .pop_front()
+                .unwrap_or(Err(PlatformError::Unavailable { what: "app reply" }))
+        }
+    }
+
+    /// An app index in memory; launches get process ids from 1000 up.
+    #[derive(Debug, Default)]
+    pub struct FakeApps {
+        entries: Mutex<Vec<AppEntry>>,
+        windows: Mutex<BTreeMap<u32, WindowRef>>,
+        launched: Mutex<Vec<String>>,
+        opened: Mutex<Vec<String>>,
+    }
+
+    impl FakeApps {
+        /// Sets the index.
+        pub fn set_index(&self, entries: Vec<AppEntry>) {
+            *lock(&self.entries) = entries;
+        }
+
+        /// Gives `pid` a main window.
+        pub fn set_window(&self, pid: u32, window: WindowRef) {
+            lock(&self.windows).insert(pid, window);
+        }
+
+        /// The ids launched, in order.
+        #[must_use]
+        pub fn launched(&self) -> Vec<String> {
+            lock(&self.launched).clone()
+        }
+
+        /// The URLs, URIs and paths opened, in order.
+        #[must_use]
+        pub fn opened(&self) -> Vec<String> {
+            lock(&self.opened).clone()
+        }
+    }
+
+    impl Apps for FakeApps {
+        fn index(&self) -> Result<Vec<AppEntry>, PlatformError> {
+            Ok(lock(&self.entries).clone())
+        }
+
+        fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError> {
+            let count = {
+                let mut launched = lock(&self.launched);
+                launched.push(app.id.clone());
+                launched.len()
+            };
+            Ok(1000_u32.saturating_add(u32::try_from(count).unwrap_or(u32::MAX)))
+        }
+
+        fn main_window(&self, pid: u32, _: Deadline) -> Result<Option<WindowRef>, PlatformError> {
+            Ok(lock(&self.windows).get(&pid).copied())
+        }
+
+        fn open_url(&self, url: &str) -> Result<(), PlatformError> {
+            lock(&self.opened).push(url.to_owned());
+            Ok(())
+        }
+
+        fn open_uri(&self, uri: &str) -> Result<(), PlatformError> {
+            lock(&self.opened).push(uri.to_owned());
+            Ok(())
+        }
+
+        fn open_path(&self, path: &str, _: Option<&AppEntry>) -> Result<(), PlatformError> {
+            lock(&self.opened).push(path.to_owned());
+            Ok(())
+        }
+    }
+
+    /// Media sessions a test sets, with recorded controls.
+    #[derive(Debug)]
+    pub struct FakeMediaSessions {
+        sessions: Mutex<Vec<MediaState>>,
+        controls: Mutex<Vec<(String, MediaAction)>>,
+        sinks: Sinks<MediaState>,
+    }
+
+    impl Default for FakeMediaSessions {
+        fn default() -> Self {
+            Self { sessions: Mutex::default(), controls: Mutex::default(), sinks: Sinks::new() }
+        }
+    }
+
+    impl FakeMediaSessions {
+        /// Sets the sessions and tells every subscriber about each.
+        pub fn set_sessions(&self, sessions: Vec<MediaState>) {
+            for session in &sessions {
+                self.sinks.emit(session);
+            }
+            *lock(&self.sessions) = sessions;
+        }
+
+        /// The controls sent, in order.
+        #[must_use]
+        pub fn controls(&self) -> Vec<(String, MediaAction)> {
+            lock(&self.controls).clone()
+        }
+    }
+
+    impl MediaSessions for FakeMediaSessions {
+        fn sessions(&self) -> Result<Vec<MediaState>, PlatformError> {
+            Ok(lock(&self.sessions).clone())
+        }
+
+        fn control(&self, session: &str, action: &MediaAction) -> Result<(), PlatformError> {
+            lock(&self.controls).push((session.to_owned(), *action));
+            Ok(())
+        }
+
+        fn subscribe(
+            &self,
+            sink: Box<dyn Fn(MediaState) + Send + Sync>,
+        ) -> Result<Subscription, PlatformError> {
+            Ok(self.sinks.add(sink))
+        }
+    }
+
+    /// Recent files a test adds.
+    #[derive(Debug)]
+    pub struct FakeRecentSources {
+        items: Mutex<Vec<RecentItem>>,
+        sinks: Sinks<RecentItem>,
+    }
+
+    impl Default for FakeRecentSources {
+        fn default() -> Self {
+            Self { items: Mutex::default(), sinks: Sinks::new() }
+        }
+    }
+
+    impl FakeRecentSources {
+        /// Adds a newly opened file and tells the watchers.
+        pub fn open(&self, item: RecentItem) {
+            self.sinks.emit(&item);
+            lock(&self.items).insert(0, item);
+        }
+    }
+
+    impl RecentSources for FakeRecentSources {
+        fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError> {
+            Ok(lock(&self.items).iter().take(limit).cloned().collect())
+        }
+
+        fn watch(
+            &self,
+            _roots: &[String],
+            sink: Box<dyn Fn(RecentItem) + Send + Sync>,
+        ) -> Result<Subscription, PlatformError> {
+            Ok(self.sinks.add(sink))
+        }
+
+        fn thumbnail(&self, _: &RecentItem, _: u32) -> Result<Option<RgbaImage>, PlatformError> {
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eileen_contracts::tools::apps::OfficeOp;
+
+    use super::{AppEntry, AppHost, AppKind, AppOp, Apps, FakeAppHost, FakeApps};
+    use crate::Deadline;
+
+    #[test]
+    fn a_host_answers_in_order_and_records_calls() {
+        let word = FakeAppHost::new("word");
+        assert!(word.running().unwrap().is_none(), "not running");
+        word.push_reply(Ok(serde_json::json!({"ok": true})));
+        let op = AppOp::Office(OfficeOp::WordSelection);
+        assert_eq!(word.call(&op, Deadline::UIA).unwrap()["ok"], true, "queued reply");
+        assert!(word.call(&op, Deadline::UIA).is_err(), "no reply left");
+        assert_eq!(word.calls().len(), 2, "both recorded");
+    }
+
+    #[test]
+    fn launches_get_increasing_pids() {
+        let apps = FakeApps::default();
+        let notepad = AppEntry {
+            id: "notepad".to_owned(),
+            name: "Notepad".to_owned(),
+            kind: AppKind::Packaged,
+            path: None,
+        };
+        let first = apps.launch(&notepad).unwrap();
+        let second = apps.launch(&notepad).unwrap();
+        assert!(second > first, "increasing");
+        assert_eq!(apps.launched(), ["notepad", "notepad"], "recorded");
+    }
+}

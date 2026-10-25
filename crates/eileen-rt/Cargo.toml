@@ -1,0 +1,24 @@
+[package]
+name = "eileen-rt"
+description = "The one way Eileen starts async tasks (named, in their span, registered with await-tree, panics logged) and its bounded channels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "all async processes"
+owns = "WP0"
+unsafe = "forbid"
+
+[dependencies]
+await-tree.workspace = true
+eileen-stdx.workspace = true
+eileen-trace.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -18,8 +18,14 @@ publish = false
 # Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1. Each
 # line joins in the WP0 pull request that creates its crate, as `members` does: Dependabot's
 # cargo updater fails the whole run on a workspace dependency whose path holds no Cargo.toml.
+eileen-buildguard = { path = "crates/eileen-buildguard" }
 eileen-contracts = { path = "crates/eileen-contracts" }
 eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
+eileen-platform = { path = "crates/eileen-platform" }
+eileen-rt = { path = "crates/eileen-rt" }
+eileen-stdx = { path = "crates/eileen-stdx" }
+eileen-supervisor = { path = "crates/eileen-supervisor" }
+eileen-trace = { path = "crates/eileen-trace" }
 
 # Async and plumbing
 # tokio: 1.54.0 is yanked. RUSTSEC-2026-0386 (AsyncFd's safe constructors are unsound) affects
@@ -69,7 +75,7 @@ windows = { version = "0.62.2", default-features = false, features = [   # take 
   "Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant",
   "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Power", "Win32_System_Registry",
-  "Win32_System_Performance",
+  "Win32_System_Performance", "Win32_System_IO", "std",   # Win32_System_IO from process-wrap's job-object feature, std from its windows dependency, which keeps windows' default features; listed so every build has one set
   "Win32_System_DataExchange", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_NetworkManagement_IpHelper",
   "Win32_Storage_FileSystem", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input",
   "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem",
@@ -80,8 +86,12 @@ windows = { version = "0.62.2", default-features = false, features = [   # take 
 ] }   # WP0 starts from this list and adds what the stubs show is missing; later additions go through an amendment pull request
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects",
   "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_Storage_FileSystem", "Win32_Security",
-  "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging"] }
-  # buildguard (procinfo: working set, threads, GDI and USER counts for measure-idle) and supervisor
+  "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging",
+  "Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Networking_WinSock", "Win32_System_IO",
+  "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_WindowsProgramming", "Win32_System_Console",
+  "Win32_System_Diagnostics_Debug", "Win32_UI_Input_KeyboardAndMouse"] }
+  # buildguard (sampling, Job Object, disk; procinfo later) and tokio's dependencies (mio, socket2), plus the
+  # test tools' (console, tempfile, rustix, errno, winapi-util), so a -p build, xtask and the workspace build share one set
 tray-icon = { version = "0.26.1", default-features = false }   # drops the Linux libappindicator default
 global-hotkey = "0.9.0"
 tauri-winrt-notification = "0.8.1"

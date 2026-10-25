@@ -1,0 +1,87 @@
+//! How Eileen starts every child process (BUILD.md section 2.1): supervised in a kill-on-close
+//! Job Object with no console window and stderr into tracing ([`spawn`]), the guard's detached
+//! spawn ([`spawn_detached`]), deadlines, heartbeats and bounded restarts ([`watch`]), and
+//! the scheduling opt-outs every process makes at start ([`qos`]).
+//!
+//! # Owns
+//!
+//! - The one `Command::new` for every child of the running product, and how it is wrapped.
+//! - [`spawn_detached`] for `eileen-guard.exe`: `CREATE_BREAKAWAY_FROM_JOB`, null handles.
+//! - [`watch`] (deadlines, heartbeats, restart backoff) and [`qos`] (`EcoQoS`, MMCSS).
+//!
+//! # Does not own
+//!
+//! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`),
+//!   cargo under the build guard (`eileen-buildguard::spawn_cargo`), worker flags
+//!   (`eileen-harness`).
+//!
+//! # Invariants
+//!
+//! - Killing a child's Job Object kills its grandchildren (Windows test
+//!   `tests::killing_the_job_kills_the_grandchild`).
+//! - Stderr forwarding survives bytes that are not UTF-8 and keeps at most
+//!   [`MAX_STDERR_LINE`] bytes of a line in memory
+//!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
+//! - The detached spawn outlives its parent (Windows test
+//!   `tests::the_guard_spawn_outlives_its_parent`).
+//! - A failing child restarts at most `max_restarts` times per window
+//!   (`watch::tests::restarts_back_off_and_give_up_inside_the_window`).
+//! - Unsafe code only in the private `ffi` module, one operation per block.
+//!
+//! # Boundaries
+//!
+//! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
+//! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `tokio`; `windows` on Windows.
+//! - Wire types: none; the protocols on the pipes belong to their crates.
+//!
+//! # Testing
+//!
+//! - Fast command: `cargo xtask test -p eileen-supervisor` (until `wp0/xtask` merges,
+//!   `cargo nextest run -p eileen-supervisor`).
+//! - Layers: unit tests for the watch logic; process tests that run the test binary again
+//!   as a helper child (Job Object semantics on Windows, stderr forwarding on both).
+//! - A bug here starts as an orphaned process after Eileen exits, or a restart storm.
+//!
+//! # Traps
+//!
+//! - A [`Child`] kills its tree when dropped: keep it for as long as the child should live.
+//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime (tokio's process driver).
+//! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
+//!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
+//! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
+//! - [`qos::AudioBoost`] is not `Send` on any OS: MMCSS is reverted on the thread that joined.
+//!
+//! # Logs and tracing
+//!
+//! - Emits `child.spawned`, `child.stderr`, `child.exited` and `deadline.passed`; the
+//!   restart span `supervisor.restart` belongs to the runtime that drives [`watch::Restarts`].
+//!
+//! # Do not change without a decision record
+//!
+//! - The one `#[expect]`ed `Command::new` and the flags every child gets; the breakaway rule.
+
+mod child;
+mod detached;
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "the Win32 calls for EcoQoS, MMCSS and process liveness")]
+mod ffi;
+pub mod qos;
+#[cfg(test)]
+mod tests;
+pub mod watch;
+
+pub use child::{Child, ChildClass, ChildSpec, MAX_STDERR_LINE, spawn};
+pub use detached::{Detached, spawn_detached};
+
+/// Why a child could not be started.
+#[derive(Debug, thiserror::Error)]
+pub enum SupervisorError {
+    /// The OS refused to start it.
+    #[error("could not start {program}: {source}")]
+    Spawn {
+        /// The program.
+        program: String,
+        /// The OS's error.
+        source: std::io::Error,
+    },
+}
