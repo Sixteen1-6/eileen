@@ -116,10 +116,10 @@ const PROCESS_ID_LOOKUP: &str = "process ID lookup";
 /// The file or folder being opened, as errors name it.
 const FILE: &str = "file to open";
 
-/// The flags the file to open, and `recently-used.xbel`, are opened with beside read-only:
-/// `O_NONBLOCK`, so the open returns at once where it would wait for a FIFO's writer, and
-/// `O_NOCTTY`, so opening a terminal never makes it the process's controlling terminal. std
-/// names neither; rustix has each architecture's value.
+/// The flags the file to open, `recently-used.xbel` and the desktop entries are opened with
+/// beside read-only: `O_NONBLOCK`, so the open returns at once where it would wait for a FIFO's
+/// writer, and `O_NOCTTY`, so opening a terminal never makes it the process's controlling
+/// terminal. std names neither; rustix has each architecture's value.
 pub(crate) const OPEN_FLAGS: i32 = OFlags::NONBLOCK.union(OFlags::NOCTTY).bits().cast_signed();
 
 /// Why a file or folder was not opened: the path or the file it names, or the request to open
