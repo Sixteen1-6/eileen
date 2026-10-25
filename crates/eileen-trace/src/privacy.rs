@@ -320,8 +320,15 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
 /// `/@fs/home/<name>/...`); on a host of this PC (`localhost`, a name under `.localhost`,
 /// `127.*`, `0.0.0.0`), where a server run from `/` shows its folders; on an IPv6 host in
 /// brackets, `[::1]` among them; and after any other scheme, `file://` and `sftp://` among them.
+///
+/// It reads back over the host and port alone. A line can hold a marker every few bytes, and
+/// reading back to a `://` for each, or to the line's start where none is, makes the scan of one
+/// line grow with the square of its length.
 fn at_web_root(before: &str) -> bool {
-    let Some((scheme, host)) = before.rsplit_once("://") else {
+    let front = before
+        .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+    let host = before.get(front.len()..).unwrap_or_default();
+    let Some(scheme) = front.strip_suffix("://") else {
         return false;
     };
     let name = host
@@ -359,7 +366,8 @@ fn under_wsl_distro(before: &str) -> bool {
     parts.next().is_some() && matches!(parts.next(), Some("wsl.localhost" | "wsl$"))
 }
 
-/// Where a marker of [`USER_FOLDERS`] names a user's folder.
+/// Where a marker of [`USER_FOLDERS`] names a user's folder. Each check reads back from the
+/// marker only as far as it needs, so a line full of markers still scans in linear time.
 #[derive(Debug, Clone, Copy)]
 enum Counts {
     /// Anywhere: a drive's `Users` folder, which a web address holds only as a PC's own path
@@ -646,7 +654,11 @@ fn origin_value(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PiiKind, Problem, ScenarioFile, check_files, scan_line};
+    use std::time::Duration;
+
+    use eileen_stdx::clock::{Clock as _, SystemClock};
+
+    use super::{MAX_TEXT_BYTES, PiiKind, Problem, ScenarioFile, check_files, scan_line};
     use crate::redact::{Redactor, SecretKind};
 
     fn kinds(line: &str) -> Vec<PiiKind> {
@@ -768,6 +780,24 @@ mod tests {
         ] {
             assert!(kinds(line).is_empty(), "{line}: {:?}", kinds(line));
         }
+    }
+
+    #[test]
+    fn a_long_line_of_folders_scans_in_linear_time() {
+        // A user folder every 7 bytes, in a line as long as the largest text file (a file over
+        // its cap is still scanned, so no cap bounds a line). Each marker's checks read back
+        // only over the text right in front of it. Were one to read back to the line's start,
+        // this line would take seconds in the dev profile; it takes milliseconds, far under
+        // the bound.
+        let unit = "/home/a";
+        let markers = MAX_TEXT_BYTES / unit.len();
+        let line = unit.repeat(markers);
+        let clock = SystemClock::new();
+        let found = kinds(&line);
+        let took = Duration::from_nanos(clock.mono().0);
+        assert_eq!(found.len(), markers, "one finding per marker");
+        assert!(found.iter().all(|kind| *kind == PiiKind::UserPath), "each a user folder");
+        assert!(took < Duration::from_secs(1), "{markers} user folders in one line took {took:?}");
     }
 
     /// A valid `scenario.toml` with this origin, and `extra` appended (an `[intent.audio]`
