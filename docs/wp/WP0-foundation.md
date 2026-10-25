@@ -67,6 +67,17 @@ child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTick
 removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
 span-parent table, with a test for each.
 
+Ayham asked, on WP10's drafts, whether section 3.4's synchronous methods that read files take a
+deadline or bound their reads on a helper thread. Both: amendment #76 (merged on 2026-10-25 as
+ec3746c) gives eight methods the caller's `Deadline` and leaves enforcing it to each
+implementation's helper thread, since a hung file read cannot be interrupted.
+`wp0/platform-file-deadlines` changes the seven that exist (`Apps::index`, `launch` and
+`open_path`, `RecentSources::recent`, `watch` and `thumbnail`, `ShellHost::set_run_at_sign_in`)
+and their fakes, which spend a file time on `eileen-stdx`'s `ManualClock`, so a test answers
+within a deadline or passes one without sleeping. `MachineProbe::facts` takes its deadline when
+phase B's `wp0/machine-contracts` builds the trait. `eileen-shell-linux`'s `set_run_at_sign_in`
+takes the parameter and leaves the helper thread to WP10.
+
 ## Acceptance records
 
 Acceptance 4 (its fake-memory half), 5, 6 and 12 passed in pull request #73's CI run on its

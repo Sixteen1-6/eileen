@@ -3,12 +3,54 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
-use crate::Subscription;
+use eileen_stdx::clock::ManualClock;
+
+use crate::{Deadline, PlatformError, Subscription};
 
 /// Locks a fake's state, carrying on past a poisoned lock (a test that panicked).
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// How long a fake's file read or write takes, on a [`ManualClock`] the test holds: what lets
+/// the fake of a method that reads or writes the user's files (BUILD.md section 3.4) answer
+/// within its caller's [`Deadline`], or pass it, without sleeping. Until a test sets a time,
+/// every operation takes none.
+#[derive(Debug, Default)]
+pub(crate) struct FileTime(Mutex<Option<(Arc<ManualClock>, Duration)>>);
+
+impl FileTime {
+    /// From now on, each operation takes `takes` on `clock`.
+    pub(crate) fn set(&self, clock: Arc<ManualClock>, takes: Duration) {
+        *lock(&self.0) = Some((clock, takes));
+    }
+
+    /// Spends one operation's time within `deadline`, as an implementation's helper thread
+    /// would. An operation that fits the deadline's budget moves the clock by its own time and
+    /// answers `Ok`. One that does not moves the clock by the budget alone, the whole of the
+    /// caller's wait, and answers [`PlatformError::DeadlineExceeded`] naming `call`; the fake
+    /// then leaves its state as it was, since the caller cannot know whether the abandoned
+    /// operation lands.
+    pub(crate) fn spend(
+        &self,
+        call: &'static str,
+        deadline: Deadline,
+    ) -> Result<(), PlatformError> {
+        let time = lock(&self.0).clone();
+        let Some((clock, takes)) = time else {
+            return Ok(());
+        };
+        let budget = deadline.budget();
+        if takes <= budget {
+            clock.advance(takes);
+            Ok(())
+        } else {
+            clock.advance(budget);
+            Err(PlatformError::DeadlineExceeded { call })
+        }
+    }
 }
 
 /// A subscriber, shared so that [`Sinks::emit`] can call a copy of the list after it lets go of

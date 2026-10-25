@@ -7,7 +7,8 @@ use std::time::Duration;
 use crate::PlatformError;
 
 /// How long a call may take. Implementations abandon a call past it and answer
-/// [`PlatformError::DeadlineExceeded`] (section 2.1 rule 2: a UIA call defaults to 5 s).
+/// [`PlatformError::DeadlineExceeded`] (section 2.1 rule 2: a UIA call defaults to 5 s). A
+/// file read or write is abandoned on the helper thread it runs on (section 3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Deadline(Duration);
 

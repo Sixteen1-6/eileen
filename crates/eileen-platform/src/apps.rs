@@ -61,10 +61,12 @@ pub struct AppEntry {
 
 /// The app index and launch.
 pub trait Apps: Send + Sync {
-    /// Every app the Start menu knows.
-    fn index(&self) -> Result<Vec<AppEntry>, PlatformError>;
-    /// Starts `app` through the shell; returns its process id.
-    fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError>;
+    /// Every app the Start menu knows, read within `deadline`: the shortcuts may sit in a Start
+    /// menu redirected to a server (on Linux, desktop entries under the home folder).
+    fn index(&self, deadline: Deadline) -> Result<Vec<AppEntry>, PlatformError>;
+    /// Starts `app` through the shell within `deadline`, since its shortcut may sit in the
+    /// redirected Start menu; returns its process id.
+    fn launch(&self, app: &AppEntry, deadline: Deadline) -> Result<u32, PlatformError>;
     /// The main window of `pid`, waiting up to `deadline` for it to appear.
     fn main_window(&self, pid: u32, deadline: Deadline)
     -> Result<Option<WindowRef>, PlatformError>;
@@ -72,8 +74,14 @@ pub trait Apps: Send + Sync {
     fn open_url(&self, url: &str) -> Result<(), PlatformError>;
     /// Opens a URI (a settings page, a deep link) with its registered handler.
     fn open_uri(&self, uri: &str) -> Result<(), PlatformError>;
-    /// Opens a file or folder, with `with_app` when given.
-    fn open_path(&self, path: &str, with_app: Option<&AppEntry>) -> Result<(), PlatformError>;
+    /// Opens a file or folder, with `with_app` when given, within `deadline`: the user's files
+    /// may sit in a folder redirected to a server or on a network mount.
+    fn open_path(
+        &self,
+        path: &str,
+        with_app: Option<&AppEntry>,
+        deadline: Deadline,
+    ) -> Result<(), PlatformError>;
 }
 
 /// Media sessions (`eileen-apps-win`: SMTC; Linux later: MPRIS).
@@ -102,21 +110,26 @@ pub struct RecentItem {
     pub opened_at: WallTime,
 }
 
-/// Recent files.
+/// Recent files. Every method reads files the user's profile may keep on another machine (the
+/// Recent folder in the roaming profile, `recently-used.xbel` under a Linux home folder, the
+/// files themselves), so each waits at most its `deadline`.
 pub trait RecentSources: Send + Sync {
     /// The most recent `limit` items, newest first.
-    fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError>;
-    /// Calls `sink` for every file opened or saved under `roots`.
+    fn recent(&self, limit: usize, deadline: Deadline) -> Result<Vec<RecentItem>, PlatformError>;
+    /// Calls `sink` for every file opened or saved under `roots`. `deadline` bounds opening the
+    /// roots, not the subscription, which lasts until it drops.
     fn watch(
         &self,
         roots: &[String],
         sink: Box<dyn Fn(RecentItem) + Send + Sync>,
+        deadline: Deadline,
     ) -> Result<Subscription, PlatformError>;
     /// The shell's thumbnail of `item`, at most `edge_px` on its longer side.
     fn thumbnail(
         &self,
         item: &RecentItem,
         edge_px: u32,
+        deadline: Deadline,
     ) -> Result<Option<RgbaImage>, PlatformError>;
 }
 
@@ -126,16 +139,31 @@ pub use fake::{FakeAppHost, FakeApps, FakeMediaSessions, FakeRecentSources};
 #[cfg(any(test, feature = "fake"))]
 mod fake {
     use std::collections::{BTreeMap, VecDeque};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use eileen_contracts::desktop::{MediaState, WindowRef};
     use eileen_contracts::tools::apps::MediaAction;
+    use eileen_stdx::clock::ManualClock;
 
     use super::{
         AppEntry, AppHost, AppOp, AppProcess, Apps, MediaSessions, RecentItem, RecentSources,
     };
-    use crate::fake_util::{Sinks, lock};
+    use crate::fake_util::{FileTime, Sinks, lock};
     use crate::{Deadline, PlatformError, RgbaImage, Subscription};
+
+    /// What `FakeApps::index` names when it passes its deadline.
+    const INDEX: &str = "app index";
+    /// What `FakeApps::launch` names when it passes its deadline.
+    const LAUNCH: &str = "app launch";
+    /// What `FakeApps::open_path` names when it passes its deadline.
+    const OPEN_PATH: &str = "opening a file or folder";
+    /// What `FakeRecentSources::recent` names when it passes its deadline.
+    const RECENT: &str = "recent files";
+    /// What `FakeRecentSources::watch` names when it passes its deadline.
+    const WATCH: &str = "watching recent files";
+    /// What `FakeRecentSources::thumbnail` names when it passes its deadline.
+    const THUMBNAIL: &str = "a recent file's thumbnail";
 
     /// A host that answers queued replies and records every operation.
     #[derive(Debug)]
@@ -192,19 +220,29 @@ mod fake {
         }
     }
 
-    /// An app index in memory; launches get process ids from 1000 up.
+    /// An app index in memory; launches get process ids from 1000 up. `index`, `launch` and
+    /// `open_path` take no time until [`Self::set_file_time`] gives them some.
     #[derive(Debug, Default)]
     pub struct FakeApps {
         entries: Mutex<Vec<AppEntry>>,
         windows: Mutex<BTreeMap<u32, WindowRef>>,
         launched: Mutex<Vec<String>>,
         opened: Mutex<Vec<String>>,
+        files: FileTime,
     }
 
     impl FakeApps {
         /// Sets the index.
         pub fn set_index(&self, entries: Vec<AppEntry>) {
             *lock(&self.entries) = entries;
+        }
+
+        /// Makes each `index`, `launch` and `open_path` take `takes` on `clock`, as on a Start
+        /// menu or a file a server holds: within the caller's deadline the call moves the clock
+        /// by `takes` and answers; past it, the clock moves by the deadline's budget and the call
+        /// answers `DeadlineExceeded`, recording nothing.
+        pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration) {
+            self.files.set(clock, takes);
         }
 
         /// Gives `pid` a main window.
@@ -226,11 +264,13 @@ mod fake {
     }
 
     impl Apps for FakeApps {
-        fn index(&self) -> Result<Vec<AppEntry>, PlatformError> {
+        fn index(&self, deadline: Deadline) -> Result<Vec<AppEntry>, PlatformError> {
+            self.files.spend(INDEX, deadline)?;
             Ok(lock(&self.entries).clone())
         }
 
-        fn launch(&self, app: &AppEntry) -> Result<u32, PlatformError> {
+        fn launch(&self, app: &AppEntry, deadline: Deadline) -> Result<u32, PlatformError> {
+            self.files.spend(LAUNCH, deadline)?;
             let count = {
                 let mut launched = lock(&self.launched);
                 launched.push(app.id.clone());
@@ -253,7 +293,13 @@ mod fake {
             Ok(())
         }
 
-        fn open_path(&self, path: &str, _: Option<&AppEntry>) -> Result<(), PlatformError> {
+        fn open_path(
+            &self,
+            path: &str,
+            _: Option<&AppEntry>,
+            deadline: Deadline,
+        ) -> Result<(), PlatformError> {
+            self.files.spend(OPEN_PATH, deadline)?;
             lock(&self.opened).push(path.to_owned());
             Ok(())
         }
@@ -307,16 +353,18 @@ mod fake {
         }
     }
 
-    /// Recent files a test adds.
+    /// Recent files a test adds. Its methods take no time until [`Self::set_file_time`] gives
+    /// them some.
     #[derive(Debug)]
     pub struct FakeRecentSources {
         items: Mutex<Vec<RecentItem>>,
         sinks: Sinks<RecentItem>,
+        files: FileTime,
     }
 
     impl Default for FakeRecentSources {
         fn default() -> Self {
-            Self { items: Mutex::default(), sinks: Sinks::new() }
+            Self { items: Mutex::default(), sinks: Sinks::new(), files: FileTime::default() }
         }
     }
 
@@ -326,10 +374,23 @@ mod fake {
             self.sinks.emit(&item);
             lock(&self.items).insert(0, item);
         }
+
+        /// Makes each `recent`, `watch` and `thumbnail` take `takes` on `clock`, as on a profile
+        /// a server holds: within the caller's deadline the call moves the clock by `takes` and
+        /// answers; past it, the clock moves by the deadline's budget and the call answers
+        /// `DeadlineExceeded`, subscribing nothing.
+        pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration) {
+            self.files.set(clock, takes);
+        }
     }
 
     impl RecentSources for FakeRecentSources {
-        fn recent(&self, limit: usize) -> Result<Vec<RecentItem>, PlatformError> {
+        fn recent(
+            &self,
+            limit: usize,
+            deadline: Deadline,
+        ) -> Result<Vec<RecentItem>, PlatformError> {
+            self.files.spend(RECENT, deadline)?;
             Ok(lock(&self.items).iter().take(limit).cloned().collect())
         }
 
@@ -337,11 +398,19 @@ mod fake {
             &self,
             _roots: &[String],
             sink: Box<dyn Fn(RecentItem) + Send + Sync>,
+            deadline: Deadline,
         ) -> Result<Subscription, PlatformError> {
+            self.files.spend(WATCH, deadline)?;
             Ok(self.sinks.add(sink))
         }
 
-        fn thumbnail(&self, _: &RecentItem, _: u32) -> Result<Option<RgbaImage>, PlatformError> {
+        fn thumbnail(
+            &self,
+            _: &RecentItem,
+            _: u32,
+            deadline: Deadline,
+        ) -> Result<Option<RgbaImage>, PlatformError> {
+            self.files.spend(THUMBNAIL, deadline)?;
             Ok(None)
         }
     }
@@ -349,10 +418,108 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
-    use eileen_contracts::tools::apps::OfficeOp;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
 
-    use super::{AppEntry, AppHost, AppKind, AppOp, Apps, FakeAppHost, FakeApps};
-    use crate::Deadline;
+    use eileen_contracts::ids::{MonoTime, Personal, WallTime};
+    use eileen_contracts::tools::apps::OfficeOp;
+    use eileen_stdx::clock::{Clock, ManualClock};
+
+    use super::{
+        AppEntry, AppHost, AppKind, AppOp, Apps, FakeAppHost, FakeApps, FakeRecentSources,
+        RecentItem, RecentSources,
+    };
+    use crate::{Deadline, PlatformError};
+
+    /// The callers' deadline in these tests: 5 s, which the file times fall either side of.
+    const FIVE_SECONDS: Deadline = Deadline::after(Duration::from_secs(5));
+
+    fn notepad() -> AppEntry {
+        AppEntry {
+            id: "notepad".to_owned(),
+            name: "Notepad".to_owned(),
+            kind: AppKind::Packaged,
+            path: None,
+        }
+    }
+
+    fn notes() -> RecentItem {
+        RecentItem {
+            path: Personal::new("/home/sam/notes.txt".to_owned()),
+            app: Some("Text Editor".to_owned()),
+            kind: None,
+            opened_at: WallTime(1_000),
+        }
+    }
+
+    #[test]
+    fn a_file_call_within_its_deadline_answers_after_its_own_time() {
+        let clock = Arc::new(ManualClock::new(WallTime(0)));
+        let recent = FakeRecentSources::default();
+        recent.open(notes());
+        recent.set_file_time(Arc::clone(&clock), Duration::from_secs(2));
+        assert_eq!(recent.recent(10, FIVE_SECONDS), Ok(vec![notes()]), "the file, within 5 s");
+        assert_eq!(clock.mono(), MonoTime(2_000_000_000), "the read took its own 2 s");
+        assert_eq!(recent.thumbnail(&notes(), 96, FIVE_SECONDS), Ok(None), "no thumbnail");
+        let apps = FakeApps::default();
+        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(5));
+        apps.open_path("/home/sam/notes.txt", None, FIVE_SECONDS).unwrap();
+        assert_eq!(
+            apps.opened(),
+            ["/home/sam/notes.txt"],
+            "a call taking its whole budget answers"
+        );
+        assert_eq!(clock.mono(), MonoTime(9_000_000_000), "2 s, 2 s and 5 s, each its own time");
+    }
+
+    #[test]
+    fn a_file_call_past_its_deadline_answers_deadline_exceeded_once_its_budget_has_passed() {
+        let clock = Arc::new(ManualClock::new(WallTime(0)));
+        let recent = FakeRecentSources::default();
+        recent.open(notes());
+        // A mount whose server has stalled: each read would take a minute.
+        recent.set_file_time(Arc::clone(&clock), Duration::from_secs(60));
+        assert_eq!(
+            recent.recent(10, FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "recent files" }),
+            "the read passed its deadline"
+        );
+        assert_eq!(clock.mono(), MonoTime(5_000_000_000), "the caller waited its 5 s, no longer");
+        let seen = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&seen);
+        let sink: Box<dyn Fn(RecentItem) + Send + Sync> = Box::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(
+            recent.watch(&["/home/sam".to_owned()], sink, FIVE_SECONDS).unwrap_err(),
+            PlatformError::DeadlineExceeded { call: "watching recent files" },
+            "opening the roots passed its deadline"
+        );
+        recent.open(notes());
+        assert_eq!(seen.load(Ordering::SeqCst), 0, "no watcher was added");
+
+        let apps = FakeApps::default();
+        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(60));
+        assert_eq!(
+            apps.index(FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "app index" }),
+            "the index read passed its deadline"
+        );
+        assert_eq!(
+            apps.launch(&notepad(), FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "app launch" }),
+            "the launch passed its deadline"
+        );
+        assert_eq!(
+            apps.open_path("/home/sam/notes.txt", None, FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "opening a file or folder" }),
+            "the open passed its deadline"
+        );
+        assert!(apps.launched().is_empty(), "nothing recorded as launched");
+        assert!(apps.opened().is_empty(), "nothing recorded as opened");
+        assert_eq!(clock.mono(), MonoTime(25_000_000_000), "five calls, each its 5 s budget");
+    }
 
     #[test]
     fn a_host_answers_in_order_and_records_calls() {
@@ -368,14 +535,8 @@ mod tests {
     #[test]
     fn launches_get_increasing_pids() {
         let apps = FakeApps::default();
-        let notepad = AppEntry {
-            id: "notepad".to_owned(),
-            name: "Notepad".to_owned(),
-            kind: AppKind::Packaged,
-            path: None,
-        };
-        let first = apps.launch(&notepad).unwrap();
-        let second = apps.launch(&notepad).unwrap();
+        let first = apps.launch(&notepad(), FIVE_SECONDS).unwrap();
+        let second = apps.launch(&notepad(), FIVE_SECONDS).unwrap();
         assert!(second > first, "increasing");
         assert_eq!(apps.launched(), ["notepad", "notepad"], "recorded");
     }

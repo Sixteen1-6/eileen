@@ -371,10 +371,10 @@ fn run_at_sign_in_writes_and_removes_the_entry_in_the_settings_folder() {
     let folder = scratch.autostart();
     let bridge = Bridge::on_private_bus(&bus).unwrap();
     let shell = LinuxShell::new(bridge, settings(DEFAULT_DEADLINE, Some(folder.clone())));
-    shell.set_run_at_sign_in(true).unwrap();
+    shell.set_run_at_sign_in(true, DEFAULT_DEADLINE).unwrap();
     let entry = fs::read_to_string(folder.join("eileen.desktop")).unwrap();
     assert!(entry.contains(&format!("\nExec=\"{PROGRAM}\"\n")), "the settings' program: {entry}");
-    shell.set_run_at_sign_in(false).unwrap();
+    shell.set_run_at_sign_in(false, DEFAULT_DEADLINE).unwrap();
     assert!(!folder.join("eileen.desktop").exists(), "removed");
 }
 
@@ -386,12 +386,12 @@ fn run_at_sign_in_maps_its_errors_and_needs_a_folder() {
     relative.program = PathBuf::from("bin/eileen");
     let shell = LinuxShell::new(Bridge::on_private_bus(&bus).unwrap(), relative);
     assert_eq!(
-        shell.set_run_at_sign_in(true),
+        shell.set_run_at_sign_in(true, DEFAULT_DEADLINE),
         Err(PlatformError::Invalid { what: "program path", detail: "not absolute".to_owned() }),
         "the autostart error's platform twin"
     );
     assert_eq!(
-        shell_on(&bus, DEFAULT_DEADLINE).set_run_at_sign_in(true),
+        shell_on(&bus, DEFAULT_DEADLINE).set_run_at_sign_in(true, DEFAULT_DEADLINE),
         Err(PlatformError::Unavailable { what: "autostart folder" }),
         "no folder to write in"
     );

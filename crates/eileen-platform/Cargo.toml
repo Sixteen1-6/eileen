@@ -14,15 +14,21 @@ owns = "WP0"
 unsafe = "forbid"
 
 [features]
-# The fakes beside each trait, for other crates' tests. Never enabled by a shipped binary.
-fake = []
+# The fakes beside each trait, for other crates' tests. Never enabled by a shipped binary. The
+# fakes of the methods that take a deadline keep simulated time on eileen-stdx's ManualClock.
+fake = ["dep:eileen-stdx"]
 
 [dependencies]
 blake3.workspace = true
 eileen-contracts.workspace = true
+eileen-stdx = { workspace = true, optional = true }
 secrecy.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The fakes compile in this crate's own tests without the feature, so they need the clock here too.
+eileen-stdx.workspace = true
 
 [lints]
 workspace = true
