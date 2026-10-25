@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read as _;
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
 use eileen_contracts::ids::Personal;
@@ -163,6 +163,10 @@ impl Session {
 /// is not a regular file, such as a FIFO or a device, is skipped without being read, and a file
 /// is read only up to 1 MiB and skipped when it is longer. Like a file that cannot be read, a
 /// skipped one does not decide its desktop file ID.
+///
+/// Links to folders are followed, but a data folder's walk reads each folder once, however many
+/// paths lead to it, such as links to `.` or to a folder above: its entries take their IDs from
+/// the first of those paths in the walk's order.
 #[must_use]
 pub fn index(session: &Session) -> Vec<DesktopEntry> {
     let mut decided: BTreeSet<String> = BTreeSet::new();
@@ -170,7 +174,7 @@ pub fn index(session: &Session) -> Vec<DesktopEntry> {
     for dir in &session.data_dirs {
         let packaged = is_export(dir);
         let mut files = Vec::new();
-        collect(&dir.join("applications"), "", 0, &mut files);
+        collect(&dir.join("applications"), "", 0, &mut BTreeSet::new(), &mut files);
         for (id, path) in files {
             if decided.contains(&id) {
                 continue;
@@ -232,7 +236,23 @@ fn is_export(dir: &Path) -> bool {
 
 /// The `.desktop` files under `dir`, with their desktop file IDs (`prefix` is the ID's start
 /// for a subfolder, such as `kde4-`), sorted by path so a folder's files keep one order.
-fn collect(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, PathBuf)>) {
+///
+/// `walked` holds the folders this walk has read, by the device and inode that every path to a
+/// folder shares. A folder in it is not read again, so a link back to it leads nowhere and its
+/// files keep the IDs of the path that reached it first.
+fn collect(
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    walked: &mut BTreeSet<(u64, u64)>,
+    out: &mut Vec<(String, PathBuf)>,
+) {
+    let Ok(folder) = std::fs::metadata(dir) else {
+        return;
+    };
+    if !walked.insert((folder.dev(), folder.ino())) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -246,7 +266,7 @@ fn collect(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<(String, PathBu
     for (name, path) in entries {
         if path.is_dir() {
             if depth < MAX_DEPTH {
-                collect(&path, &format!("{prefix}{name}-"), depth + 1, out);
+                collect(&path, &format!("{prefix}{name}-"), depth + 1, walked, out);
             }
         } else if name.ends_with(".desktop") {
             out.push((format!("{prefix}{name}"), path));

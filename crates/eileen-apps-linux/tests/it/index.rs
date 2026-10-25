@@ -338,3 +338,23 @@ fn a_folder_two_links_lead_to_is_walked_once_under_the_first() {
         "a link to a new folder is followed, and a second path to it is not"
     );
 }
+
+#[test]
+fn a_link_into_a_lower_data_folder_leaves_it_its_ids() {
+    // The user's folder links to the system's `applications/`, so the user's walk reads it
+    // first. Each data folder's walk keeps its own record of what it read, so the system's walk
+    // reads it too, and its entry keeps the ID it has there.
+    let scratch = Scratch::new();
+    let (mut session, applications) = beside_a_plain_entry(&scratch);
+    let system = scratch.path().join("system");
+    fs::create_dir_all(system.join("applications")).unwrap();
+    let tool = "[Desktop Entry]\nType=Application\nName=Tool\nExec=tool\n";
+    fs::write(system.join("applications").join("tool.desktop"), tool).unwrap();
+    symlink(system.join("applications"), applications.join("system")).unwrap();
+    session.data_dirs.push(system);
+    assert_eq!(
+        ids(&index(&session)),
+        ["plain.desktop", "system-tool.desktop", "tool.desktop"],
+        "the link's path in the user's folder, and the system's own"
+    );
+}
