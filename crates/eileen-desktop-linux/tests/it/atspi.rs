@@ -206,8 +206,7 @@ async fn an_error_name_an_app_chose_is_not_kept() {
     app.add("/plain", Node::showing("plain", app.references(&["/rogue"]))).await;
     let _registry = registry_root(&a11y, Node { error_name: Some(name), ..Node::default() }).await;
     let atspi = Atspi::new(&a11y.connect().await);
-    let own =
-        |what| DbusError::Invalid { what, detail: "an error name of the app's own".to_owned() };
+    let own = |what| DbusError::Invalid { what, detail: "an error name the app chose".to_owned() };
     let rogue = app.object("/rogue");
     let error = atspi.accessible(&rogue).await.unwrap_err();
     assert_eq!(error, own("accessible object"), "the read fails and says who named the error");
@@ -376,6 +375,39 @@ async fn a_crowded_node_is_read_by_index_within_the_budget() {
         (count(&table.listings), count(&wide.listings)),
         (0, 0),
         "GetChildren, which would build every child, is never called"
+    );
+}
+
+#[tokio::test]
+async fn a_count_that_says_too_many_keeps_the_children_read() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    let table = Node {
+        states: words(&[SHOWING, MANAGES_DESCENDANTS]),
+        child_count: 8,
+        ..Node::showing("table", app.references(&["/c0", "/c1", "/c2"]))
+    };
+    let table = app.add("/table", table).await;
+    let empty = Node { child_count: 2, no_get_children: true, ..Node::showing("empty", vec![]) };
+    app.add("/empty", empty).await;
+    app.tree(&[("/c0", &[]), ("/c1", &[]), ("/c2", &[])]).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    let walk = atspi.walk(&app.object("/table"), TreeLimits::default(), later()).await.unwrap();
+    assert_eq!(
+        shape(&walk),
+        [("table", None, 0), ("c0", Some(0), 1), ("c1", Some(0), 1), ("c2", Some(0), 1)],
+        "the three children read before index 3 failed are kept"
+    );
+    assert!(walk.truncated, "the count said there were more");
+    assert_eq!(count(&table.index_reads), 4, "no read after the one that failed");
+    let read = atspi.accessible(&app.object("/empty")).await.unwrap();
+    assert_eq!(
+        atspi.children(&read, 10).await.unwrap_err(),
+        DbusError::Invalid {
+            what: "accessible object",
+            detail: "an error name the app chose".into()
+        },
+        "a failed first read fails the listing"
     );
 }
 

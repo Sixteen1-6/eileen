@@ -55,8 +55,9 @@ const REGISTRY_CALL: &str = "accessibility registry";
 const OBJECT: &str = "accessible object";
 /// What errors of a text read name.
 const TEXT: &str = "accessible text";
-/// The detail of an error the callee answered with a name of its own, which is not kept.
-const APPS_OWN_ERROR: &str = "an error name of the app's own";
+/// The detail of an error the callee answered by a name this client does not know, which is not
+/// kept.
+const APPS_OWN_ERROR: &str = "an error name the app chose";
 
 /// An accessible object: the unique name of its app's connection on the accessibility bus and
 /// its path there.
@@ -165,8 +166,10 @@ impl Atspi {
     /// when the parent says it has no more than that and does not manage its descendants;
     /// otherwise, or when the app has no `GetChildren`, `GetChildAtIndex` reads them one by one
     /// from index 0, so a big table never builds every child. A reference [`ObjectRef::new`]
-    /// refuses is left out, and a failed index read fails the listing. A parent whose app has
-    /// gone is [`DbusError::NotFound`].
+    /// refuses is left out. `ChildCount` can say too many, and a child can go between the
+    /// reads, so an index read that fails after the first ends the listing with the children
+    /// read before it; a failed first read fails the listing. A parent whose app has gone is
+    /// [`DbusError::NotFound`].
     pub async fn children(
         &self,
         parent: &Accessible,
@@ -195,8 +198,9 @@ impl Atspi {
         Ok(sanitize(&text.get_text(0, end).await.map_err(failed)?, max_chars))
     }
 
-    /// [`Self::children`], with `cut` set when `parent` has more children than were read. With
-    /// `until`, no index is read once it has passed, and the listing is cut there.
+    /// [`Self::children`], with `cut` set when `parent` has more children than were read, or an
+    /// index read failed after the first. With `until`, no index is read once it has passed, and
+    /// the listing is cut there.
     async fn list(
         &self,
         parent: &Accessible,
@@ -228,8 +232,12 @@ impl Atspi {
                 return Ok(Listing { refs, cut: true });
             }
             let Ok(index) = i32::try_from(index) else { break };
-            let (bus, path) = proxy.get_child_at_index(index).await.map_err(failed)?;
-            refs.extend(ObjectRef::new(&bus, &path));
+            match proxy.get_child_at_index(index).await {
+                Ok((bus, path)) => refs.extend(ObjectRef::new(&bus, &path)),
+                // A count that says too many, or a child gone since: what was read is kept.
+                Err(_) if index > 0 => return Ok(Listing { refs, cut: true }),
+                Err(error) => return Err(failed(error)),
+            }
         }
         Ok(Listing { refs, cut: parent.child_count > at_most })
     }
