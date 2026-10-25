@@ -40,9 +40,8 @@
 //!
 //! # Boundaries
 //!
-//! - Called by the desktop process's composition root on Linux. May depend on `eileen-platform`,
-//!   `eileen-contracts`, `eileen-dbus-linux`, `zbus` and `tokio`; BUILD.md 3.1 allows
-//!   `eileen-stdx` and `eileen-trace` too. Wire types: none of its own.
+//! - Called by the desktop composition root. May depend on `eileen-platform`, `eileen-contracts`,
+//!   `eileen-dbus-linux`, `zbus`, `tokio` (3.1 adds `eileen-stdx`, `eileen-trace`); no wire types.
 //!
 //! # Testing
 //!
@@ -65,6 +64,7 @@
 //!   each that does not answer spends a call timeout and leaves the front window unknown.
 //! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
+//! - Wayland tells a GTK window nothing of being minimized: only a toolkit's `ICONIFIED` says so.
 //! - Only Firefox's and Chromium's English names mark a private window, and a class is `frame` or
 //!   `dialog`: BUILD.md 2.6's and 2.10's private-window rules and 2.6's terminal tier need more.
 //! - A second at-spi-bus-launcher on the session's runtime folder and display takes the live bus.

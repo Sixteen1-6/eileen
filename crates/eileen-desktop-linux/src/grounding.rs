@@ -48,6 +48,11 @@ impl Grounding for LinuxDesktop {
     /// an app that does not answer are left out, and while one is, no window is
     /// `is_foreground`: the front window is unknown, as [`Self::foreground`] says.
     ///
+    /// A window is minimized when its toolkit reports `ICONIFIED`, which a native Wayland
+    /// window may never do: `xdg_toplevel` tells no client it is minimized, GTK 3 does not
+    /// report it there and GTK 4 has no such state. So `include_minimized: false` keeps a GTK
+    /// window the user minimized, listed as not minimized; an X11 app under Xwayland can say so.
+    ///
     /// `is_private` is true for a window whose name ends as an English Firefox's or Chromium's
     /// private window's does (`Private Browsing`, `(Incognito)`). False means only that no mark
     /// was found, as for another browser's or language's private window, or one whose title
