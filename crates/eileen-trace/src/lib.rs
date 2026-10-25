@@ -1,7 +1,6 @@
-//! Tracing for every Eileen process (BUILD.md section 2.13, observability report sections 2
-//! to 4 and 8): the subscriber stack, span and event names with their parent table, the
-//! `pii.` policy, the Redactor, the flight recorder, Perfetto timelines, `traceparent`, and
-//! the scenario privacy rules.
+//! Tracing for every Eileen process (BUILD.md section 2.13, observability report sections 2 to 4
+//! and 8): the subscriber stack, span and event names with their parent table, the `pii.` policy,
+//! the Redactor, the flight recorder, Perfetto timelines, `traceparent` and scenario privacy rules.
 //!
 //! # Owns
 //!
@@ -36,8 +35,9 @@
 //! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
 //!   exactly, and never today's (tests `it::stack::the_core_keeps_the_other_processes_files`
 //!   and `it::stack::the_core_prunes_its_own_files_by_the_date_in_their_names`).
-//! - A stopped terminal never blocks a thread that logs: the console writes on its own thread
-//!   and drops lines when full (test `it::console::a_warning_never_waits_for_a_stopped_terminal`).
+//! - A stopped terminal never blocks a thread that logs: the console writes on its own thread and
+//!   drops lines when full (tests `it::console::a_warning_never_waits_for_a_stopped_terminal` and
+//!   `init::tests::the_console_drops_and_counts_lines_past_its_buffer`).
 //!
 //! # Boundaries
 //!
