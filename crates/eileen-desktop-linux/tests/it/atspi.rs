@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::PrivateBus;
-use eileen_dbus_linux::{METHOD_TIMEOUT, Names, owner_changes};
+use eileen_dbus_linux::{Names, owner_changes};
 use eileen_desktop_linux::{
     Accessible, Atspi, CALL_TIMEOUT, DbusError, Interfaces, Role, State, Walk, accessibility_bus,
     toolkit_accessibility,
@@ -598,10 +598,12 @@ async fn each_call_is_bounded_by_the_call_timeout() {
         DbusError::DeadlineExceeded { call: "accessible object" },
         "GetRole never answers"
     );
+    // CALL_TIMEOUT, 800 ms, is shorter than the session bus's 5 s, so this tells the timeout
+    // given from both.
     let waited = started.elapsed();
     assert!(
-        waited >= timeout && waited < METHOD_TIMEOUT,
-        "the call timeout given, not the session bus's: {waited:?}"
+        waited >= timeout && waited < CALL_TIMEOUT,
+        "the call timeout given, not CALL_TIMEOUT nor the session bus's: {waited:?}"
     );
 }
 
