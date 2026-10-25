@@ -49,7 +49,8 @@
 //!   the caller's [`Deadline`] (BUILD.md section 3.4). Its implementation enforces it on a
 //!   helper thread of its own, abandoned past the deadline, because a hung file read cannot be
 //!   interrupted; this crate holds no such helper. The fakes model it with a file time on a
-//!   `ManualClock` (`set_file_time`), so a test passes a deadline without sleeping.
+//!   `ManualClock` (`set_file_time`), so a test passes a deadline without sleeping, and a
+//!   `LateOperation` the test chooses, since an abandoned write may still land.
 //!
 //! # Logs and tracing
 //!
@@ -92,6 +93,8 @@ pub use desktop::{
 #[cfg(any(test, feature = "fake"))]
 pub use desktop::{FakeAutomation, FakeCapture, FakeGrounding, FakeInput, FakeTextInsertion};
 pub use error::PlatformError;
+#[cfg(any(test, feature = "fake"))]
+pub use fake_util::LateOperation;
 pub use handles::{Deadline, PowerRequest, RgbaImage, Subscription, ThreadTicket};
 #[cfg(any(test, feature = "fake"))]
 pub use hud::FakeHudSurface;

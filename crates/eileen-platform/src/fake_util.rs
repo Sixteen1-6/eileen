@@ -14,42 +14,72 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// How long a fake's file read or write takes, on a [`ManualClock`] the test holds: what lets
-/// the fake of a method that reads or writes the user's files (BUILD.md section 3.4) answer
-/// within its caller's [`Deadline`], or pass it, without sleeping. Until a test sets a time,
-/// every operation takes none.
+/// What becomes of a fake's file operation that its caller abandoned at its deadline.
+///
+/// BUILD.md section 3.4: the deadline bounds the caller's wait, not the abandoned work, so a
+/// write may still land after its caller was told it passed, and the caller cannot know which.
+/// A test that sets a fake's file time chooses the outcome, so the code under test can be
+/// checked against both; no outcome is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LateOperation {
+    /// The abandoned operation never takes effect: nothing is launched, opened or written.
+    Lost,
+    /// The abandoned operation takes effect anyway, before the call answers
+    /// [`PlatformError::DeadlineExceeded`]: the app starts, the path opens, the entry changes.
+    Lands,
+}
+
+/// One file time a test set: each operation takes `takes` on `clock`, and one past its
+/// deadline ends as `late` says.
+#[derive(Debug, Clone)]
+struct Setting {
+    clock: Arc<ManualClock>,
+    takes: Duration,
+    late: LateOperation,
+}
+
+/// How long a fake's file read or write takes, on a [`ManualClock`] the test holds, and what
+/// becomes of one its caller abandons: what lets the fake of a method that reads or writes the
+/// user's files (BUILD.md section 3.4) answer within its caller's [`Deadline`], or pass it,
+/// without sleeping. Until a test sets a time, every operation takes none.
 #[derive(Debug, Default)]
-pub(crate) struct FileTime(Mutex<Option<(Arc<ManualClock>, Duration)>>);
+pub(crate) struct FileTime(Mutex<Option<Setting>>);
 
 impl FileTime {
-    /// From now on, each operation takes `takes` on `clock`.
-    pub(crate) fn set(&self, clock: Arc<ManualClock>, takes: Duration) {
-        *lock(&self.0) = Some((clock, takes));
+    /// From now on, each operation takes `takes` on `clock`, and one past its deadline ends as
+    /// `late` says.
+    pub(crate) fn set(&self, clock: Arc<ManualClock>, takes: Duration, late: LateOperation) {
+        *lock(&self.0) = Some(Setting { clock, takes, late });
     }
 
-    /// Spends one operation's time within `deadline`, as an implementation's helper thread
-    /// would. An operation that fits the deadline's budget moves the clock by its own time and
-    /// answers `Ok`. One that does not moves the clock by the budget alone, the whole of the
-    /// caller's wait, and answers [`PlatformError::DeadlineExceeded`] naming `call`; the fake
-    /// then leaves its state as it was, since the caller cannot know whether the abandoned
-    /// operation lands.
-    pub(crate) fn spend(
+    /// Runs one operation within `deadline`, as an implementation's helper thread would, and
+    /// answers what `operation` returns. An operation that fits the deadline's budget moves the
+    /// clock by its own time, takes effect and answers. One that does not moves the clock by
+    /// the budget alone, the whole of the caller's wait, and answers
+    /// [`PlatformError::DeadlineExceeded`] naming `call`; it takes effect first only when the
+    /// test chose [`LateOperation::Lands`]. What a landed operation returns has no caller, so it
+    /// is dropped here: a landed watch's subscription ends at once, as when an implementation's
+    /// helper thread finds its caller gone.
+    pub(crate) fn run<T>(
         &self,
         call: &'static str,
         deadline: Deadline,
-    ) -> Result<(), PlatformError> {
-        let time = lock(&self.0).clone();
-        let Some((clock, takes)) = time else {
-            return Ok(());
+        operation: impl FnOnce() -> T,
+    ) -> Result<T, PlatformError> {
+        let setting = lock(&self.0).clone();
+        let Some(Setting { clock, takes, late }) = setting else {
+            return Ok(operation());
         };
         let budget = deadline.budget();
         if takes <= budget {
             clock.advance(takes);
-            Ok(())
-        } else {
-            clock.advance(budget);
-            Err(PlatformError::DeadlineExceeded { call })
+            return Ok(operation());
         }
+        clock.advance(budget);
+        if late == LateOperation::Lands {
+            drop(operation());
+        }
+        Err(PlatformError::DeadlineExceeded { call })
     }
 }
 

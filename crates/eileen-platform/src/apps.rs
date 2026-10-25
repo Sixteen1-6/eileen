@@ -149,7 +149,7 @@ mod fake {
     use super::{
         AppEntry, AppHost, AppOp, AppProcess, Apps, MediaSessions, RecentItem, RecentSources,
     };
-    use crate::fake_util::{FileTime, Sinks, lock};
+    use crate::fake_util::{FileTime, LateOperation, Sinks, lock};
     use crate::{Deadline, PlatformError, RgbaImage, Subscription};
 
     /// What `FakeApps::index` names when it passes its deadline.
@@ -240,9 +240,11 @@ mod fake {
         /// Makes each `index`, `launch` and `open_path` take `takes` on `clock`, as on a Start
         /// menu or a file a server holds: within the caller's deadline the call moves the clock
         /// by `takes` and answers; past it, the clock moves by the deadline's budget and the call
-        /// answers `DeadlineExceeded`, recording nothing.
-        pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration) {
-            self.files.set(clock, takes);
+        /// answers `DeadlineExceeded`. A late launch or open is recorded as done when `late` is
+        /// [`LateOperation::Lands`], as a real one abandoned at its deadline may still start the
+        /// app or open the path, and is not recorded when it is [`LateOperation::Lost`].
+        pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration, late: LateOperation) {
+            self.files.set(clock, takes, late);
         }
 
         /// Gives `pid` a main window.
@@ -265,18 +267,18 @@ mod fake {
 
     impl Apps for FakeApps {
         fn index(&self, deadline: Deadline) -> Result<Vec<AppEntry>, PlatformError> {
-            self.files.spend(INDEX, deadline)?;
-            Ok(lock(&self.entries).clone())
+            self.files.run(INDEX, deadline, || lock(&self.entries).clone())
         }
 
         fn launch(&self, app: &AppEntry, deadline: Deadline) -> Result<u32, PlatformError> {
-            self.files.spend(LAUNCH, deadline)?;
-            let count = {
-                let mut launched = lock(&self.launched);
-                launched.push(app.id.clone());
-                launched.len()
-            };
-            Ok(1000_u32.saturating_add(u32::try_from(count).unwrap_or(u32::MAX)))
+            self.files.run(LAUNCH, deadline, || {
+                let count = {
+                    let mut launched = lock(&self.launched);
+                    launched.push(app.id.clone());
+                    launched.len()
+                };
+                1000_u32.saturating_add(u32::try_from(count).unwrap_or(u32::MAX))
+            })
         }
 
         fn main_window(&self, pid: u32, _: Deadline) -> Result<Option<WindowRef>, PlatformError> {
@@ -299,9 +301,7 @@ mod fake {
             _: Option<&AppEntry>,
             deadline: Deadline,
         ) -> Result<(), PlatformError> {
-            self.files.spend(OPEN_PATH, deadline)?;
-            lock(&self.opened).push(path.to_owned());
-            Ok(())
+            self.files.run(OPEN_PATH, deadline, || lock(&self.opened).push(path.to_owned()))
         }
     }
 
@@ -378,9 +378,15 @@ mod fake {
         /// Makes each `recent`, `watch` and `thumbnail` take `takes` on `clock`, as on a profile
         /// a server holds: within the caller's deadline the call moves the clock by `takes` and
         /// answers; past it, the clock moves by the deadline's budget and the call answers
-        /// `DeadlineExceeded`, subscribing nothing.
+        /// `DeadlineExceeded`, leaving no watcher behind.
+        ///
+        /// Unlike the other fakes' `set_file_time`, it takes no [`LateOperation`], because the
+        /// outcome cannot differ here: `recent` and `thumbnail` only read, and a late `watch`
+        /// that lands has no caller to hold its subscription, so the subscription ends at once,
+        /// as when an implementation's helper thread finds its caller gone. The fake lets every
+        /// late call land.
         pub fn set_file_time(&self, clock: Arc<ManualClock>, takes: Duration) {
-            self.files.set(clock, takes);
+            self.files.set(clock, takes, LateOperation::Lands);
         }
     }
 
@@ -390,8 +396,8 @@ mod fake {
             limit: usize,
             deadline: Deadline,
         ) -> Result<Vec<RecentItem>, PlatformError> {
-            self.files.spend(RECENT, deadline)?;
-            Ok(lock(&self.items).iter().take(limit).cloned().collect())
+            self.files
+                .run(RECENT, deadline, || lock(&self.items).iter().take(limit).cloned().collect())
         }
 
         fn watch(
@@ -400,8 +406,7 @@ mod fake {
             sink: Box<dyn Fn(RecentItem) + Send + Sync>,
             deadline: Deadline,
         ) -> Result<Subscription, PlatformError> {
-            self.files.spend(WATCH, deadline)?;
-            Ok(self.sinks.add(sink))
+            self.files.run(WATCH, deadline, || self.sinks.add(sink))
         }
 
         fn thumbnail(
@@ -410,8 +415,7 @@ mod fake {
             _: u32,
             deadline: Deadline,
         ) -> Result<Option<RgbaImage>, PlatformError> {
-            self.files.spend(THUMBNAIL, deadline)?;
-            Ok(None)
+            self.files.run(THUMBNAIL, deadline, || None)
         }
     }
 }
@@ -430,7 +434,7 @@ mod tests {
         AppEntry, AppHost, AppKind, AppOp, Apps, FakeAppHost, FakeApps, FakeRecentSources,
         RecentItem, RecentSources,
     };
-    use crate::{Deadline, PlatformError};
+    use crate::{Deadline, LateOperation, PlatformError};
 
     /// The callers' deadline in these tests: 5 s, which the file times fall either side of.
     const FIVE_SECONDS: Deadline = Deadline::after(Duration::from_secs(5));
@@ -463,7 +467,7 @@ mod tests {
         assert_eq!(clock.mono(), MonoTime(2_000_000_000), "the read took its own 2 s");
         assert_eq!(recent.thumbnail(&notes(), 96, FIVE_SECONDS), Ok(None), "no thumbnail");
         let apps = FakeApps::default();
-        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(5));
+        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(5), LateOperation::Lost);
         apps.open_path("/home/sam/notes.txt", None, FIVE_SECONDS).unwrap();
         assert_eq!(
             apps.opened(),
@@ -497,10 +501,10 @@ mod tests {
             "opening the roots passed its deadline"
         );
         recent.open(notes());
-        assert_eq!(seen.load(Ordering::SeqCst), 0, "no watcher was added");
+        assert_eq!(seen.load(Ordering::SeqCst), 0, "no watcher outlived the call");
 
         let apps = FakeApps::default();
-        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(60));
+        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(60), LateOperation::Lost);
         assert_eq!(
             apps.index(FIVE_SECONDS),
             Err(PlatformError::DeadlineExceeded { call: "app index" }),
@@ -516,9 +520,30 @@ mod tests {
             Err(PlatformError::DeadlineExceeded { call: "opening a file or folder" }),
             "the open passed its deadline"
         );
-        assert!(apps.launched().is_empty(), "nothing recorded as launched");
-        assert!(apps.opened().is_empty(), "nothing recorded as opened");
+        assert!(apps.launched().is_empty(), "the lost launch started nothing");
+        assert!(apps.opened().is_empty(), "the lost open opened nothing");
         assert_eq!(clock.mono(), MonoTime(25_000_000_000), "five calls, each its 5 s budget");
+    }
+
+    #[test]
+    fn a_launch_or_open_past_its_deadline_may_still_land() {
+        let clock = Arc::new(ManualClock::new(WallTime(0)));
+        let apps = FakeApps::default();
+        // The server answers in the end, a minute late, after both callers gave up.
+        apps.set_file_time(Arc::clone(&clock), Duration::from_secs(60), LateOperation::Lands);
+        assert_eq!(
+            apps.launch(&notepad(), FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "app launch" }),
+            "the caller was told the launch passed its deadline"
+        );
+        assert_eq!(
+            apps.open_path("/home/sam/notes.txt", None, FIVE_SECONDS),
+            Err(PlatformError::DeadlineExceeded { call: "opening a file or folder" }),
+            "and the open"
+        );
+        assert_eq!(apps.launched(), ["notepad"], "the abandoned launch started the app anyway");
+        assert_eq!(apps.opened(), ["/home/sam/notes.txt"], "the abandoned open opened the file");
+        assert_eq!(clock.mono(), MonoTime(10_000_000_000), "each caller waited its 5 s, no longer");
     }
 
     #[test]
