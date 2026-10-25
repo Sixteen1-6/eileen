@@ -1,121 +1,108 @@
 # Developer setup
 
-This takes you from a fresh Windows 11 machine to a passing test suite and a running `eileen doctor`. The external pieces (Cua Driver, Playwright MCP, the agent harnesses) are optional until you work on the milestone that needs them.
-
-Third-party facts here are summarized from [RESEARCH.md](RESEARCH.md). When the two disagree, RESEARCH.md wins.
+This takes you from a fresh PC to a passing `cargo xtask ci`. Windows 11 is the full target; on
+Linux the neutral crates and the `-linux` crates build and test, and the `-win` crates compile to
+empty libraries. The versions here come from [BUILD.md](BUILD.md) section 4.1; when the two
+disagree, BUILD.md wins.
 
 ## Prerequisites
 
 | Tool | Version | Needed for |
 |---|---|---|
-| Windows 11 | current | Everything. The desktop layer uses Win32, DWM and UI Automation and does not run elsewhere. |
-| Python | 3.12 or newer | The core package |
-| git | any recent | Cloning and pull requests |
-| Node | 24 | Playwright MCP (milestone 2) |
-| uv | latest | Recommended. Faster installs and a managed venv. Plain `pip` works too. |
-| Rust toolchain or .NET SDK | latest stable | Only for the DesktopState sidecar (milestone 1). Not installed on the owner's machine today. |
+| Windows 11, or Ubuntu 24.04 or later | current | Windows for everything; Linux for the neutral crates, the `-linux` crates and fuzzing |
+| git | recent | Cloning, pull requests, the pre-push hook |
+| rustup | current | The toolchain itself is pinned to 1.99.0 in `rust-toolchain.toml`; rustup installs it on first use |
+| Visual Studio 2022 Build Tools, "Desktop development with C++" (MSVC 14.4x, Windows SDK 10.0.26100) | 17.14 | Windows: the MSVC target and the vendored C in SQLite, zstd and ring |
+| A C compiler (`build-essential`) | distribution's | Linux: the same vendored C |
+| cargo-binstall | 1.26.0, prebuilt | Installing the other tools prebuilt. GPL-3.0-only, a tool we run and never link |
+| sccache | 0.18.0, prebuilt | Optional local compile cache |
+| curl and tar | ship with Windows 11 | `cargo xtask fetch-native` |
 
-Install Python from python.org and tick "Add to PATH". Install Node 24 from nodejs.org.
+Install cargo-binstall and sccache from their release pages as prebuilt binaries. Never `cargo
+install` a tool from source: four tools built that way took 59 minutes on the owner's PC
+(BUILD.md section 6.1 rule 10). If you use sccache, set `RUSTC_WRAPPER=sccache`,
+`SCCACHE_DIR=%LOCALAPPDATA%\sccache` and `SCCACHE_CACHE_SIZE=8G` in your user environment; without
+it, builds work the same, only slower. No Dev Drive is needed.
 
-## Clone and install
+## Clone and set up
 
 ```powershell
 git clone https://github.com/Sixteen1-6/eileen.git
 cd eileen
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[dev]"
+cargo xtask setup
 ```
 
-With uv instead:
-
-```powershell
-uv venv
-.venv\Scripts\activate
-uv pip install -e ".[dev]"
-```
+`cargo xtask setup` installs the pinned toolchain, installs cargo-nextest 0.9.148, cargo-deny
+0.20.2, cargo-machete 0.9.2, cargo-insta 1.49.0 and typos 1.51.1 with cargo-binstall (each
+project's own prebuilt release only, with no token lookup in credential files and no telemetry),
+points git's `core.hooksPath` at `.githooks` so `cargo xtask pre-push` runs before every
+push, and on Windows fetches and verifies the native libraries (below). It is safe to run again.
 
 Then check the install:
 
 ```powershell
-pytest
-python -m eileen --version
-python -m eileen doctor
+cargo xtask check -p eileen-contracts
+cargo xtask test -p eileen-core
+cargo xtask ci
 ```
 
-`doctor` reports which external pieces it can find (Cua Driver, Playwright MCP, `claude`, `codex`, a microphone) and which environment variables are set. Missing pieces are warnings, not errors, until the milestone that needs them.
+`cargo xtask ci` runs what the pull request lane runs and lists, at the end, the CI-only steps it
+skipped and why.
 
-## External pieces
+## The build guard
 
-None of these are needed to run the tests. Install them when you reach the milestone that uses them.
+Every `cargo xtask` command that runs cargo takes a build slot first (BUILD.md section 6.1 rule
+1). It admits a build by available memory, commit headroom and the paging rate, sets
+`CARGO_BUILD_JOBS` from free memory, and runs cargo in a kill-on-close Job Object at below-normal
+priority, so a killed command leaves no compiler running. When no slot comes within `--wait-max`
+(30 minutes by default) it exits with code 75: wait and try again.
 
-### Cua Driver (milestone 2, desktop actions)
+- `cargo xtask slots` lists the holders; `cargo xtask slots --kill-stale` frees the records of
+  holders that are gone.
+- Release builds, speech-model tests, soaks and benchmarks take both slots with `--exclusive`.
+- A cold build can outlast a 10-minute foreground tool call. Agents start guarded builds in the
+  background and wait for them.
+- On the owner's PC, `cargo xtask slots --baseline` samples a typical working day and writes the
+  thresholds the guard uses; until then the code defaults apply.
 
-Cua Driver is the Windows host daemon that exposes UI Automation and input as MCP tools. It is MIT licensed, written in Rust, and ships Python and TypeScript SDKs. Install it from the official docs at cua.ai. Do not build it from source unless you are changing it. After install, `python -m eileen doctor` should list its named pipe.
+## Windows notes
 
-### Playwright MCP and the browser extension (milestone 2, browser)
+- The workspace builds for `x86_64-pc-windows-msvc` with the static C runtime
+  (`.cargo/config.toml`).
+- `cargo xtask fetch-native` downloads the pinned sherpa-onnx archive into the machine folder,
+  checks its size and SHA256, and unpacks it. Every cargo run through `cargo xtask` then gets
+  `SHERPA_ONNX_ARCHIVE_DIR`, `ORT_LIB_LOCATION` and `ORT_PREFER_DYNAMIC_LINK`, so nothing
+  downloads unchecked binaries, and test binaries load the right `onnxruntime.dll` from beside
+  themselves (`System32` holds an older copy the loader would find first).
+- Each worktree keeps its own target folder; delete it when the branch merges.
+- Developer Mode is optional; symlink tests need it, and you turn it on yourself.
 
-Playwright MCP drives your real, logged-in Chrome or Edge tabs through a browser extension. Two steps:
+## Linux notes
 
-1. Install the Playwright Extension from the Chrome Web Store. It works in Chrome and Edge.
-2. Run the server with the extension flag:
+- Linux never builds the Windows native libraries: they sit under Windows target tables.
+- Fuzzing runs here, with the nightly pinned in `fuzz/rust-toolchain.toml` and cargo-fuzz 0.13.2
+  (see `fuzz/README.md`).
+- What the `-linux` crates' tests need (a D-Bus session, the desktop's services) is in
+  [LINUX.md](LINUX.md) section 6.
 
-```powershell
-npx @playwright/mcp@latest --extension
-```
+## Signing in to Claude
 
-The extension shows a tab picker the first time a session attaches. Chrome DevTools MCP is a Chrome-only alternative; see RESEARCH.md section 2.3.
-
-### Agent harnesses (milestone 4)
-
-Install Claude Code and Codex CLI from their vendors, then sign in yourself:
-
-```powershell
-claude auth login
-codex login
-```
-
-Eileen spawns the unmodified binaries in your environment. It never reads their auth files, never runs an OAuth flow for you, and never proxies tokens. If you prefer API keys, set them in `.env` and the router uses them directly. The rules behind this are in RESEARCH.md section 3.
-
-## Environment variables
-
-Copy `.env.example` to `.env` and fill in what you have. `.env` is gitignored. Never commit it.
-
-```ini
-# Model access. Optional: the signed-in claude and codex binaries work without these.
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
-
-# Phone bridge (milestone 5). Token from BotFather; ntfy topic name.
-TELEGRAM_BOT_TOKEN=
-NTFY_TOPIC=
-
-# Set to 1 to keep everything on this machine: no cloud model calls, no subscription-backed workers.
-EILEEN_LOCAL_ONLY=0
-```
-
-## Running the tests
-
-```powershell
-pytest                # full suite
-pytest tests/core     # one subpackage
-pytest -k desktop     # by keyword
-ruff check .
-ruff format --check .
-```
-
-Unit tests run without a microphone, a display or a signed-in harness. Tests that need real hardware or a real harness are marked `integration` and skipped by default. Run them with `pytest -m integration` on a machine that has the pieces installed.
+Install the claude CLI from Anthropic and sign in yourself with `claude auth login`. Eileen
+spawns the unmodified CLI in your environment; it never reads credential files, never runs a login
+flow and never proxies tokens. The only API key Eileen accepts is DeepSeek's, kept in the
+operating system's credential store, never in a file in the repository.
 
 ## Troubleshooting
 
-**PyAudio will not install.** `pip` tries to compile it when no prebuilt wheel matches your Python version, and the build fails without PortAudio headers. Check that your Python version has a wheel on PyPI, or install the Microsoft C++ Build Tools and retry. RealtimeSTT and RealtimeTTS, which the voice loop uses, are known to work on Windows.
+**`cargo xtask` exits with code 75.** No build slot came within `--wait-max`. Run
+`cargo xtask slots` to see who holds them, wait, and try again; `--kill-stale` frees a slot whose
+holder died.
 
-**Window rects are off by a scale factor.** Every process that reads window geometry must be per-monitor-V2 DPI aware, so rects come back in physical pixels. If you write a script that talks to Win32 directly, set DPI awareness before the first window call. The sidecar does this for you.
+**cargo says a workspace member has no manifest.** Every folder under `crates/` is a member; a
+folder there without a `Cargo.toml` breaks the workspace.
 
-**A UI Automation call hangs.** UIA calls into a frozen app block until that app answers. Every UIA call in Eileen goes through a timeout wrapper; use it instead of calling the library directly. If the hang persists, the app is the problem, not the tree.
+**A test binary loads the wrong `onnxruntime.dll`.** Run `cargo xtask fetch-native` and build
+through `cargo xtask`, which points `ort` at the verified copy.
 
-**Chrome refuses a CDP connection.** Since Chrome 136, raw CDP against the default profile is refused unless you opt in via `chrome://inspect`. That is why Eileen uses the Playwright extension path for browser work. Chrome DevTools MCP needs Chrome 144 or newer and shows a consent dialog per request.
-
-**`python -m eileen` cannot find the module.** The venv is not active, or you installed without `-e`. Run `.venv\Scripts\activate` and then `pip install -e ".[dev]"` again.
-
-**`claude` or `codex` not found.** They must be on PATH in the shell where you run Eileen. Open a new terminal after installing them.
+**A slow or hung build on a busy PC.** Close heavy apps, and if you use WSL, `wsl --shutdown`
+frees about 4 GB; the guard then admits a second slot on its own.

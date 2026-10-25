@@ -25,8 +25,8 @@ records when they exist.
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
-| 5 | `wp0/xtask` | Open on 2026-10-25 |
-| 6 | `wp0/guidance` | Not started |
+| 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
+| 6 | `wp0/guidance` | Open on 2026-10-25 |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -108,6 +108,18 @@ around the stub core, TOML profiles with a checked-in JSON Schema, seeded runs f
 `arbitrary::Unstructured` buffer, the fixed-column step log, `--doublecheck` over a stable FNV-1a
 trace hash, `crates/eileen-sim/regressions/`, invariants 6, 10 and 13, a 64 MiB simulator stack,
 one test per pull request seed, and the `eileen-sim` binary `cargo xtask sim` runs.
+
+`wp0/guidance` adds the guidance of section 4b.4. The root `AGENTS.md` stays within check 2's
+150 lines, and `CLAUDE.md` imports it and adds a Claude-only section. Nested pairs sit in
+`crates/eileen-desktop-win/`, `crates/eileen-apps-win/`, `crates/eileen-speech/`, `fuzz/` and
+`scenarios/`; `integrations/claude-plugin/` gets its pair when WP8 creates the folder.
+`.claude/settings.json` denies direct cargo builds, test runs, lints and benchmarks,
+`cargo install`, `cargo clean` and release builds, allows `cargo xtask`, and denies reads of
+vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRIBUTING.md`,
+`docs/DEV-SETUP.md` and `SECURITY.md` are rewritten for the Rust workspace, `NOTICE` lists the
+third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
+and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
+in the workspace.
 
 ## Acceptance records
 
