@@ -592,7 +592,7 @@ async fn password_text_is_refused_without_asking_for_it() {
         DbusError::Refused { what: "accessible text", reason: "a password field" },
         "a password field is refused by its role"
     );
-    assert_eq!(*password.text_reads.lock().unwrap(), [], "its text is never asked for");
+    assert_eq!(count(&password.text_uses), 0, "nothing of its Text is ever asked for");
     let text = atspi.text(&app.object("/plain"), 9).await.unwrap();
     assert_eq!(text.get(), "Dear Ada,", "a plain field's text, sanitized and kept to 9 characters");
     assert_eq!(*plain.text_reads.lock().unwrap(), [(0, 9)], "asked once, for the first 9");
@@ -601,6 +601,30 @@ async fn password_text_is_refused_without_asking_for_it() {
         DbusError::NotFound { what: "accessible text" },
         "an object without Text"
     );
+}
+
+#[tokio::test]
+async fn a_password_fields_selection_is_refused_without_asking_for_it() {
+    let a11y = PrivateBus::start();
+    let app = App::start(&a11y).await;
+    let text = Some("hunter2".to_owned());
+    let password = Node { role: 40, text, selections: vec![(0, 7)], ..Node::default() };
+    let password = app.add("/password", password).await;
+    let letter = Some("Dear Ada,".to_owned());
+    let plain = Node { role: 61, text: letter, selections: vec![(5, 8)], ..Node::default() };
+    let plain = app.add("/plain", plain).await;
+    let atspi = Atspi::new(&a11y.connect().await);
+    assert_eq!(
+        atspi.selection(&app.object("/password"), 100).await.unwrap_err(),
+        DbusError::Refused { what: "accessible text", reason: "a password field" },
+        "a password field's selection is refused by its role"
+    );
+    assert_eq!(count(&password.text_uses), 0, "nothing of its Text, its range neither, asked for");
+    let selected = atspi.selection(&app.object("/plain"), 100).await.unwrap();
+    let selected = selected.as_ref().map(|text| text.get().as_str());
+    assert_eq!(selected, Some("Dear Ada,"), "a plain field's, which the fake gives whole");
+    assert_eq!(count(&plain.text_uses), 3, "its count, its first range and its text");
+    assert_eq!(*plain.text_reads.lock().unwrap(), [(5, 8)], "the range it said");
 }
 
 #[tokio::test]

@@ -156,6 +156,9 @@ pub(crate) struct Calls {
     pub(crate) index_reads: Arc<AtomicU32>,
     /// The range each `Text.GetText` call asked for.
     pub(crate) text_reads: Arc<Mutex<Vec<(i32, i32)>>>,
+    /// How many calls its `Text` received, of any of its methods: `GetText`, `GetNSelections`
+    /// and `GetSelection`.
+    pub(crate) text_uses: Arc<AtomicU32>,
 }
 
 /// What a fake object answers. The default has no name, role 0, no states and no children.
@@ -294,26 +297,30 @@ impl Object {
     }
 }
 
-/// A fake object's `org.a11y.atspi.Text`. It answers its whole text whatever range is asked
-/// for, so the bound a test sees is the client's own.
+/// A fake object's `org.a11y.atspi.Text`, which counts every call it receives. It answers its
+/// whole text whatever range is asked for, so the bound a test sees is the client's own.
 struct Text {
     content: String,
     selections: Vec<(i32, i32)>,
     reads: Arc<Mutex<Vec<(i32, i32)>>>,
+    calls: Arc<AtomicU32>,
 }
 
 #[zbus::interface(name = "org.a11y.atspi.Text")]
 impl Text {
     fn get_text(&self, start_offset: i32, end_offset: i32) -> String {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         self.reads.lock().unwrap().push((start_offset, end_offset));
         self.content.clone()
     }
 
     fn get_n_selections(&self) -> i32 {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         i32::try_from(self.selections.len()).unwrap()
     }
 
     fn get_selection(&self, selection_num: i32) -> Result<(i32, i32), Failure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let range = usize::try_from(selection_num).ok().and_then(|n| self.selections.get(n));
         range.copied().ok_or(Failure(INVALID_ARGS))
     }
@@ -386,8 +393,9 @@ impl App {
         let calls = node.calls.clone();
         let server = self.conn.object_server();
         if let Some(text) = node.text.clone() {
-            let reads = Arc::clone(&calls.text_reads);
-            let text = Text { content: text, selections: node.selections.clone(), reads };
+            let (reads, text_uses) = (Arc::clone(&calls.text_reads), Arc::clone(&calls.text_uses));
+            let selections = node.selections.clone();
+            let text = Text { content: text, selections, reads, calls: text_uses };
             assert!(server.at(path, text).await.unwrap(), "Text is served at {path}");
             node.interfaces.push("org.a11y.atspi.Text".to_owned());
         }

@@ -24,7 +24,7 @@ use tokio::time::Instant;
 
 use crate::fake::{
     ACTIVE, App, Calls, DEFUNCT, FOCUSED, ICONIFIED, Node, ROOT, Reference, SHOWING, Session,
-    registry, words,
+    count, registry, words,
 };
 
 /// AT-SPI2's role numbers the tests use, written out.
@@ -552,7 +552,7 @@ fn a_focused_password_field_says_so_and_its_selection_is_never_read() {
         Err(PlatformError::Unavailable { what: "clipboard" }),
         "and the clipboard, allowed, not read yet"
     );
-    assert_eq!(*calls.text_reads.lock().unwrap(), [], "its text is never asked for");
+    assert_eq!(count(&calls.text_uses), 0, "nothing of its Text is ever asked for");
 }
 
 #[test]

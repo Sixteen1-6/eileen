@@ -24,7 +24,7 @@
 //! - Linux only: `cfg(target_os = "linux")`, an empty library elsewhere.
 //! - It never reads a password field's text: [`Atspi::text`] and [`Atspi::selection`] refuse the
 //!   `password text` role before any `Text` call, as Windows refuses `IsPassword` (BUILD.md 2.6;
-//!   tests `password_text_is_refused_without_asking_for_it` and the grounding password test).
+//!   the tests whose names hold `password`, which count every `Text` call the field receives).
 //! - It writes nothing: not `IsEnabled`, which would turn on every Qt, Chromium and Firefox tree
 //!   (2.6), nor any app's state (test `toolkit_accessibility_is_read_and_never_written`).
 //! - Every app text is sanitized and bounded, and no error carries it or an error name an app
