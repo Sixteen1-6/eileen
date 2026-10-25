@@ -420,7 +420,7 @@ async fn toolkit_accessibility_is_read_and_never_written() {
     let session = Session::start(a11y.address()).await;
     assert!(!toolkit_accessibility(&session.conn).await.unwrap(), "off, as the launcher says");
     session.enabled.store(true, Ordering::SeqCst);
-    assert!(toolkit_accessibility(&session.conn).await.unwrap(), "read again, not cached");
+    assert!(toolkit_accessibility(&session.conn).await.unwrap(), "each call asks the launcher");
     let _atspi = accessibility_bus(&session.conn, CALL_TIMEOUT).await.unwrap();
     session.enabled.store(false, Ordering::SeqCst);
     assert!(!toolkit_accessibility(&session.conn).await.unwrap(), "off again");
