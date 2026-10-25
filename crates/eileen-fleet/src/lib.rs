@@ -17,16 +17,20 @@
 //! # Invariants
 //!
 //! - The machine hash comes from `fleet\machine.toml` in the user's own data directory, never a
-//!   run's throwaway one.
+//!   run's throwaway one (WP9 acceptance 4 tests it).
 //! - An armed run starts only after 30 idle minutes, and the Task Scheduler entry only after an
-//!   explicit yes.
-//! - The stub runs nothing: `eileen test --fleet` says it is not built yet.
+//!   explicit yes (WP9 adds the test).
+//! - The stub runs nothing: `eileen test --fleet` says it is not built yet (`eileen-cli`'s
+//!   `it::commands::every_command_of_section_3_5_says_not_built_yet`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-cli` and `eileen-e2e`.
 //! - May depend on `eileen-scenarios`, `eileen-replay`, `eileen-record`, `eileen-supervisor`,
 //!   `eileen-rt`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-e2e` (development only), `eileen-runtime`, `eileen-mcp` or rmcp,
+//!   nor know vendor CLI flags (section 3.1); nor on a `-win` or `-linux` crate outside a
+//!   matching target table (check 15).
 //! - Wire types: `FleetResult` lines (`eileen-contracts::fleet`).
 //!
 //! # Testing

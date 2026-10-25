@@ -19,8 +19,10 @@
 //!
 //! # Invariants
 //!
-//! - It runs outside the core's Job Object, so it outlives a core it must restart.
-//! - Restarts are rate-limited; a core that keeps failing is reported, not looped.
+//! - It runs outside the core's Job Object, so it outlives a core it must restart
+//!   (`eileen-supervisor`'s `tests::the_guard_spawn_outlives_its_parent`, run on Windows).
+//! - Restarts are rate-limited; a core that keeps failing is reported, not looped (WP2 adds the
+//!   test).
 //! - `minidumper` appears only under its Windows target table (section 4.1, check 15).
 //!
 //! # Boundaries
@@ -29,14 +31,17 @@
 //! - May depend on `eileen-crash`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and
 //!   on `minidumper` under the Windows target table; it is one of the three crates outside the
 //!   spawn rule (section 3.1).
+//! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-supervisor`, `eileen-rt` or
+//!   rmcp, nor know vendor CLI flags (section 3.1); nor on a `-win` or `-linux` crate, or on
+//!   `minidumper` outside the Windows target table (check 15).
 //! - Wire types: `minidumper`'s protocol and the core's heartbeat.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-guard` (until `wp0/xtask` merges,
 //!   `cargo nextest run -p eileen-guard`).
-//! - Layers: a Windows test that kills a stand-in core mid-call and finds its hang dump and a
-//!   restart within the backoff bound (WP2 acceptance 2).
+//! - Layers: a Windows test that kills a stand-in sidecar mid-call and finds the guard's hang
+//!   dump in the incident and a restart within the backoff bound (WP2 acceptance 2).
 //! - A bug here starts as a hung core nobody restarted, or a restart storm.
 //!
 //! # Traps

@@ -18,13 +18,15 @@
 //! # Invariants
 //!
 //! - Event shapes match the real CLI's: the nightly contract test compares them with the
-//!   scripts (`cargo xtask contract-claude`).
-//! - Never linked into a shipped binary (development only).
+//!   scripts (`cargo xtask contract-claude` on the owner's PC, which WP3 builds).
 //!
 //! # Boundaries
 //!
-//! - Started by `eileen-harness` through the supervisor in tests.
+//! - Started by `eileen-harness` through the supervisor in tests; no shipped crate depends on it
+//!   (development only: section 3.1's table, and `process = "tests"` in its metadata, check 22).
 //! - May depend on `eileen-harness`, `eileen-contracts` and `eileen-stdx`.
+//! - Must not depend on `eileen-trace` (it writes only the protocol on stdout), `eileen-rt`,
+//!   `eileen-runtime` or rmcp (section 3.1), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: stream-json, as the claude CLI writes it.
 //!
 //! # Testing

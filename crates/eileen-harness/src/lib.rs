@@ -18,18 +18,22 @@
 //!
 //! # Invariants
 //!
-//! - Only this crate knows vendor CLI flags and protocols (section 3.1).
-//! - Every vendor process starts through `eileen_supervisor`, in a Job Object.
+//! - Every vendor process starts through `eileen_supervisor`, in a Job Object
+//!   (`disallowed-methods` bans `Command::new`; check 14).
 //! - The stub builds only the Claude route, whose drivers answer `NotBuilt` until WP3 builds
-//!   them, and every other route is `RouteUnavailable` (unit tests in `tests`).
+//!   them, and every other route is `RouteUnavailable` (unit tests
+//!   `tests::only_the_claude_route_has_a_worker_driver` and
+//!   `tests::the_stub_claude_brain_answers_not_built_and_measures_nothing`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-cli` (the component) and `eileen-stub-harness`.
 //! - May depend on `eileen-supervisor`, `eileen-buildguard`, `eileen-rt`, `eileen-contracts`,
 //!   `eileen-stdx` and `eileen-trace`.
-//! - Wire types: the vendors' protocols (stream-json for Claude); Eileen's side of them is
-//!   contract types.
+//! - Must not depend on `eileen-core` or `eileen-runtime` (the core decides), `eileen-mcp` or
+//!   rmcp (section 3.1), or on a `-win` or `-linux` crate (check 15).
+//! - Wire types: the vendors' CLI flags and protocols (stream-json for Claude), which only this
+//!   crate knows (section 3.1); Eileen's side of them is contract types.
 //!
 //! # Testing
 //!

@@ -18,9 +18,10 @@
 //!
 //! # Invariants
 //!
-//! - Precedence: safety and control, then the built-in grammar, then learned templates.
+//! - Precedence: safety and control, then the built-in grammar, then learned templates (WP7
+//!   acceptance 3: a template that shadows "stop" or "undo that" is rejected).
 //! - A slot resolver returns `Ambiguous` for bare numbers and times without units, and replay
-//!   never runs on an ambiguous slot (WP7's golden-file tests).
+//!   never runs on an ambiguous slot (the golden file's ambiguity cases, WP7 acceptance 3).
 //! - Pure: no IO, no clock, no native library (check 24).
 //! - The stub sends every utterance to the brain (unit test
 //!   `tests::the_stub_sends_every_utterance_to_the_brain`).
@@ -29,6 +30,10 @@
 //!
 //! - Called by `eileen-core` through the port, and by `eileen-sim`.
 //! - May depend on `eileen-skills`, `eileen-contracts` and `eileen-stdx`.
+//! - Must not depend on `eileen-core` (it calls the port), `eileen-speech` (embeddings arrive as
+//!   vectors), `eileen-trace` (the crate logs nothing) or rmcp, nor know vendor CLI flags
+//!   (section 3.1); nor on a native library or anything that can hang (check 24), or a `-win` or
+//!   `-linux` crate (check 15).
 //! - Wire types: none of its own; resolutions are contract types.
 //!
 //! # Testing

@@ -19,15 +19,20 @@
 //! # Invariants
 //!
 //! - `check` applies exactly the rules CI's check 18 applies, through `eileen_trace::privacy`
-//!   and `eileen_contracts::scenario::status_problems`.
-//! - `bless` rewrites an expected trace only when every expectation still passes.
-//! - A shared scenario holds only placeholders in its personal fields.
+//!   and `eileen_contracts::scenario::status_problems` (WP2 acceptance 11).
+//! - `bless` rewrites an expected trace only when every expectation still passes (WP2
+//!   acceptance 11).
+//! - A shared scenario holds only placeholders in its personal fields (WP2 acceptance 8: the
+//!   redacted folder passes `scenarios check`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-cli`, `eileen-fleet` and `eileen-e2e`.
 //! - May depend on `eileen-record`, `eileen-replay`, `eileen-supervisor`, `eileen-rt`,
 //!   `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-runtime`, `eileen-fleet`, `eileen-e2e`, `eileen-mcp` or rmcp, nor
+//!   know vendor CLI flags (section 3.1); nor on a `-win` or `-linux` crate outside a matching
+//!   target table (check 15).
 //! - Wire types: scenario folders, in the contract format.
 //!
 //! # Testing

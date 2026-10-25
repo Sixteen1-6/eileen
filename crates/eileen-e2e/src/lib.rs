@@ -20,16 +20,20 @@
 //! # Invariants
 //!
 //! - A benchmark run is excluded only for "start it anyway" or thrashing, with the reason
-//!   recorded.
-//! - Result files and comments are untrusted data, parsed by the fuzzed `fleet_result` parser.
-//! - Never linked into a shipped binary (development only).
+//!   recorded (WP9 adds the test).
+//! - Result files and comments are untrusted data, parsed by the fuzzed `fleet_result` parser
+//!   (WP9 acceptance 4 and 7).
 //!
 //! # Boundaries
 //!
-//! - Called by `cargo xtask` and the `devhub.yml` workflow.
+//! - Called by `cargo xtask` and the `devhub.yml` workflow; no shipped crate depends on it
+//!   (development only: section 3.1's table, and `process = "tests"` in its metadata, check 22).
 //! - May depend on `eileen-scenarios`, `eileen-fleet`, `eileen-replay`, `eileen-record`,
 //!   `eileen-supervisor`, `eileen-mcp`, `eileen-config`, `eileen-rt`, `eileen-contracts`,
 //!   `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-runtime`, `eileen-cli` or a sidecar's crate, whose binaries it
+//!   runs, or on rmcp except through `eileen-mcp`, nor know vendor CLI flags (section 3.1);
+//!   nor on a `-win` or `-linux` crate outside a matching target table (check 15).
 //! - Wire types: benchmark result lines and fleet results, in contract formats.
 //!
 //! # Testing

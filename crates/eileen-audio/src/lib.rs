@@ -18,10 +18,11 @@
 //!
 //! # Invariants
 //!
-//! - The capture callback allocates nothing and logs nothing (a counting allocator checks it in
-//!   debug builds).
-//! - Mute stops the capture stream within one buffer.
-//! - The ring buffer is loom-tested under `cfg(loom)`.
+//! - The capture callback allocates nothing and logs nothing (WP4 adds the counting allocator
+//!   that checks it in debug builds).
+//! - Mute stops the capture stream within one buffer (WP4 acceptance 9 tests it).
+//! - The ring buffer is safe under concurrent use by the callback and its reader (WP4 adds its
+//!   loom tests, under `cfg(loom)`).
 //! - The stub accepts the audio family and does nothing (unit test
 //!   `tests::the_stub_component_takes_the_audio_family`).
 //!
@@ -30,6 +31,9 @@
 //! - Called by `eileen-cli` (the component).
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx` and
 //!   `eileen-trace`; `eileen-audio-win` and `cpal` under the Windows target table.
+//! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
+//!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
+//!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
 //! - Wire types: the speech pipe's PCM frames (`eileen-contracts::speech`).
 //!
 //! # Testing

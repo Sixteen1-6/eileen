@@ -22,15 +22,21 @@
 //!
 //! - Pure: no IO, no clock, no native library (check 24).
 //! - A replayed skill never raises a tier, skips a confirmation or calls a tool its origin does
-//!   not allow (invariant 7).
+//!   not allow (simulator invariant 7; WP7 acceptance 8).
 //! - The stub engine knows no skill: it refuses every replay and counts nothing as a success
-//!   (unit tests in `tests`).
+//!   (unit tests `tests::the_stub_engine_refuses_every_replay` and
+//!   `tests::the_stub_engine_counts_nothing_as_a_success`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-core` through the port, and by `eileen-intent`, `eileen-learn` and
 //!   `eileen-sim`.
 //! - May depend on `eileen-contracts` and `eileen-stdx`.
+//! - Must not depend on `eileen-core` (it calls the port), `eileen-intent` or `eileen-learn`
+//!   (they depend on it), `eileen-trace` (the crate logs nothing) or rmcp, nor know vendor CLI
+//!   flags (section 3.1);
+//!   nor on a native library or anything that can hang (check 24), or on a `-win` or `-linux`
+//!   crate (check 15).
 //! - Wire types: none of its own; skills and recipes are contract types.
 //!
 //! # Testing

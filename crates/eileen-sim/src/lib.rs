@@ -17,15 +17,22 @@
 //! # Invariants
 //!
 //! - One seed gives one trace on every OS: `--doublecheck` runs a seed twice and compares the
-//!   trace hashes.
-//! - The simulator thread runs on an explicit large stack.
-//! - Never linked into a shipped binary (development only).
+//!   trace hashes (WP0 acceptance 7), and the nightly simulation runs on both OSes.
+//! - Every invariant of section 4.7 has a hand-written scenario that breaks a fake and proves the
+//!   invariant catches it (WP1 acceptance 1).
+//! - The simulator thread runs on an explicit large stack (the nightly simulation runs on
+//!   Windows, whose main-thread stack is small).
 //!
 //! # Boundaries
 //!
-//! - Called by `xtask` (`cargo xtask sim`) and the fuzz target `sim`.
+//! - Called by `xtask` (`cargo xtask sim`) and the fuzz target `sim`; no shipped crate depends
+//!   on it (development only: section 3.1's table, and `process = "tests"` in its metadata,
+//!   check 22).
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-replay`, `eileen-intent`,
 //!   `eileen-dictation`, `eileen-skills`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-runtime`, `eileen-harness` or `eileen-supervisor`, which its
+//!   `World` simulates, or on rmcp, nor know vendor CLI flags (section 3.1); nor on a `-win` or
+//!   `-linux` crate (check 15).
 //! - Wire types: `SimRegression` (a contract type).
 //!
 //! # Testing

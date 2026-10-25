@@ -19,11 +19,14 @@
 //!
 //! # Invariants
 //!
-//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere.
+//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere (the
+//!   `logic-linux` CI job builds it on Linux, where it has no dependencies).
 //! - Unsafe code only in a private `ffi` module, one operation per block (check 10).
 //! - The Raw Input module stores no key code but the dictation key, and for the approve, deny
 //!   and unmute chords only a "came from a device" flag; never a pointer position (check 25).
 //! - Its native libraries appear only under its Windows target table (section 4.1, check 15).
+//! - The stub answers `PlatformError::Unavailable` and takes toasts (unit test
+//!   `tests::the_stub_shell_answers_unavailable_and_takes_toasts`, run on Windows).
 //!
 //! # Boundaries
 //!
@@ -31,6 +34,9 @@
 //! - May depend on `eileen-platform`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and
 //!   on `keyring-core`, `windows-native-keyring-store`, `tray-icon`, `global-hotkey` and
 //!   `tauri-winrt-notification`.
+//! - Must not depend on `eileen-cli` or `eileen-runtime`, another `-win` crate, `eileen-rt` or
+//!   rmcp, nor know vendor CLI flags (section 3.1); nor on a native library that section 4.1
+//!   keeps for other crates, such as `cpal` or `ort` (check 15).
 //! - Wire types: none of its own.
 //!
 //! # Testing

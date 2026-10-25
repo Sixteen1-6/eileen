@@ -20,11 +20,14 @@
 //!
 //! # Invariants
 //!
-//! - Every queue is bounded and every task starts through `eileen_rt`.
+//! - Every queue is bounded and every task starts through `eileen_rt` (`disallowed-methods`
+//!   bans `unbounded_channel` and `tokio::spawn`).
 //! - The `PreToolUse` endpoint never answers `allow`; `allow` comes only from a held `approve`
 //!   call after a `UserInput` approval (WP2 acceptance 3).
-//! - Only a runtime reading real memory writes the machine-wide memory files (section 6.1).
-//! - The stub runs nothing: every command here says it is not built yet.
+//! - Only a runtime reading real memory writes the machine-wide memory files (section 6.1; WP2
+//!   acceptance 12).
+//! - The stub runs nothing: every command here says it is not built yet (`eileen-cli`'s
+//!   `it::commands::every_command_of_section_3_5_says_not_built_yet`).
 //!
 //! # Boundaries
 //!
@@ -32,6 +35,10 @@
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-replay`, `eileen-config`,
 //!   `eileen-mcp`, `eileen-supervisor`, `eileen-buildguard` (its `samples` module only),
 //!   `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on a component's crate (`eileen-harness`, `eileen-audio`, `eileen-learn`
+//!   and the like, which `eileen-cli` wires) or on rmcp except through `eileen-mcp`, nor know
+//!   vendor CLI flags (section 3.1); nor on vendored C outside `eileen-runtime::store`
+//!   (check 24), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: the loopback endpoint's JSON and the store's rows, built from contract types.
 //!
 //! # Testing

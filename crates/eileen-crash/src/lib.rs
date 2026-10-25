@@ -20,13 +20,17 @@
 //! - `crash-handler` and `minidumper` appear only under this crate's and `eileen-guard`'s
 //!   Windows target tables (section 4.1, check 15).
 //! - Unsafe code only in the private `ffi` module, one operation per block (check 10).
-//! - A dump never carries the user's words into a log line: messages pass the `pii.` policy.
+//! - A dump never carries the user's words into a log line: messages pass the `pii.` policy
+//!   (WP2 acceptance 7's redaction canary).
 //!
 //! # Boundaries
 //!
 //! - Called by every Eileen binary at start.
 //! - May depend on `eileen-contracts` and `eileen-trace`, and on `crash-handler` and
 //!   `minidumper` under the Windows target table.
+//! - Must not depend on `eileen-guard` (the dependency runs the other way), `eileen-rt`,
+//!   `eileen-supervisor` or rmcp, nor know vendor CLI flags (section 3.1); nor on a `-win` or
+//!   `-linux` crate, or on its native libraries outside the Windows target table (check 15).
 //! - Wire types: `minidumper`'s own protocol to the guard.
 //!
 //! # Testing

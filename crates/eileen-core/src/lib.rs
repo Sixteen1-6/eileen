@@ -19,17 +19,21 @@
 //! # Invariants
 //!
 //! - No IO: the crate depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`
-//!   (check 24), time comes in as [`MonoTime`] and randomness as [`CoreRng`].
-//! - Maps that can reach an effect are ordered: `crates/eileen-core/clippy.toml` bans `HashMap`.
+//!   (check 24); time comes in as [`MonoTime`] and randomness as [`CoreRng`]
+//!   (`disallowed-methods` bans the system clock and generated IDs).
+//! - Maps that can reach an effect are ordered (`disallowed-types` in
+//!   `crates/eileen-core/clippy.toml` bans `HashMap`).
 //! - The stub takes every input and emits nothing (unit test
 //!   `tests::a_stub_core_takes_any_input_and_emits_nothing`).
-//! - The sixteen simulator invariants of section 4.7 hold after every step (WP1, `eileen-sim`).
+//! - The sixteen simulator invariants of section 4.7 hold after every step (WP1 acceptance 1
+//!   tests them in `eileen-sim`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime` (one task owns the core), `eileen-replay` and `eileen-sim`.
-//! - May depend on `eileen-contracts`, `eileen-stdx` and `eileen-trace`; must not depend on any
-//!   other Eileen crate, a native library or anything that can hang.
+//! - May depend on `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on any other Eileen crate, a native library or anything that can hang
+//!   (check 24), or on rmcp, nor know vendor CLI flags (section 3.1).
 //! - Wire types: none of its own; inputs, effects and the snapshot are contract types.
 //!
 //! # Testing

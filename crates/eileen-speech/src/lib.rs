@@ -20,11 +20,13 @@
 //! # Invariants
 //!
 //! - The shipped `eileen` binary never links ONNX Runtime: `eileen voice` and `eileen setup`
-//!   run this binary through the supervisor (section 3.1).
+//!   run this binary through the supervisor (section 3.1's table keeps this crate out of
+//!   `eileen-cli`'s row; check 15 keeps `ort` in the target tables section 4.1 allows).
 //! - At start it checks that the loaded `onnxruntime.dll` sits beside the executable and reports
-//!   1.28.2, and exits with a clear error otherwise.
-//! - No watermark stage runs with default settings.
-//! - No GPL component in a release build (owner answer 12).
+//!   1.28.2, and exits with a clear error otherwise (WP4 acceptance 9).
+//! - No watermark stage runs with default settings (WP4 acceptance 11).
+//! - No GPL component in a release build (owner answer 12; check 13's license list for crates,
+//!   WP4 acceptance 11 for the native libraries).
 //!
 //! # Boundaries
 //!
@@ -32,6 +34,10 @@
 //!   supervisor.
 //! - May depend on `eileen-supervisor`, `eileen-rt`, `eileen-contracts`, `eileen-stdx` and
 //!   `eileen-trace`; `eileen-audio-win`, `sherpa-onnx` and `ort` under the Windows target table.
+//! - Must not depend on `eileen-core`, `eileen-runtime` or `eileen-audio`, which it reaches only
+//!   over the pipe, or on rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win`
+//!   or `-linux` crate, or on `sherpa-onnx`, `ort` or `eileen-audio-win` outside the Windows
+//!   target table (check 15).
 //! - Wire types: the speech pipe's frames and JSON bodies (`eileen-contracts::speech`).
 //!
 //! # Testing

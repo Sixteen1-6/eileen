@@ -21,16 +21,21 @@
 //! # Invariants
 //!
 //! - The registry covers every configuration leaf key exactly once, with matching docs (check
-//!   27, a test here from WP7).
-//! - `Safety` keys change only with a `UserInput` approval.
+//!   27, a test here from WP7; WP7 acceptance 4).
+//! - `Safety` keys change only with a `UserInput` approval (WP7 acceptance 4 tests it).
 //! - Links no native library and nothing that can hang (check 24).
-//! - The stub loads, validates and applies nothing: each says it is not built yet (unit tests
-//!   in `tests`).
+//! - The stub loads, validates and applies nothing, and its validator refuses every change (unit
+//!   tests `tests::the_stub_loads_validates_and_applies_nothing` and
+//!   `tests::the_stub_validator_refuses_every_change`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-core` through the port, `eileen-runtime` (the files) and `eileen-cli`.
 //! - May depend on `eileen-platform`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-core` or `eileen-runtime` (they call it) or rmcp, nor know vendor
+//!   CLI flags (section 3.1); nor on a `-win` or `-linux` crate or `keyring-core`, as secrets
+//!   come through `SecretStore` (check 15), or on a native library or anything that can hang
+//!   (check 24).
 //! - Wire types: the configuration files, in the contract types' TOML form.
 //!
 //! # Testing

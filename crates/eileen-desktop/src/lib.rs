@@ -19,9 +19,12 @@
 //!
 //! # Invariants
 //!
-//! - Physical input during a lease stops synthetic input within one event (invariant 9).
-//! - Eileen's own hotkeys are blocked combos; typed text is redacted before any log.
-//! - Every UI Automation string enters through `eileen_contracts::desktop::sanitize`.
+//! - Physical input during a lease stops synthetic input within one event (simulator invariant
+//!   9; WP5 acceptance 1 on the desktop).
+//! - Eileen's own hotkeys are blocked combos; typed text is redacted before any log (WP5
+//!   acceptance 10 tests both).
+//! - Every UI Automation string enters through `eileen_contracts::desktop::sanitize` (check 26
+//!   keeps the strings `Untrusted`; WP5 adds the test).
 //!
 //! # Boundaries
 //!
@@ -29,6 +32,9 @@
 //! - May depend on `eileen-mcp`, `eileen-platform`, `eileen-supervisor`, `eileen-rt`,
 //!   `eileen-contracts`, `eileen-stdx` and `eileen-trace`; `eileen-desktop-win` under the
 //!   Windows target table.
+//! - Must not depend on `eileen-core`, `eileen-runtime`, another sidecar's crate or rmcp (only
+//!   through `eileen-mcp`), nor know vendor CLI flags (section 3.1); nor on any other `-win` or
+//!   `-linux` crate, or on `eileen-desktop-win` outside the Windows target table (check 15).
 //! - Wire types: the `desktop` toolset's arguments and results (`eileen-contracts::tools`).
 //!
 //! # Testing

@@ -17,14 +17,21 @@
 //!
 //! # Invariants
 //!
-//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere.
+//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere (the
+//!   `logic-linux` CI job builds it on Linux, where it has no dependencies).
 //! - Unsafe code only in a private `ffi` module, one operation per block (check 10).
-//! - Endpoint names leave the process only as `Personal`.
+//! - Endpoint names leave the process only as `Personal` (check 26's text-wrapping test; WP4
+//!   acceptance 14).
+//! - The stub answers `PlatformError::Unavailable` (unit test
+//!   `tests::the_stub_endpoints_answer_unavailable`, run on Windows).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-audio` and `eileen-speech` (under their Windows target tables).
 //! - May depend on `eileen-platform`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-audio` or `eileen-speech` (they depend on it), another `-win`
+//!   crate, `eileen-rt` or rmcp, nor know vendor CLI flags (section 3.1); nor on a native library
+//!   that section 4.1 keeps for other crates, such as `ort` (check 15).
 //! - Wire types: none of its own.
 //!
 //! # Testing

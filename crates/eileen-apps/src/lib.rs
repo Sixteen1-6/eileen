@@ -20,8 +20,10 @@
 //!
 //! # Invariants
 //!
-//! - Bridge replies are parsed as JSON, never compared as strings.
-//! - "Official" is never said of a route; the publisher's verified namespace is shown instead.
+//! - Bridge replies are parsed as JSON, never compared as strings (the fuzzed `resolve_reply`
+//!   parser; WP6 acceptance 6).
+//! - "Official" is never said of a route; the publisher's verified namespace is shown instead
+//!   (WP6 acceptance 8 tests it).
 //! - `ort` appears only under the Windows target table (section 4.1, check 15).
 //!
 //! # Boundaries
@@ -30,6 +32,9 @@
 //! - May depend on `eileen-mcp`, `eileen-platform`, `eileen-supervisor`, `eileen-rt`,
 //!   `eileen-contracts`, `eileen-stdx` and `eileen-trace`; `eileen-apps-win` and `ort` under the
 //!   Windows target table, `eileen-apps-linux` under the Linux one.
+//! - Must not depend on `eileen-core`, `eileen-runtime`, another sidecar's crate or rmcp (only
+//!   through `eileen-mcp`), nor know vendor CLI flags (section 3.1); nor on any other `-win` or
+//!   `-linux` crate, or on `ort` outside the Windows target table (check 15).
 //! - Wire types: the `apps` toolset's arguments and results (`eileen-contracts::tools::apps`).
 //!
 //! # Testing

@@ -18,8 +18,10 @@
 //!
 //! # Invariants
 //!
-//! - A strict replay stops at the first difference and names its sequence number and span path.
-//! - A changed hook decision fails a scenario replay; it is never passed silently.
+//! - A strict replay stops at the first difference and names its sequence number and span path
+//!   (WP1 acceptance 9).
+//! - A changed hook decision fails a scenario replay; it is never passed silently (WP1
+//!   acceptance 13).
 //! - The stub [`responder`] accepts the brain and worker families and does nothing (unit test
 //!   `tests::the_stub_responder_takes_the_harness_families`).
 //!
@@ -28,7 +30,10 @@
 //! - Called by `eileen-runtime` (`dev_replay_core`), `eileen-scenarios`, `eileen-fleet`,
 //!   `eileen-sim` and `eileen-cli`.
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-contracts`, `eileen-stdx` and
-//!   `eileen-trace`; links no native library and nothing that can hang (check 24).
+//!   `eileen-trace`.
+//! - Must not depend on `eileen-runtime`, `eileen-harness` (its [`responder`] stands in for it)
+//!   or rmcp, nor know vendor CLI flags (section 3.1); nor on a native library or anything that
+//!   can hang (check 24), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: none of its own.
 //!
 //! # Testing

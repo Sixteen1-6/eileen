@@ -17,16 +17,23 @@
 //!
 //! # Invariants
 //!
-//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere.
+//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere (the
+//!   `logic-linux` CI job builds it on Linux, where it has no dependencies).
 //! - Unsafe code only in a private `ffi` module, one operation per block (check 10).
-//! - COM calls run on the crate's own apartment thread with a deadline, never on a tokio worker.
+//! - COM calls run on the crate's own apartment thread with a deadline, never on a tokio worker
+//!   (WP6 adds the test, against a fake COM target).
 //! - A file the user's profile may keep on another machine is read within the caller's
-//!   `Deadline`, on a helper thread abandoned past it (section 3.4).
+//!   `Deadline`, on a helper thread abandoned past it (section 3.4; WP6 adds the test).
+//! - The stub answers `PlatformError::Unavailable` (unit test
+//!   `tests::the_stub_backends_answer_unavailable`, run on Windows).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-apps` (under its Windows target table).
 //! - May depend on `eileen-platform`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-apps` (the dependency runs the other way), another `-win` crate,
+//!   `eileen-rt` or rmcp, nor know vendor CLI flags (section 3.1); nor on a native library that
+//!   section 4.1 keeps for other crates, such as `ort` or `cpal` (check 15).
 //! - Wire types: none of its own; app operations are contract types.
 //!
 //! # Testing

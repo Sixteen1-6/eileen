@@ -18,7 +18,8 @@
 //! # Invariants
 //!
 //! - Pure: no IO, no clock, no native library (check 24).
-//! - Text that is not a correction is left as it was ("I actually enjoyed the movie").
+//! - Text that is not a correction is left as it was ("I actually enjoyed the movie"; WP4
+//!   acceptance 8 tests Eileen's negatives).
 //! - The stub returns the text unchanged with nothing counted (unit test
 //!   `tests::the_stub_cleaner_returns_the_text_unchanged`).
 //!
@@ -26,6 +27,9 @@
 //!
 //! - Called by `eileen-core` through the port, and by `eileen-sim`.
 //! - May depend on `eileen-contracts` and `eileen-stdx`.
+//! - Must not depend on `eileen-core` (it calls the port), `eileen-speech`, `eileen-trace` (the
+//!   crate logs nothing) or rmcp, nor know vendor CLI flags (section 3.1); nor on a native
+//!   library or anything that can hang (check 24), or a `-win` or `-linux` crate (check 15).
 //! - Wire types: none of its own; `Cleaned` is a contract type.
 //!
 //! # Testing

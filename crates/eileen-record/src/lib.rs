@@ -19,15 +19,19 @@
 //! # Invariants
 //!
 //! - `record::stub_blobs` and `record::resolve_blobs` are exact inverses, so a written line
-//!   reads back to the `RecordLine` that was written (WP1, a property test).
-//! - `trim` keeps every setup input and each kept hook input's answer.
-//! - The stub writes nothing: every `eileen record` form says it is not built yet.
+//!   reads back to the `RecordLine` that was written (WP1 adds the property test).
+//! - `trim` keeps every setup input and each kept hook input's answer (WP1 adds the test).
+//! - The stub writes nothing: every `eileen record` form says it is not built yet
+//!   (`eileen-cli`'s `it::commands::every_command_of_section_3_5_says_not_built_yet`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime`, `eileen-replay`, `eileen-scenarios`, `eileen-fleet`,
 //!   `eileen-learn` and `eileen-cli`.
 //! - May depend on `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on any other Eileen crate, such as `eileen-core` or `eileen-replay`, or on
+//!   rmcp, nor know vendor CLI flags (section 3.1); nor on vendored C outside
+//!   `eileen-record::blob` (check 24), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: the recording files, all of them contract types.
 //!
 //! # Testing

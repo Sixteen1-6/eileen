@@ -19,15 +19,20 @@
 //!
 //! # Invariants
 //!
-//! - Only physical clicks count: every `HudInput` carries the `physical` flag from Raw Input.
-//! - Every clickable `HudInput` maps to a grammar entry or a hotkey (the accessibility test).
-//! - The window is excluded from capture.
+//! - Only physical clicks count: every `HudInput` carries the `physical` flag from Raw Input
+//!   (WP8 acceptance 2: a synthetic click on Allow is ignored).
+//! - Every clickable `HudInput` maps to a grammar entry or a hotkey (the accessibility test,
+//!   WP8 acceptance 9).
+//! - The window is excluded from capture (WP8 acceptance 2: a `desktop_screenshot` lacks it).
 //!
 //! # Boundaries
 //!
 //! - Started by `eileen-runtime` through the supervisor; fed over the HUD pipe.
 //! - May depend on `eileen-rt`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`;
 //!   `eileen-hud-win` under the Windows target table.
+//! - Must not depend on `eileen-core` or `eileen-runtime` (it is fed over the pipe) or rmcp, nor
+//!   know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or on
+//!   `eileen-hud-win` outside the Windows target table (check 15).
 //! - Wire types: `HudStateLine` and `HudInputLine` (`eileen-contracts::hud`).
 //!
 //! # Testing

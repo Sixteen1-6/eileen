@@ -17,8 +17,10 @@
 //!
 //! # Invariants
 //!
-//! - Forgetting completes only when the store and the recordings both report it.
-//! - A skill reaches a session only through a verified snapshot, re-hashed before spawn.
+//! - Forgetting completes only when the store and the recordings both report it (the canary
+//!   test of WP7 acceptance 6).
+//! - A skill reaches a session only through a verified snapshot, re-hashed before spawn (WP7
+//!   acceptance 10 tests a tampered one).
 //! - The stub accepts the learn family and does nothing (unit test
 //!   `tests::the_stub_component_takes_the_learn_family`).
 //!
@@ -27,6 +29,9 @@
 //! - Called by `eileen-cli` (the component and the commands).
 //! - May depend on `eileen-skills`, `eileen-record`, `eileen-rt`, `eileen-contracts`,
 //!   `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-harness` or rmcp, nor know
+//!   vendor CLI flags (section 3.1); nor on vendored C outside `eileen-learn::store` (check 24),
+//!   or on a `-win` or `-linux` crate or a native library of section 4.1's table (check 15).
 //! - Wire types: skill files and snapshots in the contract formats.
 //!
 //! # Testing

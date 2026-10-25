@@ -17,15 +17,21 @@
 //!
 //! # Invariants
 //!
-//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere.
+//! - Windows only: the crate is `cfg(windows)` and compiles to an empty library elsewhere (the
+//!   `logic-linux` CI job builds it on Linux, where it has no dependencies).
 //! - Unsafe code only in a private `ffi` module, one operation per block (check 10).
 //! - The Raw Input module forwards only a "came from a device" flag, never a key code or a
 //!   pointer position (check 25).
+//! - The stub draws nothing and has no input (unit test
+//!   `tests::the_stub_surface_draws_nothing_and_has_no_input`, run on Windows).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-hud` (under its Windows target table), on the HUD's own thread.
 //! - May depend on `eileen-platform`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - Must not depend on `eileen-hud` (the dependency runs the other way), another `-win` crate,
+//!   `eileen-rt` or rmcp, nor know vendor CLI flags (section 3.1); nor on a native library that
+//!   section 4.1 keeps for other crates, such as `cpal` or `ort` (check 15).
 //! - Wire types: none of its own.
 //!
 //! # Testing

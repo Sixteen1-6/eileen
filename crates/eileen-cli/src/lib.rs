@@ -24,14 +24,20 @@
 //!   not built yet (integration test
 //!   `it::commands::every_command_of_section_3_5_says_not_built_yet`); `eileen --version` runs
 //!   (`it::process::eileen_version_runs`).
-//! - The shipped `eileen` binary links no ONNX Runtime and no app automation (section 3.1).
+//! - The shipped `eileen` binary links no ONNX Runtime and no app automation (section 3.1's
+//!   table keeps `eileen-speech` and `eileen-apps` out of this crate's row; check 15 keeps `ort`
+//!   in their Windows target tables).
 //!
 //! # Boundaries
 //!
 //! - Nothing calls it: it is the binary.
-//! - May depend on every crate that makes up the core process (section 3.1's table), and on
-//!   `eileen-shell-win` under the Windows target table; never on `eileen-speech`,
-//!   `eileen-desktop`, `eileen-apps` or `eileen-hud`, which run as their own processes.
+//! - May depend on every crate that makes up the core process (section 3.1's table), with
+//!   `eileen-shell-win` under the Windows target table and `eileen-shell-linux` under the Linux
+//!   one.
+//! - Must not depend on `eileen-speech`, `eileen-desktop`, `eileen-apps` or `eileen-hud`, which
+//!   run as their own processes, on the development-only `eileen-sim`, `eileen-e2e` and
+//!   `eileen-stub-harness`, or on rmcp except through `eileen-mcp`, nor know vendor CLI flags
+//!   (section 3.1); nor on any other `-win` or `-linux` crate (check 15).
 //! - Wire types: none of its own.
 //!
 //! # Testing

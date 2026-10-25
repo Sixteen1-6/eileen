@@ -29,6 +29,10 @@
 //!   `.mcp.json` with `--role session`.
 //! - May depend on `eileen-mcp`, `eileen-rt`, `eileen-contracts`, `eileen-stdx` and
 //!   `eileen-trace`; its process test starts it through `eileen-supervisor`, a dev-dependency.
+//! - Must not depend on `eileen-core` or `eileen-runtime`, which it reaches only over the
+//!   dispatcher's pipe, on `eileen-supervisor` outside its tests, or on rmcp except through
+//!   `eileen-mcp`, nor know vendor CLI flags (section 3.1); nor on a `-win` or `-linux` crate
+//!   (check 15).
 //! - Wire types: MCP's JSON-RPC on stdio; `tools::ShimLine` and `DispatcherLine` on the pipe.
 //!
 //! # Testing

@@ -17,15 +17,22 @@
 //!
 //! # Invariants
 //!
-//! - Only this crate, and the binaries through it, know rmcp (section 3.1).
+//! - A sidecar that dies mid-call gives its caller a typed error, and its client restarts it
+//!   within the backoff bound (WP2 acceptance 2).
 //! - The stub answers `server/discover` with method-not-found, so the CLI falls back to
-//!   `initialize` at [`handshake::PROTOCOL_VERSION`], and lists no tools (unit tests in
-//!   `handshake::tests`).
+//!   `initialize` at [`handshake::PROTOCOL_VERSION`], and lists no tools (unit tests
+//!   `handshake::tests::the_discover_probe_gets_method_not_found`,
+//!   `handshake::tests::initialize_names_the_server_and_the_protocol_version` and
+//!   `handshake::tests::the_tool_list_is_empty`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime`, `eileen-shim`, `eileen-desktop`, `eileen-apps` and `eileen-e2e`.
-//! - May depend on `eileen-rt`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`.
+//! - May depend on `eileen-rt`, `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and on
+//!   rmcp, which only this crate, and the binaries through it, may know (section 3.1).
+//! - Must not depend on `eileen-core`, on `eileen-runtime`, `eileen-shim` or a sidecar's crate
+//!   (they depend on it), nor know vendor CLI flags (section 3.1); nor on a `-win` or `-linux`
+//!   crate (check 15).
 //! - Wire types: MCP's JSON-RPC; Eileen's own pipe lines are contract types (`tools::ShimLine`).
 //!
 //! # Testing
