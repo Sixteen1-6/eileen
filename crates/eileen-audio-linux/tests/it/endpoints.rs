@@ -83,6 +83,37 @@ fn register_audio_thread_promotes_the_calling_thread_and_its_ticket_reverts_it()
 }
 
 #[test]
+fn a_refused_registration_falls_back_to_high_priority_and_its_ticket_reverts_it() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    fake.refuse_realtime.store(true, Ordering::SeqCst);
+    let _fakes = Fakes::serve(&bus, fake);
+    let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE);
+    let (thread, nice) = (this_thread(), lower_priority());
+    let ticket = endpoints.register_audio_thread().unwrap();
+    assert_eq!(ticket.task(), "RealtimeKit high priority", "as the fake grants");
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time first");
+    assert_eq!(calls.try_recv(), Ok(Call::HighPriority(thread, -11)), "then high priority");
+    drop(ticket);
+    assert_eq!(
+        calls.try_recv(),
+        Ok(Call::HighPriority(thread, nice)),
+        "back to the nice level it had"
+    );
+}
+
+#[test]
+fn register_audio_thread_on_an_empty_bus_is_unavailable() {
+    let bus = PrivateBus::start();
+    assert_eq!(
+        endpoints_on(&bus, DEFAULT_DEADLINE).register_audio_thread().unwrap_err(),
+        PlatformError::Unavailable { what: "org.freedesktop.RealtimeKit1.RTTimeUSecMax" },
+        "the promoter's own error: the private bus has no activation, so the first read answers \
+         ServiceUnknown"
+    );
+}
+
+#[test]
 fn a_ticket_reverts_a_thread_whose_nice_level_is_below_the_minimum_to_the_minimum() {
     let bus = PrivateBus::start();
     let (thread, nice) = (this_thread(), lower_priority());
