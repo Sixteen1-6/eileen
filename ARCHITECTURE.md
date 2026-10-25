@@ -162,6 +162,23 @@ Development only. The simulator owns the invariants; `eileen-e2e` owns benchmark
 
 **Learning.** Every tool call is recorded at the dispatcher, fast-path and brain actions included; successful jobs become native skills each Claude session gets in its own verified snapshot; proven skills replay with a check after every step and hand off to a worker on the first failed check; phrasings the user kept run from the fast path (a paraphrase only when it is close enough and names the same app or file); the person (preferences, context, how the user likes things done) lives in the claude CLI's own notes, and the user's own statements and corrections become native notes that Eileen writes with no model (decision D77); the user can ask what was learned, correct it and make Eileen forget it.
 
+## Extension points
+
+Eileen is meant to take whatever shape a task needs, and to be something any model understands whole and uses to do better, never a wrapper around it (the owner's direction of 2026-10-25): flexible at the edges, fixed at the centre. Each row is a way to add or swap a part without touching the core; v0.1 builds only the parts its own work packages need, and the rest stay possible.
+
+| What you add | What it plugs into | Where it is chosen |
+|---|---|---|
+| A brain or worker route (a vendor's own CLI) | `BrainBackend` and `WorkerDriver` in `eileen-harness`, built per `Route` by `brain_for` and `worker_for` | config, with model names as aliases |
+| A speech stage or a voice | the voice activity, recognition, turn detection and synthesis traits of `eileen-speech`, each reporting the languages it supports | `speech.*` keys; the machine profile picks the defaults |
+| A way to understand requests | `IntentResolver` in `eileen-intent`, `DictationCleaner` in `eileen-dictation` | config and the learned phrasings in the store |
+| An app route | an adapter in `eileen-apps` (BUILD.md section 2.7) over `AppHost`, tried in the order API, MCP or scripting, UI Automation, screenshots | per app |
+| A connector, routine or device | a connector manifest naming its data classes, with its events entering the core as connector input (decision D79) | opt-in per connector and per device |
+| A skill | `SkillEngine` in `eileen-skills`, stored in the vendor's own skill format | learned from a job, or written by hand |
+| A runtime component | `Component` in `eileen_contracts::ports`, wired by `eileen-runtime` | config |
+| A platform | the traits of `eileen-platform` (BUILD.md section 3.4), one crate per OS area | the build target |
+
+What no extension changes: `Core::step` makes every decision; types cross a process, pipe, file or socket only through `eileen-contracts`; and the permission tiers, consent and the user's own input as the only approval hold for every route, skill and connector, none of which can skip a confirmation or raise its own permission.
+
 ## Glossary
 
 - **Turn:** one request from the user, voice or not; its ID is the request ID. A turn is addressed (from the user's own input) or ambient (from a job event or a command line).
