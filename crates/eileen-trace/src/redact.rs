@@ -790,6 +790,31 @@ mod tests {
     }
 
     #[test]
+    fn a_retired_secret_leaves_the_scan_in_every_form() {
+        let r = Arc::new(Redactor::new());
+        let unquote =
+            |text: String| text.strip_prefix('"').unwrap().strip_suffix('"').unwrap().to_owned();
+        let json = |text: &str| unquote(serde_json::Value::from(text).to_string());
+        // More sessions than MAX_LITERALS, one after another. A quote, a backslash and a tab
+        // give each secret forms that differ (raw, escaped once and escaped twice), where a
+        // plain token's forms are one string.
+        for session in 0..1_000 {
+            let secret = format!("pa\"ss\\word\t{session:06}");
+            let debug = unquote(format!("{secret:?}"));
+            let forms = [json(&secret), json(&debug), debug, secret.clone()];
+            let guard = r.add_literal(&secret).unwrap();
+            for form in &forms {
+                assert_eq!(r.redact(form), "[redacted:secret]", "session {session}: {form}");
+            }
+            drop(guard);
+            for form in &forms {
+                assert!(!r.prefilter(form), "session {session} ended and {form} is scanned for");
+            }
+        }
+        assert_eq!((r.literal_count(), r.refused_literals()), (0, 0), "none held, none refused");
+    }
+
+    #[test]
     fn the_literals_have_a_maximum_and_refusals_are_counted() {
         let r = Arc::new(Redactor::new());
         let held: Vec<_> = (0..MAX_LITERALS)
