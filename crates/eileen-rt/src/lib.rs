@@ -20,7 +20,11 @@
 //!   [`task::spawn_blocking`] (check 14).
 //! - A spawned task's events carry the span it was spawned in (test
 //!   `it::tasks::a_task_keeps_the_span_it_was_spawned_in`).
-//! - Every channel has a maximum; a full one is counted and logged, never grown.
+//! - Every channel has a maximum; a full one is counted and logged, never grown (test
+//!   `channel::tests::a_full_channel_refuses_and_counts`, and clippy's ban on
+//!   `unbounded_channel`).
+//! - A panic message reaches the log files only as length and hash, in `pii.message` (test
+//!   `it::tasks::a_panic_message_reaches_the_log_files_only_as_its_length`).
 //!
 //! # Boundaries
 //!
@@ -45,8 +49,8 @@
 //!
 //! # Logs and tracing
 //!
-//! - Emits `task.panicked` and `channel.full`; owns no spans. `eileen debug tasks` prints
-//!   [`task::dump`].
+//! - Emits `task.panicked` (its message in `pii.message`) and `channel.full`; owns no spans.
+//!   `eileen debug tasks` prints [`task::dump`].
 //!
 //! # Do not change without a decision record
 //!

@@ -54,8 +54,12 @@ pub const WINDOW: Duration = Duration::from_secs(30);
 pub const AUTO_LIMIT_MIN_KB_S: u32 = 2_000;
 /// The `auto` paging limit's clamp, KB/s.
 pub const AUTO_LIMIT_MAX_KB_S: u32 = 40_000;
-/// The slot-0 paging limit until a baseline exists, KB/s.
-pub const DEFAULT_PAGING_LIMIT_KB_S: u32 = 5_000;
+/// The slot-0 paging limit until a baseline exists, KB/s: admission's own default, so the
+/// runtime's `auto` limit and the guard can never drift apart.
+pub const DEFAULT_PAGING_LIMIT_KB_S: u32 = crate::admission::DEFAULT_SLOT0_PAGING_KB_S;
+/// How much time the runtime's paging windows must cover before the `auto` limit is learned
+/// from them rather than from the baseline (section 2.5 rule 3).
+pub const AUTO_LIMIT_COVERAGE: Duration = Duration::from_hours(24);
 
 /// How long an append waits for the lock before giving up.
 const LOCK_WAIT: Duration = Duration::from_secs(2);
@@ -255,23 +259,40 @@ pub struct PagingLimit {
     pub source: LimitSource,
 }
 
-/// `%LOCALAPPDATA%\eileen`, from the `LOCALAPPDATA` variable so a test can point it at a
-/// temporary folder; never from `EILEEN_DATA_DIR`. Off Windows, where the variable is not
-/// set, `$XDG_DATA_HOME/eileen` or `$HOME/.local/share/eileen`.
+/// The machine root: `%LOCALAPPDATA%\eileen`, from the `LOCALAPPDATA` variable so a test can
+/// point it at a temporary folder, and never from `EILEEN_DATA_DIR`.
+///
+/// On Windows there is no fallback: a process whose environment lacks `LOCALAPPDATA` (one a
+/// harness built from scratch, a trimmed shell) gets [`ErrorKind::NotFound`] rather than a
+/// second set of slot locks that are always free. Off Windows the variable still wins when it
+/// is set (the tests set it on every OS); otherwise the root is `$XDG_STATE_HOME/eileen`, else
+/// `$HOME/.local/state/eileen`, where docs/LINUX.md section 5 keeps the machine-wide files.
 pub fn machine_root() -> io::Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()))
-        .or_else(|| {
-            std::env::var_os("HOME").filter(|v| !v.is_empty()).map(|home| {
-                let mut path = PathBuf::from(home);
-                path.push(".local");
-                path.push("share");
-                OsString::from(path)
-            })
-        })
-        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "LOCALAPPDATA is not set"))?;
-    Ok(PathBuf::from(base).join("eileen"))
+    machine_root_from(std::env::var_os)
+}
+
+/// [`machine_root`] over a variable getter, so a test covers each branch without changing the
+/// process's environment. An empty variable counts as unset.
+fn machine_root_from(var: impl Fn(&'static str) -> Option<OsString>) -> io::Result<PathBuf> {
+    let set = |key: &'static str| var(key).filter(|value| !value.is_empty()).map(PathBuf::from);
+    if let Some(local) = set("LOCALAPPDATA") {
+        return Ok(local.join("eileen"));
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(state) = set("XDG_STATE_HOME") {
+            return Ok(state.join("eileen"));
+        }
+        if let Some(home) = set("HOME") {
+            return Ok(home.join(".local").join("state").join("eileen"));
+        }
+    }
+    let missing = if cfg!(windows) {
+        "LOCALAPPDATA is not set"
+    } else {
+        "none of LOCALAPPDATA, XDG_STATE_HOME and HOME is set"
+    };
+    Err(io::Error::new(ErrorKind::NotFound, missing))
 }
 
 /// The machine-wide files under one root: [`Store::machine`] for the real one, [`Store::at`]
@@ -319,14 +340,13 @@ impl Store {
         self.root.join(relative)
     }
 
-    /// Runs `f` under the append lock, waiting at most two seconds for it.
-    fn locked<T>(&self, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    /// Runs `f` under the append lock, waiting at most two seconds of `clock`'s time for it.
+    fn locked<T>(&self, clock: &dyn Clock, f: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
         let lock_path = self.path(LOCK_FILE);
         if let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let lock = OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path)?;
-        let clock = RealClock;
         let deadline = clock.mono_ms().saturating_add(millis(LOCK_WAIT));
         loop {
             match lock.try_lock() {
@@ -348,10 +368,11 @@ impl Store {
         Ok(value)
     }
 
-    /// Appends one sample, trimming the file first when it has passed 5 MB.
-    pub fn append(&self, sample: &Sample) -> io::Result<()> {
+    /// Appends one sample, trimming the file first when it has passed 5 MB. A busy lock is
+    /// waited for on `clock`.
+    pub fn append(&self, sample: &Sample, clock: &dyn Clock) -> io::Result<()> {
         let path = self.path(SAMPLES_FILE);
-        self.locked(|| {
+        self.locked(clock, || {
             let keep_from = sample.at_ms.saturating_sub(millis(SAMPLES_KEEP));
             trim(&path, SAMPLES_TRIM_BYTES, |line| {
                 Sample::from_line(line).is_some_and(|s| s.at_ms >= keep_from)
@@ -375,10 +396,11 @@ impl Store {
     }
 
     /// Appends one paging window unless the file's newest line ends less than 30 s before
-    /// it does (checked under the lock). Returns whether it was written.
-    pub fn append_paging(&self, window: &PagingWindow) -> io::Result<bool> {
+    /// it does (checked under the lock). Returns whether it was written. A busy lock is waited
+    /// for on `clock`.
+    pub fn append_paging(&self, window: &PagingWindow, clock: &dyn Clock) -> io::Result<bool> {
         let path = self.path(PAGING_FILE);
-        self.locked(|| {
+        self.locked(clock, || {
             let newest =
                 read_lines(&path, PagingWindow::from_line)?.into_iter().map(|w| w.at_ms).max();
             if newest.is_some_and(|at| at.saturating_add(millis(WINDOW)) > window.at_ms) {
@@ -470,7 +492,7 @@ fn trim(path: &Path, limit: u64, keep: impl Fn(&str) -> bool) -> io::Result<()> 
 
 /// Appends a sample to the machine root.
 pub fn append(sample: &Sample) -> io::Result<()> {
-    Store::machine()?.append(sample)
+    Store::machine()?.append(sample, &RealClock)
 }
 
 /// The machine root's samples from the last `window`.
@@ -480,7 +502,7 @@ pub fn recent(window: Duration) -> io::Result<Vec<Sample>> {
 
 /// Appends a paging window to the machine root (see [`Store::append_paging`]).
 pub fn append_paging(window: &PagingWindow) -> io::Result<bool> {
-    Store::machine()?.append_paging(window)
+    Store::machine()?.append_paging(window, &RealClock)
 }
 
 /// The machine root's paging windows from the last `days`.
@@ -529,14 +551,15 @@ pub fn p75_plus_25(values: &[u32]) -> Option<u32> {
 }
 
 /// Section 2.5 rule 3's `auto` limit: [`p75_plus_25`] over the windows not marked
-/// `slot_held`, clamped to 2,000 to 40,000 KB/s, once those windows cover 24 hours; else the
-/// baseline's `slot0_paging_kb_s` under the same clamp; else 5,000 KB/s.
+/// `slot_held`, clamped to 2,000 to 40,000 KB/s, once those windows cover
+/// [`AUTO_LIMIT_COVERAGE`] (24 hours); else the baseline's `slot0_paging_kb_s` under the same
+/// clamp; else [`DEFAULT_PAGING_LIMIT_KB_S`].
 #[must_use]
 pub fn auto_paging_limit(windows: &[PagingWindow], baseline: Option<&Baseline>) -> PagingLimit {
     let clamp = |v: u32| v.clamp(AUTO_LIMIT_MIN_KB_S, AUTO_LIMIT_MAX_KB_S);
     let free: Vec<u32> = windows.iter().filter(|w| !w.slot_held).map(|w| w.paging_kb_s).collect();
     let covered = u64::try_from(free.len()).unwrap_or(u64::MAX).saturating_mul(millis(WINDOW));
-    if covered >= millis(SAMPLES_KEEP)
+    if covered >= millis(AUTO_LIMIT_COVERAGE)
         && let Some(limit) = p75_plus_25(&free)
     {
         return PagingLimit { kb_s: clamp(limit), source: LimitSource::Windows };
@@ -549,11 +572,63 @@ pub fn auto_paging_limit(windows: &[PagingWindow], baseline: Option<&Baseline>) 
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::io::{self, ErrorKind};
+    use std::path::PathBuf;
+
     use super::{
-        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit, p75_plus_25,
-        percentile, plus_25,
+        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit,
+        machine_root_from, p75_plus_25, percentile, plus_25,
     };
     use crate::slots::{Holder, Slot, try_take_slot};
+
+    /// The machine root a process with exactly these variables would use.
+    fn root_with(vars: &[(&'static str, &'static str)]) -> io::Result<PathBuf> {
+        let vars = vars.to_vec();
+        machine_root_from(move |key| {
+            vars.iter().find(|(name, _)| *name == key).map(|(_, value)| OsString::from(*value))
+        })
+    }
+
+    #[test]
+    fn the_machine_root_follows_each_platforms_rule() {
+        assert_eq!(
+            root_with(&[("LOCALAPPDATA", "local"), ("XDG_STATE_HOME", "state"), ("HOME", "home")])
+                .unwrap(),
+            PathBuf::from("local").join("eileen"),
+            "LOCALAPPDATA wins on every OS"
+        );
+        let state = root_with(&[("LOCALAPPDATA", ""), ("XDG_STATE_HOME", "state"), ("HOME", "h")]);
+        let home = root_with(&[("XDG_DATA_HOME", "data"), ("HOME", "home")]);
+        let nothing = root_with(&[("XDG_DATA_HOME", "data")]);
+        if cfg!(windows) {
+            for (what, found) in
+                [("XDG_STATE_HOME", &state), ("HOME", &home), ("nothing", &nothing)]
+            {
+                assert_eq!(
+                    found.as_ref().map_err(io::Error::kind),
+                    Err(ErrorKind::NotFound),
+                    "without LOCALAPPDATA there is no root on Windows, whatever {what} says"
+                );
+            }
+        } else {
+            assert_eq!(
+                state.unwrap(),
+                PathBuf::from("state").join("eileen"),
+                "an empty LOCALAPPDATA counts as unset, and XDG_STATE_HOME comes next"
+            );
+            assert_eq!(
+                home.unwrap(),
+                PathBuf::from("home").join(".local").join("state").join("eileen"),
+                "then the state folder under HOME, never the data folder"
+            );
+            assert_eq!(
+                nothing.as_ref().map_err(io::Error::kind),
+                Err(ErrorKind::NotFound),
+                "nothing set"
+            );
+        }
+    }
 
     #[test]
     fn lines_round_trip_in_the_documented_format() {

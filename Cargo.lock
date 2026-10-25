@@ -405,6 +405,7 @@ dependencies = [
  "blake3",
  "eileen-contracts",
  "eileen-stdx",
+ "eileen-trace",
  "serde_json",
  "thiserror",
  "toml",

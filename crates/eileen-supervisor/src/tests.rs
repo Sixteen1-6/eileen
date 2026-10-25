@@ -123,6 +123,12 @@ fn helper_entry() {
             let guard = crate::spawn_detached(&helper("block", &dir)).unwrap();
             write_pids(&dir, &guard.pid.to_string());
         }
+        // Blocks until released, then exits with 259, which is STILL_ACTIVE.
+        #[cfg(windows)]
+        "exit-259" => {
+            lock_file(&dir).lock().unwrap();
+            crate::ffi::process::exit_now(259)
+        }
         other => panic!("unknown helper {other}"),
     }
 }
@@ -140,7 +146,11 @@ fn stderr_lines_become_child_stderr_events() {
         });
     });
     let lines = captured.events_named(names::CHILD_STDERR);
-    assert!(lines.iter().any(|e| e.fields["line"] == "eileen helper says hello"), "{lines:?}");
+    assert!(
+        lines.iter().any(|e| e.fields["pii.line"] == "eileen helper says hello"),
+        "the line travels as pii.line, which the files reduce: {lines:?}"
+    );
+    assert!(lines.iter().all(|e| !e.fields.contains_key("line")), "no plain line field");
     assert_eq!(captured.events_named(names::CHILD_SPAWNED).len(), 1, "spawned");
     assert_eq!(captured.events_named(names::CHILD_EXITED).len(), 1, "exited");
 }
@@ -160,7 +170,7 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
     let lines: Vec<String> = captured
         .events_named(names::CHILD_STDERR)
         .iter()
-        .map(|e| e.fields["line"].as_str().unwrap().to_owned())
+        .map(|e| e.fields["pii.line"].as_str().unwrap().to_owned())
         .collect();
     assert!(
         lines.iter().any(|l| l == "not utf-8: \u{fffd}\u{fffd} here"),
@@ -174,6 +184,35 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
         "forwarding went on: {:?}",
         lines.last()
     );
+}
+
+#[test]
+fn a_spec_never_shows_its_environment_values_in_debug() {
+    let spec = ChildSpec::new("claude.worker", "claude")
+        .envs([("EILEEN_SESSION_TOKEN", "tok-canary-4f7q2zk"), ("EILEEN_JOB_ID", "job_canary")]);
+    let shown = format!("{spec:?}");
+    assert!(shown.contains("EILEEN_SESSION_TOKEN"), "the names are listed: {shown}");
+    assert!(
+        !shown.contains("tok-canary") && !shown.contains("job_canary"),
+        "the values are not: {shown}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_helper_that_exits_with_259_is_not_alive() {
+    use crate::ffi::process::{alive, exit_code, open_for_wait, wait_exit};
+
+    let dir = TempDir::new("exit-259");
+    let block = hold_block(&dir.0);
+    let exiting = crate::spawn_detached(&helper("exit-259", &dir.0)).unwrap();
+    // Opened while it waits for the lock, so the ended process can still be read.
+    let process = open_for_wait(exiting.pid).unwrap();
+    assert!(alive(exiting.pid), "running while it waits for the lock");
+    drop(block);
+    assert!(wait_exit(&process, Duration::from_secs(30)), "it ended once released");
+    assert_eq!(exit_code(&process), Some(259), "with 259, which is STILL_ACTIVE");
+    assert!(!alive(exiting.pid), "an ended process is not alive, whatever its exit code");
 }
 
 #[cfg(windows)]

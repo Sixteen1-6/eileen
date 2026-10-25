@@ -76,8 +76,8 @@ pub fn check(spans: &[SpanRecord]) -> Vec<Violation> {
         }
         let any = def.parents.contains(&Parent::Any);
         if let Some(parent) = span.parent.and_then(|p| by_id.get(&(span.process.as_str(), p))) {
-            let allowed =
-                any || def.parents.iter().any(|r| *r == Parent::Span(names_static(&parent.name)));
+            let allowed = any
+                || def.parents.iter().any(|r| matches!(r, Parent::Span(p) if *p == parent.name));
             if !allowed {
                 violations.push(Violation::WrongParent {
                     name: span.name.clone(),
@@ -104,7 +104,7 @@ pub fn check(spans: &[SpanRecord]) -> Vec<Violation> {
                     any || def
                         .parents
                         .iter()
-                        .any(|r| *r == Parent::Remote(names_static(&parent.name)))
+                        .any(|r| matches!(r, Parent::Remote(p) if *p == parent.name))
                 }
                 None => any || def.parents.iter().any(|r| matches!(r, Parent::Remote(_))),
             };
@@ -119,11 +119,6 @@ pub fn check(spans: &[SpanRecord]) -> Vec<Violation> {
         }
     }
     violations
-}
-
-/// The declared `&'static str` for a name, so rows compare by value.
-fn names_static(name: &str) -> &'static str {
-    names::lookup(name).map_or("", |def| def.name)
 }
 
 #[cfg(test)]
@@ -189,6 +184,30 @@ mod tests {
                 parent: None
             }),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_span_with_neither_a_remote_nor_a_local_parent_is_misplaced() {
+        // A regression that drops `_meta.traceparent` turns a desktop action into a root.
+        let mut action = span(1, None, names::DESKTOP_ACTION, 0, 1);
+        action.process = "eileen-desktop".to_owned();
+        assert_eq!(
+            check(&[action]),
+            [Violation::WrongParent { name: names::DESKTOP_ACTION.to_owned(), parent: None }],
+            "a desktop.action belongs under a remote mcp.call"
+        );
+        let mut synth = span(2, None, names::TTS_SYNTH, 0, 1);
+        synth.process = "eileen-speech".to_owned();
+        assert_eq!(
+            check(&[synth]),
+            [Violation::WrongParent { name: names::TTS_SYNTH.to_owned(), parent: None }],
+            "so does a tts.synth without its speak"
+        );
+        assert_eq!(
+            check(&[span(3, None, names::SPEAK, 0, 1)]),
+            Vec::new(),
+            "an announcement's speak may start its own trace"
         );
     }
 

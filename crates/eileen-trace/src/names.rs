@@ -75,11 +75,11 @@ use Parent::{Any, Remote, Root, Span};
 names! {
     /// A user turn, the root of its trace.
     TURN = "turn", Span, "core", parents: [Root], outlives: false, fields: ["turn_id", "source", "outcome"];
-    /// A stretch of speech the voice activity detector found.
-    SPEECH_SEGMENT = "speech.segment", Span, "speech", parents: [Remote(TURN), Root], outlives: false,
+    /// A stretch of speech the voice activity detector found, under the core's turn.
+    SPEECH_SEGMENT = "speech.segment", Span, "speech", parents: [Remote(TURN)], outlives: false,
         fields: ["turn_id", "seg", "start_ms", "dur_ms", "vad_max"];
     /// End-of-turn detection.
-    TURN_DETECT = "turn.detect", Span, "speech", parents: [Remote(TURN), Root], outlives: false,
+    TURN_DETECT = "turn.detect", Span, "speech", parents: [Remote(TURN)], outlives: false,
         fields: ["silence_ms", "smart_turn_p", "decision"];
     /// Streaming recognition of a segment.
     STT_STREAM = "stt.stream", Span, "speech", parents: [Span(SPEECH_SEGMENT)], outlives: false,
@@ -121,19 +121,21 @@ names! {
     MCP_CALL = "mcp.call", Span, "core", parents: [Span(DISPATCH_CALL)], outlives: false,
         fields: ["otel.name", "mcp.method.name"];
     /// A capture in the desktop sidecar.
-    DESKTOP_CAPTURE = "desktop.capture", Span, "desktop", parents: [Remote(MCP_CALL), Root], outlives: false,
+    DESKTOP_CAPTURE = "desktop.capture", Span, "desktop", parents: [Remote(MCP_CALL)], outlives: false,
         fields: ["target", "blob"];
     /// An action in the desktop sidecar.
-    DESKTOP_ACTION = "desktop.action", Span, "desktop", parents: [Remote(MCP_CALL), Root], outlives: false,
+    DESKTOP_ACTION = "desktop.action", Span, "desktop", parents: [Remote(MCP_CALL)], outlives: false,
         fields: ["action", "rung", "result"];
     /// A call in the apps sidecar.
-    APPS_CALL = "apps.call", Span, "apps", parents: [Remote(MCP_CALL), Root], outlives: false,
+    APPS_CALL = "apps.call", Span, "apps", parents: [Remote(MCP_CALL)], outlives: false,
         fields: ["target", "rung", "result"];
-    /// Eileen speaking.
+    /// Eileen speaking: a reply under its turn, narration under its job, or an announcement
+    /// with neither (a reminder), which starts a trace of its own. The observability report's
+    /// table lists only the first two; `docs/wp/WP0-foundation.md` records why the root stays.
     SPEAK = "speak", Span, "core", parents: [Span(TURN), Span(JOB), Root], outlives: false,
         fields: ["speak_id", "cause", "chars"];
     /// Synthesis in the speech process.
-    TTS_SYNTH = "tts.synth", Span, "speech", parents: [Remote(SPEAK), Root], outlives: false,
+    TTS_SYNTH = "tts.synth", Span, "speech", parents: [Remote(SPEAK)], outlives: false,
         fields: ["voice", "first_audio_ms"];
     /// Playback of an utterance.
     AUDIO_PLAY = "audio.play", Span, "core", parents: [Span(SPEAK)], outlives: false,
@@ -159,15 +161,15 @@ names! {
     /// A soft assertion failed (`always!` or `never!`).
     SOFT_ASSERT_FAILED = "soft_assert.failed", Event, "all", parents: [Any], outlives: false,
         fields: ["file", "line", "message"];
-    /// A task started through `eileen_rt::task` panicked.
-    TASK_PANICKED = "task.panicked", Event, "all", parents: [Any], outlives: false, fields: ["task", "message"];
+    /// A task started through `eileen_rt::task` panicked; the message can quote anything.
+    TASK_PANICKED = "task.panicked", Event, "all", parents: [Any], outlives: false, fields: ["task", "pii.message"];
     /// A bounded channel was full and a send was refused or had to wait.
     CHANNEL_FULL = "channel.full", Event, "all", parents: [Any], outlives: false,
         fields: ["channel", "capacity", "times"];
     /// The supervisor started a child.
     CHILD_SPAWNED = "child.spawned", Event, "all", parents: [Any], outlives: false, fields: ["child", "pid", "class"];
-    /// A line a child wrote to stderr.
-    CHILD_STDERR = "child.stderr", Event, "all", parents: [Any], outlives: false, fields: ["child", "line"];
+    /// A line a child wrote to stderr, which can quote paths and prompt text.
+    CHILD_STDERR = "child.stderr", Event, "all", parents: [Any], outlives: false, fields: ["child", "pii.line"];
     /// A child exited.
     CHILD_EXITED = "child.exited", Event, "all", parents: [Any], outlives: false, fields: ["child", "code"];
     /// A child missed its heartbeat.

@@ -59,6 +59,13 @@ thread_local! {
     static OVERRIDE: Cell<Option<Mode>> = const { Cell::new(None) };
 }
 
+// Failures on this thread, so a test counts its own while another test fails on a parallel
+// thread (plain `cargo test` runs a crate's tests as threads of one process).
+#[cfg(test)]
+thread_local! {
+    static THREAD_FAILURES: Cell<u64> = const { Cell::new(0) };
+}
+
 /// Sets the process-wide mode.
 pub fn set_mode(mode: Mode) {
     PANICS.store(mode == Mode::Panic, Ordering::Relaxed);
@@ -100,6 +107,8 @@ pub fn failures() -> u64 {
 #[doc(hidden)]
 pub fn fail(file: &'static str, line: u32, message: fmt::Arguments<'_>) {
     FAILURES.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    THREAD_FAILURES.set(THREAD_FAILURES.get() + 1);
     let failure = Failure { file, line, message };
     if let Some(hook) = HOOK.get() {
         hook(&failure);
@@ -150,18 +159,20 @@ macro_rules! never {
 mod tests {
     use std::panic::catch_unwind;
 
-    use super::{Mode, failures, mode, with_mode};
+    use super::{Mode, THREAD_FAILURES, failures, mode, with_mode};
 
     #[test]
     fn report_mode_counts_and_returns_the_condition() {
         let before = failures();
+        let on_this_thread = THREAD_FAILURES.get();
         let held = with_mode(Mode::Report, || crate::always!(1 + 1 == 3));
         assert!(!held, "always! returns the condition");
         let hit = with_mode(Mode::Report, || crate::never!(true, "value {}", 4));
         assert!(hit, "never! returns the condition");
-        assert_eq!(failures() - before, 2, "both counted");
+        assert_eq!(THREAD_FAILURES.get() - on_this_thread, 2, "both counted");
+        assert!(failures() - before >= 2, "in the process-wide count too");
         assert!(with_mode(Mode::Report, || crate::always!(true)), "a holding assertion");
-        assert_eq!(failures() - before, 2, "a holding assertion is not counted");
+        assert_eq!(THREAD_FAILURES.get() - on_this_thread, 2, "a holding assertion is not counted");
     }
 
     #[test]

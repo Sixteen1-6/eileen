@@ -11,10 +11,36 @@
 //! process it starts. With no key the files keep the length alone, so a process started
 //! without one never hashes user text under a key anyone could know.
 
+use std::fmt;
+
 use serde_json::{Map, Value, json};
 
 /// The prefix that marks a field as user content.
 pub const PREFIX: &str = "pii.";
+
+/// The per-install key of the files' keyed hash. Its `Debug` prints `PiiKey(..)`, so a
+/// configuration, a policy or a panic message formatted with `{:?}` never shows it: the key's
+/// secrecy is what stops anyone matching a reduced `{len, h}` against a dictionary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PiiKey([u8; 32]);
+
+impl PiiKey {
+    /// A key from its 32 bytes (the runtime derives them at setup).
+    #[must_use]
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    const fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PiiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PiiKey(..)")
+    }
+}
 
 /// True for a field that carries user content.
 #[must_use]
@@ -32,18 +58,18 @@ pub enum Policy {
     /// `{"len": <chars>}` alone.
     Reduce {
         /// The key (per install, from the runtime); `None` keeps the length alone.
-        key: Option<[u8; 32]>,
+        key: Option<PiiKey>,
     },
 }
 
 /// The reduced form of one value: its length, and its keyed hash when there is a key.
 #[must_use]
-pub fn reduce(value: &Value, key: Option<&[u8; 32]>) -> Value {
+pub fn reduce(value: &Value, key: Option<&PiiKey>) -> Value {
     let text = if let Value::String(s) = value { s.clone() } else { value.to_string() };
     let len = text.chars().count();
     match key {
         Some(key) => {
-            let hash = blake3::keyed_hash(key, text.as_bytes());
+            let hash = blake3::keyed_hash(key.bytes(), text.as_bytes());
             let [a, b, c, d, ..] = *hash.as_bytes();
             json!({ "len": len, "h": format!("{a:02x}{b:02x}{c:02x}{d:02x}") })
         }
@@ -67,16 +93,25 @@ pub fn apply(fields: &mut Map<String, Value>, policy: Policy) {
 mod tests {
     use serde_json::{Map, Value, json};
 
-    use super::{Policy, apply, is_pii, reduce};
+    use super::{PiiKey, Policy, apply, is_pii, reduce};
 
     #[test]
     fn reduce_keeps_the_length_and_a_keyed_hash() {
-        let key = [7; 32];
+        let key = PiiKey::new([7; 32]);
         let reduced = reduce(&json!("Quarterly report.docx"), Some(&key));
         assert_eq!(reduced["len"], 21, "length in characters");
         assert_eq!(reduced["h"].as_str().map(str::len), Some(8), "8 hex digits");
         assert_eq!(reduce(&json!("Quarterly report.docx"), Some(&key)), reduced, "stable");
-        assert_ne!(reduce(&json!("Quarterly report.docx"), Some(&[8; 32])), reduced, "keyed");
+        let other = PiiKey::new([8; 32]);
+        assert_ne!(reduce(&json!("Quarterly report.docx"), Some(&other)), reduced, "keyed");
+    }
+
+    #[test]
+    fn the_key_never_shows_in_debug() {
+        let policy = Policy::Reduce { key: Some(PiiKey::new([0xAB; 32])) };
+        let shown = format!("{policy:?}");
+        assert!(shown.contains("PiiKey(..)"), "{shown}");
+        assert!(!shown.contains("171") && !shown.contains("ab"), "no byte of the key: {shown}");
     }
 
     #[test]
@@ -89,7 +124,7 @@ mod tests {
         let mut fields: Map<String, Value> = Map::new();
         fields.insert("pii.title".to_owned(), json!("My diary"));
         fields.insert("tool".to_owned(), json!("desktop_tree"));
-        apply(&mut fields, Policy::Reduce { key: Some([3; 32]) });
+        apply(&mut fields, Policy::Reduce { key: Some(PiiKey::new([3; 32])) });
         assert!(fields["pii.title"].get("h").is_some(), "reduced");
         assert_eq!(fields["tool"], "desktop_tree", "left alone");
         assert!(is_pii("pii.transcript") && !is_pii("piixel"), "prefix");

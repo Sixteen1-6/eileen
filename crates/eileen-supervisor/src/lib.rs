@@ -26,12 +26,17 @@
 //!   `tests::the_guard_spawn_outlives_its_parent`).
 //! - A failing child restarts at most `max_restarts` times per window
 //!   (`watch::tests::restarts_back_off_and_give_up_inside_the_window`).
-//! - Unsafe code only in the private `ffi` module, one operation per block.
+//! - Unsafe code only in the private `ffi` module, one operation per block (the
+//!   `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block` lints, and check 10).
+//! - A child's stderr reaches the log files only as length and hash, in `pii.line` (test
+//!   `tests::stderr_lines_become_child_stderr_events`), and a [`ChildSpec`]'s `Debug` names its
+//!   environment without the values (`tests::a_spec_never_shows_its_environment_values_in_debug`).
 //!
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
-//! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `tokio`; `windows` on Windows.
+//! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `thiserror`, `tokio` and
+//!   `tracing`; `windows` on Windows.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -53,8 +58,9 @@
 //!
 //! # Logs and tracing
 //!
-//! - Emits `child.spawned`, `child.stderr`, `child.exited` and `deadline.passed`; the
-//!   restart span `supervisor.restart` belongs to the runtime that drives [`watch::Restarts`].
+//! - Emits `child.spawned`, `child.stderr` (the line in `pii.line`), `child.exited` and
+//!   `deadline.passed`; the restart span `supervisor.restart` belongs to the runtime that drives
+//!   [`watch::Restarts`].
 //!
 //! # Do not change without a decision record
 //!

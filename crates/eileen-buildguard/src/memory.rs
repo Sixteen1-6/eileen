@@ -14,12 +14,13 @@ use std::io;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use crate::clock::{Clock as _, RealClock, millis};
+use crate::clock::{Clock, millis};
 
 /// The shortest time a real paging rate covers. [`SystemMemory`] primes its counter when it
 /// opens, and a reading that comes sooner than this after the prime or the previous reading
-/// first waits for the rest, so no reading's rate covers a few microseconds (a zero, a PDH
-/// status mapped to zero, or a spike) and lands in the shared samples.
+/// first waits for the rest on the caller's clock, so no reading's rate covers a few
+/// microseconds (a zero, a PDH status mapped to zero, or a spike) and lands in the shared
+/// samples.
 pub const MIN_RATE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// One reading.
@@ -37,8 +38,9 @@ pub struct MemorySample {
 pub trait MemorySource {
     /// One reading. The paging rate covers the time since the previous reading, or for the
     /// first one since the source opened, never less than [`MIN_RATE_INTERVAL`] for a real
-    /// source.
-    fn sample(&mut self) -> io::Result<MemorySample>;
+    /// source, which waits on `clock` when it must. The guard passes its own clock, so a test
+    /// on a [`ManualClock`](crate::clock::ManualClock) never waits in real time.
+    fn sample(&mut self, clock: &dyn Clock) -> io::Result<MemorySample>;
 
     /// True for the PC's real memory. Only a real source writes the machine-wide files.
     fn is_real(&self) -> bool {
@@ -98,7 +100,7 @@ impl FakeMemory {
 }
 
 impl MemorySource for FakeMemory {
-    fn sample(&mut self) -> io::Result<MemorySample> {
+    fn sample(&mut self, _clock: &dyn Clock) -> io::Result<MemorySample> {
         if let Some(next) = self.queue.pop_front() {
             self.last = Some(next);
         }
@@ -129,20 +131,21 @@ pub struct SystemMemory {
 
 impl SystemMemory {
     /// Opens the counters and primes the paging rate, so the first reading's rate covers the
-    /// time since this call, at least [`MIN_RATE_INTERVAL`].
-    pub fn new() -> io::Result<Self> {
+    /// time since this call on `clock`, at least [`MIN_RATE_INTERVAL`]. Take every reading on
+    /// the same clock.
+    pub fn new(clock: &dyn Clock) -> io::Result<Self> {
         #[cfg(windows)]
         let this = Self {
             paging: crate::ffi::PagingCounter::open()?,
             page_size: crate::ffi::page_size(),
-            collected_ms: RealClock.mono_ms(),
+            collected_ms: clock.mono_ms(),
             last_interval: Duration::ZERO,
             _thread_bound: PhantomData,
         };
         #[cfg(not(windows))]
         let this = Self {
             majfaults: read_majfaults()?,
-            collected_ms: RealClock.mono_ms(),
+            collected_ms: clock.mono_ms(),
             last_interval: Duration::ZERO,
             _thread_bound: PhantomData,
         };
@@ -155,10 +158,9 @@ impl SystemMemory {
         self.last_interval
     }
 
-    /// Waits until at least [`MIN_RATE_INTERVAL`] has passed since the previous collect, then
-    /// marks now as collected and records how long the coming rate covers.
-    fn settle(&mut self) {
-        let clock = RealClock;
+    /// Waits on `clock` until at least [`MIN_RATE_INTERVAL`] has passed since the previous
+    /// collect, then marks now as collected and records how long the coming rate covers.
+    fn settle(&mut self, clock: &dyn Clock) {
         let since = clock.mono_ms().saturating_sub(self.collected_ms);
         let min = millis(MIN_RATE_INTERVAL);
         if since < min {
@@ -172,8 +174,8 @@ impl SystemMemory {
 
 #[cfg(windows)]
 impl MemorySource for SystemMemory {
-    fn sample(&mut self) -> io::Result<MemorySample> {
-        self.settle();
+    fn sample(&mut self, clock: &dyn Clock) -> io::Result<MemorySample> {
+        self.settle(clock);
         let avail = crate::ffi::available_physical_bytes()?;
         let headroom = crate::ffi::commit_headroom_bytes()?;
         let pages = self.paging.pages_per_sec()?;
@@ -201,8 +203,8 @@ fn read_majfaults() -> io::Result<u64> {
 
 #[cfg(not(windows))]
 impl MemorySource for SystemMemory {
-    fn sample(&mut self) -> io::Result<MemorySample> {
-        self.settle();
+    fn sample(&mut self, clock: &dyn Clock) -> io::Result<MemorySample> {
+        self.settle(clock);
         let interval_ms = millis(self.last_interval).max(1);
         let meminfo = std::fs::read_to_string("/proc/meminfo")?;
         let missing = |what: &str| io::Error::other(format!("{what} missing from /proc/meminfo"));
@@ -263,6 +265,7 @@ mod tests {
         FakeMemory, MIN_RATE_INTERVAL, MemorySample, MemorySource, SystemMemory, linux_headroom_kb,
         pages_to_kb_s,
     };
+    use crate::clock::{Clock as _, ManualClock};
 
     /// A busy Linux desktop in the default mode: `Committed_AS` past `CommitLimit` while
     /// 13.7 GB is available, the shape docs/LINUX.md section 10 describes.
@@ -305,18 +308,20 @@ mod tests {
 
     #[test]
     fn a_fake_repeats_its_last_reading() {
+        let clock = ManualClock::new(0);
         let mut fake =
             FakeMemory::new([MemorySample { avail_mb: 1, headroom_mb: 2, paging_kb_s: 3 }]);
-        assert_eq!(fake.sample().unwrap().avail_mb, 1, "first");
-        assert_eq!(fake.sample().unwrap().avail_mb, 1, "repeated");
+        assert_eq!(fake.sample(&clock).unwrap().avail_mb, 1, "first");
+        assert_eq!(fake.sample(&clock).unwrap().avail_mb, 1, "repeated");
         assert!(!fake.is_real(), "a fake is not real memory");
-        assert!(FakeMemory::default().sample().is_err(), "nothing queued");
+        assert!(FakeMemory::default().sample(&clock).is_err(), "nothing queued");
     }
 
     #[test]
     fn the_real_source_reads_plausible_figures() {
-        let mut memory = SystemMemory::new().unwrap();
-        let first = memory.sample().unwrap();
+        let clock = ManualClock::new(0);
+        let mut memory = SystemMemory::new(&clock).unwrap();
+        let first = memory.sample(&clock).unwrap();
         assert!(first.avail_mb > 0, "some memory is available");
         assert!(memory.is_real(), "real");
     }
@@ -324,13 +329,16 @@ mod tests {
     #[test]
     fn the_first_reading_after_new_covers_the_minimum_interval() {
         // Called straight after opening, as xtask's acquire does: the rate must not cover the
-        // few microseconds since the prime.
-        let mut memory = SystemMemory::new().unwrap();
-        memory.sample().unwrap();
+        // few microseconds since the prime. The wait runs on the injected clock, so the test
+        // spends no real second on it.
+        let clock = ManualClock::new(0);
+        let mut memory = SystemMemory::new(&clock).unwrap();
+        memory.sample(&clock).unwrap();
         assert!(
             memory.last_interval() >= MIN_RATE_INTERVAL,
             "the first rate covered {:?}",
             memory.last_interval()
         );
+        assert_eq!(clock.mono_ms(), 1_000, "the wait for the rest ran on the injected clock");
     }
 }

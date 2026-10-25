@@ -44,28 +44,23 @@ fn blocking() -> &'static Mutex<BTreeMap<u64, (&'static str, u64)>> {
     BLOCKING.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-/// A panic's message, with any backtick-quoted part replaced, because a slicing panic quotes
-/// the user's string ("byte index 4 is out of bounds of `...`").
+/// A panic's message as text, or a note that its payload was not text.
+///
+/// A panic message can quote anything (an unwrapped error's `Debug`, an `expect` message, an
+/// assertion's values, a slice of the user's string), so it is logged whole in the
+/// `pii.message` field: the log files keep its length and keyed hash, the flight recorder and
+/// the console keep the text.
 #[must_use]
 pub fn panic_message(payload: &(dyn Any + Send)) -> String {
-    let raw = payload
+    payload
         .downcast_ref::<&str>()
         .map(|s| (*s).to_owned())
         .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "a panic with a non-text payload".to_owned());
-    let mut out = String::with_capacity(raw.len());
-    for (i, part) in raw.split('`').enumerate() {
-        if i % 2 == 0 {
-            out.push_str(part);
-        } else {
-            out.push_str("`<redacted>`");
-        }
-    }
-    out
+        .unwrap_or_else(|| "a panic with a non-text payload".to_owned())
 }
 
 fn log_panic(task: &'static str, payload: &(dyn Any + Send)) {
-    tracing::error!(name: names::TASK_PANICKED, task, message = %panic_message(payload));
+    tracing::error!(name: names::TASK_PANICKED, task, "pii.message" = %panic_message(payload));
 }
 
 /// Logs a panic of the future it wraps, then lets the panic continue to the join handle.
@@ -111,8 +106,21 @@ fn spawn_raw<T: Send + 'static>(future: CatchPanic<T>) -> JoinHandle<T> {
     tokio::spawn(future)
 }
 
-/// Removes a blocking task from the list when it ends, panic or not.
+/// A blocking task in the list [`dump`] reads, from when it starts running until it ends,
+/// panic or not.
 struct Running(u64);
+
+impl Running {
+    /// Lists a blocking task as running from now.
+    fn start(name: &'static str) -> Self {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        blocking()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, (name, clock::system().mono().0));
+        Self(id)
+    }
+}
 
 impl Drop for Running {
     fn drop(&mut self) {
@@ -121,7 +129,9 @@ impl Drop for Running {
 }
 
 /// Runs `f` on the runtime's blocking pool (bounded by the runtime's
-/// `max_blocking_threads`), named, in the current span, listed by [`dump`] while it runs.
+/// `max_blocking_threads`), named, in the current span, listed by [`dump`] while it runs: a
+/// task queued behind a full pool is not listed until a thread takes it, and a call outside a
+/// runtime, which panics, leaves no entry behind.
 #[expect(
     clippy::disallowed_methods,
     reason = "eileen_rt::task::spawn_blocking: the one tokio::task::spawn_blocking (BUILD.md section 4b.2)"
@@ -133,13 +143,8 @@ where
 {
     let span = tracing::Span::current();
     let dispatch = tracing::dispatcher::get_default(Clone::clone);
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    blocking()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(id, (name, clock::system().mono().0));
     tokio::task::spawn_blocking(move || {
-        let _running = Running(id);
+        let _running = Running::start(name);
         tracing::dispatcher::with_default(&dispatch, || {
             let _entered = span.enter();
             match catch_unwind(AssertUnwindSafe(f)) {
@@ -179,14 +184,16 @@ mod tests {
     use super::panic_message;
 
     #[test]
-    fn panic_messages_lose_their_quoted_user_text() {
+    fn a_panic_message_is_kept_whole_for_the_pii_field() {
         let payload: Box<dyn std::any::Any + Send> =
-            Box::new("byte index 4 is out of bounds of `my secret title`".to_owned());
+            Box::new("byte index 4 is out of bounds of `a`b`".to_owned());
         assert_eq!(
             panic_message(payload.as_ref()),
-            "byte index 4 is out of bounds of `<redacted>`",
-            "quoted part replaced"
+            "byte index 4 is out of bounds of `a`b`",
+            "no backtick guesswork: the files reduce the whole field"
         );
+        let payload: Box<dyn std::any::Any + Send> = Box::new("an expect message");
+        assert_eq!(panic_message(payload.as_ref()), "an expect message", "a static message");
         let payload: Box<dyn std::any::Any + Send> = Box::new(7_u32);
         assert_eq!(
             panic_message(payload.as_ref()),

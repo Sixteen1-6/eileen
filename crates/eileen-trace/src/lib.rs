@@ -9,7 +9,8 @@
 //!   layer.
 //! - [`names`] and the span-parent check ([`schema`]); the `pii.` policy ([`pii`]), the
 //!   [`redact::Redactor`] and the scenario privacy rules and PII scan ([`privacy`]).
-//! - The [`chrome`] converter, [`traceparent`] parsing, and [`test_support`].
+//! - The [`chrome`] converter, [`traceparent`] parsing, and `test_support` (feature
+//!   `testing`, which only dev-dependencies turn on).
 //!
 //! # Does not own
 //!
@@ -23,14 +24,16 @@
 //! - No secret reaches a file, a ring dump or the console, raw or escaped, and every file and
 //!   dump line stays valid JSON (tests `it::canary::fake_secrets_never_reach_disk_or_a_dump`
 //!   and `it::canary::fake_secrets_never_reach_the_console`).
-//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in.
+//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
+//!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
+//!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
 //!
 //! # Boundaries
 //!
 //! - Called by every Eileen crate; `tools/repo-tools` uses [`redact`] and [`privacy`].
 //! - May depend on `eileen-contracts`, `eileen-stdx`, `tracing` and its subscriber, appender
-//!   and error crates, `serde_json`, `blake3` and `toml` (for [`privacy`]); no async runtime,
-//!   no OpenTelemetry.
+//!   and error crates, `serde_json`, `blake3`, `thiserror` and `toml` (for [`privacy`]); no
+//!   async runtime, no OpenTelemetry.
 //! - Wire types: the JSON-lines log and ring formats, documented in [`file`](mod@file) and
 //!   [`ring`].
 //!
@@ -52,7 +55,8 @@
 //!
 //! # Logs and tracing
 //!
-//! - Emits `span.slow` and `soft_assert.failed` (target `eileen_trace`); owns no spans.
+//! - Emits `span.slow` (target `eileen_trace::slow`) and `soft_assert.failed` (target
+//!   `eileen_trace`); owns no spans.
 //! - Read back with `eileen trace <id>`, or open an incident's `timeline.json` in Perfetto.
 //!
 //! # Do not change without a decision record
@@ -74,6 +78,7 @@ pub mod redact;
 pub mod ring;
 pub mod schema;
 pub mod slow;
+#[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 pub mod traceparent;
 

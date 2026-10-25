@@ -1,6 +1,7 @@
 //! Handles and small values the trait signatures share.
 
 use std::fmt;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use crate::PlatformError;
@@ -66,17 +67,29 @@ impl fmt::Debug for Subscription {
 }
 
 /// An audio thread's MMCSS registration; dropping it reverts the thread.
+///
+/// Not `Send` on any OS: MMCSS must be reverted on the thread that joined it, so a ticket
+/// moved to another thread would revert there. The marker keeps Linux to the Windows rule, as
+/// `eileen_supervisor::qos::AudioBoost` does, and `revert` need not be `Send` either, so a
+/// Windows implementation can capture the thread's MMCSS handle as it is (or wrap the
+/// supervisor's `qos::boost_audio_thread`).
+///
+/// ```compile_fail
+/// let ticket = eileen_platform::ThreadTicket::new("Pro Audio", || {});
+/// std::thread::spawn(move || drop(ticket));
+/// ```
 pub struct ThreadTicket {
     task: &'static str,
-    release: OnDrop,
+    revert: Option<Box<dyn FnOnce()>>,
+    _thread_bound: PhantomData<*const ()>,
 }
 
 impl ThreadTicket {
     /// A registration for the MMCSS task `task` (for example `"Pro Audio"`), reverted by
-    /// `revert` on drop.
+    /// `revert` on drop, on the thread that holds the ticket.
     #[must_use]
-    pub fn new(task: &'static str, revert: impl FnOnce() + Send + 'static) -> Self {
-        Self { task, release: OnDrop::new(revert) }
+    pub fn new(task: &'static str, revert: impl FnOnce() + 'static) -> Self {
+        Self { task, revert: Some(Box::new(revert)), _thread_bound: PhantomData }
     }
 
     /// The MMCSS task the thread joined.
@@ -88,7 +101,9 @@ impl ThreadTicket {
 
 impl Drop for ThreadTicket {
     fn drop(&mut self) {
-        self.release.take();
+        if let Some(revert) = self.revert.take() {
+            revert();
+        }
     }
 }
 
@@ -175,6 +190,7 @@ impl fmt::Debug for RgbaImage {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -187,8 +203,11 @@ mod tests {
         drop(Subscription::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
+        // The revert need not be Send: an `Rc` stands in for a thread-bound MMCSS handle.
         let counter = Arc::clone(&released);
+        let thread_bound = Rc::new(());
         let ticket = ThreadTicket::new("Pro Audio", move || {
+            drop(thread_bound);
             counter.fetch_add(1, Ordering::SeqCst);
         });
         assert_eq!(ticket.task(), "Pro Audio", "task kept");
