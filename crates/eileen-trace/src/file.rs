@@ -1,9 +1,8 @@
 //! The JSON-lines file sink: one line per event at INFO, with the event's span and the span
 //! list, `pii.` fields reduced to length and keyed hash unless `logging.include_personal`.
 //! Every field value goes through the Redactor before the line is serialized, and the whole
-//! line again before it is written, as a backstop. The `filename` is cut by
-//! [`source_file`](crate::record::source_file), so a dependency's absolute path never writes
-//! the build PC's home folder into a log.
+//! line again before it is written, as a backstop. The `filename` is cut by [`source_file`], so
+//! a dependency's absolute path never writes the build PC's home folder into a log.
 
 use std::io::{self, Write};
 use std::sync::Arc;
