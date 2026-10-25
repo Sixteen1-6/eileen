@@ -62,9 +62,10 @@
 //!   hotkey, and `dictation` once `watch_input` has asked, described as the settings'
 //!   [`ShortcutNames`] say. A session takes one bind, so a set that changes once it has had
 //!   one is bound again in a new session, after the bind under way is answered.
-//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer, any change the user
-//!   makes later and each hotkey's press reach the sink of [`LinuxShell::with_events`] as
-//!   [`LinuxShellEvent`]s. The dictation key's press and release reach each `watch_input`
+//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer and each hotkey's
+//!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
+//!   user makes later in the desktop's settings does not yet. The dictation key's press and
+//!   release reach each `watch_input`
 //!   sink as `DictationKey(Down)` and `DictationKey(Up)`; `PhysicalActivity` never does, since
 //!   no source of it is chosen yet.
 //! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
@@ -210,8 +211,8 @@ impl LinuxShell {
     }
 
     /// The shortcuts holder's asks, and, when there is no holder yet or the last has ended, a
-    /// new one to start on them, for a call that began at `start`.
-    fn holder(&self, start: Instant) -> (mpsc::Sender<Ask>, Option<Holder>) {
+    /// new one to start on them.
+    fn holder(&self) -> (mpsc::Sender<Ask>, Option<Holder>) {
         let mut held = self.shortcuts.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(asks) = held.as_ref().filter(|asks| !asks.is_closed()) {
             return (asks.clone(), None);
@@ -223,7 +224,7 @@ impl LinuxShell {
         let entry = &notifier.desktop_entry;
         let app_id = entry.strip_suffix(".desktop").unwrap_or(entry).to_owned();
         let sink = self.events.clone();
-        (asks, Some(Holder { asks: taken, start, deadline: *deadline, app_id, sink }))
+        (asks, Some(Holder { asks: taken, deadline: *deadline, app_id, sink }))
     }
 }
 
@@ -234,10 +235,9 @@ impl ShellHost for LinuxShell {
     fn register_hotkey(&self, chord: &str, id: u32) -> Result<(), PlatformError> {
         let trigger = trigger_of_chord(chord)?;
         let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Hotkey(id), Some(trigger));
-        let (asks, holder) = self.holder(Instant::now());
+        let (asks, holder) = self.holder();
         self.bridge.call(HOTKEY, self.settings.deadline, move |buses| async move {
-            let ask = |answer| Ask::Add { shortcut, answer };
-            put(buses, asks, holder, ask).await.map_err(unavailable(HOTKEY))
+            put(buses, asks, holder, shortcut, None).await.map_err(unavailable(HOTKEY))
         })
     }
 
@@ -268,11 +268,10 @@ impl ShellHost for LinuxShell {
     ) -> Result<Subscription, PlatformError> {
         let trigger = trigger_of_key(dictation_key);
         let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Dictation, trigger);
-        let (asks, holder) = self.holder(Instant::now());
+        let (asks, holder) = self.holder();
         let open = move |buses| async move {
             let (edges, taken) = mpsc::channel(EDGES);
-            let ask = |answer| Ask::Listen { shortcut, edges, answer };
-            put(buses, asks, holder, ask).await.map_err(unavailable(INPUT))?;
+            put(buses, asks, holder, shortcut, Some(edges)).await.map_err(unavailable(INPUT))?;
             Ok(Edges(taken))
         };
         let each = move |edge| sink(ShellInputEvent::DictationKey(edge));

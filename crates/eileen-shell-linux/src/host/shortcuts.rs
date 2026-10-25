@@ -45,8 +45,8 @@ const SESSION: &str = "GlobalShortcuts session";
 pub enum LinuxShellEvent {
     /// The hotkey `register_hotkey` was given this ID for went down.
     Hotkey(u32),
-    /// The shortcuts the desktop bound, as a bind's answer, or those whose triggers the user has
-    /// changed since: each with its trigger.
+    /// The shortcuts the desktop bound, as a bind's answer, each with its trigger. A change the
+    /// user makes later in the desktop's settings is not reported yet.
     ShortcutsBound(Vec<BoundHotkey>),
     /// The desktop bound none: the user cancelled, the portal refused, no answer came within
     /// [`CONSENT_WAIT`], or a new session for a changed set could not open.
@@ -73,14 +73,6 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    /// The ID the portal knows it by.
-    fn portal_id(self) -> String {
-        match self {
-            Self::Hotkey(id) => format!("{HOTKEY}{id}"),
-            Self::Dictation => DICTATION.to_owned(),
-        }
-    }
-
     /// The shortcut a portal ID names; `None` for one Eileen does not bind.
     fn of(id: &str) -> Option<Self> {
         if id == DICTATION {
@@ -108,17 +100,16 @@ impl Default for ShortcutNames {
 }
 
 impl ShortcutNames {
-    /// The shortcut `id` stands for, offered with `trigger`.
+    /// The shortcut `id` stands for, under the ID the portal knows it by, offered with `trigger`.
     pub(super) fn shortcut(&self, id: ShortcutId, trigger: Option<String>) -> Shortcut {
-        let description = match id {
-            ShortcutId::Hotkey(number) => self
-                .hotkeys
-                .get(&number)
-                .cloned()
-                .unwrap_or_else(|| format!("Eileen shortcut {number}")),
-            ShortcutId::Dictation => self.dictation.clone(),
+        let (id, description) = match id {
+            ShortcutId::Hotkey(n) => {
+                let named = self.hotkeys.get(&n).cloned();
+                (format!("{HOTKEY}{n}"), named.unwrap_or_else(|| format!("Eileen shortcut {n}")))
+            }
+            ShortcutId::Dictation => (DICTATION.to_owned(), self.dictation.clone()),
         };
-        Shortcut { id: id.portal_id(), description, trigger }
+        Shortcut { id, description, trigger }
     }
 }
 
@@ -132,27 +123,22 @@ impl fmt::Debug for EventSink {
     }
 }
 
-/// What a shell call asks the holder, with where its answer goes: `Ok` once the holder has a
-/// session that will bind the shortcut.
+/// What a shell call asks the holder: to bind `shortcut` with the rest of the set and, for the
+/// dictation key, to send its edges to `edges`. `answer` is `Ok` once the holder has a session
+/// that will bind it.
 #[derive(Debug)]
-pub(super) enum Ask {
-    /// Bind `shortcut`, a hotkey, with the rest of the set.
-    Add { shortcut: Shortcut, answer: Answer },
-    /// Bind `shortcut`, the dictation key, with the rest, and send its edges to `edges`.
-    Listen { shortcut: Shortcut, edges: mpsc::Sender<KeyEdge>, answer: Answer },
+pub(super) struct Ask {
+    shortcut: Shortcut,
+    edges: Option<mpsc::Sender<KeyEdge>>,
+    answer: oneshot::Sender<Result<(), DbusError>>,
 }
-
-/// Where an ask's answer goes.
-pub(super) type Answer = oneshot::Sender<Result<(), DbusError>>;
 
 /// What a new holder takes from the shell that starts it.
 #[derive(Debug)]
 pub(super) struct Holder {
     /// The asks, from every call while the holder lives.
     pub(super) asks: mpsc::Receiver<Ask>,
-    /// When the call that starts it began: the first session opens within that call's deadline.
-    pub(super) start: Instant,
-    /// The shell's deadline, which bounds opening each session.
+    /// The shell's deadline, which bounds connecting, and opening each session.
     pub(super) deadline: Deadline,
     /// The app ID the portal's host registry is given.
     pub(super) app_id: String,
@@ -171,20 +157,21 @@ impl Stream for Edges {
     }
 }
 
-/// Hands the holder the ask `make` builds around its answer, first starting the holder on
-/// `buses` when `holder` is a new one, and waits for the answer.
+/// Asks the holder to bind `shortcut` and send its edges to `edges`, first starting the holder
+/// on `buses` when `holder` is a new one, and waits for the answer.
 pub(super) async fn put(
     buses: Buses,
     asks: mpsc::Sender<Ask>,
     holder: Option<Holder>,
-    make: impl FnOnce(Answer) -> Ask,
+    shortcut: Shortcut,
+    edges: Option<mpsc::Sender<KeyEdge>>,
 ) -> Result<(), DbusError> {
     if let Some(holder) = holder {
         drop(tokio::task::spawn_local(hold(buses, holder)));
     }
     let gone = || DbusError::Io { what: HOLDER, detail: "it ended without answering".to_owned() };
     let (answer, answered) = oneshot::channel();
-    asks.send(make(answer)).await.map_err(|_ended| gone())?;
+    asks.send(Ask { shortcut, edges, answer }).await.map_err(|_ended| gone())?;
     answered.await.unwrap_or_else(|_ended| Err(gone()))
 }
 
@@ -194,21 +181,28 @@ pub(super) async fn put(
 /// when the portal ends the session, or when a session cannot open, which every ask then
 /// waiting is answered with; the next ask starts a new holder.
 async fn hold(buses: Buses, holder: Holder) {
-    let Holder { mut asks, start, deadline, app_id, sink } = holder;
+    let Holder { mut asks, deadline, app_id, sink } = holder;
     let report = |event: LinuxShellEvent| {
         if let Some(EventSink(sink)) = &sink {
             sink(event);
         }
     };
-    let mut until = start.checked_add(deadline.budget());
-    let conn = match bounded(until, buses.unshared_session()).await {
+    // zbus bounds no connect, so the holder bounds its own, as the keep-awake holder does.
+    let until = Instant::now().checked_add(deadline.budget());
+    let conn = match super::within(until, super::SESSION_BUS, buses.unshared_session()).await {
         Ok(conn) => conn,
         Err(error) => return refuse(asks, &error),
     };
     drop(buses);
     let (mut wanted, mut again) = (Wanted::default(), false);
     loop {
-        let (session, mut events) = match bounded(until, open(&conn, &app_id, until)).await {
+        // The portal's answer waits the shell's deadline; its events come before any bind.
+        let open = async {
+            let session = ShortcutsSession::open(&conn, &app_id, deadline.budget()).await?;
+            let events = session.events().await?;
+            Ok::<_, DbusError>((session, events))
+        };
+        let (session, mut events) = match open.await {
             Ok(opened) => opened,
             Err(error) => {
                 if again {
@@ -223,33 +217,7 @@ async fn hold(buses: Buses, holder: Holder) {
         if let Err(ended) = served {
             return refuse(asks, &ended);
         }
-        (again, until) = (true, Instant::now().checked_add(deadline.budget()));
-    }
-}
-
-/// A session on `conn` and its events, subscribed before any bind, by `until`.
-async fn open(
-    conn: &zbus::Connection,
-    app_id: &str,
-    until: Option<Instant>,
-) -> Result<(ShortcutsSession, ShortcutEvents), DbusError> {
-    let left = until.map_or(Duration::MAX, |until| until.saturating_duration_since(Instant::now()));
-    let session = ShortcutsSession::open(conn, app_id, left).await?;
-    let events = session.events().await?;
-    Ok((session, events))
-}
-
-/// What `work` answers by `until` (`None` for no bound): past it, the session it was opening is
-/// late.
-async fn bounded<T>(
-    until: Option<Instant>,
-    work: impl Future<Output = Result<T, DbusError>>,
-) -> Result<T, DbusError> {
-    match until {
-        Some(until) => tokio::time::timeout_at(until, work)
-            .await
-            .unwrap_or(Err(DbusError::DeadlineExceeded { call: SESSION })),
-        None => work.await,
+        again = true;
     }
 }
 
@@ -292,8 +260,9 @@ async fn serve(
                     return Ok(());
                 }
                 (bind_at, sent) = (None, true);
-                let (session, shortcuts) = (session.clone(), wanted.set());
-                let bind = async move { session.bind(&shortcuts, CONSENT_WAIT).await };
+                let whole: Vec<Shortcut> = wanted.shortcuts.values().cloned().collect();
+                let session = session.clone();
+                let bind = async move { session.bind(&whole, CONSENT_WAIT).await };
                 binding = Some(Box::pin(bind));
             }
             answer = async {
@@ -326,10 +295,7 @@ impl Wanted {
     /// Takes `ask` in and answers it; says whether the set changed. A caller that has stopped
     /// waiting was answered `DeadlineExceeded` by the bridge, so its ask is passed over.
     fn take(&mut self, ask: Ask) -> bool {
-        let (shortcut, answer, edges) = match ask {
-            Ask::Add { shortcut, answer } => (shortcut, answer, None),
-            Ask::Listen { shortcut, edges, answer } => (shortcut, answer, Some(edges)),
-        };
+        let Ask { shortcut, edges, answer } = ask;
         if answer.send(Ok(())).is_err() {
             return false;
         }
@@ -337,14 +303,8 @@ impl Wanted {
         self.shortcuts.insert(shortcut.id.clone(), shortcut.clone()).as_ref() != Some(&shortcut)
     }
 
-    /// The whole set, in the order of its IDs.
-    fn set(&self) -> Vec<Shortcut> {
-        self.shortcuts.values().cloned().collect()
-    }
-
-    /// Hands `event` on: a hotkey's press to `report`, the dictation key's edges to each
-    /// listener, and a change of the bindings to `report` as the new bindings. A hotkey's
-    /// release says nothing.
+    /// Hands `event` on: a hotkey's press to `report`, and the dictation key's edges to each
+    /// listener. A hotkey's release says nothing.
     fn hand_on(&mut self, event: ShortcutEvent, report: &impl Fn(LinuxShellEvent)) {
         match event {
             ShortcutEvent::Activated(id) => match ShortcutId::of(&id) {
@@ -356,9 +316,6 @@ impl Wanted {
                 if ShortcutId::of(&id) == Some(ShortcutId::Dictation) {
                     self.send(KeyEdge::Up);
                 }
-            }
-            ShortcutEvent::Changed(bound) => {
-                report(LinuxShellEvent::ShortcutsBound(hotkeys(bound)));
             }
             ShortcutEvent::Closed => {}
         }
@@ -382,7 +339,6 @@ fn hotkeys(bound: Vec<BoundShortcut>) -> Vec<BoundHotkey> {
 fn refuse(mut asks: mpsc::Receiver<Ask>, error: &DbusError) {
     asks.close();
     while let Ok(ask) = asks.try_recv() {
-        let (Ask::Add { answer, .. } | Ask::Listen { answer, .. }) = ask;
-        let _ignored = answer.send(Err(error.clone()));
+        let _ignored = ask.answer.send(Err(error.clone()));
     }
 }

@@ -7,9 +7,9 @@
 //! - [`trigger_of_chord`] reads a hotkey chord as Eileen's settings write it (`ctrl+alt+m`):
 //!   parts split on `+`, trimmed, in any case. `ctrl` or `control`, `alt`, `shift`, and `super`,
 //!   `win`, `logo` or `meta` are the modifiers, each at most once, then exactly one key: a
-//!   letter, a digit, `F1` to `F24`, or one of the names in [`KEYS`]. The trigger names the
-//!   modifiers in the order above and a letter in lower case, as the specification's base layer
-//!   does, so a chord's spelling never changes its trigger.
+//!   letter, a digit, `F1` to `F24`, or one of the keysyms in [`KEYS`], with or without its `_`.
+//!   The trigger names the modifiers in the order above and a letter in lower case, as the
+//!   specification's base layer does, so a chord's spelling never changes its trigger.
 //! - [`trigger_of_key`] names the Windows virtual-key code of a dictation key alone, without
 //!   modifiers; a code it does not know gives no trigger, and the user picks one in the dialog.
 //!
@@ -30,30 +30,17 @@ const MODIFIERS: [(&str, &[&str]); 4] = [
     ("LOGO", &["super", "win", "logo", "meta"]),
 ];
 
-/// The keys besides letters, digits and F-keys: each keysym, and the words a chord may give it,
-/// in lower case and without `_`, the form a chord's key is compared in.
-const KEYS: [(&str, &[&str]); 20] = [
-    ("space", &["space"]),
-    ("Return", &["return", "enter"]),
-    ("Tab", &["tab"]),
-    ("Escape", &["escape", "esc"]),
-    ("BackSpace", &["backspace"]),
-    ("Delete", &["delete", "del"]),
-    ("Insert", &["insert", "ins"]),
-    ("Home", &["home"]),
-    ("End", &["end"]),
-    ("Page_Up", &["pageup", "pgup"]),
-    ("Page_Down", &["pagedown", "pgdn"]),
-    ("Up", &["up", "arrowup"]),
-    ("Down", &["down", "arrowdown"]),
-    ("Left", &["left", "arrowleft"]),
-    ("Right", &["right", "arrowright"]),
-    ("Pause", &["pause"]),
-    ("Print", &["print", "printscreen"]),
-    ("Menu", &["menu", "contextmenu", "apps"]),
-    ("Caps_Lock", &["capslock"]),
-    ("Scroll_Lock", &["scrolllock"]),
-];
+/// The keys a chord may name besides letters, digits and F-keys: their keysyms, separated by
+/// spaces.
+const KEYS: &str = "space Return Tab Escape BackSpace Delete Insert Home End Page_Up Page_Down \
+                    Up Down Left Right Pause Print Menu Caps_Lock Scroll_Lock";
+
+/// The keysyms of keys whose virtual-key codes run in order: the navigation keys from 0x21, the
+/// Windows and menu keys from 0x5B, and the left and right Shift, Ctrl and Alt from 0xA0.
+const NAVIGATION: [&str; 8] =
+    ["Page_Up", "Page_Down", "End", "Home", "Left", "Up", "Right", "Down"];
+const WINDOWS: [&str; 3] = ["Super_L", "Super_R", "Menu"];
+const SIDES: [&str; 6] = ["Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R"];
 
 /// The trigger a hotkey chord stands for, such as `CTRL+ALT+m` for `ctrl+alt+m`; the module's
 /// doc gives the rules. A chord that breaks them is [`DbusError::Invalid`], before the portal
@@ -97,7 +84,8 @@ fn keysym(word: &str) -> Option<String> {
     if let Some(number) = function.filter(|number| (1..=24).contains(number)) {
         return Some(format!("F{number}"));
     }
-    KEYS.iter().find(|(_, words)| words.contains(&&*folded)).map(|(name, _)| (*name).to_owned())
+    let named = |name: &&str| name.to_ascii_lowercase().replace('_', "") == folded;
+    KEYS.split(' ').find(named).map(str::to_owned)
 }
 
 /// The keysym of the Windows virtual-key code `key`, as the dictation key alone: letters,
@@ -107,31 +95,16 @@ fn keysym(word: &str) -> Option<String> {
 pub fn trigger_of_key(key: VirtualKey) -> Option<String> {
     let code = u8::try_from(key.0).ok()?;
     let name = match code {
-        b'0'..=b'9' => return Some(char::from(code).to_string()),
-        b'A'..=b'Z' => return Some(char::from(code.to_ascii_lowercase()).to_string()),
+        b'0'..=b'9' | b'A'..=b'Z' => return Some(char::from(code.to_ascii_lowercase()).into()),
         0x70..=0x87 => return Some(format!("F{}", code - 0x6F)),
+        0x21..=0x28 => *NAVIGATION.get(usize::from(code - 0x21))?,
+        0x5B..=0x5D => *WINDOWS.get(usize::from(code - 0x5B))?,
+        0xA0..=0xA5 => *SIDES.get(usize::from(code - 0xA0))?,
         0x13 => "Pause",
         0x14 => "Caps_Lock",
         0x20 => "space",
-        0x21 => "Page_Up",
-        0x22 => "Page_Down",
-        0x23 => "End",
-        0x24 => "Home",
-        0x25 => "Left",
-        0x26 => "Up",
-        0x27 => "Right",
-        0x28 => "Down",
         0x2D => "Insert",
-        0x5B => "Super_L",
-        0x5C => "Super_R",
-        0x5D => "Menu",
         0x91 => "Scroll_Lock",
-        0xA0 => "Shift_L",
-        0xA1 => "Shift_R",
-        0xA2 => "Control_L",
-        0xA3 => "Control_R",
-        0xA4 => "Alt_L",
-        0xA5 => "Alt_R",
         _ => return None,
     };
     Some(name.to_owned())
@@ -153,7 +126,8 @@ mod tests {
             ("super+space", "LOGO+space"),
             ("ctrl+f13", "CTRL+F13"),
             (" Control + Win + Page_Up ", "CTRL+LOGO+Page_Up"),
-            ("meta+enter", "LOGO+Return"),
+            ("meta+RETURN", "LOGO+Return"),
+            ("alt+capslock", "ALT+Caps_Lock"),
             ("7", "7"),
         ];
         for (chord, trigger) in cases {
@@ -186,6 +160,8 @@ mod tests {
             (0xA3, Some("Control_R")),
             (0x41, Some("a")),
             (0x30, Some("0")),
+            (0x28, Some("Down")),
+            (0x5D, Some("Menu")),
             (0x07, None),
             // Past a byte, though its low byte is Caps Lock's.
             (0x0114, None),

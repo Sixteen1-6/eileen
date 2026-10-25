@@ -26,11 +26,12 @@
 //! - A portal without the interface, as on GNOME 46, answers `UnknownMethod` or
 //!   `UnknownInterface`, [`DbusError::NotFound`]; no portal at all is
 //!   [`DbusError::Unavailable`].
-//! - The session's handle comes as a string, which the documentation records as an erratum
-//!   kept for compatibility, or as an object path: both are taken.
+//! - The session's handle comes as a string, an erratum the documentation keeps for
+//!   compatibility, and xdg-desktop-portal sends it so.
 //! - Only the connection that answered `CreateSession` speaks for the portal, and only a signal
 //!   that names the session's handle is the session's: any other, and a malformed one, is
-//!   passed over. The stream ends after the session's `Closed`.
+//!   passed over. The stream ends after the session's `Closed`. The bindings' later changes
+//!   (`ShortcutsChanged`) are not followed yet.
 //! - A trigger's description is the desktop's text, so it is `Untrusted`. No D-Bus string may
 //!   hold U+0000, and the bus drops a connection that sends one, so the app ID and each
 //!   description lose any first.
@@ -103,8 +104,6 @@ pub enum ShortcutEvent {
     Activated(String),
     /// It came back up (`Deactivated`).
     Deactivated(String),
-    /// The desktop's bindings changed, as the user changed them (`ShortcutsChanged`).
-    Changed(Vec<BoundShortcut>),
     /// The portal closed the session (the session's `Closed`), and the stream ends.
     Closed,
 }
@@ -157,10 +156,12 @@ impl ShortcutsSession {
         let portal = request.follow(&reply).await?;
         let response = request.answer(&portal, deadline).await?;
         confirmed(SESSION_WHAT, response.code)?;
-        let handle = session_handle(&response.results).ok_or_else(|| DbusError::Invalid {
-            what: SESSION_WHAT,
-            detail: "the response names no session handle".to_owned(),
-        })?;
+        let handle =
+            response.results.get("session_handle").and_then(|text| <&str>::try_from(text).ok());
+        let handle =
+            handle.and_then(|text| OwnedObjectPath::try_from(text).ok()).ok_or_else(|| {
+                DbusError::Invalid { what: SESSION_WHAT, detail: "no session handle".to_owned() }
+            })?;
         Ok(Self { conn: conn.clone(), handle, portal })
     }
 
@@ -286,37 +287,28 @@ fn event_of(
     session: &OwnedObjectPath,
 ) -> Option<ShortcutEvent> {
     let header = signal.header();
+    let (path, interface, member) = (header.path()?, header.interface()?, header.member()?);
     if header.sender() != Some(&**portal) {
         return None;
     }
-    let (path, interface, member) = (header.path()?, header.interface()?, header.member()?);
     if interface.as_str() == SESSION && member.as_str() == "Closed" {
         return (path.as_str() == session.as_str()).then_some(ShortcutEvent::Closed);
     }
+    let edge: fn(String) -> ShortcutEvent = match member.as_str() {
+        "Activated" => ShortcutEvent::Activated,
+        "Deactivated" => ShortcutEvent::Deactivated,
+        _ => return None,
+    };
     if interface.as_str() != SHORTCUTS || path.as_str() != PORTAL_PATH {
         return None;
     }
-    let body = signal.body();
-    let event = match member.as_str() {
-        "Activated" | "Deactivated" => {
-            let (handle, id, _time, _options) = body
-                .deserialize::<(OwnedObjectPath, String, u64, HashMap<String, OwnedValue>)>()
-                .ok()?;
-            let edge = if member.as_str() == "Activated" {
-                ShortcutEvent::Activated
-            } else {
-                ShortcutEvent::Deactivated
-            };
-            (handle, edge(id))
-        }
-        "ShortcutsChanged" => {
-            let (handle, list) = body.deserialize::<(OwnedObjectPath, Vec<Described>)>().ok()?;
-            (handle, ShortcutEvent::Changed(bound(list)))
-        }
-        _ => return None,
-    };
-    (event.0 == *session).then_some(event.1)
+    let (handle, id, _time, _options) = signal.body().deserialize::<Edge>().ok()?;
+    (handle == *session).then(|| edge(id))
 }
+
+/// An `Activated` or `Deactivated` signal's arguments: the session's handle, the shortcut's ID,
+/// the time and the options.
+type Edge = (OwnedObjectPath, String, u64, HashMap<String, OwnedValue>);
 
 /// A shortcut as the portal describes it: its ID and its details.
 type Described = (String, HashMap<String, OwnedValue>);
@@ -329,15 +321,6 @@ fn bound(list: Vec<Described>) -> Vec<BoundShortcut> {
         Untrusted::new(described.unwrap_or_default().to_owned())
     };
     list.into_iter().map(|(id, details)| BoundShortcut { trigger: trigger(&details), id }).collect()
-}
-
-/// The session handle a `CreateSession` response gives, as a string or as an object path.
-fn session_handle(results: &HashMap<String, OwnedValue>) -> Option<OwnedObjectPath> {
-    let handle = results.get("session_handle")?;
-    if let Ok(text) = <&str>::try_from(handle) {
-        return OwnedObjectPath::try_from(text).ok();
-    }
-    <&ObjectPath<'_>>::try_from(handle).ok().map(|path| path.to_owned().into())
 }
 
 /// What a `Response` code says of a request to `what`, by the Request documentation's codes.

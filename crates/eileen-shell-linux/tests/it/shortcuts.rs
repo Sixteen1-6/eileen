@@ -1,7 +1,7 @@
 //! The `GlobalShortcuts` client against a fake portal on a private bus: the host registry's call
-//! before the session, the bind's shortcuts and the desktop's triggers, the session handle in
-//! either type, refusals and odd answers, the session's signals and its close, a bind left
-//! unanswered, and portals without the interface. `shell_host`'s tests use the same fake.
+//! before the session, the bind's shortcuts and the desktop's triggers, refusals and odd
+//! answers, the session's signals and its close, a bind left unanswered, and portals without the
+//! interface. `shell_host`'s tests use the same fake.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -43,19 +43,16 @@ pub(super) enum Mode {
     Later,
 }
 
-/// How the fake answers `CreateSession` and `BindShortcuts`, and how it types the handle.
+/// How the fake answers `CreateSession` and `BindShortcuts`.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Modes {
     pub(super) create: Mode,
     pub(super) bind: Mode,
-    /// The session handle as an object path, not as the documented string.
-    pub(super) handle_as_path: bool,
 }
 
 impl Modes {
-    /// Every request granted, the handle as the documented string.
-    pub(super) const GRANT: Self =
-        Self { create: Mode::Grant, bind: Mode::Grant, handle_as_path: false };
+    /// Every request granted.
+    pub(super) const GRANT: Self = Self { create: Mode::Grant, bind: Mode::Grant };
 }
 
 /// A shortcut as a bind lists it: its ID, description and preferred trigger.
@@ -136,12 +133,8 @@ impl FakeShortcuts {
         let closer = Closer { path: session.clone(), reports: self.reports.clone() };
         conn.object_server().at(&session, FakeSession(closer)).await?;
         let _ignored = self.reports.send(Report::Created(session.clone())).await;
-        let typed = if self.modes.handle_as_path {
-            Value::from(session.clone())
-        } else {
-            Value::from(session.to_string())
-        };
-        let results = HashMap::from([("session_handle", typed)]);
+        // A string, as xdg-desktop-portal sends it: the documented erratum.
+        let results = HashMap::from([("session_handle", Value::from(session.to_string()))]);
         answer(conn, &caller, &request, self.modes.create, results).await;
         Ok(request)
     }
@@ -251,12 +244,6 @@ fn text(options: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
 /// The desktop's answer to a bind of `listed`: each shortcut with its description and, for one
 /// offered with a trigger, a description of the trigger that names it.
 pub(super) fn triggers(listed: &[Listed]) -> Value<'static> {
-    Value::from(described(listed))
-}
-
-/// The shortcuts in `listed` as the desktop describes them: [`triggers`], unwrapped, as the
-/// portal's `ShortcutsChanged` carries them.
-fn described(listed: &[Listed]) -> Vec<(String, HashMap<String, Value<'static>>)> {
     let described = |(id, description, trigger): &Listed| {
         let mut details: HashMap<String, Value<'static>> = HashMap::new();
         if let Some(description) = description {
@@ -268,7 +255,7 @@ fn described(listed: &[Listed]) -> Vec<(String, HashMap<String, Value<'static>>)
         }
         (id.clone(), details)
     };
-    listed.iter().map(described).collect()
+    Value::from(listed.iter().map(described).collect::<Vec<_>>())
 }
 
 /// Answers `request` from `conn` to `caller` as `mode` says, with `results` when it grants.
@@ -368,17 +355,6 @@ async fn the_app_registers_before_the_session_and_the_bind_reports_triggers() {
 }
 
 #[tokio::test]
-async fn a_session_handle_given_as_an_object_path_is_taken_too() {
-    let bus = PrivateBus::start();
-    let (fake, mut reports) = FakeShortcuts::new(Modes { handle_as_path: true, ..Modes::GRANT });
-    let _portal = serve_portal(&bus, fake).await;
-    let (_client, session) = opened(&bus).await;
-    let _registered = reports.recv().await;
-    let Some(Report::Created(created)) = reports.recv().await else { panic!("a session") };
-    assert_eq!(session.handle().as_str(), created.as_str(), "the object path, as the string");
-}
-
-#[tokio::test]
 async fn a_cancelled_bind_is_refused() {
     let bus = PrivateBus::start();
     let (fake, _reports) = FakeShortcuts::new(Modes { bind: Mode::Code(1), ..Modes::GRANT });
@@ -443,7 +419,7 @@ async fn only_this_sessions_signals_from_the_portal_are_events() {
 }
 
 #[tokio::test]
-async fn a_change_of_the_bindings_is_an_event_and_the_sessions_close_ends_the_stream() {
+async fn the_sessions_close_ends_its_events() {
     let bus = PrivateBus::start();
     let (fake, _reports) = FakeShortcuts::new(Modes::GRANT);
     let portal = serve_portal(&bus, fake).await;
@@ -451,21 +427,6 @@ async fn a_change_of_the_bindings_is_an_event_and_the_sessions_close_ends_the_st
     let mut events = session.events().await.unwrap();
     let to = client.unique_name().unwrap().to_string();
     let ours = OwnedObjectPath::from(session.handle().to_owned());
-    let changed = described(&listed(&[("hotkey-1", Some("Mute or unmute"), Some("Ctrl+K"))]));
-    let body = (&ours, changed);
-    portal
-        .emit_signal(Some(&*to), PORTAL_PATH, SHORTCUTS, "ShortcutsChanged", &body)
-        .await
-        .unwrap();
-    let rebound = BoundShortcut {
-        id: "hotkey-1".to_owned(),
-        trigger: Untrusted::new("Press Ctrl+K".to_owned()),
-    };
-    assert_eq!(
-        events.next().await,
-        Some(ShortcutEvent::Changed(vec![rebound])),
-        "the new bindings"
-    );
     let no_details = (HashMap::<&str, Value<'_>>::new(),);
     let theirs = handle("session", ":1.999", "other");
     portal.emit_signal(Some(&*to), &theirs, SESSION, "Closed", &no_details).await.unwrap();
