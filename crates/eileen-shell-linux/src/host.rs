@@ -28,14 +28,15 @@
 //! on the bridge's thread once `release` has run: should `Uninhibit` or the portal's `Close`
 //! fail, the desktop still ends its hold when that connection closes.
 //!
-//! The task connects the system bus and that session connection at once, and the connects share
-//! the portal's half of the deadline with the portal's answers, counted from the call's start: a
-//! bus not connected by the end of that half is a holder that missed, and the portal has what is
-//! left of the half. Such a bus is there and has hung, so it misses by `DeadlineExceeded` naming
-//! it, not as the absent holder a bus that fails to connect is, and when nothing holds the call
-//! fails as [`LinuxPowerRequest::keep_awake`] ranks the misses, never as `Unavailable`. So a bus
-//! that accepts and never answers costs that half, and logind's lock, or the desktop's hold,
-//! still answers within the deadline.
+//! The task connects the system bus and that session connection at once, within half the
+//! deadline counted from the call's start, and gives the portal's answers half of what is then
+//! left of it, which leaves the other half to the calls around the portal's wait, logind's
+//! included. A bus not connected by the end of that first half is a holder that missed. Such a
+//! bus is there and has hung, so it misses by `DeadlineExceeded` naming it, not as the absent
+//! holder a bus that fails to connect is, and when nothing holds the call fails as
+//! [`LinuxPowerRequest::keep_awake`] ranks the misses, never as `Unavailable`. So a bus that
+//! accepts and never answers costs half the deadline, and logind's lock, or the desktop's hold,
+//! the portal's included, still answers within it.
 //!
 //! Dropping the `PowerRequest` asks the task to release and waits at most [`RELEASE_WAIT`] for
 //! it; past that, the task finishes on its own. Dropped on the bridge's thread, in a job or a
@@ -49,9 +50,10 @@
 //!
 //! - zbus bounds no connect, neither its handshake nor its `Hello` call, and the task's own
 //!   session connection costs one more connect per `keep_awake`. The task bounds both of its
-//!   connects by the portal's half, counted from the call's start, not from the job's. A system
-//!   bus that hangs while connecting spends the whole half and leaves the portal no time to wait
-//!   for its `Response`: on a desktop without GNOME's session manager, nothing then holds.
+//!   connects from the call's start, not from the job's, and the portal's budget from what is
+//!   left once they are done, not from their half: a system bus that hangs spends the whole
+//!   half, which would leave the portal no time for its `Response` on a desktop without GNOME's
+//!   session manager.
 //! - `keep_awake` fails only when nothing holds. A holder that missed
 //!   ([`LinuxPowerRequest::missed`]), such as the desktop's on a desktop with neither GNOME's
 //!   session manager nor the portal, goes unreported: the trait's `PowerRequest` has no place
@@ -188,18 +190,19 @@ impl ShellHost for LinuxShell {
     /// [`LinuxPowerRequest::keep_awake`], held by a task on the bridge's thread until the
     /// returned request drops; the module's doc says how.
     fn keep_awake(&self) -> Result<PowerRequest, PlatformError> {
-        // The call starts here, on the caller's thread: the half is counted from now, not from
-        // when the bridge's thread takes the job. `None`, past what an instant holds, is no bound.
-        let until = Instant::now().checked_add(portal_budget(self.settings.deadline));
+        // The call starts here, on the caller's thread: the holder's bounds count from now, not
+        // from when the bridge's thread takes the job.
+        let start = Instant::now();
+        let deadline = self.settings.deadline;
         let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
-            drop(tokio::task::spawn_local(hold(buses, until, answer)));
+            drop(tokio::task::spawn_local(hold(buses, start, deadline, answer)));
             // Cancelled, the job drops `answered`, which makes the holder release what it took.
             answered.await.unwrap_or_else(|_gone| {
                 Err(PlatformError::Io { what: KEEP_AWAKE, detail: HOLDER_GONE.to_owned() })
             })
         };
-        let release = self.bridge.call(KEEP_AWAKE, self.settings.deadline, job)?;
+        let release = self.bridge.call(KEEP_AWAKE, deadline, job)?;
         Ok(released_on_drop(self.bridge.clone(), release))
     }
 
@@ -218,36 +221,44 @@ impl ShellHost for LinuxShell {
     }
 }
 
-/// How long the holder's connects and the portal's answers may take together, which no method
-/// timeout bounds: half the call's deadline, so that a bus that never finishes connecting, or a
-/// portal that never answers, is a missed holder, and the call still answers in time with the
-/// other holder.
-fn portal_budget(deadline: Deadline) -> Duration {
+/// How long the holder's connects may take, which zbus bounds by no timeout: half the call's
+/// deadline, counted from its start, so that a bus that never finishes connecting is a missed
+/// holder and the call still answers in time with the other holder.
+fn connect_budget(deadline: Deadline) -> Duration {
     deadline.budget() / 2
 }
 
-/// The holder task: takes the request on `buses`, connecting them and waiting for the portal's
-/// answers until `until` (`None` for no bound), and answers with a channel to release it through.
-/// It releases the request once asked through that channel, or once the channel or the wait for
-/// the answer is gone without asking.
+/// How long the portal's answers may take, which no method timeout bounds, in a call that ends
+/// at `end` (`None` for never): half of what is left of the call once the connects are done, so
+/// that a portal that never answers is a missed holder, and the other half leaves the calls
+/// around the portal's wait, logind's included, time to answer within the deadline.
+fn portal_budget(end: Option<Instant>) -> Duration {
+    end.map_or(Duration::MAX, |end| end.saturating_duration_since(Instant::now()) / 2)
+}
+
+/// The holder task: takes the request on `buses` within `deadline`, counted from `start`, the
+/// call's start, and answers with a channel to release it through. It releases the request once
+/// asked through that channel, or once the channel or the wait for the answer is gone without
+/// asking.
 async fn hold(
     buses: Buses,
-    until: Option<Instant>,
+    start: Instant,
+    deadline: Deadline,
     answer: oneshot::Sender<Result<Release, PlatformError>>,
 ) {
     // A bus not reached by `until` is a holder that `keep_awake` names as missed: absent when its
     // connect failed, late when the connect had not answered by then. The two connect at once,
-    // so a bus that hangs costs no more than the bound. The session connection is the holder's
-    // own: the request keeps it, and it closes here once `release` has run, or with the task
-    // when the bridge ends first, which ends the desktop's hold even when `release` failed.
+    // so a bus that hangs costs no more than the bound. `None`, past what an instant holds, is no
+    // bound. The session connection is the holder's own: the request keeps it, and it closes
+    // here once `release` has run, or with the task when the bridge ends first, which ends the
+    // desktop's hold even when `release` failed.
+    let until = start.checked_add(connect_budget(deadline));
     let (system, session) = tokio::join!(
         within(until, SYSTEM_BUS, buses.system()),
         within(until, SESSION_BUS, buses.unshared_session()),
     );
     drop(buses);
-    // What is left of the half is the portal's, for its answers.
-    let portal =
-        until.map_or(Duration::MAX, |until| until.saturating_duration_since(Instant::now()));
+    let portal = portal_budget(start.checked_add(deadline.budget()));
     let system = system.as_ref().map_err(Clone::clone);
     let taken = LinuxPowerRequest::keep_awake(system, session, KEEP_AWAKE_REASON, portal).await;
     let request = match taken {

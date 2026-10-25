@@ -197,7 +197,7 @@ pub(super) enum Answer {
 
 /// One `Inhibit` call to the fake portal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PortalCall {
+pub(super) struct PortalCall {
     window: String,
     flags: u32,
     /// The options' names, sorted.
@@ -205,7 +205,7 @@ struct PortalCall {
     reason: Option<String>,
     token: Option<String>,
     /// The request the fake made.
-    request: OwnedObjectPath,
+    pub(super) request: OwnedObjectPath,
 }
 
 /// A fake Inhibit portal. It makes each request at the handle the real portal gives it, from the
@@ -218,13 +218,21 @@ pub(super) struct FakePortal {
     on_close: mpsc::Sender<OwnedObjectPath>,
 }
 
+/// What a [`FakePortal`] that a test serves itself reports.
+pub(super) struct PortalReports {
+    /// Each call it sees.
+    pub(super) calls: mpsc::Receiver<PortalCall>,
+    /// Each request that is closed.
+    pub(super) closes: mpsc::Receiver<OwnedObjectPath>,
+}
+
 impl FakePortal {
-    /// A portal that answers as `answer` says and reports only the requests that are closed, for
-    /// a test that serves it itself.
-    pub(super) fn reporting_closes(answer: Answer) -> (Self, mpsc::Receiver<OwnedObjectPath>) {
-        let (calls, _unseen) = mpsc::channel(1);
-        let (on_close, closed) = mpsc::channel(1);
-        (Self { answer, calls, on_close }, closed)
+    /// A portal that answers as `answer` says and reports its calls and the requests that are
+    /// closed, for a test that serves it itself.
+    pub(super) fn reporting(answer: Answer) -> (Self, PortalReports) {
+        let (calls, seen) = mpsc::channel(16);
+        let (on_close, closed) = mpsc::channel(16);
+        (Self { answer, calls, on_close }, PortalReports { calls: seen, closes: closed })
     }
 }
 
@@ -340,7 +348,7 @@ impl Portal {
 
 /// Emits the portal's `Response` with `code` on `request` from `connection`, to every connection
 /// whose match rule takes it.
-async fn respond(connection: &zbus::Connection, request: &OwnedObjectPath, code: u32) {
+pub(super) async fn respond(connection: &zbus::Connection, request: &OwnedObjectPath, code: u32) {
     respond_to(connection, None, request, code).await;
 }
 

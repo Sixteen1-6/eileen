@@ -18,11 +18,12 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_chang
 use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
 use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
 use tokio::sync::{Notify, mpsc};
+use tokio::time::Instant;
 
 use crate::autostart::Scratch;
 use crate::keep_awake::{
     Answer, COOKIE, FakeGnome, FakeManager, FakePortal, GNOME, GNOME_PATH, LOGIND, MANAGER_PATH,
-    PORTAL, PORTAL_PATH, left, still_held, watch_end,
+    PORTAL, PORTAL_PATH, left, respond, still_held, watch_end,
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
@@ -34,7 +35,8 @@ const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
 /// other half leaves room for the bus calls around the portal's wait.
 const PORTAL_SILENCE: Deadline = Deadline::after(Duration::from_secs(1));
 /// The deadline of a keep-awake call one of whose buses never answers its connect, which spends
-/// the half, in real time: the other half leaves room for the one call on the bus that answers.
+/// the half, in real time: the other half leaves room for the calls on the bus that answers, a
+/// portal's answer among them.
 const BUS_SILENCE: Deadline = Deadline::after(Duration::from_millis(400));
 /// The reason Eileen gives logind and the desktop for keeping the session awake.
 const REASON: &str = "An armed run is in progress";
@@ -65,8 +67,21 @@ impl Fakes {
         path: &str,
         iface: I,
     ) {
+        let _ignored = self.serving(bus, name, path, iface);
+    }
+
+    /// Serves `iface` at `path` under `name`, as [`Self::serve`] does, and answers the service's
+    /// connection, for a test that sends from it.
+    fn serving<I: zbus::object_server::Interface>(
+        &mut self,
+        bus: &PrivateBus,
+        name: &str,
+        path: &str,
+        iface: I,
+    ) -> zbus::Connection {
         let service = self.runtime.block_on(serve(bus, name, path, iface));
-        self.services.push(service);
+        self.services.push(service.clone());
+        service
     }
 
     /// Serves logind: its `manager`, and `session` as the caller's.
@@ -285,14 +300,17 @@ fn a_silent_portal_has_half_the_deadline_so_loginds_lock_answers_in_time() {
     let manager = FakeManager::default();
     fakes.logind(&bus, manager.clone(), FakeSession::default());
     // No GNOME session manager, and a portal that replies to Inhibit and never answers it.
-    let (portal, mut closes) = FakePortal::reporting_closes(Answer::Later);
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
     fakes.serve(&bus, PORTAL, PORTAL_PATH, portal);
     let shell = shell_on(&bus, PORTAL_SILENCE);
     let request = shell.keep_awake();
     assert!(request.is_ok(), "the call answers within its deadline: {request:?}");
     let mut watch = watch_end(&manager);
     assert!(still_held(&mut watch), "with logind's lock, which holds");
-    assert!(closes.blocking_recv().is_some(), "the portal's unconfirmed request was closed");
+    assert!(
+        reports.closes.blocking_recv().is_some(),
+        "the portal's unconfirmed request was closed"
+    );
     drop(request);
     assert!(closed_now(&mut watch), "the lock is closed once the request has dropped");
 }
@@ -339,21 +357,57 @@ fn a_system_bus_that_never_answers_leaves_the_desktops_hold() {
 }
 
 #[test]
-fn a_system_bus_that_never_answers_leaves_the_portal_no_time_to_answer() {
+fn a_system_bus_that_never_answers_leaves_the_portal_time_to_answer() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    // No GNOME session manager, and a portal that replies to Inhibit and answers it later.
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
+    let service = fakes.serving(&bus, PORTAL, PORTAL_PATH, portal);
+    let shell = shell_at(bus.address(), silent.address());
+    let (request, call) = std::thread::scope(|scope| {
+        let request = scope.spawn(|| shell.keep_awake());
+        // Once the fake has the call, as the real portal answers after its reply.
+        let call = reports.calls.blocking_recv().unwrap();
+        fakes.runtime.block_on(respond(&service, &call.request, 0));
+        (request.join().unwrap(), call)
+    });
+    assert!(request.is_ok(), "the portal answered within its share of what was left: {request:?}");
+    drop(request);
+    assert_eq!(
+        reports.closes.try_recv(),
+        Ok(call.request),
+        "the portal's request is closed by the time the drop returns"
+    );
+}
+
+#[test]
+fn a_system_bus_that_never_answers_leaves_the_portal_half_of_what_is_left() {
     let bus = PrivateBus::start();
     let silent = SilentBus::start();
     let mut fakes = Fakes::new();
     // No GNOME session manager, and a portal that replies to Inhibit and never answers it.
-    let (portal, mut closes) = FakePortal::reporting_closes(Answer::Later);
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
     fakes.serve(&bus, PORTAL, PORTAL_PATH, portal);
     let shell = shell_at(bus.address(), silent.address());
+    let start = Instant::now();
+    let error = shell.keep_awake().unwrap_err();
+    let waited = start.elapsed();
     assert_eq!(
-        shell.keep_awake().unwrap_err(),
+        error,
         PlatformError::DeadlineExceeded { call: "system bus" },
-        "the connect spent the half, so the portal's own wait passed at once; logind's miss, \
-         late rather than absent, comes first"
+        "nothing holds, and logind's miss, late rather than absent, comes first, before the \
+         call's own deadline"
     );
-    assert!(closes.blocking_recv().is_some(), "the portal's unconfirmed request was closed");
+    assert!(
+        waited >= BUS_SILENCE.budget() * 3 / 4,
+        "the connects spent half the deadline and the portal waited half of what was left, so the \
+         call answered no sooner than three quarters of it: {waited:?}"
+    );
+    assert!(
+        reports.closes.blocking_recv().is_some(),
+        "the portal's unconfirmed request was closed"
+    );
 }
 
 #[test]
