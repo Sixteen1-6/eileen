@@ -35,8 +35,8 @@ use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
 use crate::shortcuts::{
     Bind, FakeRegistry, FakeShortcuts, Mode, Modes, PORTAL as SHORTCUTS_PORTAL,
-    PORTAL_PATH as SHORTCUTS_PATH, Report, listed, press, respond as answer, serve_portal,
-    triggers,
+    PORTAL_PATH as SHORTCUTS_PATH, Report, end_session, listed, press, respond as answer,
+    serve_portal, triggers,
 };
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
@@ -788,6 +788,40 @@ fn a_refused_rebind_binds_what_the_desktop_had_again_and_the_next_call_asks_agai
     shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
     let asked = bind_of(&mut reports, 2);
     assert_ne!(asked.session, again.session, "the next call asks for the new one again");
+}
+
+#[test]
+fn a_session_the_portal_closes_ends_the_holder_and_the_next_call_starts_another() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let bind = bind_of(&mut reports, 2);
+    fakes.runtime.block_on(press(&portal, &bind.caller, "Activated", &bind.session, "dictation"));
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the dictation key is held");
+    let left_the_bus = fakes.runtime.block_on(async {
+        let observer = bus.connect().await;
+        let mut leaving = owner_changes(&observer, Names::Name(&bind.caller)).await.unwrap();
+        end_session(&portal, &bind.caller, &bind.session).await;
+        // The barrier: a call made before the holder has ended would race it.
+        left(&mut leaving).await
+    });
+    assert!(left_the_bus, "the holder ended, and its connection left the bus");
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "the held key is released as the session ends");
+    assert_eq!(input.blocking_recv(), None, "and the watch ends with the holder");
+    shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
+    let next = bind_of(&mut reports, 1);
+    assert_ne!(next.caller, bind.caller, "the next call starts a holder on a new connection");
+    assert_eq!(ids(&next), ["hotkey-2"], "which binds that call's shortcut alone");
 }
 
 #[test]
