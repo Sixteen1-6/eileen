@@ -79,9 +79,9 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 /// Exit code for a check that found problems.
-const EXIT_FINDINGS: u8 = 1;
+pub(crate) const EXIT_FINDINGS: u8 = 1;
 /// Exit code for a usage, IO or git error: the check could not run.
-const EXIT_ERROR: u8 = 2;
+pub(crate) const EXIT_ERROR: u8 = 2;
 
 /// The repository root: xtask lives one folder below it.
 fn repo_root() -> std::path::PathBuf {
