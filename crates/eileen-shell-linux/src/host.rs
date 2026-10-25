@@ -14,6 +14,8 @@
 //! - `set_run_at_sign_in`: [`set_run_at_sign_in`] in the settings' autostart folder, with std
 //!   file I/O on the caller's thread; with no folder it is `Unavailable`.
 //! - `register_hotkey`, `set_tray` and `watch_input`: `Unavailable` until phase L2.
+//!   `register_hotkey` and `watch_input` are the first of it, on the `GlobalShortcuts` portal, as
+//!   the section after next says; `set_tray` still waits.
 //!
 //! # The power request
 //!
@@ -46,6 +48,33 @@
 //! last, the bridge ends after the wait and drops the task with it: logind's descriptor and the
 //! task's own session connection close, which ends both holds.
 //!
+//! # Hotkeys and the dictation key
+//!
+//! A second holder task on the bridge's thread keeps Eileen's shortcuts in a session of the
+//! `GlobalShortcuts` portal ([`ShortcutsSession`](crate::ShortcutsSession)), on a session
+//! connection of its own, whose first portal call registers the settings' desktop entry as the
+//! app's ID. The first `register_hotkey` or `watch_input` starts it, and each call returns once
+//! the holder has a session that will bind its shortcut: `Ok` means the desktop has the
+//! request, not that the user has agreed.
+//!
+//! - The holder binds the whole set [`SETTLE`] after its last change: `hotkey-<id>` for each
+//!   hotkey, and `dictation` once `watch_input` has asked, described as the settings'
+//!   [`ShortcutNames`] say. A session takes one bind, so a set that changes once it has had
+//!   one is bound again in a new session, after the bind under way is answered.
+//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog. Its answer and each hotkey's
+//!   press reach the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the
+//!   user makes later in the desktop's settings does not yet. The dictation key's press and
+//!   release reach each `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`;
+//!   `PhysicalActivity` never does, since no source of it is chosen yet.
+//! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
+//!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
+//!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`.
+//! - GNOME keeps the trigger the user chose for an ID over a changed chord, and shows its
+//!   dialog only for shortcuts it has not stored.
+//! - The holder ends when the [`LinuxShell`] drops, which closes the session and the
+//!   connection and ends each `watch_input`'s events, or when the portal closes the session;
+//!   the next call then starts a new holder.
+//!
 //! # Traps
 //!
 //! - zbus bounds no connect, neither its handshake nor its `Hello` call, and the task's own
@@ -61,11 +90,21 @@
 //! - Dropped off the bridge's thread as the bridge's last handle, a `PowerRequest` joins that
 //!   thread, as a [`Subscription`] does ([`Bridge::watch`]). The join first ends a sink under
 //!   way, so a sink must not lock what the dropping thread holds.
+//! - The events sink and each `watch_input` sink run on the bridge's thread: one that blocks
+//!   stalls every call, and one that calls the shell is refused.
+//! - A portal that restarts loses the session without a word, so the shortcuts stay dead until
+//!   a changed set is bound in a new session; one that closes the session ends the holder, and
+//!   the next call starts one that binds that call's shortcut alone. Either way `watch_input`
+//!   hears nothing more, which nothing reports yet, and a dictation key held then never
+//!   reports its release. Following the portal is a follow-up.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 
+mod shortcuts;
+
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use eileen_contracts::core_io::Toast;
@@ -74,11 +113,17 @@ use eileen_platform::{
     Deadline, PlatformError, PowerRequest, ShellHost, ShellInputEvent, Subscription, TrayState,
     VirtualKey,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::{
     DbusError, LinuxPowerRequest, Notifier, NotifierSettings, SessionLock, set_run_at_sign_in,
+    trigger_of_chord, trigger_of_key,
+};
+use shortcuts::{ASKS, Ask, EDGES, Edges, EventSink, Holder, put};
+
+pub use shortcuts::{
+    BoundHotkey, CONSENT_WAIT, LinuxShellEvent, SETTLE, ShortcutId, ShortcutNames,
 };
 
 /// How long dropping a `PowerRequest` waits for its holds to end, at most. A desktop that answers
@@ -129,6 +174,10 @@ pub struct LinuxShellSettings {
     /// How long each D-Bus call may take: `eileen_dbus_linux::DEFAULT_DEADLINE`, as for any trait
     /// method that takes none, unless a caller, such as a test, sets a shorter one.
     pub deadline: Deadline,
+    /// What the desktop's dialog shows beside each of Eileen's shortcuts. The portal knows
+    /// Eileen by `notifier`'s desktop entry, whose desktop file the portal's host registry asks
+    /// for.
+    pub shortcut_names: ShortcutNames,
 }
 
 /// `ShellHost` on Linux, over a [`Bridge`]; the module's doc says what each method uses.
@@ -136,6 +185,10 @@ pub struct LinuxShellSettings {
 pub struct LinuxShell {
     bridge: Bridge,
     settings: LinuxShellSettings,
+    /// The shortcuts holder's asks, once a call has started one.
+    shortcuts: Mutex<Option<mpsc::Sender<Ask>>>,
+    /// Where the shell's own events go; with none, they are dropped.
+    events: Option<EventSink>,
 }
 
 impl LinuxShell {
@@ -143,14 +196,47 @@ impl LinuxShell {
     /// nothing yet.
     #[must_use]
     pub const fn new(bridge: Bridge, settings: LinuxShellSettings) -> Self {
-        Self { bridge, settings }
+        Self { bridge, settings, shortcuts: Mutex::new(None), events: None }
+    }
+
+    /// The shell, with `sink` for what no `ShellHost` method returns: each hotkey's press and
+    /// the desktop's answer to the shortcuts ([`LinuxShellEvent`]). The sink runs on the
+    /// bridge's thread, so it must not block, nor call the shell, which the bridge refuses there.
+    #[must_use]
+    pub fn with_events(mut self, sink: Arc<dyn Fn(LinuxShellEvent) + Send + Sync>) -> Self {
+        self.events = Some(EventSink(sink));
+        self
+    }
+
+    /// The shortcuts holder's asks, and, when there is no holder yet or the last has ended, a
+    /// new one to start on them.
+    fn holder(&self) -> (mpsc::Sender<Ask>, Option<Holder>) {
+        let mut held = self.shortcuts.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(asks) = held.as_ref().filter(|asks| !asks.is_closed()) {
+            return (asks.clone(), None);
+        }
+        let (asks, taken) = mpsc::channel(ASKS);
+        *held = Some(asks.clone());
+        drop(held);
+        let LinuxShellSettings { notifier, deadline, .. } = &self.settings;
+        let entry = &notifier.desktop_entry;
+        let app_id = entry.strip_suffix(".desktop").unwrap_or(entry).to_owned();
+        let sink = self.events.clone();
+        (asks, Some(Holder { asks: taken, deadline: *deadline, app_id, sink }))
     }
 }
 
 impl ShellHost for LinuxShell {
-    /// `Unavailable` until phase L2 brings global shortcuts through the `GlobalShortcuts` portal.
-    fn register_hotkey(&self, _chord: &str, _id: u32) -> Result<(), PlatformError> {
-        Err(PlatformError::Unavailable { what: HOTKEY })
+    /// A global shortcut from the `GlobalShortcuts` portal, through the shortcuts holder; the
+    /// module's doc says how. `Ok` once the desktop has the request: it never fails because
+    /// another app owns the chord, and the user may still refuse it, or choose another trigger.
+    fn register_hotkey(&self, chord: &str, id: u32) -> Result<(), PlatformError> {
+        let trigger = trigger_of_chord(chord)?;
+        let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Hotkey(id), Some(trigger));
+        let (asks, holder) = self.holder();
+        self.bridge.call(HOTKEY, self.settings.deadline, move |buses| async move {
+            put(buses, asks, holder, shortcut, None).await.map_err(unavailable(HOTKEY))
+        })
     }
 
     /// `Unavailable` until phase L2 brings the tray as a `StatusNotifierItem`.
@@ -170,14 +256,24 @@ impl ShellHost for LinuxShell {
         })
     }
 
-    /// `Unavailable` until phase L2, for which docs/LINUX.md section 4 plans the dictation key
-    /// through the `GlobalShortcuts` portal; the source of physical activity is not chosen yet.
+    /// The dictation key's press and release, from the `GlobalShortcuts` portal's `dictation`
+    /// shortcut, offered with `dictation_key`'s trigger, through the shortcuts holder; the
+    /// module's doc says how. It never reports `PhysicalActivity`: no source of it is chosen yet.
     fn watch_input(
         &self,
-        _dictation_key: VirtualKey,
-        _sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>,
+        dictation_key: VirtualKey,
+        sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>,
     ) -> Result<Subscription, PlatformError> {
-        Err(PlatformError::Unavailable { what: INPUT })
+        let trigger = trigger_of_key(dictation_key);
+        let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Dictation, trigger);
+        let (asks, holder) = self.holder();
+        let open = move |buses| async move {
+            let (edges, taken) = mpsc::channel(EDGES);
+            put(buses, asks, holder, shortcut, Some(edges)).await.map_err(unavailable(INPUT))?;
+            Ok(Edges(taken))
+        };
+        let each = move |edge| sink(ShellInputEvent::DictationKey(edge));
+        self.bridge.watch(INPUT, self.settings.deadline, open, each)
     }
 
     /// [`set_run_at_sign_in`] with the settings' folder, ID and program.
@@ -309,4 +405,16 @@ fn released_on_drop(bridge: Bridge, release: Release) -> PowerRequest {
             Ok(())
         });
     })
+}
+
+/// What a shortcut call to `what` answers for `error`: `Unavailable` naming the call for a
+/// desktop without the portal or its `GlobalShortcuts`, else the error's platform twin.
+fn unavailable(what: &'static str) -> impl Fn(DbusError) -> PlatformError {
+    move |error| {
+        if matches!(error, DbusError::Unavailable { .. } | DbusError::NotFound { .. }) {
+            PlatformError::Unavailable { what }
+        } else {
+            error.into()
+        }
+    }
 }
