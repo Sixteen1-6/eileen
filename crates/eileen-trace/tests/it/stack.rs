@@ -89,11 +89,14 @@ fn the_core_prunes_its_own_files_by_the_date_in_their_names() {
         touch(&dir.0, name);
     }
     std::fs::create_dir_all(dir.0.join(core_file(today, 40))).unwrap();
+    // Dated after today, as a clock that ran ahead leaves: it stays and takes none of the 13.
+    touch(&dir.0, &core_file(today, -2));
     start_and_stop(ProcessKind::Core, &dir.0);
     // Today's, which the stack opened, and the 13 newest days before it.
     let mut kept: BTreeSet<String> = (0..=13).map(|back| core_file(today, back)).collect();
     kept.extend(not_daily);
     kept.insert(core_file(today, 40));
+    kept.insert(core_file(today, -2));
     assert_eq!(names_in(&dir.0), kept, "the oldest days went, and nothing else");
 }
 

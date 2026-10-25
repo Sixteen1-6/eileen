@@ -219,6 +219,19 @@ mod tests {
     }
 
     #[test]
+    fn a_file_dated_after_today_stays_and_takes_no_place() {
+        // Left by a clock that ran ahead and was then corrected.
+        let dir = TempDir::new("future");
+        let day = Date::new(2026, 10, 25).unwrap();
+        for back in [-1, 0, 1, 2] {
+            touch(&dir.0, &daily("eileen", day, back));
+        }
+        assert_eq!(rule(&dir.0, 2).prune(day).unwrap(), 1, "only the oldest day went");
+        let left: BTreeSet<String> = [-1, 0, 1].map(|back| daily("eileen", day, back)).into();
+        assert_eq!(names(&dir.0), left, "tomorrow's stays, and yesterday's keeps its place");
+    }
+
+    #[test]
     fn a_long_running_process_prunes_again_after_utc_midnight() {
         // 2026-10-25T23:59:59Z, a second before midnight.
         static CLOCK: ManualClock = ManualClock::new(WallTime(1_792_972_799_000_000));
