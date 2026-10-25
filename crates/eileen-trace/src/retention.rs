@@ -8,6 +8,7 @@
 //!
 //! [`TraceConfig::max_log_files`]: crate::TraceConfig::max_log_files
 
+use std::cmp::Reverse;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -49,7 +50,7 @@ impl Retention {
                 (date < today && is_file).then(|| (date, entry.path()))
             })
             .collect();
-        older.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        older.sort_unstable_by_key(|(date, _)| Reverse(*date));
         let mut deleted = 0;
         for (_, path) in older.iter().skip(self.keep.saturating_sub(1)) {
             // One held open elsewhere stays for the next prune.
