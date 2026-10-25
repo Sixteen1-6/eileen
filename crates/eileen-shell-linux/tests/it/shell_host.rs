@@ -29,8 +29,13 @@ use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
-/// its length, and a short one keeps the test short.
+/// its length, and a short one keeps the test short. Not for `keep_awake`, whose connects have
+/// half of it ([`GNOME_SILENCE`]).
 const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
+/// The deadline of a keep-awake call that cannot answer in time, its GNOME session manager not
+/// answering: it passes whatever its length, and half of it bounds the holder's connects, which
+/// take about a millisecond on a private bus, so it leaves them room on a loaded machine.
+const GNOME_SILENCE: Deadline = Deadline::after(Duration::from_millis(400));
 /// The deadline of a keep-awake call whose silent portal spends its half, in real time: the
 /// other half leaves room for the bus calls around the portal's wait.
 const PORTAL_SILENCE: Deadline = Deadline::after(Duration::from_secs(1));
@@ -456,7 +461,7 @@ fn a_keep_awake_past_its_deadline_releases_what_it_took_once_it_holds() {
     let gate = Arc::new(Notify::new());
     let (gnome, mut reports) = ReportingGnome::new(Some(Arc::clone(&gate)));
     fakes.serve(&bus, GNOME, GNOME_PATH, gnome);
-    let shell = shell_on(&bus, SHORT);
+    let shell = shell_on(&bus, GNOME_SILENCE);
     assert_eq!(
         shell.keep_awake().unwrap_err(),
         PlatformError::DeadlineExceeded { call: "keep-awake request" },
