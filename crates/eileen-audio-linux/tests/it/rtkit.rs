@@ -10,11 +10,12 @@
 //! reads that come that way.
 
 use std::collections::BTreeMap;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use eileen_dbus_linux::METHOD_TIMEOUT;
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use rustix::process::{Resource, getrlimit};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -257,10 +258,6 @@ async fn client(bus: &PrivateBus) -> RealtimeKit {
     RealtimeKit::new(&bus.connect().await)
 }
 
-/// The method timeout of a client whose fake holds its answer: it passes whatever its length,
-/// and a short one keeps the test short.
-const SHORT: Duration = Duration::from_millis(100);
-
 #[tokio::test]
 async fn the_limits_come_from_the_three_properties() {
     let bus = PrivateBus::start();
@@ -465,16 +462,27 @@ async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     let limits = Limits { min_nice_level: NICE + 2, ..DEFAULTS };
     let (fake, mut calls) = FakeRtkit::new(limits, Some(Gate::Realtime(Arc::clone(&gate))));
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
-    let client = RealtimeKit::new(&bus.connect_within(SHORT).await);
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let client = RealtimeKit::new(&bus.connect_within(METHOD_TIMEOUT).await);
+    let mut promoted = pin!(client.promote(ThreadId::current(), NICE, RealtimePolicy::default()));
+    // In real time until the fake holds the request, so the three limit reads before it have the
+    // default 5 s method timeout, not a short one they must beat. From then on the fake answers
+    // nothing until its gate opens, so only method timeouts are left to fire (the request's, the
+    // revert's and the read's), and tokio's paused clock reaches each as soon as the runtime is
+    // idle.
+    tokio::select! {
+        held = calls.recv() => {
+            assert_eq!(held, Some(Call::Realtime(this_thread(), 10)), "the request it holds");
+        }
+        early = &mut promoted => panic!("promote answered before its request was held: {early:?}"),
+    }
+    tokio::time::pause();
     assert_eq!(
-        promoted,
+        promoted.await,
         Err(DbusError::DeadlineExceeded {
             call: "org.freedesktop.RealtimeKit1.MakeThreadRealtime"
         }),
         "rtkit holds its answer past the method timeout"
     );
-    assert_eq!(calls.recv().await, Some(Call::Realtime(this_thread(), 10)), "the request it holds");
     fake.report_reads.store(true, Ordering::SeqCst);
     gate.notify_one();
     assert_eq!(
