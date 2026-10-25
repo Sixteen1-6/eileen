@@ -106,6 +106,14 @@ fn echo(bridge: &Bridge, word: &'static str) -> Result<String, PlatformError> {
     })
 }
 
+/// The ID of the bus `bus` is on, as the bus's `GetId` answers.
+async fn bus_id(bus: &zbus::Connection) -> Result<String, PlatformError> {
+    const BUS: &str = "org.freedesktop.DBus";
+    let reply = bus.call_method(Some(BUS), "/org/freedesktop/DBus", Some(BUS), "GetId", &()).await;
+    let reply = reply.map_err(|error| DbusError::from_zbus("GetId", &error))?;
+    Ok(reply.body().deserialize::<String>().unwrap())
+}
+
 /// A watch of the fake's ticks through `bridge`, each tick's number sent to the receiver.
 fn watch_ticks(bridge: &Bridge) -> (Subscription, mpsc::Receiver<u32>) {
     let (sink, ticks) = mpsc::channel(8);
@@ -311,6 +319,28 @@ fn the_buses_are_kept_and_connected_again_once_closed() {
     assert_eq!(first, again, "one session connection, kept");
     assert_ne!(first, system, "the system bus has its own");
     assert_ne!(first, reconnected, "a new one after it closed");
+}
+
+#[test]
+fn a_bridge_on_two_addresses_gives_each_job_its_own_bus() {
+    let (first, second) = (PrivateBus::start(), PrivateBus::start());
+    let bridge = Bridge::on_addresses(first.address(), second.address()).unwrap();
+    let ids = bridge.call("bus ids", DEFAULT_DEADLINE, |buses| async move {
+        let session = bus_id(&buses.session().await?).await?;
+        let unshared = bus_id(&buses.unshared_session().await?).await?;
+        let system = bus_id(&buses.system().await?).await?;
+        Ok([session, unshared, system])
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let own = |bus: &PrivateBus| runtime.block_on(async { bus_id(&bus.connect().await).await });
+    let (first_id, second_id) = (own(&first).unwrap(), own(&second).unwrap());
+    assert_ne!(first_id, second_id, "two buses, each with an ID of its own");
+    assert_eq!(
+        ids.unwrap(),
+        [first_id.clone(), first_id, second_id],
+        "the session bus, unshared connections included, at the first address; the system bus \
+         at the second"
+    );
 }
 
 #[test]
