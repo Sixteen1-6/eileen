@@ -44,7 +44,8 @@ pub const DEFAULT_DEADLINE: Deadline =
 const THREAD: &str = "eileen-dbus";
 /// The name of the runtime's blocking threads, on which zbus connects a Unix socket.
 const BLOCKING_THREAD: &str = "eileen-dbus-blk";
-/// At most this many blocking threads: one per bus being connected.
+/// At most this many blocking threads: one per bus being connected. They are zbus's alone, as
+/// `Bridge::call` tells jobs.
 const BLOCKING_THREADS: usize = 2;
 /// How many posted jobs wait for the thread, at most. The thread takes each at once, so the
 /// queue is full only when the thread is stuck.
@@ -151,6 +152,11 @@ impl Bridge {
     /// A job answers plain data, never a zbus connection, proxy or stream, which are `Send` but
     /// belong to the bridge's runtime: dropped by the caller, a stream or a proxy that subscribed
     /// panics (zbus finds no reactor), and a connection stops working once the bridge has ended.
+    ///
+    /// A job leaves the runtime's blocking threads to zbus, which connects a Unix socket on one:
+    /// no `tokio::fs` and no `spawn_blocking`. There are two, so two jobs stuck on a hung file
+    /// system would keep every later connect from finishing. A job that must touch files does so
+    /// on a thread of its own (`eileen_stdx::thread::spawn_named`) and awaits its answer.
     pub fn call<T, F, Fut>(
         &self,
         call: &'static str,
