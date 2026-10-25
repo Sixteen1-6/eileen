@@ -1,7 +1,8 @@
 //! Global shortcuts on Linux: [`ShortcutsSession`], a client of the `GlobalShortcuts` portal
-//! (`org.freedesktop.portal.GlobalShortcuts`, [its documentation][portal]), which serves
+//! (`org.freedesktop.portal.GlobalShortcuts`, [its documentation][portal]), for
 //! `ShellHost::register_hotkey` and the dictation key of `ShellHost::watch_input` (BUILD.md
-//! section 3.4; docs/LINUX.md sections 3 and 4). Its triggers are the `trigger` module's.
+//! section 3.4; docs/LINUX.md sections 3 and 4), whose docs in `host` say whether they call it.
+//! Its triggers are the `trigger` module's.
 //!
 //! [portal]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html
 //!
