@@ -325,16 +325,19 @@ fn in_web_address(before: &str) -> bool {
     })
 }
 
-/// The folders a user's name follows: Windows' and macOS's `Users` (plain, JSON-escaped and
-/// with forward slashes), Linux's `/home/`, and `/media/`, where Ubuntu mounts a user's drives
-/// (`/media/<name>/<label>`; Fedora's and Arch's `/run/media/<name>` too).
-const USER_FOLDERS: [&str; 6] =
-    [":\\users\\", ":\\\\users\\\\", ":/users/", "/home/", "/users/", "/media/"];
-
-/// A Linux home as a Windows app shows a WSL distro's files, `\home\` plain and JSON-escaped:
-/// it counts only under the distro's root ([`under_wsl_distro`]), so a Windows folder named
-/// Home is not read as one.
-const WSL_HOMES: [&str; 2] = ["\\home\\", "\\\\home\\\\"];
+/// True when `before`, the text in front of a `/media/` marker, ends where an absolute path
+/// starts, as a mount point's does: at the start of the line, after a space, a quote, `=`, `(`
+/// or `,`, after `file://`, or after a `/run` that starts one (`/run/media/<name>`). A folder
+/// named media further in a path (`assets/media/`, `/srv/media/`, `{HOME}/media/`) is no
+/// user's mount point.
+fn at_path_start(before: &str) -> bool {
+    let before = before.strip_suffix("/run").unwrap_or(before);
+    before.is_empty()
+        || before.ends_with("file://")
+        || before.ends_with(|c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '=' | '(' | ',')
+        })
+}
 
 /// True when `before`, the text in front of a `\home\` marker, ends with a WSL distro's root,
 /// `\\wsl.localhost\<distro>` or `\\wsl$\<distro>`, plain or JSON-escaped.
@@ -343,14 +346,45 @@ fn under_wsl_distro(before: &str) -> bool {
     parts.next().is_some() && matches!(parts.next(), Some("wsl.localhost" | "wsl$"))
 }
 
+/// Where a marker of [`USER_FOLDERS`] names a user's folder.
+#[derive(Debug, Clone, Copy)]
+enum Counts {
+    /// Anywhere but in the path of a web address ([`in_web_address`]).
+    NotInWebAddress,
+    /// Only where an absolute path starts ([`at_path_start`]), as a mount point does.
+    AtPathStart,
+    /// Only under a WSL distro's root ([`under_wsl_distro`]), so a Windows folder named Home is
+    /// not read as one, and not in the path of a web address.
+    UnderWslDistro,
+}
+
+/// The folders a user's name follows, with where each counts: Windows' and macOS's `Users`
+/// (plain, JSON-escaped and with forward slashes), Linux's `/home/`, `/media/`, where Ubuntu
+/// mounts a user's drives (`/media/<name>/<label>`; Fedora's and Arch's `/run/media/<name>`
+/// too), and the Linux home a Windows app shows for a WSL distro's files, `\home\` plain and
+/// JSON-escaped.
+const USER_FOLDERS: [(&str, Counts); 8] = [
+    (":\\users\\", Counts::NotInWebAddress),
+    (":\\\\users\\\\", Counts::NotInWebAddress),
+    (":/users/", Counts::NotInWebAddress),
+    ("/home/", Counts::NotInWebAddress),
+    ("/users/", Counts::NotInWebAddress),
+    ("/media/", Counts::AtPathStart),
+    ("\\home\\", Counts::UnderWslDistro),
+    ("\\\\home\\\\", Counts::UnderWslDistro),
+];
+
 fn user_paths(line: &str, out: &mut Vec<PiiFinding>) {
     let lower = line.to_ascii_lowercase();
-    let markers =
-        USER_FOLDERS.iter().map(|m| (m, false)).chain(WSL_HOMES.iter().map(|m| (m, true)));
-    for (marker, wsl) in markers {
+    for (marker, counts) in USER_FOLDERS {
         for (at, _) in lower.match_indices(marker) {
             let before = lower.get(..at).unwrap_or_default();
-            if (wsl && !under_wsl_distro(before)) || in_web_address(before) {
+            let names_a_user = match counts {
+                Counts::NotInWebAddress => !in_web_address(before),
+                Counts::AtPathStart => at_path_start(before),
+                Counts::UnderWslDistro => under_wsl_distro(before) && !in_web_address(before),
+            };
+            if !names_a_user {
                 continue;
             }
             let name_start = at + marker.len();
@@ -627,6 +661,19 @@ mod tests {
         ] {
             assert_eq!(kinds(line), [PiiKind::UserPath], "{what}: {line}");
         }
+        for line in [
+            "opened /media/samlee/USB/cv.pdf",
+            "path = \"/media/samlee/USB/cv.pdf\"",
+            "path = '/media/samlee/USB/cv.pdf'",
+            "`/media/samlee/USB/cv.pdf`",
+            "path=/media/samlee/USB/cv.pdf",
+            "(/media/samlee/USB/cv.pdf)",
+            "a.pdf,/media/samlee/USB/cv.pdf",
+            "file:///media/samlee/USB/cv.pdf",
+            "file:///run/media/samlee/USB/cv.pdf",
+        ] {
+            assert_eq!(kinds(line), [PiiKind::UserPath], "a drive mount starts a path: {line}");
+        }
         assert_eq!(
             kinds("file:///home/samlee/notes.txt"),
             [PiiKind::UserPath],
@@ -706,6 +753,10 @@ mod tests {
             "/media/{NAME}/USB/{TITLE}",
             r"{DOCS}\Home\Recipes.docx",
             "https://cdn.example.com/static/media/logo.png",
+            "assets/media/logo.png",
+            "/srv/media/eileen",
+            "{HOME}/media/movie.mkv",
+            "C:/Windows/Media/chimes.wav",
             "version 1.13.8",
         ] {
             assert!(kinds(line).is_empty(), "{line}: {:?}", kinds(line));
