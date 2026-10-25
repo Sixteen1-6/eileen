@@ -6,7 +6,8 @@
 //!
 //! # Promoting a thread
 //!
-//! [`RealtimeKit::promote`] reads the three limits, each property alone, then asks for real-time
+//! [`RealtimeKit::promote`] reads the three limits, each property alone, since rtkit 0.13 answers
+//! `Get` but not `GetAll`, which zbus's default property cache calls. It then asks for real-time
 //! (`SCHED_RR`) at the policy's priority capped at `MaxRealtimePriority`, after bounding the
 //! process's `RLIMIT_RTTIME` to `RTTimeUSecMax`, which rtkit checks before and after it changes
 //! the thread. A refusal falls back to high priority (`SCHED_OTHER` at a negative nice level,
