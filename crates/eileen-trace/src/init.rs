@@ -1,10 +1,10 @@
 //! The subscriber stack every Eileen process starts with (observability report section 3.1).
 //!
 //! One `tracing_subscriber::Registry` with a filter per layer: the error layer (so
-//! `SpanTrace::capture` works), the JSON file at INFO behind a reload handle, the flight
-//! recorder ring at `eileen=debug,warn`, the slow-span and stage-stats layer, and a console
-//! at WARN only when stderr is a terminal. `tracing-log` bridges dependencies that log
-//! through the `log` crate.
+//! `SpanTrace::capture` works; a span trace shows each `pii.` field as its length alone), the
+//! JSON file at INFO behind a reload handle, the flight recorder ring at `eileen=debug,warn`,
+//! the slow-span and stage-stats layer, and a console at WARN only when stderr is a terminal.
+//! `tracing-log` bridges dependencies that log through the `log` crate.
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal as _;
@@ -25,7 +25,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
 use crate::file::{FileLayer, RedactingMakeWriter};
 use crate::names;
-use crate::pii::{PiiKey, Policy};
+use crate::pii::{PiiKey, Policy, SpanTraceFields};
 use crate::redact::Redactor;
 use crate::retention::{Retained, Retention};
 use crate::ring::{Ring, RingLayer};
@@ -269,7 +269,7 @@ pub fn build(
     ));
     let stats = Arc::new(Stats::default());
     let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> =
-        vec![tracing_error::ErrorLayer::default().boxed()];
+        vec![tracing_error::ErrorLayer::new(SpanTraceFields).boxed()];
 
     let mut file_guard = None;
     let mut dropped = None;

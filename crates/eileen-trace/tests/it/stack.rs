@@ -1,5 +1,6 @@
-//! The whole stack: the file's line shape, the slow-span event, the reload handle, the stage
-//! stats, which daily files a process keeps, and `init` with soft assertions reporting.
+//! The whole stack: the file's line shape, a span trace in a line, the slow-span event, the
+//! reload handle, the stage stats, which daily files a process keeps, and `init` with soft
+//! assertions reporting.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use eileen_stdx::clock::{self, Clock as _};
 use eileen_stdx::soft_assert::{self, Mode};
 use eileen_trace::{Console, ProcessKind, TraceConfig, TraceError, names, test_support};
 use serde_json::Value;
+use tracing_error::SpanTrace;
 
 struct TempDir(PathBuf);
 
@@ -174,6 +176,38 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     );
     assert!(!text.contains("after the reload"), "the reloaded filter applied at once");
     assert_eq!(stats.get(names::ADDRESSEE).map(|s| s.count), Some(1), "stage stats");
+}
+
+#[test]
+fn a_logged_span_trace_shows_pii_fields_as_their_length() {
+    // An internal error logs the span trace it captured as a field (observability report
+    // section 2.4 rule 6), and the panic hook records one (section 4.5).
+    let dir = TempDir::new("span-trace");
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        let turn = tracing::info_span!(target: "eileen_core", names::TURN, turn_id = "t", "pii.transcript" = "my diary entry");
+        let _entered = turn.enter();
+        let trace = SpanTrace::capture();
+        tracing::error!(target: "eileen_core", trace = %trace, debug = ?trace, "failed");
+    });
+    drop(guard);
+    let text: String = names_in(&dir.0)
+        .iter()
+        .map(|name| std::fs::read_to_string(dir.0.join(name)).unwrap())
+        .collect();
+    assert!(!text.contains("my diary entry"), "the transcript reached the file:\n{text}");
+    let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let failed = lines.iter().find(|l| l["fields"]["message"] == "failed").unwrap();
+    let shown = failed["fields"]["trace"].as_str().unwrap();
+    assert!(
+        shown.contains(r#"with turn_id="t" pii.transcript={"len":14}"#),
+        "the trace names its turn and gives the transcript's length alone:\n{shown}"
+    );
+    let debug = failed["fields"]["debug"].as_str().unwrap();
+    assert!(debug.contains(r#"turn_id=\"t\" pii.transcript={\"len\":14}"#), "Debug too:\n{debug}");
+    assert_eq!(failed["spans"][0]["pii.transcript"], serde_json::json!({ "len": 14 }), "span list");
 }
 
 #[test]
