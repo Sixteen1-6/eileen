@@ -46,8 +46,8 @@ Voices
 Pocket TTS (Kyutai), the default voice-cloning engine
   Code: MIT. Weights: CC-BY-4.0, attribution required: "Pocket TTS by Kyutai".
   The ONNX export Eileen runs (pocket-tts-onnx) is CC-BY-4.0 with Apache-2.0 export code.
-  To confirm: the sherpa-onnx archive's README calls the archive non-commercial while its LICENSE
-  is CC-BY-4.0; to be confirmed with the maintainers before a downloader ships (owner answer 14).
+  The sherpa-onnx archive's README calls the archive non-commercial while its LICENSE is
+  CC-BY-4.0; the owner's direction of 2026-10-25 follows the LICENSE (docs/OWNER-DIRECTION.md).
 
 Chatterbox (Resemble AI), optional engine chosen per voice
   Chatterbox-Turbo, official ONNX export: MIT.
