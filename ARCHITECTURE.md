@@ -164,7 +164,7 @@ Development only. The simulator owns the invariants; `eileen-e2e` owns benchmark
 
 ## Extension points
 
-Eileen is meant to take whatever shape a task needs (the owner's direction of 2026-10-25): flexible at the edges, fixed at the centre. Each row is a way to add or swap a part without touching the core; v0.1 builds only the parts its own work packages need, and the rest stay possible.
+Eileen is meant to take whatever shape a task needs, and to be something any model understands whole and uses to do better, never a wrapper around it (the owner's direction of 2026-10-25): flexible at the edges, fixed at the centre. Each row is a way to add or swap a part without touching the core; v0.1 builds only the parts its own work packages need, and the rest stay possible.
 
 | What you add | What it plugs into | Where it is chosen |
 |---|---|---|
