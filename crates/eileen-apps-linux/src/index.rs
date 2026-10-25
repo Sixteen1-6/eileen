@@ -11,6 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fs::File;
+use std::io::Read as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 
 use eileen_contracts::ids::Personal;
@@ -18,9 +21,15 @@ use eileen_contracts::ids::Personal;
 use crate::FileError;
 use crate::entry::{DesktopEntry, Meaning, interpret};
 use crate::keyfile::{locale_keys, messages_locale, parse};
+use crate::open::OPEN_FLAGS;
 
 /// How deep the index looks below an `applications/` folder (`kde4/kate.desktop` is one deep).
 const MAX_DEPTH: usize = 8;
+
+/// The most of one desktop entry the index reads: 1 MiB, far more than real entries take, so a
+/// huge file, such as a sparse one that takes no disk space, cannot fill memory. A longer file
+/// is skipped whole, as a cut could change its `Exec` line.
+const MAX_ENTRY_BYTES: u64 = 1 << 20;
 
 /// The export folders of Flatpak and Snap, relative to the data folders they extend. The
 /// session's `XDG_DATA_DIRS` normally lists them; the index adds any it lacks, so a runtime
@@ -149,6 +158,11 @@ impl Session {
 }
 
 /// Every app the session's menu shows, sorted by name.
+///
+/// An entry is opened without waiting, where the open of a FIFO would wait for a writer. What
+/// is not a regular file, such as a FIFO or a device, is skipped without being read, and a file
+/// is read only up to 1 MiB and skipped when it is longer. Like a file that cannot be read, a
+/// skipped one does not decide its desktop file ID.
 #[must_use]
 pub fn index(session: &Session) -> Vec<DesktopEntry> {
     let mut decided: BTreeSet<String> = BTreeSet::new();
@@ -161,8 +175,7 @@ pub fn index(session: &Session) -> Vec<DesktopEntry> {
             if decided.contains(&id) {
                 continue;
             }
-            let Some(file) = std::fs::read_to_string(&path).ok().and_then(|text| parse(&text))
-            else {
+            let Some(file) = read_entry(&path).and_then(|text| parse(&text)) else {
                 continue;
             };
             let Some(meaning) = interpret(&file, &id, &path, packaged, session) else {
@@ -194,6 +207,22 @@ pub fn entry_for<'a>(
         .iter()
         .find(|entry| entry.id == app.id)
         .ok_or(FileError::NotFound { what: "desktop entry" })
+}
+
+/// The text of the desktop entry at `path`; `None` when it cannot be opened or read, is not
+/// UTF-8, is over [`MAX_ENTRY_BYTES`], or is not a regular file. The open never waits (see
+/// [`OPEN_FLAGS`]), and the check is of the opened descriptor, so it holds for what is read even
+/// when the path changed after the folder was listed.
+fn read_entry(path: &Path) -> Option<String> {
+    let file = File::options().read(true).custom_flags(OPEN_FLAGS).open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    // Up to one byte over the limit is read: a file that reaches it is too long.
+    let mut limited = file.take(MAX_ENTRY_BYTES + 1);
+    let mut text = String::new();
+    limited.read_to_string(&mut text).ok()?;
+    (limited.limit() > 0).then_some(text)
 }
 
 /// Whether a data folder is one of Flatpak's or Snap's export folders, whose apps are packaged.
