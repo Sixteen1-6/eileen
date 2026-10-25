@@ -7,7 +7,7 @@
 //! `tracing-log` bridges dependencies that log through the `log` crate.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal as _;
+use std::io::{IsTerminal as _, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -15,7 +15,7 @@ use std::time::Duration;
 use eileen_stdx::clock;
 use eileen_stdx::soft_assert::{self, Failure, Mode};
 use tracing::{Level, Subscriber};
-use tracing_appender::non_blocking::{ErrorCounter, NonBlockingBuilder, WorkerGuard};
+use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Layered, SubscriberExt as _};
@@ -234,6 +234,17 @@ fn parse_filter(which: &'static str, filter: &str) -> Result<EnvFilter, TraceErr
     EnvFilter::try_new(filter).map_err(|e| TraceError::Filter { which, detail: e.to_string() })
 }
 
+/// The log writer's thread name. Linux keeps 15 bytes of a thread's name (`TASK_COMM_LEN` is
+/// 16) and std cuts a longer one without a word, so `top -H`, gdb and core dumps would show a
+/// cut name.
+const LOG_WRITER_THREAD: &str = "eileen-log";
+
+/// The file sink's writer: lines go to `inner` on the log writer's thread, and a full buffer
+/// drops a line rather than block an always-on process.
+fn log_writer<W: Write + Send + 'static>(inner: W) -> (NonBlocking, WorkerGuard) {
+    NonBlockingBuilder::default().lossy(true).thread_name(LOG_WRITER_THREAD).finish(inner)
+}
+
 /// The console layer: `fmt`'s format on `writer` under `filter`, uncoloured, every write
 /// through `redactor`. `pii.` fields stay (a terminal the owner is watching, as the
 /// [`crate::pii`] table says); secrets do not. [`build`] gives it stderr.
@@ -287,10 +298,7 @@ pub fn build(
                 detail: e.to_string(),
             })?;
         let rule = Retention { dir: dir.clone(), process, keep: config.max_log_files };
-        let (writer, guard) = NonBlockingBuilder::default()
-            .lossy(true)
-            .thread_name("eileen-log-writer")
-            .finish(Retained::new(appender, rule, clock::system()));
+        let (writer, guard) = log_writer(Retained::new(appender, rule, clock::system()));
         dropped = Some(writer.error_counter());
         file_guard = Some(guard);
         let policy = if config.include_personal {
@@ -371,5 +379,39 @@ mod tests {
         let shown = format!("{config:?}");
         assert!(shown.contains("pii_key: Some(PiiKey(..))"), "{shown}");
         assert!(!shown.contains("171, 171"), "no byte of the key: {shown}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_writers_thread_keeps_its_whole_name_on_linux() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex, PoisonError};
+
+        use super::{LOG_WRITER_THREAD, log_writer};
+
+        /// Keeps the kernel's name for the thread that writes to it, the one `top -H`, gdb
+        /// and core dumps show.
+        struct KernelName(Arc<Mutex<Option<String>>>);
+
+        impl Write for KernelName {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let comm = std::fs::read_to_string("/proc/thread-self/comm")?;
+                *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(comm.trim_end().to_owned());
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(None));
+        let (mut writer, guard) = log_writer(KernelName(Arc::clone(&seen)));
+        writer.write_all(b"a line\n").unwrap();
+        // Dropping the guard waits for the thread to write what it was sent.
+        drop(guard);
+        let name = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        assert_eq!(name.as_deref(), Some(LOG_WRITER_THREAD), "Linux keeps 15 bytes of a name");
     }
 }
