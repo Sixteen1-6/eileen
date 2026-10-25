@@ -31,10 +31,10 @@ impl Retention {
         name.strip_prefix(self.process)?.strip_prefix('.')?.strip_suffix(".jsonl")?.parse().ok()
     }
 
-    /// Deletes the process's files dated before `today` except the newest `keep - 1`, so with
-    /// today's (whether or not its file exists yet) `keep` days stay, and at least today's.
-    /// Files dated today or later stay, and so does every other name, folder and link. Answers
-    /// how many it deleted; a missing folder has none.
+    /// Keeps `keep` days of the process's files, today's counted whether or not its file exists
+    /// yet: of the files dated before `today` it deletes all but the newest `keep - 1` (so 0
+    /// and 1 both keep today's alone). Files dated today or later stay, and so does every other
+    /// name, folder and link. Answers how many it deleted; a missing folder has none.
     pub(crate) fn prune(&self, today: Date) -> io::Result<usize> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
