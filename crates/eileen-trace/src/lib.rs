@@ -70,8 +70,8 @@
 //!
 //! # Logs and tracing
 //!
-//! - Emits `span.slow` (target `eileen_trace::slow`) and `soft_assert.failed` (target
-//!   `eileen_trace`); owns no spans.
+//! - Emits `span.slow` (target `eileen_trace::slow`), and `soft_assert.failed` and
+//!   `log_bridge.failed` (target `eileen_trace`); owns no spans.
 //! - Pruning old log files writes nothing to the logs or to stderr.
 //! - Read back with `eileen trace <id>`, or open an incident's `timeline.json` in Perfetto.
 //!

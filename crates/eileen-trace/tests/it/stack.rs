@@ -1,6 +1,6 @@
 //! The whole stack: the file's line shape, a span trace in a line, the slow-span event, the
 //! reload handle, the stage stats, which daily files a process keeps, and `init` with soft
-//! assertions reporting.
+//! assertions reporting, a `log` logger set before it included.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ use eileen_stdx::soft_assert::{self, Mode};
 use eileen_trace::{Console, ProcessKind, TraceConfig, TraceError, names, test_support};
 use serde_json::Value;
 use tracing_error::SpanTrace;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 struct TempDir(PathBuf);
 
@@ -250,4 +251,42 @@ fn init_installs_once_and_soft_assertions_report() {
     let parsed = guard.ring().records(guard.redactor());
     assert_eq!(parsed.skipped, 0, "every ring line read back as a record");
     assert!(parsed.events.iter().any(|e| e.name == names::SOFT_ASSERT_FAILED), "logged");
+}
+
+#[test]
+fn init_starts_the_stack_when_a_log_logger_came_first() {
+    // `set_default` sets tracing-log's `log` logger and no global default, as a library's
+    // `env_logger::init()` before `init` would.
+    drop(tracing_subscriber::registry().set_default());
+    let dir = TempDir::new("log-first");
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let guard = eileen_trace::init(ProcessKind::Cli, &config).unwrap();
+    assert!(
+        matches!(
+            eileen_trace::init(ProcessKind::Cli, &config),
+            Err(TraceError::AlreadyInitialised)
+        ),
+        "a second init is still refused"
+    );
+    assert_eq!(soft_assert::mode(), Mode::Report, "soft assertions report");
+    assert!(eileen_stdx::never!(true, "a canary soft assertion"), "the condition comes back");
+    assert!(guard.ring().take_dump_request(), "the hook found the ring");
+    tracing::info!(target: "eileen_core", "after init");
+    let parsed = guard.ring().records(guard.redactor());
+    let warned = parsed.events.iter().filter(|e| e.name == names::LOG_BRIDGE_FAILED).count();
+    assert_eq!(warned, 1, "one warning says that `log` records stay with the other logger");
+    drop(guard);
+    let text: String = names_in(&dir.0)
+        .iter()
+        .map(|name| std::fs::read_to_string(dir.0.join(name)).unwrap())
+        .collect();
+    let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(lines.iter().any(|l| l["fields"]["message"] == "after init"), "still writing:\n{text}");
+    assert!(
+        lines.iter().any(|l| l["level"] == "WARN"
+            && l["target"] == "eileen_trace"
+            && l["fields"]["error"].as_str().is_some_and(|e| e.contains("logger"))),
+        "the warning reached the file too:\n{text}"
+    );
 }

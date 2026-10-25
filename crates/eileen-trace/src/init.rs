@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use eileen_stdx::clock;
 use eileen_stdx::soft_assert::{self, Failure, Mode};
-use tracing::{Level, Subscriber};
+use tracing::{Dispatch, Level, Subscriber};
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::MakeWriter;
@@ -357,14 +357,35 @@ fn soft_assert_hook(failure: &Failure<'_>) {
 }
 
 /// Starts tracing for this process: installs the stack as the global default, bridges the
-/// `log` crate, and switches soft assertions to reporting (log, count, request a dump).
+/// `log` crate, and switches soft assertions to reporting (log, count, request a dump). Call
+/// it once, at the start of `main`, outside any `with_default`.
+///
+/// Only a global default set before is an error. When a `log` logger was set first (an
+/// `env_logger::init()`, say), records logged through `log` stay with it: the rest starts all
+/// the same, and a [`names::LOG_BRIDGE_FAILED`] warning says so.
 pub fn init(kind: ProcessKind, config: &TraceConfig) -> Result<TraceGuard, TraceError> {
     let (subscriber, guard) = build(kind, config)?;
-    subscriber.try_init().map_err(|_| TraceError::AlreadyInitialised)?;
+    let stack = Dispatch::new(subscriber);
+    let installed = stack.clone().try_init();
+    // `try_init` sets the global default, then the bridge: an error with this stack as this
+    // thread's default, the global one outside any `with_default`, is the bridge's alone.
+    if installed.is_err() && !tracing::dispatcher::get_default(|now| same_stack(now, &stack)) {
+        return Err(TraceError::AlreadyInitialised);
+    }
     let _first = GLOBAL_RING.set(Arc::clone(&guard.ring));
     soft_assert::set_hook(soft_assert_hook);
     soft_assert::set_mode(Mode::Report);
+    if let Err(error) = installed {
+        tracing::warn!(name: names::LOG_BRIDGE_FAILED, target: "eileen_trace", error = %error);
+    }
     Ok(guard)
+}
+
+/// True when `a` and `b` dispatch to the same stack.
+fn same_stack(a: &Dispatch, b: &Dispatch) -> bool {
+    a.downcast_ref::<TraceSubscriber>()
+        .zip(b.downcast_ref::<TraceSubscriber>())
+        .is_some_and(|(a, b)| std::ptr::eq(a, b))
 }
 
 #[cfg(test)]
