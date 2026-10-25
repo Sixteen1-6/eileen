@@ -1,31 +1,44 @@
-//! `ShellHost` through `LinuxShell` on the session's real services: logind on the system bus
-//! and the notification server on the session bus. What the tests share: the shell they test,
-//! and a connection of the test's own to the system bus, to see what logind did.
+//! The shell crate on the session's real services: `ShellHost` through `LinuxShell`, and the
+//! clients behind it where the trait does not show what they did. On the system bus: logind,
+//! `UPower` and power-profiles-daemon; on the session bus: the notification server and the
+//! Inhibit portal. What the tests share: the shell they test, a connection of the test's own to
+//! the system bus, to see what logind did, and a guard that sets the power profile back.
 //!
 //! - Each test makes its own bridge with `Bridge::start()`, as the core makes one, and the
 //!   profile runs the tests one at a time, since they share the session's services.
 //! - The test's thread calls the shell as the core does, blocking, while the workers of a runtime
 //!   of the test's own read its connection, so a signal sent meanwhile waits in its stream.
 //! - No test waits for nothing to arrive. A signal check follows a round trip to its sender
-//!   (`testing::round_trip`), and a wait for a signal is `testing::next_message`, which has no
-//!   timer: the profile's slow-timeout ends a wait that never ends.
-//! - Streams live and drop inside `Session::block_on`, within their runtime's context, a
-//!   panicking test's included (the stream traps of `eileen-dbus-linux`).
+//!   (`testing::round_trip`), and every wait is for something the test caused, with no timer of
+//!   its own (`testing::next_message`, or a client stream's `next`): the profile's slow-timeout
+//!   ends a wait that never ends.
+//! - Streams and connections live and drop inside `Session::block_on`, within their runtime's
+//!   context, a panicking test's included (the stream traps of `eileen-dbus-linux`).
 
 use std::future::Future;
 use std::path::PathBuf;
 
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, system_bus};
 use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
+use zbus::zvariant::Value;
 
 mod keep_awake;
 mod lock;
+mod notifications;
+mod power;
 mod toast;
 
 /// logind's name, its manager's object and the manager's interface.
 const LOGIND: &str = "org.freedesktop.login1";
 const MANAGER_PATH: &str = "/org/freedesktop/login1";
 const MANAGER: &str = "org.freedesktop.login1.Manager";
+
+/// power-profiles-daemon's name, which is also its interface, and its object.
+const PROFILES: &str = "org.freedesktop.UPower.PowerProfiles";
+const PROFILES_PATH: &str = "/org/freedesktop/UPower/PowerProfiles";
+
+/// The lane's power profile, the daemon's default, which the tests find and leave.
+const BALANCED: &str = "balanced";
 
 /// The test's own connection to the system bus, apart from the shell's bridge, on a runtime of
 /// its own whose two workers read it while the test's thread waits on the shell.
@@ -61,6 +74,31 @@ impl Drop for Session {
         // The connection ends inside its runtime's context, a panicking test's included.
         let _context = self.runtime.enter();
         self.system = None;
+    }
+}
+
+/// Switches power-profiles-daemon to `profile` with a `Set` of its `ActiveProfile`, as a
+/// desktop's power menu does. polkit allows it to the active local session alone
+/// (`org.freedesktop.UPower.PowerProfiles.switch-profile` is `allow_active`), as the lane's is.
+async fn set_profile(system: &zbus::Connection, profile: &str) -> zbus::Result<()> {
+    let property = (PROFILES, "ActiveProfile", Value::from(profile));
+    let properties = Some("org.freedesktop.DBus.Properties");
+    let reply = system.call_method(Some(PROFILES), PROFILES_PATH, properties, "Set", &property);
+    reply.await.map(|_reply| ())
+}
+
+/// Sets the power profile back to `balanced` when it drops, a panicking test's included, so the
+/// tests after one that switches the profile find the lane's. Make it before the switch and
+/// outside `Session::block_on`: it calls through the session's runtime from the test's thread,
+/// which the test's `block_on` has returned or unwound from by then, and the borrow drops it
+/// before the session. Best effort: a test that nextest's slow-timeout ends is killed, guard and
+/// all, and no other test asserts on the profile.
+struct Balanced<'s>(&'s Session);
+
+impl Drop for Balanced<'_> {
+    fn drop(&mut self) {
+        let Self(session) = self;
+        let _ignored = session.block_on(set_profile(session.system(), BALANCED));
     }
 }
 
