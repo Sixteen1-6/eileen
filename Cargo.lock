@@ -307,6 +307,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eileen-audio-linux"
+version = "0.0.0"
+dependencies = [
+ "eileen-dbus-linux",
+ "eileen-platform",
+ "proptest",
+ "rustix",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eileen-buildguard"
 version = "0.0.0"
 dependencies = [

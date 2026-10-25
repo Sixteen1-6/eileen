@@ -1,0 +1,33 @@
+[package]
+name = "eileen-audio-linux"
+description = "The core and speech processes' audio implementations on Linux, starting with real-time audio threads through RealtimeKit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, speech"
+owns = "WP10"
+unsafe = "forbid"
+
+# Linux only, as the -win crates are Windows only: off Linux the crate is empty and has no
+# dependencies (docs/LINUX.md section 4).
+[target.'cfg(target_os = "linux")'.dependencies]
+eileen-dbus-linux.workspace = true
+eileen-platform.workspace = true
+# The thread's kernel id (gettid, the thread feature), its nice level and the process's
+# RLIMIT_RTTIME (getpriority, getrlimit and setrlimit, the process feature), which RealtimeKit
+# asks for. Neither feature brings a crate: each turns on linux-raw-sys's prctl.
+rustix = { workspace = true, features = ["thread", "process"] }
+tokio.workspace = true
+zbus.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+eileen-dbus-linux = { workspace = true, features = ["private-bus"] }
+proptest.workspace = true
+
+[lints]
+workspace = true
