@@ -26,7 +26,7 @@ records when they exist.
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
 | 4 | `wp0/stubs` | Not started |
 | 5 | `wp0/xtask` | Not started |
-| 6 | `wp0/guidance` | Not started |
+| 6 | `wp0/guidance` | Drafted; opens once `wp0/stubs` and `wp0/xtask` have merged |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -66,6 +66,18 @@ of `Debug`, keeps dependencies' absolute source paths out of the logs, logs pani
 child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTicket` thread-bound,
 removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
 span-parent table, with a test for each.
+
+`wp0/guidance` adds the guidance of section 4b.4. The root `AGENTS.md` stays within check 2's
+150 lines, and `CLAUDE.md` imports it and adds a Claude-only section. Nested pairs sit in
+`crates/eileen-desktop-win/`, `crates/eileen-apps-win/`, `crates/eileen-speech/`, `fuzz/` and
+`scenarios/`; `integrations/claude-plugin/` gets its pair when WP8 creates the folder.
+`.claude/settings.json` denies direct cargo builds, test runs, lints and benchmarks,
+`cargo install`, `cargo clean` and release builds, allows `cargo xtask`, and denies reads of
+vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRIBUTING.md`,
+`docs/DEV-SETUP.md` and `SECURITY.md` are rewritten for the Rust workspace, `NOTICE` lists the
+third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
+and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
+in the workspace.
 
 ## Acceptance records
 

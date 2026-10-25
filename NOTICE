@@ -1,0 +1,71 @@
+Eileen
+Licensed under the MIT License; the copyright notice and license text are in LICENSE.
+
+Eileen builds on the work below. Each entry names what Eileen uses, where it comes from and its
+license. Licenses are as docs/BUILD.md section 4.2 and the research reports in docs/research/
+record them; an entry marked "to confirm" names where to check before anything that downloads or
+ships it is released. Models are downloaded by `eileen setup` from their pinned URLs and verified
+by size and SHA256; they are not part of this repository. The about panel (WP8) lists these
+entries with their licenses.
+
+
+Code and data
+-------------
+
+jpeg-encoder (Rust crate, used for screenshot JPEG encoding)
+  License: (MIT OR Apache-2.0) AND IJG.
+  This software is based in part on the work of the Independent JPEG Group.
+
+Handy (https://github.com/cjpais/Handy)
+  License: MIT. Eileen's text insertion ports Handy's clipboard paste transaction, with
+  attribution kept, and borrows ideas from its dictation design. The pull request that ports the
+  code (WP5) adds Handy's copyright line and the MIT permission notice here.
+  Source: docs/research/2026-10-dictation-and-voices.md.
+
+SpeakoFlow dictation-cleanup-rules
+  License: MIT. Eileen's dictation cleanup ports the rule specification, the per-language filler
+  tables and the 79-case conformance suite. The pull request that ports them (WP4) adds the
+  copyright line and the MIT permission notice here.
+  Source: docs/research/2026-10-dictation-and-voices.md.
+
+sherpa-onnx (k2-fsa), native library shipped beside the binaries
+  License: Apache-2.0.
+
+ONNX Runtime (Microsoft), native library shipped beside the binaries
+  License: MIT.
+
+
+Voices
+------
+
+Pocket TTS (Kyutai), the default voice-cloning engine
+  Code: MIT. Weights: CC-BY-4.0, attribution required: "Pocket TTS by Kyutai".
+  The ONNX export Eileen runs (pocket-tts-onnx) is CC-BY-4.0 with Apache-2.0 export code.
+  To confirm: the sherpa-onnx archive's README calls the archive non-commercial while its LICENSE
+  is CC-BY-4.0; confirmed with the maintainers before a downloader ships (owner answer 14).
+
+Chatterbox (Resemble AI), optional engine chosen per voice
+  Chatterbox-Turbo, official ONNX export: MIT.
+  Chatterbox-Nano, community ONNX export: the model is MIT; the export's own license is to
+  confirm with its maintainer before a downloader ships (owner answer 14).
+  Its watermark is off by default; watermarking is an opt-in setting.
+
+
+Models
+------
+
+Silero VAD v6.2 (snakers4/silero-vad): MIT.
+Nemotron streaming EN 0.6B, 560 ms, int8 (NVIDIA, via sherpa-onnx): NVIDIA Open Model License.
+Smart Turn v3.2 CPU: BSD-2-Clause.
+Kokoro v1.0, fp32 and int8: Apache-2.0.
+Kokoro front end: CMUdict lexicon, BSD-2-Clause; the grapheme-to-phoneme model's license is to
+  confirm by WP4 before it ships.
+Pocket TTS int8 (sherpa-onnx export): CC-BY-4.0, see Voices above.
+WeSpeaker CAM++ (wespeaker_en_voxceleb_CAM++): to confirm, per the WeSpeaker repository (WP4).
+Parakeet TDT 0.6B v3 int8 (NVIDIA, via sherpa-onnx): CC-BY-4.0.
+Kroko streaming zipformer EN (Banafo): to confirm, per Banafo's Kroko-ASR page (WP4).
+Sentence embedding candidate (all-MiniLM-L6-v2 class): Apache-2.0, to confirm by WP4 if adopted.
+Static embedding candidate (model2vec class): MIT, to confirm by WP4.
+AudioSeal generator and detector (opt-in watermark only): MIT.
+YuNet face detector (OpenCV Zoo face_detection_yunet): MIT.
+First-run demo clip: CC0.

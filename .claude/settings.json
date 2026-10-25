@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo xtask *)",
+      "Bash(cargo fmt *)"
+    ],
+    "deny": [
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo nextest *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo check *)",
+      "Bash(cargo run *)",
+      "Bash(cargo doc *)",
+      "Bash(cargo bench *)",
+      "Bash(cargo fuzz *)",
+      "Bash(cargo insta *)",
+      "Bash(cargo mutants *)",
+      "Bash(cargo install *)",
+      "Bash(cargo clean *)",
+      "Bash(cargo b *)",
+      "Bash(cargo c *)",
+      "Bash(cargo d *)",
+      "Bash(cargo t *)",
+      "Bash(cargo r *)",
+      "Bash(cargo xtask build --release*)",
+      "Bash(cargo xtask build * --release*)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/AppData/Roaming/Microsoft/Credentials/**)",
+      "Read(~/AppData/Local/Microsoft/Credentials/**)"
+    ]
+  }
+}

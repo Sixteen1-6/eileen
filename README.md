@@ -48,7 +48,7 @@ The halves of Eileen exist and we say so. The ChatGPT desktop app lets voice dir
  TTS, voices    app launch      recent files                your plan
 ```
 
-Each box below the core is a separate process the core supervises and can restart, so a hung UI Automation call or a crashed speech model never takes the microphone loop down. The map is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the full v0.1 specification in [docs/BUILD.md](docs/BUILD.md).
+Each box below the core is a separate process the core supervises and can restart, so a hung UI Automation call or a crashed speech model never takes the microphone loop down. The map is in [ARCHITECTURE.md](ARCHITECTURE.md) and the full v0.1 specification in [docs/BUILD.md](docs/BUILD.md).
 
 ## What we build on
 
@@ -88,7 +88,7 @@ The product is Eileen, chosen by the owner on 2026-10-11 (decision D16 in [docs/
 ## Docs
 
 - [docs/BUILD.md](docs/BUILD.md): the v0.1 specification, contracts and work packages
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the map, the invariants, the boundaries
+- [ARCHITECTURE.md](ARCHITECTURE.md): the map, the invariants, the boundaries
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones
 - [docs/DECISIONS.md](docs/DECISIONS.md): decision records
 - [docs/OWNER-DIRECTION.md](docs/OWNER-DIRECTION.md): what the owner asked for
