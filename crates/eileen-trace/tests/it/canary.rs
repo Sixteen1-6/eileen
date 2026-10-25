@@ -40,6 +40,8 @@ const KEY_HEADER_QUOTED: &str = "could not parse \"-----BEGIN RSA PRIVATE KEY---
 const NEGATIVE_CARD: i64 = -4_111_111_111_111_111;
 /// The card on a line of its own, which `Debug` writes after an escaped newline (`\n`).
 const CARD_ON_ITS_OWN_LINE: &str = "Card number:\n4111 1111 1111 1111";
+/// The card read out with its expiry date and its CVV after it.
+const CARD_WITH_EXPIRY_AND_CVV: &str = "4111 1111 1111 1111 12 27 123";
 /// 6/11, whose 16 digits after the point pass the card rule's Luhn check.
 const RATIO: f64 = 6.0 / 11.0;
 /// A `traceparent` whose trace id's last digit, parent id and flags make 19 digits that do too.
@@ -107,6 +109,7 @@ fn emit_secrets(pem: &str) {
     tracing::warn!(target: "eileen_desktop", line = KEY_HEADER_QUOTED, "a key header alone");
     tracing::info!(target: "eileen_core", balance = NEGATIVE_CARD, "a negative card number");
     tracing::info!(target: "eileen_core", note = CARD_ON_ITS_OWN_LINE, shown = ?CARD_ON_ITS_OWN_LINE, "a card on its own line");
+    tracing::info!(target: "eileen_core", card = CARD_WITH_EXPIRY_AND_CVV, "a card with its expiry date and CVV");
     tracing::debug!(target: "eileen_core", key = API_KEY, "ring only");
 }
 
