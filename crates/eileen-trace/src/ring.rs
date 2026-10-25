@@ -19,7 +19,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::record::{EventRecord, JsonVisitor, SpanRecord, remote_parent, sorted};
+use crate::record::{EventRecord, JsonVisitor, SpanRecord, event_name, remote_parent, sorted};
 use crate::redact::Redactor;
 
 struct Inner {
@@ -258,7 +258,7 @@ where
         line.insert("at_us".to_owned(), json!(at_us));
         line.insert("level".to_owned(), json!(meta.level().as_str()));
         line.insert("target".to_owned(), json!(meta.target()));
-        line.insert("name".to_owned(), json!(meta.name()));
+        line.insert("name".to_owned(), json!(event_name(meta.name())));
         line.insert("span".to_owned(), json!(span));
         line.insert("process".to_owned(), json!(self.ring.process));
         line.insert("fields".to_owned(), Value::Object(visitor.0));

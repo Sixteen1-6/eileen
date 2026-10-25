@@ -23,6 +23,7 @@
 
 mod personal;
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use eileen_contracts::record::RecordLine;
@@ -55,6 +56,20 @@ pub enum PiiKind {
     TokenPrefix,
     /// A secret the [`Redactor`] found.
     Secret(SecretKind),
+}
+
+impl fmt::Display for PiiKind {
+    /// Plain words for a contributor: "an e-mail address", "a user folder".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Email => f.write_str("an e-mail address"),
+            Self::Phone => f.write_str("a phone number"),
+            Self::UserPath => f.write_str("a user folder with a name in it"),
+            Self::MachineName => f.write_str("a machine name"),
+            Self::TokenPrefix => f.write_str("a credential's prefix with token text"),
+            Self::Secret(kind) => write!(f, "a secret ({})", kind.as_str()),
+        }
+    }
 }
 
 /// One finding in a line, as a byte range.
@@ -148,7 +163,7 @@ impl fmt::Display for Problem {
                 write!(f, "{path}: {bytes} bytes, over the {cap}-byte cap")
             }
             Self::Pii { path, line, kind } => {
-                write!(f, "{path}:{line}: {kind:?}; use a placeholder")
+                write!(f, "{path}:{line}: {kind}; use a placeholder")
             }
             Self::NotPlaceholder { path, line, pointer } => {
                 write!(
@@ -474,9 +489,9 @@ pub fn check_files(files: &[ScenarioFile<'_>], redactor: &Redactor) -> Vec<Probl
             if is_inputs {
                 check_replay_line(file.path, n + 1, line, &mut problems);
             }
-            let mut kinds: Vec<PiiKind> =
+            // One problem per kind on a line, however many times and wherever it appears.
+            let kinds: BTreeSet<PiiKind> =
                 scan_line(line, redactor).into_iter().map(|f| f.kind).collect();
-            kinds.dedup();
             for kind in kinds {
                 problems.push(Problem::Pii { path: file.path.to_owned(), line: n + 1, kind });
             }
@@ -503,7 +518,7 @@ mod tests {
 
     #[test]
     fn the_scan_finds_personal_data() {
-        assert_eq!(kinds("mail sam.lee@gmail.com now"), [PiiKind::Email], "e-mail");
+        assert_eq!(kinds("mail sam.lee@quillpost.net now"), [PiiKind::Email], "e-mail");
         assert_eq!(kinds("call +1 (555) 123-4567"), [PiiKind::Phone], "phone");
         assert_eq!(
             kinds(r"C:\Users\samlee\Documents\cv.docx"),
@@ -522,6 +537,28 @@ mod tests {
             kinds("key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv")
                 .contains(&PiiKind::Secret(SecretKind::ApiKey)),
             "secret"
+        );
+    }
+
+    #[test]
+    fn a_kind_found_twice_on_a_line_is_one_problem_in_plain_words() {
+        let line = b"write to sam.lee@quillpost.net or +1 (555) 123-4567 or jo.vale@quillpost.net";
+        let problems = check(&[("notes.txt", line)]);
+        let pii = |kind| Problem::Pii { path: "notes.txt".to_owned(), line: 1, kind };
+        assert_eq!(
+            problems,
+            [pii(PiiKind::Email), pii(PiiKind::Phone)],
+            "two addresses with a phone number between them are one e-mail problem"
+        );
+        assert_eq!(
+            problems[0].to_string(),
+            "notes.txt:1: an e-mail address; use a placeholder",
+            "the kind reads as plain words"
+        );
+        assert_eq!(
+            PiiKind::Secret(SecretKind::ApiKey).to_string(),
+            "a secret (api_key)",
+            "a secret names its kind as the redactor's replacement does"
         );
     }
 
@@ -686,7 +723,7 @@ mod tests {
                 "\n[[steps]]\nhud = {{ input = {{ set_setting = {{ key = \"voice.name\", value = \"{value}\" }} }} }}\n"
             )
         };
-        let real = scenario("synthetic-from-user", &step("Samantha"));
+        let real = scenario("synthetic-from-user", &step("Jordan Vale"));
         let problems = check(&[("scenario.toml", real.as_bytes())]);
         assert!(
             matches!(problems.as_slice(), [Problem::NotPlaceholder { line: None, .. }]),

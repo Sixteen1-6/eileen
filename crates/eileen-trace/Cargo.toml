@@ -13,6 +13,11 @@ process = "all"
 owns = "WP0"
 unsafe = "forbid"
 
+[features]
+# `test_support`, the capture layer and `assert_schema_ok`, for other crates' tests. Only
+# dev-dependencies turn it on, so no shipped binary carries it.
+test-support = []
+
 [dependencies]
 blake3.workspace = true
 eileen-contracts.workspace = true
@@ -25,6 +30,9 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-error.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+eileen-trace = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

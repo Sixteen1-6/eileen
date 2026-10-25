@@ -20,5 +20,8 @@ eileen-trace.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+eileen-trace = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

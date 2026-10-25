@@ -13,11 +13,18 @@
 //! and `Debug` then JSON-escaped, so a password holding a quote or a backslash is caught after
 //! serialization too. The file layer also redacts each field value before it serializes the
 //! line, and the line pass stays as the backstop.
+//!
+//! A literal stays registered while its [`LiteralGuard`] lives, so a session's hook token
+//! leaves the scan when the session ends, and at most [`MAX_LITERALS`] are held at once: each
+//! costs a substring search on every line a sink writes. The `Debug` of a [`Redactor`] shows
+//! how many literals it holds, never the literals.
 
 use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 
 /// What a match was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -83,12 +90,76 @@ const PREFIXES: &[&str] = &[
 
 /// Literal secrets shorter than this are not registered (they would match ordinary text).
 pub const MIN_LITERAL_LEN: usize = 6;
+/// The most literal secrets registered at once; a registration past it is refused and
+/// counted ([`Redactor::refused_literals`]).
+pub const MAX_LITERALS: usize = 64;
+
+/// Why a literal secret was not registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiteralError {
+    /// Shorter than [`MIN_LITERAL_LEN`] bytes, so it would match ordinary text.
+    TooShort,
+    /// [`MAX_LITERALS`] secrets are registered already.
+    Full,
+}
+
+impl fmt::Display for LiteralError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooShort => {
+                write!(f, "a literal secret under {MIN_LITERAL_LEN} bytes is not registered")
+            }
+            Self::Full => write!(f, "{MAX_LITERALS} literal secrets are registered already"),
+        }
+    }
+}
+
+impl std::error::Error for LiteralError {}
+
+/// The registered literal secrets.
+#[derive(Default)]
+struct Literals {
+    /// Each registration's forms, by its id.
+    registered: BTreeMap<u64, Vec<String>>,
+    /// Every form, with how many registrations hold it, so dropping one of two registrations of
+    /// the same secret keeps it redacted.
+    forms: BTreeMap<String, usize>,
+    /// The next registration's id.
+    next: u64,
+}
 
 /// The scanner. Share one per process (it counts its redactions).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Redactor {
-    literals: RwLock<Vec<String>>,
+    literals: RwLock<Literals>,
     redactions: AtomicU64,
+    refused: AtomicU64,
+}
+
+impl fmt::Debug for Redactor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Redactor")
+            .field("literals", &self.literal_count())
+            .field("redactions", &self.redactions())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A registered literal secret. Dropping it removes the secret from the scan; it holds its
+/// redactor weakly, so it never keeps one alive.
+#[must_use = "dropping the guard unregisters the secret at once"]
+#[derive(Debug)]
+pub struct LiteralGuard {
+    redactor: Weak<Redactor>,
+    id: u64,
+}
+
+impl Drop for LiteralGuard {
+    fn drop(&mut self) {
+        if let Some(redactor) = self.redactor.upgrade() {
+            redactor.remove_literal(self.id);
+        }
+    }
 }
 
 const fn is_token_byte(b: u8) -> bool {
@@ -131,22 +202,63 @@ impl Redactor {
         Self::default()
     }
 
-    /// Registers a literal secret with its escaped forms (see the module doc); shorter than
-    /// [`MIN_LITERAL_LEN`] bytes is ignored.
-    pub fn add_literal(&self, secret: &str) {
+    /// Registers a literal secret with its escaped forms (see the module doc) for as long as
+    /// the returned guard lives. Refuses a secret shorter than [`MIN_LITERAL_LEN`] bytes, and
+    /// any registration past [`MAX_LITERALS`], which it counts.
+    pub fn add_literal(self: &Arc<Self>, secret: &str) -> Result<LiteralGuard, LiteralError> {
         if secret.len() < MIN_LITERAL_LEN {
-            return;
+            return Err(LiteralError::TooShort);
         }
-        let debug = format!("{secret:?}");
-        let debug = unquote(&debug);
-        let forms =
-            [secret.to_owned(), json_escaped(secret), debug.to_owned(), json_escaped(debug)];
-        let mut literals = self.literals.write().unwrap_or_else(PoisonError::into_inner);
+        let forms = literal_forms(secret);
+        let mut literals = self.write_literals();
+        if literals.registered.len() >= MAX_LITERALS {
+            drop(literals);
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            return Err(LiteralError::Full);
+        }
+        for form in &forms {
+            *literals.forms.entry(form.clone()).or_insert(0) += 1;
+        }
+        let id = literals.next;
+        literals.next += 1;
+        literals.registered.insert(id, forms);
+        drop(literals);
+        Ok(LiteralGuard { redactor: Arc::downgrade(self), id })
+    }
+
+    /// Removes one registration, keeping the forms another registration still holds.
+    fn remove_literal(&self, id: u64) {
+        let mut literals = self.write_literals();
+        let Some(forms) = literals.registered.remove(&id) else { return };
         for form in forms {
-            if !literals.contains(&form) {
-                literals.push(form);
+            let left = literals.forms.get_mut(&form).map(|count| {
+                *count = count.saturating_sub(1);
+                *count
+            });
+            if left == Some(0) {
+                literals.forms.remove(&form);
             }
         }
+    }
+
+    /// How many literal secrets are registered now.
+    #[must_use]
+    pub fn literal_count(&self) -> usize {
+        self.read_literals().registered.len()
+    }
+
+    /// How many registrations were refused because [`MAX_LITERALS`] were held.
+    #[must_use]
+    pub fn refused_literals(&self) -> u64 {
+        self.refused.load(Ordering::Relaxed)
+    }
+
+    fn read_literals(&self) -> RwLockReadGuard<'_, Literals> {
+        self.literals.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn write_literals(&self) -> RwLockWriteGuard<'_, Literals> {
+        self.literals.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// How many matches this redactor has replaced (`redactions.total`).
@@ -160,12 +272,7 @@ impl Redactor {
     pub fn prefilter(&self, text: &str) -> bool {
         PREFIXES.iter().any(|p| text.contains(p))
             || has_long_digit_run(text.as_bytes())
-            || self
-                .literals
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .iter()
-                .any(|l| text.contains(l.as_str()))
+            || self.read_literals().forms.keys().any(|l| text.contains(l.as_str()))
     }
 
     /// Every match in `text`, in order, without overlaps.
@@ -177,8 +284,8 @@ impl Redactor {
         let bytes = text.as_bytes();
         let mut found = Vec::new();
         {
-            let literals = self.literals.read().unwrap_or_else(PoisonError::into_inner);
-            for literal in literals.iter() {
+            let literals = self.read_literals();
+            for literal in literals.forms.keys() {
                 let mut from = 0;
                 while let Some(at) = text.get(from..).and_then(|rest| rest.find(literal.as_str())) {
                     let start = from + at;
@@ -238,6 +345,15 @@ impl Redactor {
         out.push_str(text.get(at..).unwrap_or_default());
         Cow::Owned(out)
     }
+}
+
+/// A secret in each form a sink writes it (see the module doc), each once.
+fn literal_forms(secret: &str) -> Vec<String> {
+    let debug = format!("{secret:?}");
+    let debug = unquote(&debug);
+    BTreeSet::from([secret.to_owned(), json_escaped(secret), debug.to_owned(), json_escaped(debug)])
+        .into_iter()
+        .collect()
 }
 
 /// `text` without the double quotes around it, as `Debug` and JSON write a string.
@@ -384,7 +500,9 @@ fn card(bytes: &[u8], i: usize) -> Option<Finding> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Redactor, SecretKind};
+    use std::sync::Arc;
+
+    use super::{LiteralError, MAX_LITERALS, Redactor, SecretKind};
 
     #[test]
     fn finds_each_kind() {
@@ -425,9 +543,9 @@ mod tests {
 
     #[test]
     fn redacts_and_counts_and_keeps_json_numbers_numbers() {
-        let r = Redactor::new();
-        r.add_literal("hunter2-password");
-        r.add_literal("short");
+        let r = Arc::new(Redactor::new());
+        let _password = r.add_literal("hunter2-password").unwrap();
+        assert_eq!(r.add_literal("short").unwrap_err(), LiteralError::TooShort, "too short");
         let line = r#"{"pin":4111111111111111,"pw":"hunter2-password","short":"short"}"#;
         let out = r.redact(line);
         assert_eq!(out, r#"{"pin":0,"pw":"[redacted:secret]","short":"short"}"#, "redacted");
@@ -441,13 +559,55 @@ mod tests {
 
     #[test]
     fn a_literal_with_quotes_and_backslashes_is_found_escaped() {
-        let r = Redactor::new();
+        let r = Arc::new(Redactor::new());
         let secret = "pa\"ss\\word\tcanary";
-        r.add_literal(secret);
+        let _secret = r.add_literal(secret).unwrap();
         let json = serde_json::json!({ "pw": secret, "dbg": format!("{secret:?}") }).to_string();
         for text in [secret.to_owned(), json, format!("pw={secret:?}")] {
             let out = r.redact(&text);
             assert!(!out.contains("canary"), "{text} came out as {out}");
         }
+    }
+
+    #[test]
+    fn a_literal_leaves_the_scan_once_its_guards_drop() {
+        let r = Arc::new(Redactor::new());
+        let first = r.add_literal("hook-token-canary").unwrap();
+        let second = r.add_literal("hook-token-canary").unwrap();
+        assert_eq!(r.literal_count(), 2, "two registrations of one secret");
+        drop(first);
+        assert_eq!(
+            r.redact("token hook-token-canary"),
+            "token [redacted:secret]",
+            "the other registration still holds it"
+        );
+        drop(second);
+        assert_eq!(r.literal_count(), 0, "none left");
+        assert_eq!(
+            r.redact("token hook-token-canary"),
+            "token hook-token-canary",
+            "unregistered once both guards are gone"
+        );
+    }
+
+    #[test]
+    fn the_literals_have_a_maximum_and_refusals_are_counted() {
+        let r = Arc::new(Redactor::new());
+        let held: Vec<_> = (0..MAX_LITERALS)
+            .map(|i| r.add_literal(&format!("session-token-{i:04}")).unwrap())
+            .collect();
+        assert_eq!(r.add_literal("one-too-many").unwrap_err(), LiteralError::Full, "refused");
+        assert_eq!(r.refused_literals(), 1, "and counted");
+        drop(held);
+        assert!(r.add_literal("room-again-now").is_ok(), "room again once the guards drop");
+    }
+
+    #[test]
+    fn debug_shows_how_many_literals_never_which() {
+        let r = Arc::new(Redactor::new());
+        let _secret = r.add_literal("correct-horse-canary").unwrap();
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("canary"), "{shown}");
+        assert!(shown.contains("literals: 1"), "{shown}");
     }
 }

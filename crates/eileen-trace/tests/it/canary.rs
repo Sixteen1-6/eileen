@@ -1,6 +1,7 @@
 //! The redaction canary: fake secrets written through the file and ring layers never appear
 //! raw on disk or in a ring dump (acceptance 6), and the console layer writes none of them
-//! either (BUILD.md section 2.13: no sink writes them where policy forbids).
+//! either (BUILD.md section 2.13: no sink writes them where policy forbids). Nor does the home
+//! folder of the PC that built a dependency, which its events carry in their source path.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -8,6 +9,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use eileen_trace::{Console, ProcessKind, Redactor, TraceConfig, names};
 use serde_json::Value;
+use tracing::callsite::{DefaultCallsite, Identifier};
+use tracing::field::{FieldSet, Value as FieldValue};
+use tracing::metadata::Kind;
+use tracing::{Level, Metadata};
 use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -55,12 +60,20 @@ fn forms(secret: &str) -> Vec<String> {
     vec![secret.to_owned(), json(secret), json(&debug), debug]
 }
 
-/// Asserts that `text` holds no form of any secret and that every line is valid JSON.
+/// What a home folder looks like in a line: a Windows user folder, raw or JSON-escaped, and a
+/// Linux one.
+const HOME_FOLDERS: [&str; 3] = [":\\Users\\", ":\\\\Users\\\\", "/home/"];
+
+/// Asserts that `text` holds no form of any secret and no home folder, and that every line is
+/// valid JSON.
 fn assert_clean_json_lines(what: &str, text: &str) {
     for secret in [API_KEY, JWT, CARD, PASSWORD, QUOTED_PASSWORD, PEM_BODY] {
         for form in forms(secret) {
             assert!(!text.contains(&form), "{form} reached {what}:\n{text}");
         }
+    }
+    for home in HOME_FOLDERS {
+        assert!(!text.contains(home), "a home folder ({home}) reached {what}:\n{text}");
     }
     assert!(!text.contains(&CARD_NUMBER.to_string()), "the bare card reached {what}:\n{text}");
     for line in text.lines() {
@@ -91,8 +104,8 @@ fn fake_secrets_never_reach_disk_or_a_dump() {
     let mut config = TraceConfig::new(Some(dir.0.clone()));
     config.console = Console::Never;
     let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
-    guard.redactor().add_literal(PASSWORD);
-    guard.redactor().add_literal(QUOTED_PASSWORD);
+    let _password = guard.redactor().add_literal(PASSWORD).unwrap();
+    let _quoted = guard.redactor().add_literal(QUOTED_PASSWORD).unwrap();
     let pem = format!("-----BEGIN PRIVATE KEY-----\n{PEM_BODY}\n-----END PRIVATE KEY-----");
     tracing::subscriber::with_default(subscriber, || emit_secrets(&pem));
     let dump = String::from_utf8(guard.ring().dump(guard.redactor())).unwrap();
@@ -113,6 +126,81 @@ fn fake_secrets_never_reach_disk_or_a_dump() {
     );
     assert!(dump.contains(TRANSCRIPT), "the ring keeps pii fields in memory, as the policy says");
     assert!(dump.contains("ring only"), "DEBUG for Eileen's crates reaches the ring");
+}
+
+/// A registry crate's event on a Windows build PC: its file, and its default name, hold the
+/// absolute path under the user's folder.
+static WINDOWS_DEPENDENCY: Metadata<'static> = Metadata::new(
+    "event C:\\Users\\someone\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\somecrate-1.2.3\\src\\client.rs:7",
+    "somecrate::client",
+    Level::WARN,
+    Some(
+        "C:\\Users\\someone\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\somecrate-1.2.3\\src\\client.rs",
+    ),
+    Some(7),
+    Some("somecrate::client"),
+    FieldSet::new(&["message"], Identifier(&WINDOWS_CALLSITE)),
+    Kind::EVENT,
+);
+static WINDOWS_CALLSITE: DefaultCallsite = DefaultCallsite::new(&WINDOWS_DEPENDENCY);
+
+/// The same on a Linux build PC.
+static LINUX_DEPENDENCY: Metadata<'static> = Metadata::new(
+    "event /home/someone/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/somecrate-1.2.3/src/lib.rs:9",
+    "somecrate",
+    Level::WARN,
+    Some(
+        "/home/someone/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/somecrate-1.2.3/src/lib.rs",
+    ),
+    Some(9),
+    Some("somecrate"),
+    FieldSet::new(&["message"], Identifier(&LINUX_CALLSITE)),
+    Kind::EVENT,
+);
+static LINUX_CALLSITE: DefaultCallsite = DefaultCallsite::new(&LINUX_DEPENDENCY);
+
+/// Emits one event through `meta`'s callsite, as `tracing`'s macros do in a dependency.
+fn emit_from(meta: &'static Metadata<'static>) {
+    let fields = meta.fields();
+    let message = fields.field("message").unwrap();
+    let text: &dyn FieldValue = &"a dependency logged this";
+    let values = [(&message, Some(text))];
+    let value_set = fields.value_set(&values);
+    tracing::dispatcher::get_default(|dispatch| {
+        if dispatch.enabled(meta) {
+            dispatch.event(&tracing::Event::new(meta, &value_set));
+        }
+    });
+}
+
+#[test]
+fn no_home_folder_reaches_disk_or_a_dump() {
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("eileen-trace-home-{}", std::process::id())));
+    let _ignored = std::fs::remove_dir_all(&dir.0);
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        emit_from(&WINDOWS_DEPENDENCY);
+        emit_from(&LINUX_DEPENDENCY);
+    });
+    let dump = String::from_utf8(guard.ring().dump(guard.redactor())).unwrap();
+    drop(guard);
+    let files = read_all(&dir.0);
+    assert!(
+        files.contains("somecrate-1.2.3/src/client.rs")
+            && files.contains("somecrate-1.2.3/src/lib.rs"),
+        "the files keep each event's path from its crate's folder:\n{files}"
+    );
+    assert!(
+        dump.contains("event somecrate-1.2.3/src/client.rs:7")
+            && dump.contains("event somecrate-1.2.3/src/lib.rs:9"),
+        "the dump keeps each event's location:\n{dump}"
+    );
+    assert_clean_json_lines("a log file", &files);
+    assert_clean_json_lines("a ring dump", &dump);
+    assert!(!files.contains("someone") && !dump.contains("someone"), "no user name anywhere");
 }
 
 /// An in-memory console for the test.
@@ -148,8 +236,8 @@ impl<'a> MakeWriter<'a> for Captured {
 fn fake_secrets_never_reach_the_console() {
     // The console layer `build` installs with `Console::Always`, over a captured writer.
     let redactor = Arc::new(Redactor::new());
-    redactor.add_literal(PASSWORD);
-    redactor.add_literal(QUOTED_PASSWORD);
+    let _password = redactor.add_literal(PASSWORD).unwrap();
+    let _quoted = redactor.add_literal(QUOTED_PASSWORD).unwrap();
     let console = Captured::default();
     let layer = eileen_trace::init::console_layer::<Registry, _>(
         console.clone(),

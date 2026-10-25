@@ -24,7 +24,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
 use crate::file::{FileLayer, RedactingMakeWriter};
 use crate::names;
-use crate::pii::Policy;
+use crate::pii::{PiiKey, Policy};
 use crate::redact::Redactor;
 use crate::ring::{Ring, RingLayer};
 use crate::slow::{SlowLayer, Stats};
@@ -114,8 +114,8 @@ pub struct TraceConfig {
     pub include_personal: bool,
     /// The per-install key for the files' keyed hash of `pii.` fields, which the runtime
     /// derives at setup and passes to every process it starts. `None`, the default, reduces
-    /// them to their length alone: never a constant key.
-    pub pii_key: Option<[u8; 32]>,
+    /// them to their length alone: never a constant key. It never shows in `Debug`.
+    pub pii_key: Option<PiiKey>,
     /// Slow-span thresholds by span name, milliseconds.
     pub slow_span_ms: BTreeMap<String, u64>,
     /// Daily files kept per process.
@@ -344,4 +344,19 @@ pub fn init(kind: ProcessKind, config: &TraceConfig) -> Result<TraceGuard, Trace
     soft_assert::set_hook(soft_assert_hook);
     soft_assert::set_mode(Mode::Report);
     Ok(guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TraceConfig;
+    use crate::pii::PiiKey;
+
+    #[test]
+    fn a_config_never_shows_its_pii_key_in_debug() {
+        let mut config = TraceConfig::new(None);
+        config.pii_key = Some(PiiKey::new([0xAB; 32]));
+        let shown = format!("{config:?}");
+        assert!(shown.contains("pii_key: Some(PiiKey(..))"), "{shown}");
+        assert!(!shown.contains("171, 171"), "no byte of the key: {shown}");
+    }
 }

@@ -261,7 +261,7 @@ mod tests {
         for text in ["{NAME}", "{HOME}\\{DOCS}\\{TITLE}", "{WORK} / {TITLE}", ""] {
             assert!(built_from_placeholders(text), "{text}");
         }
-        for text in ["Samantha", "{DOCS}\\tax.pdf", "{NAME}2", "{TITLE}.docx"] {
+        for text in ["Jordan Vale", "{DOCS}\\tax.pdf", "{NAME}2", "{TITLE}.docx"] {
             assert!(!built_from_placeholders(text), "{text}");
         }
     }
