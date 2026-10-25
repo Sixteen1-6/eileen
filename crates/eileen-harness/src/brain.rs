@@ -30,9 +30,10 @@ pub trait BrainBackend: Send {
     fn next_event(&mut self) -> impl Future<Output = Option<BrainEvent>> + Send;
 }
 
-/// Declares a brain backend whose every call answers `RouteUnavailable` for its route.
-macro_rules! unavailable_brain {
-    ($(#[$doc:meta])* $name:ident, $route:expr, $languages:expr) => {
+/// Declares a brain backend whose every call answers `$error`: `NotBuilt` for the route v0.1
+/// builds, until WP3 builds it, and `RouteUnavailable` for a designed slot.
+macro_rules! stub_brain {
+    ($(#[$doc:meta])* $name:ident, $route:expr, $languages:expr, $error:expr) => {
         $(#[$doc])*
         #[derive(Debug)]
         pub struct $name;
@@ -51,18 +52,18 @@ macro_rules! unavailable_brain {
                 _turn: TurnId,
                 _message: String,
             ) -> impl Future<Output = Result<(), DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn interrupt(&mut self) -> impl Future<Output = Result<(), DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn recycle(
                 &mut self,
                 _summary: String,
             ) -> impl Future<Output = Result<(), DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn next_event(&mut self) -> impl Future<Output = Option<BrainEvent>> + Send {
@@ -72,33 +73,37 @@ macro_rules! unavailable_brain {
     };
 }
 
-unavailable_brain!(
+stub_brain!(
     /// The Claude brain: a warm `claude -p` session with only Eileen's tools. A stub until WP3
     /// builds it.
     ClaudeBrain,
     Route::Claude,
-    LanguageSupport::Any
+    LanguageSupport::Any,
+    DriverError::NotBuilt { route: Route::Claude }
 );
 
-unavailable_brain!(
+stub_brain!(
     /// The Codex brain, a designed slot.
     CodexBrain,
     Route::Codex,
-    LanguageSupport::Listed(Vec::new())
+    LanguageSupport::Listed(Vec::new()),
+    DriverError::RouteUnavailable { route: Route::Codex }
 );
 
-unavailable_brain!(
+stub_brain!(
     /// The `DeepSeek` brain, a designed slot (configuration only in v0.1).
     DeepSeekBrain,
     Route::DeepSeek,
-    LanguageSupport::Listed(Vec::new())
+    LanguageSupport::Listed(Vec::new()),
+    DriverError::RouteUnavailable { route: Route::DeepSeek }
 );
 
-unavailable_brain!(
+stub_brain!(
     /// A local model as the brain, a designed slot.
     LocalBrain,
     Route::Local,
-    LanguageSupport::Listed(Vec::new())
+    LanguageSupport::Listed(Vec::new()),
+    DriverError::RouteUnavailable { route: Route::Local }
 );
 
 /// Every brain backend, dispatched by variant.

@@ -24,8 +24,8 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 ort.workspace = true

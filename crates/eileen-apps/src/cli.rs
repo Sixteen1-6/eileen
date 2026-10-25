@@ -2,7 +2,21 @@
 //! stdio; `setup` (the face model) and `doctor resolve` are what `eileen setup` and `eileen doctor
 //! resolve` run. A stub until WP6 builds it: every form says it is not built yet.
 
+use std::io::{self, Write as _};
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand, ValueEnum};
+
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP6 has not built it yet.
+    #[error("`{command}` is not built yet (WP6 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
 
 /// `eileen-apps [setup | doctor ...]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Parser)]
@@ -34,7 +48,8 @@ pub enum DoctorTarget {
     },
 }
 
-/// The routes to Resolve (section 2.7).
+/// The routes to Resolve (section 2.7). `eileen-runtime` has its own copy for `eileen doctor
+/// resolve --route`, which it passes to this binary: the core binary may not depend on this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ResolveRoute {
     /// Resolve's own MCP server.
@@ -44,6 +59,33 @@ pub enum ResolveRoute {
 }
 
 /// Runs `eileen-apps`.
-pub fn run(_cli: AppsCli) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen-apps` is not built yet (WP6 builds it)")
+pub const fn run(_cli: AppsCli) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen-apps" })
+}
+
+/// The `eileen-apps` binary: parses its command line, runs it, and reports a failure on
+/// standard error. Returns the process's exit code, so no destructor or log flush is skipped.
+#[must_use]
+pub fn main() -> ExitCode {
+    match AppsCli::try_parse() {
+        Ok(cli) => match run(cli) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => failure(&error),
+        },
+        Err(error) => usage_exit(&error),
+    }
+}
+
+/// Prints clap's help, version or usage error and returns its exit code: 0 for help and
+/// version, 2 for a usage error.
+fn usage_exit(error: &clap::Error) -> ExitCode {
+    let printed = error.print();
+    if error.use_stderr() || printed.is_err() { ExitCode::from(2) } else { ExitCode::SUCCESS }
+}
+
+/// Reports a failed command on standard error and returns exit code 1.
+fn failure(error: &impl std::fmt::Display) -> ExitCode {
+    match writeln!(io::stderr().lock(), "Error: {error}") {
+        Ok(()) | Err(_) => ExitCode::FAILURE,
+    }
 }

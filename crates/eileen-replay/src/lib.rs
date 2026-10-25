@@ -9,7 +9,7 @@
 //!   reactive and synthesized input rules, stable keys and ID remapping.
 //! - The expectation and expected-trace matcher, and [`responder`] for `--replay-models`.
 //! - `eileen replay` and `eileen scenario replay` ([`cli`]) and the `expected_trace` fuzz
-//!   target's entry ([`fuzz_entry`]).
+//!   target's entry (`fuzz_entry`).
 //!
 //! # Does not own
 //!

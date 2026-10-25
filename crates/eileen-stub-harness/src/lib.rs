@@ -49,7 +49,30 @@
 
 #![forbid(unsafe_code)]
 
+use std::io::{self, Write as _};
+use std::process::ExitCode;
+
 /// Runs the stub harness.
-pub fn run() -> anyhow::Result<()> {
-    anyhow::bail!("`eileen-stub-harness` is not built yet (WP3 builds it)")
+pub const fn run() -> Result<(), RunError> {
+    Err(RunError::NotBuilt)
+}
+
+/// Why the stub harness stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RunError {
+    /// WP3 has not built it yet.
+    #[error("`eileen-stub-harness` is not built yet (WP3 builds it)")]
+    NotBuilt,
+}
+
+/// The `eileen-stub-harness` binary: runs it and reports a failure on standard error. Returns the
+/// process's exit code, so no destructor or log flush is skipped.
+#[must_use]
+pub fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => match writeln!(io::stderr().lock(), "Error: {error}") {
+            Ok(()) | Err(_) => ExitCode::FAILURE,
+        },
+    }
 }

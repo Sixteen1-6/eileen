@@ -8,7 +8,7 @@
 //!   `eileen-contracts::record`, with long strings moved into blobs.
 //! - The BLAKE3 and zstd blob store with reference counts (`eileen-record::blob`, the only
 //!   module here that may use vendored C, on the runtime's blocking pool).
-//! - `eileen record` ([`cli`]) and the `recording` fuzz target's entry ([`fuzz_entry`]).
+//! - `eileen record` ([`cli`]) and the `recording` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
 //!

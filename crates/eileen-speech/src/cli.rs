@@ -3,9 +3,44 @@
 //! doctor machine --bench` and `eileen voice` run. A stub until WP4 builds it: every form says it
 //! is not built yet.
 
+use std::convert::Infallible;
+use std::fmt;
+use std::io::{self, Write as _};
 use std::path::PathBuf;
+use std::process::ExitCode;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
+
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP4 has not built it yet.
+    #[error("`{command}` is not built yet (WP4 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
+/// The text `voice render` speaks. Its `Debug` gives the length only, because the text is the
+/// user's own words.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RenderText(pub String);
+
+impl fmt::Debug for RenderText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RenderText").field("len", &self.0.len()).finish()
+    }
+}
+
+impl FromStr for RenderText {
+    type Err = Infallible;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Ok(Self(text.to_owned()))
+    }
+}
 
 /// `eileen-speech [--stub FILE] [setup | bench | voice ...]`.
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
@@ -51,7 +86,7 @@ pub enum VoiceCommand {
     /// Render text in a voice to a file.
     Render {
         /// The text.
-        text: String,
+        text: RenderText,
         /// The voice.
         #[arg(long, value_name = "NAME")]
         voice: String,
@@ -67,6 +102,33 @@ pub enum VoiceCommand {
 }
 
 /// Runs `eileen-speech`.
-pub fn run(_cli: SpeechCli) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen-speech` is not built yet (WP4 builds it)")
+pub fn run(_cli: SpeechCli) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen-speech" })
+}
+
+/// The `eileen-speech` binary: parses its command line, runs it, and reports a failure on
+/// standard error. Returns the process's exit code, so no destructor or log flush is skipped.
+#[must_use]
+pub fn main() -> ExitCode {
+    match SpeechCli::try_parse() {
+        Ok(cli) => match run(cli) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => failure(&error),
+        },
+        Err(error) => usage_exit(&error),
+    }
+}
+
+/// Prints clap's help, version or usage error and returns its exit code: 0 for help and
+/// version, 2 for a usage error.
+fn usage_exit(error: &clap::Error) -> ExitCode {
+    let printed = error.print();
+    if error.use_stderr() || printed.is_err() { ExitCode::from(2) } else { ExitCode::SUCCESS }
+}
+
+/// Reports a failed command on standard error and returns exit code 1.
+fn failure(error: &impl fmt::Display) -> ExitCode {
+    match writeln!(io::stderr().lock(), "Error: {error}") {
+        Ok(()) | Err(_) => ExitCode::FAILURE,
+    }
 }

@@ -215,7 +215,7 @@ impl std::error::Error for ComponentError {}
 
 /// A component that takes the effects routed to it, drops them and does nothing else, until
 /// the runtime shuts down or closes its effect source. WP0's stub crates return it from their
-/// `component` constructors, so `eileen-cli` wires every component from the first day, and a
+/// `component` constructors, so `eileen-cli` wires the components from the first day, and a
 /// test can stand it in for a component it does not exercise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdleComponent {

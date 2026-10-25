@@ -4,6 +4,17 @@
 
 use clap::{Args, ValueEnum};
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP1 has not built it yet.
+    #[error("`{command}` is not built yet (WP1 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
 /// Which replay mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ReplayMode {
@@ -41,11 +52,11 @@ pub struct ScenarioReplayArgs {
 }
 
 /// Runs `eileen replay`.
-pub fn replay(_args: ReplayArgs) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen replay` is not built yet (WP1 builds it)")
+pub fn replay(_args: ReplayArgs) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen replay" })
 }
 
 /// Runs `eileen scenario replay`.
-pub fn scenario_replay(_args: ScenarioReplayArgs) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen scenario replay` is not built yet (WP1 builds it)")
+pub fn scenario_replay(_args: ScenarioReplayArgs) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen scenario replay" })
 }

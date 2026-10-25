@@ -3,9 +3,9 @@
 //! components that accept their effects and do nothing.
 
 use eileen_audio::AudioConfig;
-use eileen_contracts::ports::Component;
 use eileen_harness::HarnessConfig;
 use eileen_learn::LearnConfig;
+use eileen_runtime::Component;
 use eileen_runtime::cli::RunArgs;
 
 /// The components for a run with these arguments.

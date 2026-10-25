@@ -3,10 +3,28 @@
 //! `claude`), `voice` (forwarded to `eileen-speech.exe`), `trace`, `logs`, `incident`, `debug`,
 //! `mcp-probe` and `bench`. A stub until WP2 builds them: each says it is not built yet.
 
+use std::fmt;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 use eileen_contracts::ports::Component;
+
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP2 has not built it yet.
+    #[error("`{command}` is not built yet (WP2 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+    /// A command this crate forwards to `eileen-speech`, which WP4 has not built yet.
+    #[error("`{command}` is not built yet (WP4 builds it in eileen-speech)")]
+    NotBuiltInSpeech {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
 
 /// `eileen run`: start everything.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
@@ -41,11 +59,18 @@ pub struct RunArgs {
     pub test_harness: bool,
 }
 
-/// `eileen say "<text>"`: a typed request into the running instance.
-#[derive(Debug, Clone, PartialEq, Eq, Args)]
+/// `eileen say "<text>"`: a typed request into the running instance. Its `Debug` gives the
+/// text's length only, because the text is the user's own words.
+#[derive(Clone, PartialEq, Eq, Args)]
 pub struct SayArgs {
     /// What to say to Eileen.
     pub text: String,
+}
+
+impl fmt::Debug for SayArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SayArgs").field("text_len", &self.text.len()).finish()
+    }
 }
 
 /// The forms of `eileen jobs`.
@@ -86,7 +111,8 @@ pub enum DoctorCheck {
     },
 }
 
-/// The routes `eileen doctor resolve --route` can name (section 2.7).
+/// The routes `eileen doctor resolve --route` can name (section 2.7). `eileen-apps` has its own
+/// copy, which this one is passed to: the core binary may not depend on the apps sidecar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ResolveRoute {
     /// Resolve's own MCP server.
@@ -126,76 +152,76 @@ pub enum DebugCommand {
     Dump,
 }
 
-fn not_built(command: &str) -> anyhow::Result<()> {
-    anyhow::bail!("`{command}` is not built yet (WP2 builds it)")
+const fn not_built(command: &'static str) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command })
 }
 
 /// Runs `eileen run` with the components the composition root wired.
-pub fn run(_args: RunArgs, _components: Vec<Box<dyn Component>>) -> anyhow::Result<()> {
+pub fn run(_args: RunArgs, _components: Vec<Box<dyn Component>>) -> Result<(), CliError> {
     not_built("eileen run")
 }
 
 /// Runs `eileen say`.
-pub fn say(_args: SayArgs) -> anyhow::Result<()> {
+pub fn say(_args: SayArgs) -> Result<(), CliError> {
     not_built("eileen say")
 }
 
 /// Runs `eileen status`.
-pub fn status() -> anyhow::Result<()> {
+pub const fn status() -> Result<(), CliError> {
     not_built("eileen status")
 }
 
 /// Runs `eileen jobs`.
-pub fn jobs(_command: Option<JobsCommand>) -> anyhow::Result<()> {
+pub fn jobs(_command: Option<JobsCommand>) -> Result<(), CliError> {
     not_built("eileen jobs")
 }
 
 /// Runs `eileen about`.
-pub fn about() -> anyhow::Result<()> {
+pub const fn about() -> Result<(), CliError> {
     not_built("eileen about")
 }
 
 /// Runs `eileen setup`.
-pub fn setup() -> anyhow::Result<()> {
+pub const fn setup() -> Result<(), CliError> {
     not_built("eileen setup")
 }
 
 /// Runs `eileen doctor`, every check or one.
-pub fn doctor(_check: Option<DoctorCheck>) -> anyhow::Result<()> {
+pub const fn doctor(_check: Option<DoctorCheck>) -> Result<(), CliError> {
     not_built("eileen doctor")
 }
 
 /// Runs `eileen voice ...`, which passes its arguments to `eileen-speech.exe voice`.
-pub fn voice(_args: Vec<String>) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen voice` is not built yet (WP4 builds it in eileen-speech)")
+pub fn voice(_args: Vec<String>) -> Result<(), CliError> {
+    Err(CliError::NotBuiltInSpeech { command: "eileen voice" })
 }
 
 /// Runs `eileen trace`.
-pub fn trace(_args: TraceArgs) -> anyhow::Result<()> {
+pub fn trace(_args: TraceArgs) -> Result<(), CliError> {
     not_built("eileen trace")
 }
 
 /// Runs `eileen logs`.
-pub fn logs() -> anyhow::Result<()> {
+pub const fn logs() -> Result<(), CliError> {
     not_built("eileen logs")
 }
 
 /// Runs `eileen incident`.
-pub fn incident(_command: Option<IncidentCommand>) -> anyhow::Result<()> {
+pub const fn incident(_command: Option<IncidentCommand>) -> Result<(), CliError> {
     not_built("eileen incident")
 }
 
 /// Runs `eileen debug`.
-pub fn debug(_command: Option<DebugCommand>) -> anyhow::Result<()> {
+pub const fn debug(_command: Option<DebugCommand>) -> Result<(), CliError> {
     not_built("eileen debug")
 }
 
 /// Runs `eileen mcp-probe`.
-pub fn mcp_probe() -> anyhow::Result<()> {
+pub const fn mcp_probe() -> Result<(), CliError> {
     not_built("eileen mcp-probe")
 }
 
 /// Runs `eileen bench`, the developer probe (`eileen bench brain` is the harness's).
-pub fn bench() -> anyhow::Result<()> {
+pub const fn bench() -> Result<(), CliError> {
     not_built("eileen bench")
 }

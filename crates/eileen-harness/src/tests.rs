@@ -42,10 +42,10 @@ fn the_stub_claude_worker_reports_any_language_and_no_events() {
 }
 
 #[test]
-fn the_stub_claude_brain_answers_route_unavailable_and_measures_nothing() {
+fn the_stub_claude_brain_answers_not_built_and_measures_nothing() {
     let mut brain = brain_for(Route::Claude, &HarnessConfig).unwrap();
-    let unavailable = Err(DriverError::RouteUnavailable { route: Route::Claude });
-    assert_eq!(at_once(brain.interrupt()), unavailable, "nothing to interrupt until WP3");
+    let not_built = Err(DriverError::NotBuilt { route: Route::Claude });
+    assert_eq!(at_once(brain.interrupt()), not_built, "nothing to interrupt until WP3");
     let result = at_once(brain_benchmark(&mut brain, &BrainSuite::default()));
     assert_eq!(result.route, Route::Claude, "the benchmarked route");
     assert_eq!(result.first_word_p50_ms, None, "the stub measures nothing");

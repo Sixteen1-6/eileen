@@ -80,16 +80,30 @@ impl Resolver {
     pub const fn new(_grammar: Grammar) -> Self {
         Self
     }
-}
 
-impl IntentResolver for Resolver {
-    fn rebuild(&mut self, _skills: &[SkillMeta], _phrasings: &[PhrasingFact]) {}
+    /// Rebuilds the indexes from the current skills and phrasings. The stub keeps none.
+    #[expect(clippy::unused_self, reason = "section 3.3.10's signature; the stub keeps no index")]
+    pub const fn rebuild(&mut self, _skills: &[SkillMeta], _phrasings: &[PhrasingFact]) {}
 
-    fn resolve(&self, _utterance: &str, _ctx: &ResolveCtx) -> Resolution {
+    /// L1 and the lexical part of L2. The stub sends every utterance to the brain.
+    #[must_use]
+    #[expect(
+        clippy::unused_self,
+        clippy::trivially_copy_pass_by_ref,
+        reason = "section 3.3.10's signature; the stub matches nothing"
+    )]
+    pub const fn resolve(&self, _utterance: &str, _ctx: &ResolveCtx) -> Resolution {
         Resolution::Brain { depth: None, addressee_unsure: false }
     }
 
-    fn resolve_semantic(
+    /// L2 with an embedding the core requested from the speech process. The stub ignores the
+    /// embedding.
+    #[must_use]
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "section 3.3.10's signature; the stub resolver holds nothing"
+    )]
+    pub const fn resolve_semantic(
         &self,
         utterance: &str,
         _embedding: &[f32],
@@ -98,8 +112,33 @@ impl IntentResolver for Resolver {
         self.resolve(utterance, ctx)
     }
 
-    fn follow_up(&self, _utterance: &str, _ctx: &ResolveCtx) -> FollowUp {
+    /// The conversation window's follow-up feature (section 2.8 rule 3). The stub finds none.
+    #[must_use]
+    #[expect(
+        clippy::unused_self,
+        clippy::trivially_copy_pass_by_ref,
+        reason = "section 3.3.10's signature; the stub finds no follow-up"
+    )]
+    pub const fn follow_up(&self, _utterance: &str, _ctx: &ResolveCtx) -> FollowUp {
         FollowUp::None
+    }
+}
+
+impl IntentResolver for Resolver {
+    fn rebuild(&mut self, skills: &[SkillMeta], phrasings: &[PhrasingFact]) {
+        Self::rebuild(self, skills, phrasings);
+    }
+
+    fn resolve(&self, utterance: &str, ctx: &ResolveCtx) -> Resolution {
+        Self::resolve(self, utterance, ctx)
+    }
+
+    fn resolve_semantic(&self, utterance: &str, embedding: &[f32], ctx: &ResolveCtx) -> Resolution {
+        Self::resolve_semantic(self, utterance, embedding, ctx)
+    }
+
+    fn follow_up(&self, utterance: &str, ctx: &ResolveCtx) -> FollowUp {
+        Self::follow_up(self, utterance, ctx)
     }
 
     fn introspect(

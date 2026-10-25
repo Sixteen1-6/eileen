@@ -40,9 +40,10 @@ pub struct WorkerSession {
     pub model: String,
 }
 
-/// Declares a worker driver whose every call answers `RouteUnavailable` for its route.
-macro_rules! unavailable_worker {
-    ($(#[$doc:meta])* $name:ident, $route:expr, $languages:expr) => {
+/// Declares a worker driver whose every call answers `$error`: `NotBuilt` for the route v0.1
+/// builds, until WP3 builds it, and `RouteUnavailable` for a designed slot.
+macro_rules! stub_worker {
+    ($(#[$doc:meta])* $name:ident, $route:expr, $languages:expr, $error:expr) => {
         $(#[$doc])*
         #[derive(Debug)]
         pub struct $name;
@@ -60,21 +61,21 @@ macro_rules! unavailable_worker {
                 &mut self,
                 _spec: SessionSpec,
             ) -> impl Future<Output = Result<WorkerSession, DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn bind(
                 &mut self,
                 _binding: JobBinding,
             ) -> impl Future<Output = Result<(), DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn send(
                 &mut self,
                 _cmd: WorkerCmd,
             ) -> impl Future<Output = Result<(), DriverError>> + Send {
-                ready(Err(DriverError::RouteUnavailable { route: $route }))
+                ready(Err($error))
             }
 
             fn next_event(&mut self) -> impl Future<Output = Option<WorkerEvent>> + Send {
@@ -84,25 +85,28 @@ macro_rules! unavailable_worker {
     };
 }
 
-unavailable_worker!(
+stub_worker!(
     /// The Claude worker: `claude -p` in stream-json. A stub until WP3 builds it.
     ClaudeWorker,
     Route::Claude,
-    LanguageSupport::Any
+    LanguageSupport::Any,
+    DriverError::NotBuilt { route: Route::Claude }
 );
 
-unavailable_worker!(
+stub_worker!(
     /// The Codex app-server worker, a designed slot.
     CodexWorker,
     Route::Codex,
-    LanguageSupport::Listed(Vec::new())
+    LanguageSupport::Listed(Vec::new()),
+    DriverError::RouteUnavailable { route: Route::Codex }
 );
 
-unavailable_worker!(
+stub_worker!(
     /// The ACP worker, for Grok and other ACP agents, a designed slot.
     AcpWorker,
     Route::Grok,
-    LanguageSupport::Listed(Vec::new())
+    LanguageSupport::Listed(Vec::new()),
+    DriverError::RouteUnavailable { route: Route::Grok }
 );
 
 /// Every worker driver, dispatched by variant.

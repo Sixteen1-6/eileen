@@ -67,12 +67,12 @@ child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTick
 removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
 span-parent table, with a test for each.
 
-`wp0/stubs` adds the other 33 crates of section 3.1, every one but the `-linux` crates, which
+`wp0/stubs` adds the other 30 crates of section 3.1, every one but the `-linux` crates, which
 WP10 creates itself, and their `[workspace.dependencies]` lines. Each has the crate doc with the
 eight headings of section 4b.4 naming its owner package, `[package.metadata.eileen]`, the
 signatures section 3 gives it, and bodies that return a typed `Unavailable` error or do nothing.
 `component(cfg)` returns `eileen_contracts::ports::IdleComponent`, which drops the effects routed
-to it until its source closes or the runtime shuts down; `eileen-cli` wires every component and
+to it until its source closes or the runtime shuts down; `eileen-cli` wires the components whose crates exist and
 every subcommand of section 3.5, and each subcommand reaches its crate's `cli` module, which says
 it is not built yet. The real native dependencies sit under their Windows target tables, with
 `cargo-machete` told why each stub does not use them yet. The `-win` crates are
@@ -181,10 +181,19 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   of every crate they create, `name = { path = "crates/<name>" }`, beside the `members` entry.
 - After `wp0/stubs` merges, check that Dependabot's next `cargo` run finishes (the repository's
   Insights, Dependency graph, Dependabot tab) and record it here.
-- `wp0/stubs` is the first pull request to lock `shuttle` and `shuttle-tokio`. Its description
-  lists the publish date of every package it adds to `Cargo.lock`, and any package younger than 14
-  days that no section 4.1 pin names is held back with `cargo update -p <name> --precise
-  <version>` to its newest older release, or named in the description with the reason it stays.
+- `wp0/stubs` lists the publish date of every package it adds to `Cargo.lock` in its
+  description, and any package younger than 14 days that no section 4.1 pin names is held back
+  with `cargo update -p <name> --precise <version>` to its newest older release, or named in the
+  description with the reason it stays. (Done in pull request #96. No stub uses `shuttle` or
+  `shuttle-tokio`, so WP2's first use locks them, under the same rule.)
+- After `wp0/stubs` merges, pull request #77 (`wp0/platform-file-deadlines`) adds `Deadline` to
+  `Apps`, `RecentSources` and `ShellHost` methods that the `eileen-apps-win` and
+  `eileen-shell-win` stubs implement, so it updates those two stubs' signatures before it
+  merges; only its Windows lanes would show it.
+- The fuzz workspace builds from a copy of the root `Cargo.lock` (`cp Cargo.lock fuzz/`), so its
+  versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
+  package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development
+  tool never shipped. Phase B's fuzz job copies the lock before `cargo fuzz build`.
 
 - `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
   `SystemMemory::new(&RealClock)`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
@@ -332,14 +341,39 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
 - Stubs: the unit-struct configurations (`HarnessConfig` and the others) are zero-sized, so
   pedantic clippy asks to pass them by value; section 3.3.15's `component(cfg: &...)` signature
   stays, with an `#[expect(clippy::trivially_copy_pass_by_ref)]` that fails the build once the
-  owning package gives the type a field.
+  owning package's fields make the type too large for the lint, so the expectation cannot
+  outlive its reason.
 - Stubs: a `-win` crate is empty off Windows, so an intra-doc link in its crate doc breaks
   `cargo doc` on Linux under `-D warnings`. Their crate docs name their types in plain code
   spans instead.
 - Stubs: `shuttle` and `shuttle-tokio` are still not in the lock: no stub uses them, and the lock
   holds only what a member uses. WP2 locks them with its `shuttle` feature.
+- Stubs: until `wp0/xtask`'s `fetch-native` exists, both Windows CI jobs fetch the pinned
+  sherpa-onnx archive themselves, check its SHA256 and point `SHERPA_ONNX_ARCHIVE_DIR` at it;
+  otherwise `sherpa-onnx-sys`'s build script downloads it unchecked and without retries.
+  `deny.toml` also bans `zip` everywhere but under `sherpa-onnx-sys`, so D78's three advisory
+  ignores cannot cover a `zip` that arrives some other way.
 
 ## Decisions
+
+- Stubs: the component that does nothing is `eileen_contracts::ports::IdleComponent`, beside the
+  `Component` trait, rather than a copy in each stub crate; it has no serialized form, so no
+  snapshot changes. The contracts doc now names it as its one piece of behaviour.
+- Stubs: `eileen-cli` names `Component` through `eileen_runtime::Component`, a re-export, because
+  section 3.1's row for `eileen-cli` does not list `eileen-contracts`, and the runtime is the
+  crate that composes components.
+- Stubs: a crate's dev-dependencies for its process tests sit outside section 3.1's "may depend
+  on" column, which governs what its code links. `eileen-shim`'s process tests start the binary
+  through `eileen-supervisor`, the one sanctioned way to start a child.
+- Stubs: every stub command returns a typed error (`CliError::NotBuilt` in each crate's `cli`
+  module, `RunError` in the guard and the stub harness, `eileen_cli::CommandError` around them),
+  so section 4b.2's reason for allowing `missing_errors_doc` holds; no stub uses `anyhow`. Each
+  binary parses with `try_parse` and returns its exit code, so clap never calls
+  `std::process::exit`.
+- Stubs: `eileen-skills` has the pure functions the `SkillEngine` port calls. Section 3.3.13
+  names the rest in prose without argument types (the evidence, the store index, templates,
+  ranked routes, provenance, faults and notes are WP7's to shape), so WP7 adds them rather than
+  WP0 fixing shapes it has not designed.
 
 - Workflows install the toolchain with `rustup toolchain install`, which reads
   `rust-toolchain.toml`, before `rustup show`, so a job does not depend on whether `rustup show`
@@ -614,6 +648,16 @@ build guard and of the supervisor's `qos` module was linted by compiling it here
 `cfg(windows)` and `cfg(not(windows))` swapped, under the workspace's lint table and
 `clippy.toml`; the supervisor's `cfg(unix)` process code uses Unix-only APIs and waits for
 `logic-linux`.
+
+`wp0/stubs` on 2026-10-25, the full stub workspace (40 crates), pull request #96's run
+40214464644 on 9e02dc5: the Linux and Windows jobs restored `main`'s caches as partial matches,
+since the lockfile changed, so the stubs and their new dependencies (the native ones included)
+built cold. `plan` 6 s, `hygiene` 21 s, `logic-linux` 97 s, `windows-clippy` 385 s,
+`windows-test` 540 s, `all-green` 2 s; `pr-meta` 21 s. Warm times need the caches this pull
+request's push to `main` saves, so `wp0/xtask` records them. The per-worktree target folder in
+this cloud session (Ubuntu 24.04, debug, after `check`, `clippy`, `nextest` and the doc tests of
+the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows cross-check and
+`cargo doc` beside it. The owner's PC's Windows figure waits for a build there.
 
 ## Outcome
 

@@ -1,8 +1,8 @@
 //! The `eileen` binary (BUILD.md sections 3.1, 3.3.15 and 3.5): the composition root that wires
-//! every component through its crate's `component(cfg)` and the real ports, and the command line
-//! that passes each subcommand to the crate that implements it. WP0's stub wires every component
-//! and every subcommand; until their packages land, each subcommand says it is not built yet.
-//! WP2 owns it from then on.
+//! the components through each crate's `component(cfg)`, and the command line that passes each
+//! subcommand to the crate that implements it. WP0's stub wires the components whose crates
+//! exist (harness or responder, audio, learning, shell) and every subcommand, each saying it is
+//! not built yet; WP2 adds the speech, sidecar and HUD clients and owns it from then on.
 //!
 //! # Owns
 //!
@@ -58,6 +58,9 @@
 #![forbid(unsafe_code)]
 
 pub mod wiring;
+
+use std::io::{self, Write as _};
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use eileen_config::cli::{AddMcpArgs, ConfigCommand};
@@ -215,47 +218,116 @@ pub enum AppsCommand {
     AddMcp(AddMcpArgs),
 }
 
+/// Why a command failed: the error of the crate that implements it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CommandError {
+    /// `eileen config` and `eileen apps add-mcp`.
+    #[error(transparent)]
+    Config(#[from] eileen_config::cli::CliError),
+    /// `eileen test --fleet`.
+    #[error(transparent)]
+    Fleet(#[from] eileen_fleet::cli::CliError),
+    /// `eileen bench brain`, `eileen claude` and `eileen doctor claude`.
+    #[error(transparent)]
+    Harness(#[from] eileen_harness::cli::CliError),
+    /// `eileen skills`, `facts`, `notes` and `apps proposals`.
+    #[error(transparent)]
+    Learn(#[from] eileen_learn::cli::CliError),
+    /// `eileen record`.
+    #[error(transparent)]
+    Record(#[from] eileen_record::cli::CliError),
+    /// `eileen replay`.
+    #[error(transparent)]
+    Replay(#[from] eileen_replay::cli::CliError),
+    /// The runtime's commands.
+    #[error(transparent)]
+    Runtime(#[from] eileen_runtime::cli::CliError),
+    /// `eileen scenario`.
+    #[error(transparent)]
+    Scenarios(#[from] eileen_scenarios::cli::CliError),
+}
+
+/// The `eileen` binary: parses its command line, runs it, and reports a failure on standard
+/// error. Returns the process's exit code, so no destructor or log flush is skipped.
+#[must_use]
+pub fn main() -> ExitCode {
+    match Cli::try_parse() {
+        Ok(cli) => match run(cli) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => match writeln!(io::stderr().lock(), "Error: {error}") {
+                Ok(()) | Err(_) => ExitCode::FAILURE,
+            },
+        },
+        Err(error) => {
+            let printed = error.print();
+            if error.use_stderr() || printed.is_err() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+    }
+}
+
 /// Passes the command to the crate that implements it.
-pub fn run(cli: Cli) -> anyhow::Result<()> {
+pub fn run(cli: Cli) -> Result<(), CommandError> {
     match cli.command {
         Command::Run(args) => {
             let components = wiring::components(&args);
-            eileen_runtime::cli::run(args, components)
+            eileen_runtime::cli::run(args, components).map_err(CommandError::from)
         }
-        Command::Say(args) => eileen_runtime::cli::say(args),
+        Command::Say(args) => eileen_runtime::cli::say(args).map_err(CommandError::from),
         Command::Bench { what: Some(BenchCommand::Brain(args)) } => {
-            eileen_harness::cli::bench_brain(args)
+            eileen_harness::cli::bench_brain(args).map_err(CommandError::from)
         }
-        Command::Bench { what: None } => eileen_runtime::cli::bench(),
-        Command::Status => eileen_runtime::cli::status(),
-        Command::Jobs { command } => eileen_runtime::cli::jobs(command),
-        Command::About => eileen_runtime::cli::about(),
-        Command::Setup => eileen_runtime::cli::setup(),
+        Command::Bench { what: None } => eileen_runtime::cli::bench().map_err(CommandError::from),
+        Command::Status => eileen_runtime::cli::status().map_err(CommandError::from),
+        Command::Jobs { command } => eileen_runtime::cli::jobs(command).map_err(CommandError::from),
+        Command::About => eileen_runtime::cli::about().map_err(CommandError::from),
+        Command::Setup => eileen_runtime::cli::setup().map_err(CommandError::from),
         Command::Doctor { check: Some(DoctorCommand::Claude) } => {
-            eileen_harness::cli::doctor_claude()
+            eileen_harness::cli::doctor_claude().map_err(CommandError::from)
         }
         Command::Doctor { check: Some(DoctorCommand::Runtime(check)) } => {
-            eileen_runtime::cli::doctor(Some(check))
+            eileen_runtime::cli::doctor(Some(check)).map_err(CommandError::from)
         }
-        Command::Doctor { check: None } => eileen_runtime::cli::doctor(None),
-        Command::Config { command } => eileen_config::cli::config(command),
-        Command::Skills { command } => eileen_learn::cli::skills(command),
-        Command::Facts { command } => eileen_learn::cli::facts(command),
-        Command::Apps { command: AppsCommand::Proposals } => eileen_learn::cli::apps_proposals(),
+        Command::Doctor { check: None } => {
+            eileen_runtime::cli::doctor(None).map_err(CommandError::from)
+        }
+        Command::Config { command } => {
+            eileen_config::cli::config(command).map_err(CommandError::from)
+        }
+        Command::Skills { command } => {
+            eileen_learn::cli::skills(command).map_err(CommandError::from)
+        }
+        Command::Facts { command } => eileen_learn::cli::facts(command).map_err(CommandError::from),
+        Command::Apps { command: AppsCommand::Proposals } => {
+            eileen_learn::cli::apps_proposals().map_err(CommandError::from)
+        }
         Command::Apps { command: AppsCommand::AddMcp(args) } => {
-            eileen_config::cli::apps_add_mcp(args)
+            eileen_config::cli::apps_add_mcp(args).map_err(CommandError::from)
         }
-        Command::Notes { command } => eileen_learn::cli::notes(command),
-        Command::Voice { args } => eileen_runtime::cli::voice(args),
-        Command::Scenario { command } => eileen_scenarios::cli::scenario(command),
-        Command::Test(args) => eileen_fleet::cli::test(args),
-        Command::Trace(args) => eileen_runtime::cli::trace(args),
-        Command::Logs => eileen_runtime::cli::logs(),
-        Command::Incident { command } => eileen_runtime::cli::incident(command),
-        Command::Record { command } => eileen_record::cli::record(command),
-        Command::Replay(args) => eileen_replay::cli::replay(args),
-        Command::Debug { command } => eileen_runtime::cli::debug(command),
-        Command::Claude { command } => eileen_harness::cli::claude(command),
-        Command::McpProbe => eileen_runtime::cli::mcp_probe(),
+        Command::Notes { command } => eileen_learn::cli::notes(command).map_err(CommandError::from),
+        Command::Voice { args } => eileen_runtime::cli::voice(args).map_err(CommandError::from),
+        Command::Scenario { command } => {
+            eileen_scenarios::cli::scenario(command).map_err(CommandError::from)
+        }
+        Command::Test(args) => eileen_fleet::cli::test(args).map_err(CommandError::from),
+        Command::Trace(args) => eileen_runtime::cli::trace(args).map_err(CommandError::from),
+        Command::Logs => eileen_runtime::cli::logs().map_err(CommandError::from),
+        Command::Incident { command } => {
+            eileen_runtime::cli::incident(command).map_err(CommandError::from)
+        }
+        Command::Record { command } => {
+            eileen_record::cli::record(command).map_err(CommandError::from)
+        }
+        Command::Replay(args) => eileen_replay::cli::replay(args).map_err(CommandError::from),
+        Command::Debug { command } => {
+            eileen_runtime::cli::debug(command).map_err(CommandError::from)
+        }
+        Command::Claude { command } => {
+            eileen_harness::cli::claude(command).map_err(CommandError::from)
+        }
+        Command::McpProbe => eileen_runtime::cli::mcp_probe().map_err(CommandError::from),
     }
 }

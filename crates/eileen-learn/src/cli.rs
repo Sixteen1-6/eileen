@@ -4,6 +4,17 @@
 
 use clap::{Args, Subcommand};
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP7 has not built it yet.
+    #[error("`{command}` is not built yet (WP7 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
 /// `eileen skills distill [--job ID] [--wait]`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct DistillArgs {
@@ -56,26 +67,26 @@ pub enum NotesCommand {
     Drop,
 }
 
-fn not_built(command: &str) -> anyhow::Result<()> {
-    anyhow::bail!("`{command}` is not built yet (WP7 builds it)")
+const fn not_built(command: &'static str) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command })
 }
 
 /// Runs `eileen skills`.
-pub fn skills(_command: Option<SkillsCommand>) -> anyhow::Result<()> {
+pub fn skills(_command: Option<SkillsCommand>) -> Result<(), CliError> {
     not_built("eileen skills")
 }
 
 /// Runs `eileen facts`.
-pub fn facts(_command: Option<FactsCommand>) -> anyhow::Result<()> {
+pub const fn facts(_command: Option<FactsCommand>) -> Result<(), CliError> {
     not_built("eileen facts")
 }
 
 /// Runs `eileen apps proposals`.
-pub fn apps_proposals() -> anyhow::Result<()> {
+pub const fn apps_proposals() -> Result<(), CliError> {
     not_built("eileen apps proposals")
 }
 
 /// Runs `eileen notes`.
-pub fn notes(_command: Option<NotesCommand>) -> anyhow::Result<()> {
+pub const fn notes(_command: Option<NotesCommand>) -> Result<(), CliError> {
     not_built("eileen notes")
 }

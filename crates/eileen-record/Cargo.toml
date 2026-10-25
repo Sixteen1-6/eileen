@@ -14,8 +14,8 @@ owns = "WP1"
 unsafe = "forbid"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

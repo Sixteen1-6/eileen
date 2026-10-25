@@ -3,6 +3,17 @@
 
 use clap::Subcommand;
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP1 has not built it yet.
+    #[error("`{command}` is not built yet (WP1 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
 /// The forms of `eileen record`.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum RecordCommand {
@@ -17,6 +28,6 @@ pub enum RecordCommand {
 }
 
 /// Runs `eileen record`.
-pub fn record(_command: Option<RecordCommand>) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen record` is not built yet (WP1 builds it)")
+pub const fn record(_command: Option<RecordCommand>) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen record" })
 }

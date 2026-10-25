@@ -20,8 +20,8 @@
 //!
 //! - Only this crate knows vendor CLI flags and protocols (section 3.1).
 //! - Every vendor process starts through `eileen_supervisor`, in a Job Object.
-//! - The stub builds only the Claude route, and its drivers answer `RouteUnavailable` until WP3
-//!   (unit tests in `tests`).
+//! - The stub builds only the Claude route, whose drivers answer `NotBuilt` until WP3 builds
+//!   them, and every other route is `RouteUnavailable` (unit tests in `tests`).
 //!
 //! # Boundaries
 //!
@@ -85,6 +85,12 @@ pub enum DriverError {
     /// The route is not built in this version.
     #[error("the {} route is not available", .route.display_name())]
     RouteUnavailable {
+        /// The route asked for.
+        route: Route,
+    },
+    /// The route is built in this version, and WP3 has not built its driver yet.
+    #[error("the {} route is not built yet (WP3 builds it)", .route.display_name())]
+    NotBuilt {
         /// The route asked for.
         route: Route,
     },

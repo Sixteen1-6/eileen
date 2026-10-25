@@ -19,11 +19,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
 eileen-audio.workspace = true
 eileen-config.workspace = true
-eileen-contracts.workspace = true
 eileen-fleet.workspace = true
 eileen-harness.workspace = true
 eileen-learn.workspace = true
@@ -31,6 +29,7 @@ eileen-record.workspace = true
 eileen-replay.workspace = true
 eileen-runtime.workspace = true
 eileen-scenarios.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 eileen-shell-win.workspace = true

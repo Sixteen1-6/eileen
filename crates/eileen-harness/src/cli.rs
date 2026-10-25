@@ -4,6 +4,17 @@
 
 use clap::{Args, Subcommand};
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP3 has not built it yet.
+    #[error("`{command}` is not built yet (WP3 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
 /// `eileen bench brain [--backend B]`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct BenchBrainArgs {
@@ -23,21 +34,21 @@ pub enum ClaudeCommand {
     UpdateWindow,
 }
 
-fn not_built(command: &str) -> anyhow::Result<()> {
-    anyhow::bail!("`{command}` is not built yet (WP3 builds it)")
+const fn not_built(command: &'static str) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command })
 }
 
 /// Runs `eileen bench brain`.
-pub fn bench_brain(_args: BenchBrainArgs) -> anyhow::Result<()> {
+pub fn bench_brain(_args: BenchBrainArgs) -> Result<(), CliError> {
     not_built("eileen bench brain")
 }
 
 /// Runs `eileen claude`.
-pub fn claude(_command: Option<ClaudeCommand>) -> anyhow::Result<()> {
+pub const fn claude(_command: Option<ClaudeCommand>) -> Result<(), CliError> {
     not_built("eileen claude")
 }
 
 /// Runs `eileen doctor claude`.
-pub fn doctor_claude() -> anyhow::Result<()> {
+pub const fn doctor_claude() -> Result<(), CliError> {
     not_built("eileen doctor claude")
 }

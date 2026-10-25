@@ -4,6 +4,17 @@
 
 use clap::{Args, Subcommand};
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP7 has not built it yet.
+    #[error("`{command}` is not built yet (WP7 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+}
+
 /// The forms of `eileen config`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum ConfigCommand {
@@ -31,11 +42,11 @@ pub struct AddMcpArgs {
 }
 
 /// Runs `eileen config`.
-pub fn config(_command: Option<ConfigCommand>) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen config` is not built yet (WP7 builds it)")
+pub const fn config(_command: Option<ConfigCommand>) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen config" })
 }
 
 /// Runs `eileen apps add-mcp`.
-pub fn apps_add_mcp(_args: AddMcpArgs) -> anyhow::Result<()> {
-    anyhow::bail!("`eileen apps add-mcp` is not built yet (WP7 builds it)")
+pub fn apps_add_mcp(_args: AddMcpArgs) -> Result<(), CliError> {
+    Err(CliError::NotBuilt { command: "eileen apps add-mcp" })
 }

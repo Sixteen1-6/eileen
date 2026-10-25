@@ -1,9 +1,5 @@
-//! The `eileen-apps` binary, the app adapters sidecar; its guidance is the crate doc of the
-//! library.
+//! The `eileen-apps` binary, the app adapters sidecar; its guidance is the library's crate doc.
 
-use clap::Parser as _;
-use eileen_apps::cli::{AppsCli, run};
-
-fn main() -> anyhow::Result<()> {
-    run(AppsCli::parse())
+fn main() -> std::process::ExitCode {
+    eileen_apps::cli::main()
 }

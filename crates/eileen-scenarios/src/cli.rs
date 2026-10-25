@@ -5,6 +5,20 @@
 use clap::{Args, Subcommand};
 use eileen_replay::cli::ScenarioReplayArgs;
 
+/// Why a command of this crate failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CliError {
+    /// The command exists, and WP2 has not built it yet.
+    #[error("`{command}` is not built yet (WP2 builds it)")]
+    NotBuilt {
+        /// The command as the user typed it, without its arguments.
+        command: &'static str,
+    },
+    /// `eileen scenario replay`, which `eileen-replay` implements, failed.
+    #[error(transparent)]
+    Replay(#[from] eileen_replay::cli::CliError),
+}
+
 /// One scenario, as `<area>/<id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct ScenarioRef {
@@ -51,9 +65,9 @@ pub enum ScenarioCommand {
 }
 
 /// Runs `eileen scenario`.
-pub fn scenario(command: Option<ScenarioCommand>) -> anyhow::Result<()> {
+pub fn scenario(command: Option<ScenarioCommand>) -> Result<(), CliError> {
     let Some(ScenarioCommand::Replay(args)) = command else {
-        anyhow::bail!("`eileen scenario` is not built yet (WP2 builds it)");
+        return Err(CliError::NotBuilt { command: "eileen scenario" });
     };
-    eileen_replay::cli::scenario_replay(args)
+    eileen_replay::cli::scenario_replay(args).map_err(CliError::from)
 }

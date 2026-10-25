@@ -58,6 +58,10 @@
 
 #![forbid(unsafe_code)]
 
+/// The trait of every component the runtime starts (section 3.3.15), named here so the
+/// composition root reaches it through the crate that runs the components.
+pub use eileen_contracts::ports::Component;
+
 pub mod cli;
 #[doc(hidden)]
 pub mod fuzz_entry;

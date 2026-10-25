@@ -14,7 +14,6 @@ owns = "WP7"
 unsafe = "forbid"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
 eileen-contracts.workspace = true
 thiserror.workspace = true

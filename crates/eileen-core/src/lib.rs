@@ -8,7 +8,7 @@
 //!   pool, memory admission, the permission gate, approvals, announcements, the settings flow
 //!   and the learning loop's decisions.
 //! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start.
-//! - The `shell_command` fuzz target's entry ([`fuzz_entry`]).
+//! - The `shell_command` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
 //!
@@ -109,6 +109,8 @@ pub struct Core {
     snapshot: CoreSnapshotV1,
 }
 
+// Written out rather than derived: until WP1's `step` reads them, this is what reads `config`
+// and `ports`, and dead-code analysis does not count a derived `Debug`.
 impl fmt::Debug for Core {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Core")

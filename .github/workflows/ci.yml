@@ -166,6 +166,20 @@ jobs:
         with:
           shared-key: win-clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Fetch the pinned sherpa-onnx archive and check its hash
+        # BUILD.md section 4.1: sherpa-onnx-sys would otherwise download it in its build script,
+        # unchecked and without retries. cargo xtask fetch-native takes over this step once it
+        # exists.
+        env:
+          ARCHIVE: sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-lib.tar.bz2
+          SHA256: b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7
+        run: |
+          dir="$(cygpath -u "$RUNNER_TEMP")/sherpa-onnx"
+          mkdir -p "$dir"
+          curl --fail --location --retry 5 --silent --show-error --output "$dir/$ARCHIVE" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$ARCHIVE"
+          echo "$SHA256  $dir/$ARCHIVE" | sha256sum --check --strict
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -185,6 +199,20 @@ jobs:
         with:
           shared-key: win-test
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Fetch the pinned sherpa-onnx archive and check its hash
+        # BUILD.md section 4.1: sherpa-onnx-sys would otherwise download it in its build script,
+        # unchecked and without retries. cargo xtask fetch-native takes over this step once it
+        # exists.
+        env:
+          ARCHIVE: sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-lib.tar.bz2
+          SHA256: b8eedf41bd6d3779218887b48367bb7a3ece5aaa7667f01f69ee823a12b0a9e7
+        run: |
+          dir="$(cygpath -u "$RUNNER_TEMP")/sherpa-onnx"
+          mkdir -p "$dir"
+          curl --fail --location --retry 5 --silent --show-error --output "$dir/$ARCHIVE" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$ARCHIVE"
+          echo "$SHA256  $dir/$ARCHIVE" | sha256sum --check --strict
+          echo "SHERPA_ONNX_ARCHIVE_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9.148

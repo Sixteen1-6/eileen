@@ -17,8 +17,8 @@
 //!
 //! # Invariants
 //!
-//! - The stub answers `initialize` within 100 ms (unit test
-//!   `tests::initialize_is_answered_within_100_ms`) and lists no tools (integration test
+//! - The stub binary answers `initialize` within 100 ms once it is up and lists no tools
+//!   (integration tests `it::process::the_binary_answers_initialize_within_100_ms` and
 //!   `it::process::the_binary_answers_initialize_and_lists_no_tools`).
 //! - A shim started inside a worker's Job Object with the session token is refused (WP2
 //!   acceptance 4); the dispatcher decides, not the shim.
@@ -57,40 +57,40 @@ use std::io::{self, BufRead, Write};
 use eileen_mcp::handshake;
 
 /// Answers each line the client writes on `input` with one line on `output`, until `input`
-/// ends. Blank lines are skipped.
-pub fn serve(input: impl BufRead, output: &mut impl Write) -> io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
+/// ends. Blank lines are skipped, and a line that is not UTF-8 is read lossily, so it gets a
+/// parse error back instead of ending the session.
+pub fn serve(mut input: impl BufRead, output: &mut impl Write) -> io::Result<()> {
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        if input.read_until(b'\n', &mut raw)? == 0 {
+            return Ok(());
+        }
+        let line = String::from_utf8_lossy(&raw);
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handshake::answer(&line) {
+        if let Some(reply) = handshake::answer(line.trim_end()) {
             writeln!(output, "{reply}")?;
             output.flush()?;
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use eileen_stdx::clock::{Clock as _, SystemClock};
-
     use super::serve;
 
     #[test]
-    fn initialize_is_answered_within_100_ms() {
+    fn initialize_gets_one_answer_line() {
         let request = concat!(
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"#,
             r#""2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.304"}}}"#,
             "\n",
         );
-        let clock = SystemClock::new();
         let mut output = Vec::new();
-        let start = clock.mono();
         serve(request.as_bytes(), &mut output).unwrap();
-        let elapsed_ms = clock.mono().0.saturating_sub(start.0) / 1_000_000;
-        assert!(elapsed_ms < 100, "answered in {elapsed_ms} ms");
+        assert_eq!(String::from_utf8(output.clone()).unwrap().lines().count(), 1, "one line");
         let reply: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(reply["id"], 1, "the request's id");
         assert_eq!(reply["result"]["protocolVersion"], "2025-11-25", "the protocol version");
@@ -102,5 +102,21 @@ mod tests {
         let mut output = Vec::new();
         serve(input.as_bytes(), &mut output).unwrap();
         assert!(output.is_empty(), "nothing written");
+    }
+
+    #[test]
+    fn a_line_that_is_not_utf8_gets_a_parse_error_and_the_session_goes_on() {
+        let mut input = b"{\"id\":1,\"method\":\xff}\n".to_vec();
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}\n");
+        let mut output = Vec::new();
+        serve(input.as_slice(), &mut output).unwrap();
+        let replies: Vec<serde_json::Value> = output
+            .split(|&b| b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 2, "both lines answered");
+        assert_eq!(replies[0]["error"]["code"], -32_700, "a parse error for the bad line");
+        assert_eq!(replies[1]["id"], 2, "the next request still answered");
     }
 }

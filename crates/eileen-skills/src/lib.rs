@@ -6,10 +6,11 @@
 //! # Owns
 //!
 //! - [`Engine`], the implementation of `eileen_contracts::ports::SkillEngine`.
-//! - The pure functions of section 3.3.13; the stub has those whose types exist already
+//! - The pure functions of section 3.3.13. The stub has those the `SkillEngine` port calls
 //!   ([`ladder::next_level`], [`verdict::success`], [`shadow::checks`], [`shadow::agree`],
-//!   [`routes::facts_line`]), and WP7 adds the rest (`template`, `lint`, `provenance`, `slots`,
-//!   `facts`, `sources`, `forget`, `ReplayMachine`).
+//!   [`routes::facts_line`]); WP7 adds the rest with the argument types it designs (`template`,
+//!   `lint`, `provenance`, `slots`, `facts`, `routes::rank`, `sources`, `forget`, `notes`,
+//!   `faults`, `ReplayMachine`).
 //! - The `skill_record` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
@@ -207,7 +208,8 @@ mod tests {
     use eileen_contracts::connectors::AppCapability;
     use eileen_contracts::ids::SkillId;
     use eileen_contracts::intent::SlotValues;
-    use eileen_contracts::learn::{ReplayRefusal, SkillRef, Transition};
+    use eileen_contracts::jobs::JobStatus;
+    use eileen_contracts::learn::{Outcome, ReplayRefusal, SkillRef, Transition, Verdict};
     use eileen_contracts::ports::SkillEngine;
 
     use super::Engine;
@@ -221,6 +223,17 @@ mod tests {
         let refused = Engine.start_replay(&skill(), &SlotValues::new());
         assert_eq!(refused.err(), Some(ReplayRefusal::UnknownSkill), "it knows no skill");
         assert_eq!(Engine.next_level(&skill().id, &[]), Transition::Stay, "no level changes");
+    }
+
+    #[test]
+    fn the_stub_engine_counts_nothing_as_a_success() {
+        let worked = Outcome {
+            status: JobStatus::Completed,
+            signals: Vec::new(),
+            verdict: Verdict::Success,
+            objective_check: true,
+        };
+        assert!(!Engine.success(&worked), "not even a job that says it worked");
     }
 
     #[test]

@@ -101,12 +101,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -727,9 +721,9 @@ checksum = "8072bec12b909b65aec01fa6518f387cfbf3427d4475409ad622898cd347522c"
 name = "eileen-apps"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "ort",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -783,11 +777,9 @@ dependencies = [
 name = "eileen-cli"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-audio",
  "eileen-config",
- "eileen-contracts",
  "eileen-fleet",
  "eileen-harness",
  "eileen-learn",
@@ -797,6 +789,7 @@ dependencies = [
  "eileen-scenarios",
  "eileen-shell-win",
  "eileen-supervisor",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -804,7 +797,6 @@ dependencies = [
 name = "eileen-config"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-contracts",
  "serde_json",
@@ -856,8 +848,8 @@ dependencies = [
 name = "eileen-desktop"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -879,31 +871,30 @@ dependencies = [
 name = "eileen-e2e"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "eileen-fleet"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "eileen-guard"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "minidumper",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "eileen-harness"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-contracts",
  "thiserror 2.0.21",
@@ -913,8 +904,8 @@ dependencies = [
 name = "eileen-hud"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -936,9 +927,9 @@ dependencies = [
 name = "eileen-learn"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-contracts",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -963,17 +954,17 @@ dependencies = [
 name = "eileen-record"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "eileen-replay"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-contracts",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -991,18 +982,18 @@ dependencies = [
 name = "eileen-runtime"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-contracts",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "eileen-scenarios"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "eileen-replay",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1059,10 +1050,10 @@ dependencies = [
 name = "eileen-speech"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "ort",
  "sherpa-onnx",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1078,7 +1069,7 @@ dependencies = [
 name = "eileen-stub-harness"
 version = "0.0.0"
 dependencies = [
- "anyhow",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -134,3 +134,13 @@ fn eileen_run_wires_every_component() {
     expected[0] = "responder";
     assert_eq!(names(&replay), expected, "the responder stands in for the harness");
 }
+
+#[test]
+fn the_fleet_run_times_exclude_each_other() {
+    for flags in
+        [["--once", "--nightly"], ["--once", "--arm-tonight"], ["--nightly", "--arm-tonight"]]
+    {
+        let parsed = Cli::try_parse_from(["eileen", "test", "--fleet", flags[0], flags[1]]);
+        assert!(parsed.is_err(), "{flags:?} together are refused");
+    }
+}

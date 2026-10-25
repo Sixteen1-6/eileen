@@ -1,17 +1,31 @@
 //! The `eileen` binary itself, started through the supervisor as every child of Eileen is.
 
+use std::time::Duration;
+
 use eileen_supervisor::{ChildSpec, spawn};
 use tokio::io::AsyncReadExt as _;
+use tokio::time::timeout;
 
-/// Runs `eileen` with `args` and returns its exit success, stdout and stderr.
+/// A guard against a hung binary, far above anything a working one needs.
+const HANG: Duration = Duration::from_secs(20);
+
+/// Runs `eileen` with `args` and returns its exit success, stdout and stderr. Both pipes are
+/// read at once, so a child that fills one while the test waits on the other cannot deadlock.
 async fn eileen(args: &[&str]) -> (bool, String, String) {
     let spec = ChildSpec::new("eileen", env!("CARGO_BIN_EXE_eileen")).args(args.iter().copied());
     let mut child = spawn(&spec).unwrap();
+    let mut stdout_pipe = child.take_stdout().unwrap();
+    let mut stderr_pipe = child.take_stderr().unwrap();
     let mut stdout = String::new();
     let mut stderr = String::new();
-    child.take_stdout().unwrap().read_to_string(&mut stdout).await.unwrap();
-    child.take_stderr().unwrap().read_to_string(&mut stderr).await.unwrap();
-    let status = child.wait().await.unwrap();
+    let reads = async {
+        tokio::try_join!(
+            stdout_pipe.read_to_string(&mut stdout),
+            stderr_pipe.read_to_string(&mut stderr)
+        )
+    };
+    timeout(HANG, reads).await.expect("eileen hung").unwrap();
+    let status = timeout(HANG, child.wait()).await.expect("eileen did not exit").unwrap();
     (status.success(), stdout, stderr)
 }
 

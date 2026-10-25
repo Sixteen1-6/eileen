@@ -51,6 +51,8 @@ highlight = "all"
 deny = [
   { crate = "openssl-sys", reason = "use rustls or SChannel" },
   { crate = "native-tls", reason = "use rustls" },
+  # D78 ignores three advisories against zip; this keeps them from covering zip anywhere else.
+  { crate = "zip", wrappers = ["sherpa-onnx-sys"], reason = "D78: only sherpa-onnx-sys's build script may bring in zip" },
 ]
 
 [sources]
