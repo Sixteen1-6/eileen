@@ -808,7 +808,7 @@ fn without_the_portal_hotkeys_and_input_are_unavailable() {
     assert_eq!(
         shell.register_hotkey("ctrl+alt+m", 1),
         Err(hotkey),
-        "a portal without GlobalShortcuts, as GNOME 46's, which a new holder asks"
+        "a portal without GlobalShortcuts, which a new holder asks; 24.04's lacks the registry too"
     );
 }
 

@@ -75,7 +75,9 @@
 //!   released then.
 //! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
 //!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
-//!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`.
+//!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`:
+//!   docs/LINUX.md section 3's fallback there, GNOME custom shortcuts that run `eileen ctl`, is
+//!   a follow-up.
 //! - GNOME keeps the trigger the user chose for an ID over a changed chord, and shows its
 //!   dialog only for shortcuts it has not stored.
 //! - The holder ends when the [`LinuxShell`] drops, which closes the session and the
