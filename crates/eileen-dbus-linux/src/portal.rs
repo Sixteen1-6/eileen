@@ -13,9 +13,10 @@
 //! 3. The caller makes the portal call with [`Request::token`] as its `handle_token` option.
 //! 4. [`Request::follow`] reads the reply: it follows the handle the portal names when that is
 //!    another (portals before 0.9 ignore the token), and gives the reply's sender.
-//! 5. [`Request::wait`] waits for the `Response` from that sender, within the caller's deadline:
-//!    the answer is a signal, which no method timeout bounds. Past the deadline it closes the
-//!    request, which dismisses a dialog the portal still shows.
+//! 5. [`Request::answer`] waits for the `Response` from that sender, within the caller's
+//!    deadline, and gives its code and results ([`Response`]); [`Request::wait`] gives the code
+//!    alone. The answer is a signal, which no method timeout bounds. Past the deadline either
+//!    closes the request, which dismisses a dialog the portal still shows.
 //! 6. A request that holds until it is closed, as an inhibition does, ends with
 //!    [`close_request`]: `Close`, answered within the connection's method timeout. It takes the
 //!    handle alone, so the holder need not keep the [`Request`] and its signal stream.
@@ -23,10 +24,11 @@
 //! Only a `Response` from the connection that answered the call counts. The match rule names the
 //! portal, which keeps other connections' broadcasts out on the bus, but the bus delivers a
 //! signal addressed to this connection whatever its rules say, and zbus cannot compare the
-//! rule's well-known name with a signal's unique sender: [`Request::wait`] checks each sender.
+//! rule's well-known name with a signal's unique sender: [`Request::answer`] checks each sender.
 //!
-//! The codes [`Request::wait`] gives are the documentation's: 0 success, 1 cancelled by the user,
-//! 2 ended another way. What 2 means (a backend's failure, a target not opened) is the caller's.
+//! The codes are the documentation's: 0 success, 1 cancelled by the user, 2 ended another way.
+//! What 2 means (a backend's failure, a target not opened) is the caller's, and so are the
+//! results, which each portal documents for its own calls.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
@@ -56,6 +58,15 @@ const RESPONSE: &str = "portal response";
 /// How long [`Request::close`] may spend sending `Close`: one write to the bus socket, which
 /// takes microseconds unless the bus has stopped reading.
 pub const CLOSE_GRACE: Duration = Duration::from_millis(100);
+
+/// A portal request's `Response`: its code, and what the portal answered with.
+#[derive(Debug, PartialEq)]
+pub struct Response {
+    /// 0 success, 1 cancelled by the user, 2 ended another way (the module's doc).
+    pub code: u32,
+    /// The results, by key, as the portal documents them for the call.
+    pub results: HashMap<String, OwnedValue>,
+}
 
 /// One portal request: its `handle_token`, its handle, and the subscription to its `Response`.
 #[derive(Debug)]
@@ -110,7 +121,7 @@ impl Request {
 
     /// Reads the portal call's `reply`: the handle it names, which the request follows when it
     /// is not the predicted one, and the unique name of the connection that sent it, which
-    /// [`Self::wait`] takes.
+    /// [`Self::answer`] and [`Self::wait`] take.
     pub async fn follow(&mut self, reply: &Message) -> Result<OwnedUniqueName, DbusError> {
         let header = reply.header();
         let sender = header.sender().map(|sender| sender.to_owned().into()).ok_or_else(|| {
@@ -126,15 +137,25 @@ impl Request {
         Ok(sender)
     }
 
-    /// The code of the first `Response` that `portal`, the connection that answered the call,
-    /// sends within `deadline`; a `Response` from anyone else is passed over. Past the deadline
-    /// it closes the request and answers [`DbusError::DeadlineExceeded`]. Without
-    /// [`Self::responses`] first, [`DbusError::Invalid`].
+    /// The code of the first `Response` that `portal` sends within `deadline`: [`Self::answer`]'s
+    /// code alone, for a call whose results the caller does not read.
     pub async fn wait(
         &mut self,
         portal: &UniqueName<'_>,
         deadline: Duration,
     ) -> Result<u32, DbusError> {
+        self.answer(portal, deadline).await.map(|response| response.code)
+    }
+
+    /// The first `Response` that `portal`, the connection that answered the call, sends within
+    /// `deadline`; a `Response` from anyone else is passed over. Past the deadline it closes the
+    /// request and answers [`DbusError::DeadlineExceeded`]. Without [`Self::responses`] first,
+    /// [`DbusError::Invalid`].
+    pub async fn answer(
+        &mut self,
+        portal: &UniqueName<'_>,
+        deadline: Duration,
+    ) -> Result<Response, DbusError> {
         let Some(responses) = self.responses.as_mut() else {
             return Err(DbusError::Invalid {
                 what: WHAT,
@@ -179,8 +200,11 @@ pub async fn close_request(
         .map_err(|error| DbusError::from_zbus(what, &error))
 }
 
-/// The code of the first `Response` in `responses` that `portal` sent.
-async fn response(responses: &mut Signals, portal: &UniqueName<'_>) -> Result<u32, DbusError> {
+/// The first `Response` in `responses` that `portal` sent.
+async fn response(
+    responses: &mut Signals,
+    portal: &UniqueName<'_>,
+) -> Result<Response, DbusError> {
     loop {
         let message = responses.next().await.ok_or_else(|| DbusError::Io {
             what: WHAT,
@@ -189,9 +213,9 @@ async fn response(responses: &mut Signals, portal: &UniqueName<'_>) -> Result<u3
         if message.header().sender() != Some(portal) {
             continue;
         }
-        let (code, _results): (u32, HashMap<String, OwnedValue>) =
+        let (code, results) =
             message.body().deserialize().map_err(|error| DbusError::from_zbus(RESPONSE, &error))?;
-        return Ok(code);
+        return Ok(Response { code, results });
     }
 }
 
