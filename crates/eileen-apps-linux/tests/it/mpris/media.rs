@@ -153,10 +153,18 @@ fn a_listing_that_stalls_passes_its_deadline_and_the_bridge_goes_on() {
     // far past the short deadline.
     fakes.serve_hung(&bus, HUNG[0], &Gate::default());
     let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let short = LinuxMedia::new_within(bridge.clone(), SHORT);
     assert_eq!(
-        LinuxMedia::new_within(bridge.clone(), SHORT).sessions(),
+        short.sessions(),
         Err(PlatformError::DeadlineExceeded { call: "media sessions" }),
         "the adapter's deadline, not a listing without the hung player a method timeout later"
+    );
+    // A control call reads the player's properties first, so the player holds it too: the
+    // short deadline ends it, long before the method timeout would end the player's read.
+    assert_eq!(
+        short.control(HUNG[0], &MediaAction::Status),
+        Err(PlatformError::DeadlineExceeded { call: "media control" }),
+        "the adapter's deadline, not the player's method timeout"
     );
     // Another adapter on the same bridge, with the default deadline.
     let media = LinuxMedia::new(bridge);
