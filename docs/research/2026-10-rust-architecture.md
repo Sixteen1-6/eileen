@@ -2,7 +2,7 @@
 
 Research pass, written 2026-10-20. Question: what should the Rust workspace that becomes Eileen's always-on core look like, which crate versions does it start from, what does "spotless" mean as concrete configuration, how does it talk to Python and Node adapters, and how do several engineer agents build it at once on the owner's 16 GB PC without freezing it?
 
-This is for contributors who will create the Rust workspace in this repository. It sits next to [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md) (harness drivers, the brain), [2026-10-app-hooks.md](2026-10-app-hooks.md) (deep app hooks, the `eileen-apps` process) and [2026-10-brain-latency.md](2026-10-brain-latency.md) (warm `claude -p` turns). It must satisfy [OWNER-DIRECTION.md](../OWNER-DIRECTION.md); where it proposes a change to [ARCHITECTURE.md](../ARCHITECTURE.md) or [DECISIONS.md](../DECISIONS.md), that change needs a decision record.
+This is for contributors who will create the Rust workspace in this repository. It sits next to [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md) (harness drivers, the brain), [2026-10-app-hooks.md](2026-10-app-hooks.md) (deep app hooks, the `eileen-apps` process) and [2026-10-brain-latency.md](2026-10-brain-latency.md) (warm `claude -p` turns). It must satisfy [OWNER-DIRECTION.md](../OWNER-DIRECTION.md); where it proposes a change to [ARCHITECTURE.md](../../ARCHITECTURE.md) or [DECISIONS.md](../DECISIONS.md), that change needs a decision record.
 
 ## How to read this
 

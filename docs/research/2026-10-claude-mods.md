@@ -377,4 +377,4 @@ Anthropic, read 2026-10-20: [mods overview](https://code.claude.com/docs/en/plug
 
 Secondary: search summaries of [local MCP servers on Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) and [build a desktop extension with MCPB](https://claude.com/docs/connectors/building/mcpb).
 
-Eileen: [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md), [2026-10-brain-latency.md](2026-10-brain-latency.md), [2026-10-learning-loop.md](2026-10-learning-loop.md), [2026-10-rust-architecture.md](2026-10-rust-architecture.md), [ARCHITECTURE.md](../ARCHITECTURE.md).
+Eileen: [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md), [2026-10-brain-latency.md](2026-10-brain-latency.md), [2026-10-learning-loop.md](2026-10-learning-loop.md), [2026-10-rust-architecture.md](2026-10-rust-architecture.md), [ARCHITECTURE.md](../../ARCHITECTURE.md).

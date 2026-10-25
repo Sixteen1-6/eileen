@@ -2,7 +2,7 @@
 
 Research pass, written 2026-10-20. Question: how do the best-engineered open-source projects lay out their code, write their guidance for people and coding agents, test long-running concurrent software, and split fast pull request checks from slow suites, and exactly what should Eileen copy?
 
-This is for whoever writes `docs/BUILD.md` and WP0, and for every engineer agent after that. It serves the 2026-10-20 owner direction entry "Engineered extremely well from the ground up" in [OWNER-DIRECTION.md](../OWNER-DIRECTION.md). It builds on [2026-10-rust-architecture.md](2026-10-rust-architecture.md), which already settled the workspace lints, clippy pedantic, cargo-deny, cargo-nextest, `cargo xtask ci`, the build guard and CI on `windows-latest`; this report does not repeat those. Where it proposes a change to [ARCHITECTURE.md](../ARCHITECTURE.md) or [DECISIONS.md](../DECISIONS.md), that change needs a decision record.
+This is for whoever writes `docs/BUILD.md` and WP0, and for every engineer agent after that. It serves the 2026-10-20 owner direction entry "Engineered extremely well from the ground up" in [OWNER-DIRECTION.md](../OWNER-DIRECTION.md). It builds on [2026-10-rust-architecture.md](2026-10-rust-architecture.md), which already settled the workspace lints, clippy pedantic, cargo-deny, cargo-nextest, `cargo xtask ci`, the build guard and CI on `windows-latest`; this report does not repeat those. Where it proposes a change to [ARCHITECTURE.md](../../ARCHITECTURE.md) or [DECISIONS.md](../DECISIONS.md), that change needs a decision record.
 
 ## How to read this
 
