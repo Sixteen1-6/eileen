@@ -460,7 +460,10 @@ async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimu
 async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     let bus = PrivateBus::start();
     let gate = Arc::new(Notify::new());
-    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
+    // A minimum above the thread's level, which rtkit refuses: the revert must ask for the
+    // minimum, or the thread stays real-time.
+    let limits = Limits { min_nice_level: NICE + 2, ..DEFAULTS };
+    let (fake, mut calls) = FakeRtkit::new(limits, Some(Gate::Realtime(Arc::clone(&gate))));
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = RealtimeKit::new(&bus.connect_within(SHORT).await);
     let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
@@ -476,8 +479,8 @@ async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     gate.notify_one();
     assert_eq!(
         calls.recv().await,
-        Some(Call::HighPriority(this_thread(), NICE)),
-        "the revert, which rtkit serves after the request it granted late"
+        Some(Call::HighPriority(this_thread(), NICE + 2)),
+        "the revert, to the minimum, which rtkit serves after the request it granted late"
     );
     assert_eq!(
         calls.recv().await,
