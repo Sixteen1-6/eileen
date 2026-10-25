@@ -10,8 +10,7 @@
 //!   the registry's apps and their processes, each object's name, role, states and interfaces
 //!   ([`Accessible`]), children, text, selection, box and automation id, and a bounded walk
 //!   ([`Walk`]); [`accessibility_bus`] with [`CALL_TIMEOUT`], and [`toolkit_accessibility`].
-//! - The tables that give AT-SPI's numbers and names a meaning: [`Role`] and its names,
-//!   [`State`], [`StateSet`] and [`Interfaces`].
+//! - Tables of AT-SPI's numbers and names: [`Role`], [`State`], [`StateSet`], [`Interfaces`].
 //!
 //! # Does not own
 //!
@@ -61,12 +60,13 @@
 //!   on or a screen reader runs; GTK apps always do. A listing without them means both are off.
 //! - `ChildCount` can be wrong, and `GetChildren` on a big table makes the app build every child:
 //!   such an object is read child by child by index, and only as far as the room goes.
-//! - libatspi waits up to 15 s on an app it first saw less than 15 s ago, and 800 ms only after;
-//!   [`CALL_TIMEOUT`] is 800 ms from the start, so a read just after an app starts can time out.
+//! - libatspi gives a new app 15 s, then 800 ms; [`CALL_TIMEOUT`] is 800 ms from an app's start.
 //! - Every call connects to the accessibility bus anew, and a listing reads one app after another:
 //!   each that does not answer spends a call timeout and leaves the front window unknown.
 //! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
+//! - Only Firefox's and Chromium's English names mark a private window, and a class is `frame` or
+//!   `dialog`: BUILD.md 2.6's and 2.10's private-window rules and 2.6's terminal tier need more.
 //! - A second at-spi-bus-launcher on the session's runtime folder and display takes the live bus.
 //! - nextest runs each test whose path holds `::desktop::` alone: no module here is so named.
 //!

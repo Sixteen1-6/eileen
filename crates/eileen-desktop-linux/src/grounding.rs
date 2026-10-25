@@ -43,10 +43,18 @@ impl Grounding for LinuxDesktop {
     /// the registry's order, the minimized ones only when asked for. A window's class is its
     /// role's name (`frame`, `dialog`), its frame `(0, 0, width, height)` in its own
     /// coordinates, its process the name of its app's executable, and `z_order` counts the
-    /// minimized windows too. No monitor, executable version, cloaking, private mode or page
-    /// host is known: `url_host` is `None`, which keeps BUILD.md section 2.12's URL rule closed.
-    /// The windows of an app that does not answer are left out, and while one is, no window is
+    /// minimized windows too. No monitor, executable version, cloaking or page host is known:
+    /// `url_host` is `None`, which keeps BUILD.md section 2.12's URL rule closed. The windows of
+    /// an app that does not answer are left out, and while one is, no window is
     /// `is_foreground`: the front window is unknown, as [`Self::foreground`] says.
+    ///
+    /// `is_private` is true for a window whose name ends as an English Firefox's or Chromium's
+    /// private window's does (`Private Browsing`, `(Incognito)`). False means only that no mark
+    /// was found, as for another browser's or language's private window, or one whose title
+    /// runs past the 1,000 characters kept. So BUILD.md section 2.10's rule that private
+    /// windows are never recorded, and every rule that reads `is_private`, hold on Linux for
+    /// those two marks alone. Nor does a class name a terminal, as section 2.6's terminal tier
+    /// reads it on Windows: here that needs the `terminal` role or the terminal's process.
     fn windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, PlatformError> {
         let mut windows = self.list(WINDOWS)?.windows;
         windows.retain(|window| include_minimized || !window.is_minimized);

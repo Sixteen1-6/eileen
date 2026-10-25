@@ -24,6 +24,11 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// What the kernel adds to `/proc/<pid>/exe`'s target once the file has been replaced, as a
 /// package update replaces it.
 const DELETED: &str = " (deleted)";
+/// How the browsers that mark a private window's name in English end it: Firefox on Linux, whose
+/// private window's title ends `Mozilla Firefox Private Browsing` (its `-brand-full-name`, then
+/// `Private Browsing`), and Chromium, whose accessible title, the one AT-SPI gives, adds
+/// `(Incognito)` for an incognito window (`IDS_ACCESSIBLE_INCOGNITO_WINDOW_TITLE_FORMAT`).
+const PRIVATE_MARKS: [&str; 2] = ["Private Browsing", "(Incognito)"];
 
 /// The id of the window `object` is: FNV-1a 64 over its bus name, a zero byte and its path, with
 /// the sign bit cleared, and 1 in place of 0. It is the same in every process and every run, for
@@ -140,8 +145,9 @@ async fn toplevel(atspi: &Atspi, object: &ObjectRef, pid: u32) -> Result<Topleve
 
 /// The windows `toplevels` lists, in its order, as `Grounding` gives them, each with what Eileen
 /// keeps of it. Each process is named once, by [`process_name`]; a window is Eileen's when its
-/// process is one of `own_processes`. The first window is the foreground one when it is active
-/// and `front_known`, which a listing that left an app unread is not.
+/// process is one of `own_processes`, and private when its name ends with one of
+/// [`PRIVATE_MARKS`]. The first window is the foreground one when it is active and
+/// `front_known`, which a listing that left an app unread is not.
 pub(crate) fn window_infos(
     toplevels: Vec<Toplevel>,
     front_known: bool,
@@ -150,6 +156,7 @@ pub(crate) fn window_infos(
     let mut names = BTreeMap::new();
     let listed = toplevels.into_iter().zip(0_u32..).map(|(Toplevel { window, rect, pid }, z)| {
         let process: &String = names.entry(pid).or_insert_with(|| process_name(pid));
+        let is_private = PRIVATE_MARKS.iter().any(|mark| window.name.get().ends_with(mark));
         let info = WindowInfo {
             hwnd: window_id(&window.object),
             pid,
@@ -164,7 +171,7 @@ pub(crate) fn window_infos(
             is_cloaked: false,
             is_foreground: front_known && z == 0 && window.states.contains(State::ACTIVE),
             is_eileen: own_processes.contains(process),
-            is_private: false,
+            is_private,
             url_host: None,
         };
         (info, KnownWindow { object: window.object, pid, process: process.clone() })

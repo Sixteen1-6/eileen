@@ -555,6 +555,29 @@ fn eileens_own_windows_are_marked_by_process() {
 }
 
 #[test]
+fn private_browser_windows_are_marked_by_their_names() {
+    let mut world = World::new();
+    world.app(|app| {
+        let names = [
+            ("/firefox", "Inbox \u{2014} Mozilla Firefox Private Browsing"),
+            ("/chromium", "New Tab - Chromium (Incognito)"),
+            ("/tips", "Private Browsing tips \u{2014} Mozilla Firefox"),
+            ("/guide", "(Incognito) explained - Chromium"),
+        ];
+        let mut nodes = vec![root(app, &names.map(|(path, _name)| path))];
+        nodes.extend(names.map(|(path, name)| (path, window(FRAME, name, &[], vec![]))));
+        nodes
+    });
+    let windows = world.desktop(settings()).windows(true).unwrap();
+    let private: Vec<_> = windows.iter().map(|w| w.is_private).collect();
+    assert_eq!(
+        private,
+        [true, true, false, false],
+        "the marks Firefox and Chromium end a private window's name with, and not a page's words"
+    );
+}
+
+#[test]
 fn what_wayland_withholds_is_unavailable() {
     let bus = PrivateBus::start();
     let desktop = LinuxDesktop::new(Bridge::on_private_bus(&bus).unwrap(), settings());
