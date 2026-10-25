@@ -1,7 +1,7 @@
-//! The whole stack: the file's line shape, a span trace in a line, the slow-span event, the
-//! reload handle, the stage stats, which daily files a process keeps, and `init` with soft
-//! assertions reporting, a `log` logger set before it and a scoped default held across it
-//! included.
+//! The whole stack: the file's line shape, a span trace in a line with personal logs off and
+//! on, the slow-span event, the reload handle, the stage stats, which daily files a process
+//! keeps, and `init` with soft assertions reporting, a `log` logger set before it and a scoped
+//! default held across it included.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -186,13 +186,16 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     assert_eq!(stats.get(names::ADDRESSEE).map(|s| s.count), Some(1), "stage stats");
 }
 
-#[test]
-fn a_logged_span_trace_shows_pii_fields_as_their_length() {
-    // An internal error logs the span trace it captured as a field (observability report
-    // section 2.4 rule 6), and the panic hook records one (section 4.5).
-    let dir = TempDir::new("span-trace");
+/// Logs a span trace through `build`, with `logging.include_personal` as given: captured inside
+/// a turn span with a `pii.transcript`, as an internal error logs one (observability report
+/// section 2.4 rule 6) and the panic hook records one (section 4.5). Returns the files' text
+/// and the line, after checking that the trace, as text and as `Debug`, names its turn and
+/// gives the transcript's length alone.
+fn log_a_span_trace(name: &str, include_personal: bool) -> (String, Value) {
+    let dir = TempDir::new(name);
     let mut config = TraceConfig::new(Some(dir.0.clone()));
     config.console = Console::Never;
+    config.include_personal = include_personal;
     let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
     tracing::subscriber::with_default(subscriber, || {
         let turn = tracing::info_span!(target: "eileen_core", names::TURN, turn_id = "t", "pii.transcript" = "my diary entry");
@@ -201,21 +204,42 @@ fn a_logged_span_trace_shows_pii_fields_as_their_length() {
         tracing::error!(target: "eileen_core", trace = %trace, debug = ?trace, "failed");
     });
     drop(guard);
-    let text: String = names_in(&dir.0)
-        .iter()
-        .map(|name| std::fs::read_to_string(dir.0.join(name)).unwrap())
-        .collect();
-    assert!(!text.contains("my diary entry"), "the transcript reached the file:\n{text}");
-    let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    let failed = lines.iter().find(|l| l["fields"]["message"] == "failed").unwrap();
+    let text = files_text(&dir.0);
+    let failed = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|l| l["fields"]["message"] == "failed")
+        .unwrap();
     let shown = failed["fields"]["trace"].as_str().unwrap();
     assert!(
-        shown.contains(r#"with turn_id="t" pii.transcript={"len":14}"#),
+        shown.contains(r#"with turn_id="t" pii.transcript={"len":14}"#)
+            && !shown.contains("my diary entry"),
         "the trace names its turn and gives the transcript's length alone:\n{shown}"
     );
     let debug = failed["fields"]["debug"].as_str().unwrap();
-    assert!(debug.contains(r#"turn_id=\"t\" pii.transcript={\"len\":14}"#), "Debug too:\n{debug}");
+    assert!(
+        debug.contains(r#"turn_id=\"t\" pii.transcript={\"len\":14}"#)
+            && !debug.contains("my diary entry"),
+        "Debug too:\n{debug}"
+    );
+    (text, failed)
+}
+
+#[test]
+fn a_logged_span_trace_shows_pii_fields_as_their_length() {
+    let (text, failed) = log_a_span_trace("span-trace", false);
+    assert!(!text.contains("my diary entry"), "the transcript reached the file:\n{text}");
     assert_eq!(failed["spans"][0]["pii.transcript"], serde_json::json!({ "len": 14 }), "span list");
+}
+
+#[test]
+fn a_logged_span_trace_shows_pii_lengths_with_personal_logs_on() {
+    // The user's opt-in keeps the files' own `pii.` fields, not the values in a trace's text.
+    let (_text, failed) = log_a_span_trace("span-trace-personal", true);
+    assert_eq!(
+        failed["spans"][0]["pii.transcript"], "my diary entry",
+        "the opt-in reached the span list"
+    );
 }
 
 #[test]

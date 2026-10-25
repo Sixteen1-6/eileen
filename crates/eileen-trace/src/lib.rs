@@ -32,8 +32,10 @@
 //! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
 //!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
 //!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`).
-//! - A span trace, text that any sink can carry, shows `pii.` fields as their length alone
-//!   (test `it::stack::a_logged_span_trace_shows_pii_fields_as_their_length`).
+//! - A span trace, text that any sink can carry, shows `pii.` fields as their length alone,
+//!   whatever `logging.include_personal` says (tests
+//!   `it::stack::a_logged_span_trace_shows_pii_fields_as_their_length` and
+//!   `it::stack::a_logged_span_trace_shows_pii_lengths_with_personal_logs_on`).
 //! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
 //!   exactly, and never today's (tests `it::stack::the_core_keeps_the_other_processes_files`
 //!   and `it::stack::the_core_prunes_its_own_files_by_the_date_in_their_names`).
