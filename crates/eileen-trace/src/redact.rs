@@ -16,12 +16,14 @@
 //! letter, which is why the console never colours what it writes.
 //!
 //! A card's digits come in groups joined by single spaces or hyphens. A run of groups that is
-//! not a card as a whole can still begin with one: the longest part of it that ends before a
-//! space and passes is taken, so a card read out with its CVV or expiry date after it
-//! (`4111 1111 1111 1111 12 27`) becomes `[redacted:card] 12 27`. A card never ends at a hyphen
-//! inside a run, since a hyphen joins the parts of one id: a `traceparent`'s parent id can be
-//! 16 digits that pass, and its flags follow after a hyphen. Each group of a run is tried as a
-//! start, so a number in front of a card never hides any of it.
+//! not a card as a whole can still begin with one: the longest part of it that passes and ends
+//! before a space, or before a hyphen once the part holds a separator of its own, is taken. So
+//! a card read out with its CVV or expiry date after it (`4111 1111 1111 1111 12 27`, or
+//! `4111-1111-1111-1111-123`) becomes `[redacted:card] 12 27` (`[redacted:card]-123`). A part
+//! that is a single group never ends at a hyphen, since a hyphen joins the parts of one id: a
+//! `traceparent`'s parent id can be 16 digits that pass, and its flags follow after a hyphen,
+//! so `4111111111111111-123` is not found. Each group of a run is tried as a start, so a number
+//! in front of a card never hides any of it.
 //!
 //! A literal is found in the forms a sink writes it: raw, JSON-escaped (a field value inside a
 //! log line), `Debug`-escaped (a `?value` field, or the console's strings), and `Debug` then
@@ -512,19 +514,21 @@ fn private_key(bytes: &[u8], i: usize) -> Option<Finding> {
 }
 
 /// The card number that starts at `i`: the run of digit groups from there, or else the longest
-/// part of it that ends before a space (a card read out with its CVV or expiry date after it).
-/// A part never ends at a hyphen, which joins the parts of one id.
+/// part of it that ends before a space, or before a hyphen once the part holds a separator of
+/// its own (a card read out with its CVV or expiry date after it). A part that is a single
+/// group never ends at a hyphen, which joins the parts of one id.
 fn card(bytes: &[u8], i: usize) -> Option<Finding> {
     let found = |end| Finding { kind: SecretKind::CardNumber, range: i..end };
     let mut digits = Vec::with_capacity(19);
     let mut end = i;
     let mut j = i;
-    let mut before_space = None;
+    let mut part = None;
+    let mut grouped = false;
     while let Some(&b) = bytes.get(j) {
         if b.is_ascii_digit() {
             if digits.len() == 19 {
-                // Longer than any card, so only a part before a space can be one.
-                return before_space.map(found);
+                // Longer than any card, so only a part of it can be one.
+                return part.map(found);
             }
             digits.push(b);
             j += 1;
@@ -533,9 +537,11 @@ fn card(bytes: &[u8], i: usize) -> Option<Finding> {
             && bytes.get(j + 1).is_some_and(u8::is_ascii_digit)
             && !digits.is_empty()
         {
-            if b == b' ' && card_digits(&digits) {
-                before_space = Some(end);
+            // One group and then a hyphen is how a `traceparent` writes its parent id and flags.
+            if (b == b' ' || grouped) && card_digits(&digits) {
+                part = Some(end);
             }
+            grouped = true;
             j += 1;
         } else {
             break;
@@ -544,7 +550,7 @@ fn card(bytes: &[u8], i: usize) -> Option<Finding> {
     // A word of its own at the end too: a run that a letter continues is part of an id.
     let continued = bytes.get(end).is_some_and(u8::is_ascii_alphanumeric);
     let whole = (!continued && card_digits(&digits)).then_some(end);
-    whole.or(before_space).map(found)
+    whole.or(part).map(found)
 }
 
 /// 15, 16 or 19 digits that pass the Luhn check.
@@ -703,6 +709,11 @@ mod tests {
             ("3782 822463 10005 1234", "[redacted:card] 1234"),
             // Its first 16 digits pass too, and the longest part that passes is the card.
             ("4111 1111 1111 1111 003 123", "[redacted:card] 123"),
+            // After a hyphen, once the card holds a separator of its own.
+            ("6400 8570 7213 7033-135", "[redacted:card]-135"),
+            ("4111-1111-1111-1111-123", "[redacted:card]-123"),
+            ("4111-1111-1111-1111-12/27", "[redacted:card]-12/27"),
+            ("3782-822463-10005-1234", "[redacted:card]-1234"),
         ] {
             assert_eq!(r.redact(text), redacted, "{text}");
         }
