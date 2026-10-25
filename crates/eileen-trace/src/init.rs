@@ -185,6 +185,12 @@ pub type TraceSubscriber = Layered<Vec<Box<dyn Layer<Registry> + Send + Sync>>, 
 /// a terminal that stopped reading waits until the terminal reads again.
 const FLUSH_WAIT: Duration = Duration::from_millis(1_200);
 
+// Longer than the guard's own 100 ms + 1 s, so a flush that finishes is never cut short.
+const _: () = assert!(
+    FLUSH_WAIT.as_millis() > 100 + 1_000,
+    "FLUSH_WAIT must outlast tracing-appender's own 1.1 s wait"
+);
+
 /// The thread that drops a writer's guard for [`WriterThread`]: 12 bytes, within Linux's 15.
 const FLUSH_THREAD: &str = "eileen-flush";
 
