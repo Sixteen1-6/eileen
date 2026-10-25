@@ -6,7 +6,7 @@ use std::time::Duration;
 use eileen_dbus_linux::testing::{
     PrivateBus, next_message, nothing_ready, ready_now, round_trip, serve,
 };
-use eileen_dbus_linux::{DbusError, bus_at_within, next};
+use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, bus_at_within, next};
 
 /// The fake service's name.
 const NAME: &str = "org.eileen.Test";
@@ -79,20 +79,28 @@ async fn a_bus_at_an_address_bounds_each_call_by_its_timeout() {
         DbusError::Unavailable { what: "the test bus" },
         "no bus listens there, and the error names what the caller said"
     );
-    let client =
-        bus_at_within(bus.address(), "the test bus", Duration::from_secs(5)).await.unwrap();
+    // Not METHOD_TIMEOUT, so the test tells the caller's timeout from the default.
+    let timeout = Duration::from_secs(2);
+    let client = bus_at_within(bus.address(), "the test bus", timeout).await.unwrap();
     let reply =
         client.call_method(Some(NAME), PATH, Some(INTERFACE), "Echo", &("hello",)).await.unwrap();
     let text: String = reply.body().deserialize().unwrap();
     assert_eq!(text, "echo: hello", "the connection reached the bus at the address");
     // Paused only now, as in the test above: from here the only timer is the method timeout.
     tokio::time::pause();
+    let started = tokio::time::Instant::now();
     let error =
         client.call_method(Some(NAME), PATH, Some(INTERFACE), "Hang", &()).await.unwrap_err();
     assert_eq!(
         DbusError::from_zbus("the hanging call", &error),
         DbusError::DeadlineExceeded { call: "the hanging call" },
-        "the timeout the caller gave bounds the call"
+        "the method timeout bounds the call"
+    );
+    // tokio rounds a timer up to its next millisecond, so the paused clock reads 2.001 s.
+    let waited = started.elapsed();
+    assert!(
+        waited >= timeout && waited < METHOD_TIMEOUT,
+        "the timeout the caller gave, not the default: {waited:?}"
     );
 }
 
