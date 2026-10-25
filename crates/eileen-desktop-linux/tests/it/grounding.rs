@@ -600,6 +600,16 @@ fn the_selection_is_the_first_range_of_the_focused_text() {
     assert_eq!(*calls.text_reads.lock().unwrap(), [], "and nothing read");
     let field = desktop.focused_element(Deadline::UIA).unwrap().unwrap();
     assert_eq!(field.automation_id, None, "an empty AccessibleId is none");
+    let empty = [
+        ((-1, -1), "no range, which GetText would read to the end of the text"),
+        ((5, 5), "an empty range, which a caret gives"),
+    ];
+    for (range, what) in empty {
+        let (mut world, calls) = focused_text("Dear Ada".to_owned(), vec![range]);
+        let selected = world.desktop(settings()).selection(false, Deadline::UIA).unwrap();
+        let read = calls.text_reads.lock().unwrap().clone();
+        assert_eq!((selected, read), (None, vec![]), "nothing selected and nothing read: {what}");
+    }
 }
 
 #[test]
