@@ -81,9 +81,9 @@ pub struct RealtimePolicy {
 
 impl Default for RealtimePolicy {
     /// Priority 10, below the audio server's threads: `PipeWire` 1.0.5's `pipewire.conf` asks its
-    /// `module-rt` for priority 88, which `RealtimeKit` caps at its maximum, 20 by default
-    /// [inferred: rtkit refuses any priority past it]. The fallback, nice -11, is the level that
-    /// file asks for.
+    /// `module-rt` for priority 88, and through `RealtimeKit` they get its maximum, 20 by default
+    /// [inferred: rtkit refuses any priority past it, so `module-rt` asks for no more]. The
+    /// fallback, nice -11, is the level that file asks for.
     fn default() -> Self {
         Self { priority: 10, fallback_nice: -11 }
     }
@@ -97,7 +97,7 @@ pub enum Promotion {
         /// Its real-time priority.
         priority: u32,
     },
-    /// `SCHED_OTHER` at a negative nice level, since real-time was refused.
+    /// `SCHED_OTHER` at a nice level, since real-time was refused or could not be asked for.
     HighPriority {
         /// Its nice level.
         nice: i32,

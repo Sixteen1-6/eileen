@@ -102,10 +102,11 @@ impl AudioEndpoints for LinuxAudioEndpoints {
         Err(PlatformError::Unavailable { what: LOOPBACK })
     }
 
-    /// Opting out is done already: `WirePlumber` ducks other streams only for a stream that
-    /// declares a `media.role`, and Eileen's declare none. Its role-based policy also ships
-    /// commented out in Ubuntu 24.04's `WirePlumber` 0.4.17 [inferred for 0.5 on 26.04]. Opting
-    /// back in is `Unavailable`: there is no ducking of the OS's to opt into.
+    /// Opting out needs nothing: `WirePlumber` ducks other streams only for a stream that
+    /// declares a `media.role`, and Eileen's declare none [inferred for `WirePlumber` 0.5, on
+    /// Ubuntu 26.04]. Ubuntu 24.04's `WirePlumber` 0.4.17 ships its role-based policy commented
+    /// out, so it ducks nothing at all. Opting back in is `Unavailable`: there is no ducking of
+    /// the OS's to opt into.
     fn set_communications_ducking(&self, opt_out: bool) -> Result<(), PlatformError> {
         if opt_out { Ok(()) } else { Err(PlatformError::Unavailable { what: DUCKING }) }
     }
