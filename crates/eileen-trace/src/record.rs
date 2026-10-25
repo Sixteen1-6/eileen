@@ -95,24 +95,40 @@ pub(crate) fn remote_parent(fields: &Map<String, Value>) -> Option<u64> {
         .map(|tp| tp.parent_id)
 }
 
-/// Runs every string value of `fields` (nested ones included) through `redactor`, before the
-/// map is serialized, so a literal secret is matched raw rather than JSON-escaped.
-pub(crate) fn redact_values(fields: &mut Map<String, Value>, redactor: &Redactor) {
+/// Runs every value of `fields` (nested ones included) through `redactor`, before the map is
+/// serialized, so a literal secret is matched raw rather than JSON-escaped. A string is
+/// redacted in place; a number whose digits hold a match (a card number, which the digits
+/// after a decimal point never are) becomes `0`, so a negative card or one written `.0` leaves
+/// valid JSON too. True when anything was replaced.
+pub(crate) fn redact_values(fields: &mut Map<String, Value>, redactor: &Redactor) -> bool {
+    let mut replaced = false;
     for value in fields.values_mut() {
-        redact_value(value, redactor);
+        replaced |= redact_value(value, redactor);
     }
+    replaced
 }
 
-fn redact_value(value: &mut Value, redactor: &Redactor) {
+fn redact_value(value: &mut Value, redactor: &Redactor) -> bool {
     match value {
-        Value::String(text) => {
-            if let Cow::Owned(clean) = redactor.redact(text) {
+        Value::String(text) => match redactor.redact(text) {
+            Cow::Owned(clean) => {
                 *text = clean;
+                true
             }
+            Cow::Borrowed(_) => false,
+        },
+        Value::Number(number) => {
+            let found = matches!(redactor.redact(&number.to_string()), Cow::Owned(_));
+            if found {
+                *value = Value::from(0);
+            }
+            found
         }
-        Value::Array(items) => items.iter_mut().for_each(|item| redact_value(item, redactor)),
+        Value::Array(items) => {
+            items.iter_mut().fold(false, |replaced, item| redact_value(item, redactor) | replaced)
+        }
         Value::Object(map) => redact_values(map, redactor),
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        Value::Null | Value::Bool(_) => false,
     }
 }
 
@@ -160,7 +176,40 @@ pub(crate) fn event_name(name: &'static str) -> Cow<'static, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{event_name, source_file};
+    use serde_json::json;
+
+    use super::{event_name, redact_values, source_file};
+    use crate::redact::Redactor;
+
+    #[test]
+    fn a_card_in_any_field_number_becomes_zero() {
+        let r = Redactor::new();
+        let mut fields = json!({
+            "amount": 4_111_111_111_111_111_u64,
+            "balance": -4_111_111_111_111_111_i64,
+            "ratio": 4_111_111_111_111_111.0_f64,
+            "nested": {"cards": [4_111_111_111_111_111_u64, 7]},
+            "count": 7,
+        });
+        assert!(redact_values(fields.as_object_mut().unwrap(), &r), "something was replaced");
+        assert_eq!(
+            fields,
+            json!({"amount": 0, "balance": 0, "ratio": 0, "nested": {"cards": [0, 7]}, "count": 7}),
+            "every card became 0, other numbers stay"
+        );
+        let mut clean = json!({"count": 7, "turn_id": "turn_1"});
+        assert!(!redact_values(clean.as_object_mut().unwrap(), &r), "nothing to replace");
+    }
+
+    #[test]
+    fn a_fraction_keeps_its_digits() {
+        let r = Redactor::new();
+        // The 16 digits after each point pass the card rule's Luhn check.
+        let mut fields = json!({"ratio": 6.0_f64 / 11.0, "score": 0.590_089_667_194_192_1_f64});
+        let before = fields.clone();
+        assert!(!redact_values(fields.as_object_mut().unwrap(), &r), "nothing to replace");
+        assert_eq!(fields, before, "both numbers stay as they are");
+    }
 
     #[test]
     fn workspace_and_standard_library_paths_stay() {
