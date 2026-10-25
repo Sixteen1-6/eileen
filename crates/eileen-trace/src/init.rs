@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -178,20 +179,45 @@ pub enum TraceError {
 /// The subscriber [`build`] makes.
 pub type TraceSubscriber = Layered<Vec<Box<dyn Layer<Registry> + Send + Sync>>, Registry>;
 
-/// A sink's writer thread as [`TraceGuard`] keeps it: dropping it flushes the thread, and
-/// `dropped` counts the lines a full buffer dropped.
+/// How long dropping a [`WriterThread`] waits for its thread to write what it holds.
+/// tracing-appender's guard waits at most 1.1 s (100 ms to queue the stop, 1 s for the thread to
+/// take it), except when the buffer is full: then it first prints that on stdout, and a print to
+/// a terminal that stopped reading waits until the terminal reads again.
+const FLUSH_WAIT: Duration = Duration::from_millis(1_200);
+
+/// The thread that drops a writer's guard for [`WriterThread`]: 12 bytes, within Linux's 15.
+const FLUSH_THREAD: &str = "eileen-flush";
+
+/// A sink's writer thread as [`TraceGuard`] keeps it: `dropped` counts the lines a full buffer
+/// dropped, and dropping it lets the thread write what it holds, waiting at most [`FLUSH_WAIT`].
 struct WriterThread {
-    _flush: WorkerGuard,
+    flush: Option<WorkerGuard>,
     dropped: ErrorCounter,
 }
 
 impl WriterThread {
     fn new(writer: &NonBlocking, flush: WorkerGuard) -> Self {
-        Self { _flush: flush, dropped: writer.error_counter() }
+        Self { flush: Some(flush), dropped: writer.error_counter() }
     }
 }
 
-/// Keeps tracing running: dropping it flushes the file and console writers.
+impl Drop for WriterThread {
+    fn drop(&mut self) {
+        let Some(flush) = self.flush.take() else { return };
+        // The guard goes to a thread of its own, so a guard stuck on stdout stays behind there.
+        let (done_tx, done) = sync_channel(1);
+        let flusher = eileen_stdx::thread::spawn_named(FLUSH_THREAD, move || {
+            drop(flush);
+            let _ignored = done_tx.send(());
+        });
+        if flusher.is_ok() {
+            let _ignored = done.recv_timeout(FLUSH_WAIT);
+        }
+    }
+}
+
+/// Keeps tracing running: dropping it lets the file and console writers write what they hold,
+/// waiting at most about 1.2 s for each, even for a terminal that stopped reading.
 pub struct TraceGuard {
     file: Option<WriterThread>,
     console: Option<WriterThread>,
@@ -464,11 +490,12 @@ mod tests {
     use std::io::Write;
     use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
     use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     use tracing::Dispatch;
 
-    use super::{CONSOLE_LINES, Console, ProcessKind, TraceConfig, build_on};
+    use super::{CONSOLE_LINES, Console, ProcessKind, TraceConfig, TraceGuard, build_on};
     use crate::pii::PiiKey;
 
     /// How long a test waits for a thread before calling it stuck: a writer thread takes a line
@@ -556,8 +583,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_console_drops_and_counts_lines_past_its_buffer() {
+    /// A stack whose console's terminal stopped at its first line, after which another thread
+    /// logged 10 lines more than the console's buffer holds.
+    struct StoppedConsole {
+        guard: TraceGuard,
+        /// Resumes the terminal.
+        resume: SyncSender<()>,
+        /// What the terminal got.
+        lines: Arc<Mutex<Vec<Vec<u8>>>>,
+        /// The thread that logged the lines, and whether it returned within the deadline.
+        filler: JoinHandle<()>,
+        returned: bool,
+    }
+
+    fn stopped_console() -> StoppedConsole {
         let (stopped_tx, stopped) = sync_channel(1);
         let (resume, resume_rx) = sync_channel(1);
         let lines = Arc::new(Mutex::new(Vec::new()));
@@ -582,14 +621,74 @@ mod tests {
         })
         .unwrap();
         let returned = returned_rx.recv_timeout(DEADLINE).is_ok();
-        resume.send(()).unwrap();
-        filler.join().unwrap();
-        let dropped = guard.console_dropped_lines();
+        StoppedConsole { guard, resume, lines, filler, returned }
+    }
+
+    #[test]
+    fn the_console_drops_and_counts_lines_past_its_buffer() {
+        let console = stopped_console();
+        console.resume.send(()).unwrap();
+        console.filler.join().unwrap();
+        let dropped = console.guard.console_dropped_lines();
         // Dropping the guard waits for the console's thread to write what its buffer held.
-        drop(guard);
-        let written = lines.lock().unwrap_or_else(PoisonError::into_inner).len();
-        assert!(returned, "a full console made a thread that logs wait");
+        drop(console.guard);
+        let written = console.lines.lock().unwrap_or_else(PoisonError::into_inner).len();
+        assert!(console.returned, "a full console made a thread that logs wait");
         assert_eq!(dropped, 10, "the lines past the buffer were dropped and counted");
         assert_eq!(written, 1 + CONSOLE_LINES, "the terminal got every line the buffer held");
+    }
+
+    /// Stdout's lock, held on a thread of its own until this is dropped, as a print to a
+    /// terminal that stopped reading holds it.
+    struct HeldStdout {
+        release: Option<SyncSender<()>>,
+        holder: Option<JoinHandle<()>>,
+    }
+
+    impl HeldStdout {
+        fn hold() -> Self {
+            let (held_tx, held) = sync_channel(1);
+            let (release, release_rx) = sync_channel::<()>(1);
+            let holder = eileen_stdx::thread::spawn_named("held-stdout", move || {
+                let _lock = std::io::stdout().lock();
+                held_tx.send(()).unwrap();
+                // Until the test releases it, or drops the sender as it unwinds.
+                let _ignored = release_rx.recv();
+            })
+            .unwrap();
+            held.recv().unwrap();
+            Self { release: Some(release), holder: Some(holder) }
+        }
+    }
+
+    impl Drop for HeldStdout {
+        fn drop(&mut self) {
+            drop(self.release.take());
+            if let Some(holder) = self.holder.take() {
+                let _ignored = holder.join();
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_the_guard_never_waits_for_a_stopped_terminal() {
+        let console = stopped_console();
+        // tracing-appender's guard finds the console's buffer full and prints that on stdout,
+        // whose lock this holds. nextest runs a test without libtest's output capture, so the
+        // print goes to the process's stdout, as it does in Eileen.
+        let stdout = HeldStdout::hold();
+        let guard = console.guard;
+        let (returned_tx, returned_rx) = sync_channel(1);
+        let dropper = eileen_stdx::thread::spawn_named("guard-dropper", move || {
+            drop(guard);
+            let _ignored = returned_tx.send(());
+        })
+        .unwrap();
+        let returned = returned_rx.recv_timeout(DEADLINE).is_ok();
+        drop(stdout);
+        console.resume.send(()).unwrap();
+        console.filler.join().unwrap();
+        dropper.join().unwrap();
+        assert!(returned, "dropping the guard waited for a stopped terminal");
     }
 }
