@@ -81,8 +81,8 @@ impl Ring {
     }
 
     fn push(&self, at_us: i64, mut line: String) {
-        // `Value::to_string` grows its buffer by doubling, to up to twice the line, and the
-        // bound counts allocations, so a line keeps only what it needs.
+        // `Value::to_string` grows its buffer by doubling, so a line can hold twice its length;
+        // the bound counts allocations, so each line keeps only what it needs.
         line.shrink_to_fit();
         let mut inner = self.lock();
         inner.line_bytes += line.capacity();
