@@ -119,7 +119,7 @@ fn the_inhibit_portal_takes_the_desktop_request() {
         let own = session_bus().await.unwrap();
         let folder = request_folder(&own);
         let request =
-            LinuxPowerRequest::keep_awake(Some(system), Some(own.clone()), WHY, PORTAL_BUDGET)
+            LinuxPowerRequest::keep_awake(Ok(system), Ok(own.clone()), WHY, PORTAL_BUDGET)
                 .await
                 .unwrap();
         assert!(request.holds_sleep(), "logind's lock holds: {request:?}");
