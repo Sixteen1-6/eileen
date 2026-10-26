@@ -2,7 +2,8 @@
 //! The mappings follow the D-Bus specification's error names
 //! ([the specification](https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names-error)),
 //! systemd's and dbus-daemon's activation errors, the portal's `org.freedesktop.portal.Error`
-//! names and logind's `NoSessionForPID`.
+//! names, logind's `NoSessionForPID` and the Secret Service's `org.freedesktop.Secret.Error` names
+//! ([its errors](https://specifications.freedesktop.org/secret-service/latest/errors.html)).
 
 use eileen_platform::PlatformError;
 
@@ -20,6 +21,15 @@ const PORTAL_NOT_ALLOWED: &str = "org.freedesktop.portal.Error.NotAllowed";
 /// logind's answer to a caller that has no session and no display session: there is no session
 /// to find.
 const LOGIND_NO_SESSION: &str = "org.freedesktop.login1.NoSessionForPID";
+
+/// The Secret Service's answer for a locked item or collection, which must be unlocked, with a
+/// prompt the user answers, before the action.
+const SECRET_IS_LOCKED: &str = "org.freedesktop.Secret.Error.IsLocked";
+
+/// The Secret Service's answer for an item or collection that does not exist (any more). Its
+/// third name, `NoSession`, keeps its name as [`DbusError::Invalid`]: the client sent a session
+/// the service does not know.
+const SECRET_NO_SUCH_OBJECT: &str = "org.freedesktop.Secret.Error.NoSuchObject";
 
 /// What went wrong talking to a D-Bus service. The variants are [`PlatformError`]'s field for
 /// field, and `From` maps each to its twin, so a trait implementation answers with `?`.
@@ -119,8 +129,11 @@ impl DbusError {
         if name == PORTAL_NOT_ALLOWED {
             return Self::Refused { what, reason: "not allowed" };
         }
-        if name == LOGIND_NO_SESSION {
+        if name == LOGIND_NO_SESSION || name == SECRET_NO_SUCH_OBJECT {
             return Self::NotFound { what };
+        }
+        if name == SECRET_IS_LOCKED {
+            return Self::Refused { what, reason: "locked" };
         }
         let short = name.rsplit('.').next().unwrap_or(name);
         match short {
@@ -267,6 +280,36 @@ mod tests {
                 detail: "org.example.Error.NoSessionForPID".to_owned()
             },
             "only logind's name: another service's NoSessionForPID keeps its name"
+        );
+    }
+
+    #[test]
+    fn the_secret_services_error_names_map_to_what_they_mean() {
+        assert_eq!(
+            of("org.freedesktop.Secret.Error.IsLocked"),
+            DbusError::Refused { what: "the call", reason: "locked" },
+            "the item or collection must be unlocked first"
+        );
+        assert_eq!(
+            of("org.freedesktop.Secret.Error.NoSuchObject"),
+            DbusError::NotFound { what: "the call" },
+            "no such item or collection"
+        );
+        assert_eq!(
+            of("org.freedesktop.Secret.Error.NoSession"),
+            DbusError::Invalid {
+                what: "the call",
+                detail: "org.freedesktop.Secret.Error.NoSession".to_owned()
+            },
+            "a session the service does not know keeps its name"
+        );
+        assert_eq!(
+            of("org.example.Error.IsLocked"),
+            DbusError::Invalid {
+                what: "the call",
+                detail: "org.example.Error.IsLocked".to_owned()
+            },
+            "only the Secret Service's name: another service's IsLocked keeps its name"
         );
     }
 

@@ -21,6 +21,7 @@ eileen-dbus-linux.workspace = true
 eileen-platform.workspace = true
 eileen-stdx.workspace = true
 rustix.workspace = true
+secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 zbus.workspace = true

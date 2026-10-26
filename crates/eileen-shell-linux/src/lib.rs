@@ -1,6 +1,6 @@
 //! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
 //! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
-//! memory sample (2.5), `ShellHost`'s toasts, session calls, shortcuts and tray, and power facts.
+//! memory sample (2.5), power, secrets and `ShellHost`'s toasts, session calls, shortcuts and tray.
 //!
 //! # Owns
 //!
@@ -12,12 +12,12 @@
 //! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
 //!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
 //!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
-//! - `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`, and
-//!   the trait's clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state over
-//!   logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
-//!   ([`Notifier`], [`NotificationEvents`]), global shortcuts from the `GlobalShortcuts` portal
-//!   ([`ShortcutsSession`], [`ShortcutEvents`], [`trigger_of_chord`]) and the tray's item and
-//!   menu ([`TraySettings`]).
+//! - `ShellHost` for [`LinuxShell`] and `SecretStore` for [`LinuxSecretStore`], whose D-Bus calls
+//!   run on `eileen-dbus-linux`'s `Bridge`, and their clients: the XDG autostart entry
+//!   ([`set_run_at_sign_in`]), the lock state over logind ([`SessionLock`]), keeping the session
+//!   awake ([`LinuxPowerRequest`]), toasts ([`Notifier`], [`NotificationEvents`]), global shortcuts
+//!   from the `GlobalShortcuts` portal ([`ShortcutsSession`], [`ShortcutEvents`],
+//!   [`trigger_of_chord`]), the tray's item and menu ([`TraySettings`]) and the Secret Service.
 //!
 //! # Does not own
 //!
@@ -35,9 +35,9 @@
 //! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, asks the
 //!   session to lock only in [`SessionLock::lock_workstation`], keeps it awake no longer than a
 //!   [`LinuxPowerRequest`] and the connections it was given, shows a toast only in
-//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`] and shows the tray
-//!   only from `set_tray`. It starts no process itself (a call may let the bus start a service)
-//!   and never needs elevation.
+//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`], shows the tray only
+//!   from `set_tray` and changes secrets only in `LinuxSecretStore`'s `set` and `delete`. It starts
+//!   no process itself (a call may let the bus start a service) and never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -49,7 +49,7 @@
 //!
 //! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
-//!   `tokio` (the portal's deadline, the holder tasks), `rustix` (`statvfs`) and `thiserror`.
+//!   `tokio` (deadlines, the holder tasks), `rustix` (`statvfs`), `secrecy` and `thiserror`.
 //!   Only the composition root on Linux may depend on it. Wire types: none of its own.
 //!
 //! # Testing
@@ -59,9 +59,9 @@
 //!   CPU lists, the busy share, the MB conversion, the `os-release` quotes and the hotkey chords;
 //!   the fuzz targets of `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in
 //!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
-//!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (feature
-//!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] on them
-//!   over `Bridge::on_private_bus` and on the Linux desktop lane's real buses (`tests/session/`).
+//!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (`private-bus`,
+//!   tests only), their deadlines in tokio's paused time; [`LinuxShell`] and [`LinuxSecretStore`]
+//!   on them over `Bridge::on_private_bus`, the first also on real buses (`tests/session/`).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
@@ -102,6 +102,8 @@ mod power;
 mod pressure;
 mod probe;
 mod root;
+mod secret_store;
+mod secrets;
 mod session_lock;
 mod shortcuts;
 mod tray;
@@ -123,6 +125,7 @@ pub use notifications::{
 pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
+pub use secret_store::{LinuxSecretStore, SecretSettings};
 pub use session_lock::SessionLock;
 pub use shortcuts::{
     BoundShortcut, Shortcut, ShortcutEvent, ShortcutEvents, ShortcutsSession, trigger_of_chord,
