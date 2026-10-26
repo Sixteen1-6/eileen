@@ -31,6 +31,7 @@ eileen-core = { path = "crates/eileen-core" }
 eileen-crash = { path = "crates/eileen-crash" }
 eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
 eileen-desktop = { path = "crates/eileen-desktop" }
+eileen-desktop-linux = { path = "crates/eileen-desktop-linux" }
 eileen-desktop-win = { path = "crates/eileen-desktop-win" }
 eileen-dictation = { path = "crates/eileen-dictation" }
 eileen-e2e = { path = "crates/eileen-e2e" }

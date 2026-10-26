@@ -865,6 +865,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eileen-desktop-linux"
+version = "0.0.0"
+dependencies = [
+ "eileen-contracts",
+ "eileen-dbus-linux",
+ "eileen-platform",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eileen-desktop-win"
 version = "0.0.0"
 dependencies = [
