@@ -33,12 +33,25 @@ const MENU: &str = "com.canonical.dbusmenu";
 /// The name of the error an unknown menu id is answered with.
 pub(super) const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
 
+/// The interface every object's properties are read through.
+const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
+
 /// An icon as pixels, `a(iiay)`.
 type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
 /// A node as `GetLayout` sends it, `(ia{sv}av)`.
 type Layout = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
-/// One registration: the service the item gave, and the unique name it came from.
-pub(super) type Registration = (String, String);
+
+/// One registration, as the fake watcher saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Registration {
+    /// The service the item gave.
+    pub(super) service: String,
+    /// The unique name it came from.
+    pub(super) sender: String,
+    /// The item's icon, read while the item waited for the answer, as a host's first read
+    /// would be; `None` when it could not be read.
+    pub(super) icon: Option<String>,
+}
 
 /// A watcher that reports each `RegisterStatusNotifierItem`.
 #[derive(Debug, Clone)]
@@ -50,10 +63,21 @@ impl FakeWatcher {
         &self,
         service: &str,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) {
         let sender = header.sender().unwrap().to_string();
-        let _ignored = self.0.send((service.to_owned(), sender)).await;
+        let icon = icon_of(conn, service).await;
+        let registration = Registration { service: service.to_owned(), sender, icon };
+        let _ignored = self.0.send(registration).await;
     }
+}
+
+/// The icon the item `service` shows now; `None` when it cannot be read.
+async fn icon_of(conn: &zbus::Connection, service: &str) -> Option<String> {
+    let asked = (ITEM, "IconName");
+    let get = conn.call_method(Some(service), ITEM_PATH, Some(PROPERTIES), "Get", &asked);
+    let icon: OwnedValue = get.await.ok()?.body().deserialize().ok()?;
+    String::try_from(icon).ok()
 }
 
 /// A node of the menu's layout as the host reads it.
@@ -171,7 +195,7 @@ impl Rig {
         interface: &str,
         name: &str,
     ) -> OwnedValue {
-        let properties = Some("org.freedesktop.DBus.Properties");
+        let properties = Some(PROPERTIES);
         let asked = (interface, name);
         let get = self.host().call_method(Some(item), path, properties, "Get", &asked);
         let reply = self.runtime.block_on(get).unwrap();
@@ -272,7 +296,7 @@ fn the_item_shows_the_state_and_registers_with_the_watcher() {
     let mut registrations = rig.watcher();
     let (shell, _events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, sender) = rig.registered(&mut registrations);
+    let Registration { service: item, sender, .. } = rig.registered(&mut registrations);
     let prefix = format!("org.kde.StatusNotifierItem-{}-", std::process::id());
     let n = item.strip_prefix(&prefix).unwrap_or_else(|| panic!("the item's name: {item}"));
     assert!(n.parse::<u32>().is_ok(), "a number after the process's ID: {item}");
@@ -318,7 +342,7 @@ fn a_clicked_item_reaches_the_sink_by_its_id_and_a_stale_one_is_an_id_error() {
     let mut registrations = rig.watcher();
     let (shell, mut events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
     let (_revision, root) = rig.layout(&item, 0, -1);
     let [mute, quit] = [root.children[0].id, root.children[1].id];
     rig.menu_event(&item, quit, "clicked").unwrap();
@@ -348,7 +372,7 @@ fn the_menu_answers_for_its_items_and_never_asks_to_update() {
     let mut registrations = rig.watcher();
     let (shell, _events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
     let (_revision, root) = rig.layout(&item, 0, -1);
     let [mute, quit] = [root.children[0].id, root.children[1].id];
     let label = vec!["label".to_owned()];
@@ -385,7 +409,7 @@ fn a_menu_change_signals_a_new_revision() {
     let mut registrations = rig.watcher();
     let (shell, _events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
     let (before, _root) = rig.layout(&item, 0, -1);
     let mut updates = rig.signals(&item, MENU_PATH, MENU, "LayoutUpdated");
     let menu = vec![tray_item("mute", "Unmute", Some(true)), tray_item("about", "About", None)];
@@ -413,7 +437,7 @@ fn a_new_icon_or_tooltip_is_signalled() {
     let mut registrations = rig.watcher();
     let (shell, _events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
     let mut icons_now = rig.signals(&item, ITEM_PATH, ITEM, "NewIcon");
     let mut tooltips = rig.signals(&item, ITEM_PATH, ITEM, "NewToolTip");
     shell.set_tray(TrayState { muted: true, ..state() }).unwrap();
@@ -435,10 +459,11 @@ fn a_watcher_that_restarts_registers_the_item_again() {
     let mut first = rig.watcher();
     let (shell, _events) = rig.shell();
     shell.set_tray(state()).unwrap();
-    let (item, sender) = rig.registered(&mut first);
+    let Registration { service: item, sender, .. } = rig.registered(&mut first);
     rig.stop_watchers();
     let mut second = rig.watcher();
-    assert_eq!(rig.registered(&mut second), (item, sender), "the same item, registered again");
+    let again = rig.registered(&mut second);
+    assert_eq!((again.service, again.sender), (item, sender), "the same item, registered again");
     assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it");
 }
 
@@ -454,7 +479,7 @@ fn the_item_leaves_the_bus_when_the_shell_drops() {
     let bridge = Bridge::on_private_bus(&rig.bus).unwrap();
     let (shell, _events) = shell_on(bridge.clone(), settings(DEFAULT_DEADLINE, None));
     shell.set_tray(state()).unwrap();
-    let (item, sender) = rig.registered(&mut registrations);
+    let Registration { service: item, sender, .. } = rig.registered(&mut registrations);
     let mut changes = rig.runtime.block_on(owner_changes(rig.host(), Names::Name(&item))).unwrap();
     let owner = rig.runtime.block_on(name_owner(rig.host(), &item)).unwrap();
     assert_eq!(owner.map(|owner| owner.to_string()), Some(sender), "on the bus");

@@ -1,8 +1,8 @@
 //! `ShellHost` on Linux: `LinuxShell` through a bridge on the private bus, against the fake
 //! logind, logind session, GNOME session manager, Inhibit portal, notification server and tray
 //! watcher of the clients' own tests, and a GNOME session manager that reports what it is asked;
-//! a silent bus stands in for a bus that has hung. The test's thread calls the shell as the core does,
-//! blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
+//! a silent bus stands in for a bus that has hung. The test's thread calls the shell as the core
+//! does, blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
 
 use std::fs;
 use std::io::Read;
@@ -29,7 +29,7 @@ use crate::keep_awake::{
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
-use crate::tray::{ITEM, ITEM_PATH, Rig, state, tray_item};
+use crate::tray::{ITEM, ITEM_PATH, Registration, Rig, state, tray_item};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
 /// its length, and a short one keeps the test short. Not for `keep_awake`, whose connects have
@@ -568,7 +568,8 @@ fn set_tray_shows_the_mute_state_and_menu_and_reports_choices() {
     // No D-Bus string may hold U+0000, and the bus would drop the tray's connection for one.
     let muted = TrayState { muted: true, tooltip: "Mu\0ted".to_owned(), ..state() };
     assert_eq!(shell.set_tray(muted), Ok(()), "a watcher has the item");
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, icon: first, .. } = rig.registered(&mut registrations);
+    assert_eq!(first.as_deref(), Some("eileen-muted"), "shown before the watcher heard of it");
     let icon = || String::try_from(rig.property(&item, ITEM_PATH, ITEM, "IconName"));
     assert_eq!(icon().unwrap(), "eileen-muted", "the settings' muted icon");
     let tooltip = rig.property(&item, ITEM_PATH, ITEM, "ToolTip");
@@ -596,7 +597,7 @@ fn set_tray_without_a_watcher_is_unavailable_and_registers_once_one_appears() {
         "no watcher, as on GNOME without its AppIndicator extension"
     );
     let mut registrations = rig.watcher();
-    let (item, _sender) = rig.registered(&mut registrations);
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
     assert_eq!(shell.set_tray(tray), Ok(()), "registered once the watcher came");
     let (_revision, root) = rig.layout(&item, 0, -1);
     assert_eq!(root.labels(), ["Quit"], "what the first call showed, kept");

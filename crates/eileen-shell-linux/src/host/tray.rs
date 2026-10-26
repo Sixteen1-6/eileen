@@ -36,8 +36,8 @@ pub(super) struct Holder {
     pub(super) sink: Option<EventSink>,
 }
 
-/// What `set_tray` does on the bridge's thread: starts `holder`, when the call brings one,
-/// then asks the holder on `asks` to show `state`. `Ok` once a watcher has the item, and
+/// What `set_tray` does on the bridge's thread: starts `holder` on `state`, when the call brings
+/// one, or else asks the holder on `asks` to show `state`. `Ok` once a watcher has the item, and
 /// `Unavailable` while none does, the item staying on the bus to register once one comes.
 pub(super) async fn show(
     buses: Buses,
@@ -45,13 +45,14 @@ pub(super) async fn show(
     holder: Option<Holder>,
     state: TrayState,
 ) -> Result<(), PlatformError> {
-    if let Some(holder) = holder {
-        start(&buses, holder).await?;
-    }
-    drop(buses);
     let gone = || PlatformError::Io { what: TRAY, detail: HOLDER_GONE.to_owned() };
     let (shown, answer) = oneshot::channel();
-    asks.send(Ask { state, shown }).await.map_err(|_closed| gone())?;
+    let ask = Ask { state, shown };
+    match holder {
+        Some(holder) => start(&buses, holder, ask).await?,
+        None => asks.send(ask).await.map_err(|_closed| gone())?,
+    }
+    drop(buses);
     match answer.await {
         Ok(true) => Ok(()),
         Ok(false) => Err(PlatformError::Unavailable { what: TRAY }),
@@ -59,18 +60,21 @@ pub(super) async fn show(
     }
 }
 
-/// Serves the item on a session connection of the holder's own, follows the watcher's owner
-/// from before it asks who that is, and leaves the rest to the holder's task. Cut short, it
-/// drops the connection, and with it everything it served.
-async fn start(buses: &Buses, holder: Holder) -> Result<(), DbusError> {
+/// Serves the item on a session connection of the holder's own, shows `first`'s state, follows
+/// the watcher's owner from before it asks who that is, and leaves the rest, `first`'s answer
+/// among it, to the holder's task. Cut short, it drops the connection, and with it everything it
+/// served.
+async fn start(buses: &Buses, holder: Holder, first: Ask) -> Result<(), DbusError> {
     let Holder { asks, id, settings, sink } = holder;
     let conn = buses.unshared_session().await?;
     let (choose, choices) = mpsc::channel(CHOICES);
     let item = StatusNotifier::serve(&conn, &id, settings, choose).await?;
+    // Before any watcher hears of the item, so that a host's first read shows the state.
+    item.show(&first.state).await;
     let watchers = owner_changes(&conn, Names::Name(WATCHER)).await?;
     let watched = name_owner(&conn, WATCHER).await?.is_some();
     let held = Held { item, watchers, asks, choices, sink };
-    drop(tokio::task::spawn_local(held.run(watched)));
+    drop(tokio::task::spawn_local(held.run(watched, first.shown)));
     Ok(())
 }
 
@@ -84,12 +88,14 @@ struct Held {
 }
 
 impl Held {
-    /// Registers the item when `watched`, a watcher being there, and once again for each new
-    /// owner of the watcher's name; shows each ask's state, answering whether a watcher has
-    /// the item; passes each choice to the sink. It ends when the shell drops its end of the
-    /// asks or the connection closes, and the connection, its last holder, closes with it.
-    async fn run(mut self, watched: bool) {
+    /// Registers the item when `watched`, a watcher being there, and answers `first`, the
+    /// starting call, whether the watcher has it; then registers once again for each new owner
+    /// of the watcher's name, shows each ask's state, answering whether a watcher has the item,
+    /// and passes each choice to the sink. It ends when the shell drops its end of the asks or
+    /// the connection closes, and the connection, its last holder, closes with it.
+    async fn run(mut self, watched: bool, first: oneshot::Sender<bool>) {
         let mut registered = watched && self.item.register().await.is_ok();
+        let _ignored = first.send(registered);
         loop {
             tokio::select! {
                 ask = self.asks.recv() => {

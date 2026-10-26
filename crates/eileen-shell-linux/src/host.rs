@@ -51,13 +51,15 @@
 //! # The tray
 //!
 //! The first `set_tray` starts a holder task on the bridge's thread, which keeps the item and its
-//! menu on a session connection of its own ([`Buses::unshared_session`]) and registers it with
-//! the watcher whenever the watcher's name has an owner: at once, and again each time the name
-//! gets a new one, as when the watcher restarts. Each `set_tray` then asks the holder, within the
-//! settings' deadline, to show its state: the mute state picks [`TraySettings`]' icon, the
-//! tooltip fills the item's, and the menu becomes the dbusmenu items. The answer is `Ok` while a
-//! watcher has the item, and `Unavailable` while none does, as on GNOME without its `AppIndicator`
-//! extension; the item stays on the bus and registers once a watcher comes. A menu item the user
+//! menu on a session connection of its own ([`Buses::unshared_session`]). The holder shows that
+//! call's state before it registers the item with the watcher, so that a host's first read has
+//! it, and registers whenever the watcher's name has an owner: at once, and again each time the
+//! name gets a new one, as when the watcher restarts. Each later `set_tray` asks the holder to
+//! show its state, and every call waits for the holder's answer within the settings' deadline.
+//! The mute state picks [`TraySettings`]' icon, the tooltip fills the item's, and the menu
+//! becomes the dbusmenu items. The answer is `Ok` while a watcher has the item, and `Unavailable`
+//! while none does, as on GNOME without its `AppIndicator` extension; the item stays on the bus
+//! and registers once a watcher comes. A menu item the user
 //! chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
 //! with its `TrayItem::id`. When the shell drops, the holder ends and drops its connection, so
 //! the item leaves the bus and the watcher forgets it. A holder whose connection closed has ended
