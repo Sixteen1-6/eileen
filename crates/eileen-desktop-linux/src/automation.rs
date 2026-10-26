@@ -79,7 +79,8 @@ impl Automation for LinuxDesktop {
     }
 
     /// Runs the element's action that invokes it: among its first 16 actions, the first named
-    /// as [`INVOKING`] lists, else its first. It answers `Verification { kind: "action" }`,
+    /// `click`, `press`, `activate`, `jump`, `toggle`, `open` or `select` in any case, else its
+    /// first. It answers `Verification { kind: "action" }`,
     /// whose `observed` names the action (as the app named it, sanitized), whether the element's
     /// states changed and whether it has gone; `null` where its read after the action failed for
     /// another reason. An element without `Action`, or with no action, is `Refused`, as is an
