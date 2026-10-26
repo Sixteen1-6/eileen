@@ -62,7 +62,8 @@ struct State {
     open_sessions: BTreeSet<String>,
     next_session: u32,
     created: Vec<Created>,
-    prompted: u32,
+    /// The window each prompt was shown over: none, as the store never prompts.
+    prompted: Vec<String>,
     dismissed: u32,
 }
 
@@ -101,6 +102,9 @@ fn called_at(header: &Header<'_>) -> String {
     header.path().unwrap().to_string()
 }
 
+/// A secret as the service sends and takes it.
+type SecretStruct = (OwnedObjectPath, Vec<u8>, Vec<u8>, String);
+
 /// Whether `item`'s attributes hold every one of `wanted`.
 fn matches(item: &Item, wanted: &HashMap<String, String>) -> bool {
     wanted.iter().all(|(key, value)| item.attributes.get(key) == Some(value))
@@ -112,20 +116,24 @@ struct FakeService(Shared);
 impl FakeService {
     fn open_session(
         &self,
-        algorithm: String,
-        _input: OwnedValue,
+        algorithm: &str,
+        input: OwnedValue,
     ) -> Result<(OwnedValue, OwnedObjectPath), BusError> {
+        let plain = algorithm == "plain" && <&str>::try_from(&input) == Ok("");
+        drop(input);
         let mut state = lock(&self.0);
-        state.algorithms.push(algorithm.clone());
-        if algorithm != "plain" {
-            return Err(BusError::NotSupported(algorithm));
+        state.algorithms.push(algorithm.to_owned());
+        if !plain {
+            return Err(BusError::NotSupported(algorithm.to_owned()));
         }
         state.next_session += 1;
         let session = format!("{SERVICE_PATH}/session/{}", state.next_session);
         state.open_sessions.insert(session.clone());
+        drop(state);
         Ok((OwnedValue::try_from(zbus::zvariant::Value::from("")).unwrap(), path(&session)))
     }
 
+    #[expect(clippy::needless_pass_by_value, reason = "zbus hands the arguments over by value")]
     fn search_items(
         &self,
         attributes: HashMap<String, String>,
@@ -140,7 +148,7 @@ impl FakeService {
         if state.locked { (Vec::new(), found) } else { (found, Vec::new()) }
     }
 
-    fn read_alias(&self, name: String) -> OwnedObjectPath {
+    fn read_alias(&self, name: &str) -> OwnedObjectPath {
         let state = lock(&self.0);
         if name != "default" || state.no_default { path("/") } else { path(COLLECTION_PATH) }
     }
@@ -152,23 +160,22 @@ struct FakeCollection(Shared);
 impl FakeCollection {
     fn create_item(
         &self,
-        properties: HashMap<String, OwnedValue>,
-        secret: (OwnedObjectPath, Vec<u8>, Vec<u8>, String),
+        mut properties: HashMap<String, OwnedValue>,
+        secret: SecretStruct,
         replace: bool,
     ) -> Result<(OwnedObjectPath, OwnedObjectPath), SecretError> {
         let mut state = lock(&self.0);
         if state.locked {
             return Err(SecretError::IsLocked("the collection is locked".to_owned()));
         }
-        let label = properties.get("org.freedesktop.Secret.Item.Label").unwrap();
-        let attributes = properties.get("org.freedesktop.Secret.Item.Attributes").unwrap();
-        let attributes =
-            HashMap::<String, String>::try_from(attributes.try_clone().unwrap()).unwrap();
+        let label = properties.remove("org.freedesktop.Secret.Item.Label").unwrap();
+        let attributes = properties.remove("org.freedesktop.Secret.Item.Attributes").unwrap();
+        let attributes = HashMap::<String, String>::try_from(attributes).unwrap();
         let (session, parameters, value, content_type) = secret;
         assert!(parameters.is_empty(), "plain has no parameters");
         let session_open = state.open_sessions.contains(session.as_str());
         state.created.push(Created {
-            label: String::try_from(label.try_clone().unwrap()).unwrap(),
+            label: String::try_from(label).unwrap(),
             attributes: attributes.clone().into_iter().collect(),
             content_type,
             session_open,
@@ -186,6 +193,7 @@ impl FakeCollection {
             }
         };
         state.items.insert(at.clone(), item);
+        drop(state);
         Ok((path(&at), path("/")))
     }
 }
@@ -194,11 +202,12 @@ struct FakeItem(Shared);
 
 #[zbus::interface(name = "org.freedesktop.Secret.Item")]
 impl FakeItem {
+    #[expect(clippy::needless_pass_by_value, reason = "zbus hands the arguments over by value")]
     fn get_secret(
         &self,
         session: OwnedObjectPath,
         #[zbus(header)] header: Header<'_>,
-    ) -> Result<((OwnedObjectPath, Vec<u8>, Vec<u8>, String),), SecretError> {
+    ) -> Result<(SecretStruct,), SecretError> {
         let state = lock(&self.0);
         let item = state.items.get(&called_at(&header));
         let item = item.ok_or_else(|| SecretError::NoSuchObject("no item".to_owned()))?;
@@ -208,9 +217,12 @@ impl FakeItem {
         if !state.open_sessions.contains(session.as_str()) {
             return Err(SecretError::NoSession("no such session".to_owned()));
         }
-        Ok(((session, Vec::new(), item.value.clone(), "text/plain".to_owned()),))
+        let value = item.value.clone();
+        drop(state);
+        Ok(((session, Vec::new(), value, "text/plain".to_owned()),))
     }
 
+    #[expect(clippy::needless_pass_by_value, reason = "zbus hands the arguments over by value")]
     fn delete(&self, #[zbus(header)] header: Header<'_>) -> Result<OwnedObjectPath, SecretError> {
         let mut state = lock(&self.0);
         let at = called_at(&header);
@@ -224,6 +236,7 @@ impl FakeItem {
             return Ok(path(PROMPT_PATH));
         }
         state.items.remove(&at);
+        drop(state);
         Ok(path("/"))
     }
 }
@@ -232,6 +245,7 @@ struct FakeSession(Shared);
 
 #[zbus::interface(name = "org.freedesktop.Secret.Session")]
 impl FakeSession {
+    #[expect(clippy::needless_pass_by_value, reason = "zbus hands the arguments over by value")]
     fn close(&self, #[zbus(header)] header: Header<'_>) {
         lock(&self.0).open_sessions.remove(&called_at(&header));
     }
@@ -241,8 +255,8 @@ struct FakePrompt(Shared);
 
 #[zbus::interface(name = "org.freedesktop.Secret.Prompt")]
 impl FakePrompt {
-    fn prompt(&self, _window_id: String) {
-        lock(&self.0).prompted += 1;
+    fn prompt(&self, window_id: &str) {
+        lock(&self.0).prompted.push(window_id.to_owned());
     }
 
     fn dismiss(&self) {
@@ -255,11 +269,13 @@ struct Silent;
 
 #[zbus::interface(name = "org.freedesktop.Secret.Service")]
 impl Silent {
-    async fn search_items(&self, _attributes: HashMap<String, String>) -> Vec<OwnedObjectPath> {
+    async fn search_items(&self, attributes: HashMap<String, String>) -> Vec<OwnedObjectPath> {
+        drop(attributes);
         std::future::pending().await
     }
 
-    async fn read_alias(&self, _name: String) -> OwnedObjectPath {
+    async fn read_alias(&self, name: String) -> OwnedObjectPath {
+        drop(name);
         std::future::pending().await
     }
 }
@@ -281,17 +297,17 @@ impl Fake {
                 bus,
                 NAME,
                 SERVICE_PATH,
-                FakeService(state.clone()),
+                FakeService(Arc::clone(&state)),
             )
             .await;
             let server = service.object_server();
-            server.at(COLLECTION_PATH, FakeCollection(state.clone())).await.unwrap();
-            server.at(PROMPT_PATH, FakePrompt(state.clone())).await.unwrap();
+            server.at(COLLECTION_PATH, FakeCollection(Arc::clone(&state))).await.unwrap();
+            server.at(PROMPT_PATH, FakePrompt(Arc::clone(&state))).await.unwrap();
             for n in 1..=SLOTS {
                 let item = format!("{COLLECTION_PATH}/{n}");
-                server.at(item, FakeItem(state.clone())).await.unwrap();
+                server.at(item, FakeItem(Arc::clone(&state))).await.unwrap();
                 let session = format!("{SERVICE_PATH}/session/{n}");
-                server.at(session, FakeSession(state.clone())).await.unwrap();
+                server.at(session, FakeSession(Arc::clone(&state))).await.unwrap();
             }
             service
         });
@@ -361,22 +377,21 @@ fn a_secret_round_trips_through_a_plain_session() {
     let store = store_on(&bus, DEFAULT_DEADLINE);
     store.set("deepseek", &secret(VALUE)).unwrap();
     assert_eq!(got(&store, "deepseek").as_deref(), Some(VALUE), "round trip");
-    {
-        let state = fake.state();
-        assert_eq!(state.algorithms, ["plain", "plain"], "one plain session per call");
-        assert!(state.open_sessions.is_empty(), "every session closed");
-        let attributes = BTreeMap::from([
-            ("service".to_owned(), SERVICE.to_owned()),
-            ("username".to_owned(), "deepseek".to_owned()),
-        ]);
-        let created = Created {
-            label: "Eileen: deepseek".to_owned(),
-            attributes,
-            content_type: "text/plain".to_owned(),
-            session_open: true,
-        };
-        assert_eq!(state.created, [created], "keyring's attributes, in an open session");
-    }
+    let state = fake.state();
+    assert_eq!(state.algorithms, ["plain", "plain"], "one plain session per call");
+    assert!(state.open_sessions.is_empty(), "every session closed");
+    let attributes = BTreeMap::from([
+        ("service".to_owned(), SERVICE.to_owned()),
+        ("username".to_owned(), "deepseek".to_owned()),
+    ]);
+    let created = Created {
+        label: "Eileen: deepseek".to_owned(),
+        attributes,
+        content_type: "text/plain".to_owned(),
+        session_open: true,
+    };
+    assert_eq!(state.created, [created], "keyring's attributes, in an open session");
+    drop(state);
     // Another tool's item under the same attributes is removed too.
     fake.insert("deepseek", b"from another tool");
     store.delete("deepseek").unwrap();
@@ -420,8 +435,9 @@ fn a_locked_collection_is_refused_and_no_prompt_is_shown() {
     assert_eq!(store.set("deepseek", &secret("new")), Err(LOCKED), "a locked collection");
     let state = fake.state();
     assert_eq!(state.items.len(), 1, "nothing deleted");
-    assert_eq!((state.prompted, state.dismissed), (0, 0), "no prompt");
+    assert!(state.prompted.is_empty() && state.dismissed == 0, "no prompt");
     assert!(state.open_sessions.is_empty(), "every session closed");
+    drop(state);
 }
 
 #[test]
@@ -434,9 +450,10 @@ fn a_change_that_needs_a_prompt_is_refused_and_the_prompt_dismissed() {
     assert_eq!(store.set("deepseek", &secret("new")), Err(NEEDS_CONFIRMATION), "a store");
     let state = fake.state();
     assert_eq!(state.items.len(), 1, "nothing deleted");
-    assert_eq!(state.prompted, 0, "never prompted");
+    assert!(state.prompted.is_empty(), "never prompted");
     assert_eq!(state.dismissed, 2, "each prompt dismissed");
     assert!(state.open_sessions.is_empty(), "every session closed");
+    drop(state);
 }
 
 #[test]
