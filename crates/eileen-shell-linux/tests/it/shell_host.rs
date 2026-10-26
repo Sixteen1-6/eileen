@@ -1,8 +1,8 @@
 //! `ShellHost` on Linux: `LinuxShell` through a bridge on the private bus, against the fake
 //! logind, logind session, GNOME session manager, Inhibit portal and notification server of the
-//! clients' own tests, and a GNOME session manager that reports what it is asked. The test's
-//! thread calls the shell as the core does, blocking; the fakes run on a runtime of their own,
-//! whose workers serve them meanwhile.
+//! clients' own tests, and a GNOME session manager that reports what it is asked; a silent bus
+//! stands in for a bus that has hung. The test's thread calls the shell as the core does,
+//! blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
 
 use std::fs;
 use std::io::Read;
@@ -13,26 +13,36 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eileen_contracts::core_io::Toast;
-use eileen_dbus_linux::testing::{PrivateBus, serve};
+use eileen_dbus_linux::testing::{PrivateBus, SilentBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_changes};
 use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
 use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
 use tokio::sync::{Notify, mpsc};
+use tokio::time::Instant;
 
 use crate::autostart::Scratch;
 use crate::keep_awake::{
     Answer, COOKIE, FakeGnome, FakeManager, FakePortal, GNOME, GNOME_PATH, LOGIND, MANAGER_PATH,
-    PORTAL, PORTAL_PATH, left, still_held, watch_end,
+    PORTAL, PORTAL_PATH, left, respond, still_held, watch_end,
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
-/// its length, and a short one keeps the test short.
+/// its length, and a short one keeps the test short. Not for `keep_awake`, whose connects have
+/// half of it ([`GNOME_SILENCE`]).
 const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
+/// The deadline of a keep-awake call that cannot answer in time, its GNOME session manager not
+/// answering: it passes whatever its length, and half of it bounds the holder's connects, which
+/// take about a millisecond on a private bus, so it leaves them room on a loaded machine.
+const GNOME_SILENCE: Deadline = Deadline::after(Duration::from_millis(400));
 /// The deadline of a keep-awake call whose silent portal spends its half, in real time: the
 /// other half leaves room for the bus calls around the portal's wait.
 const PORTAL_SILENCE: Deadline = Deadline::after(Duration::from_secs(1));
+/// The deadline of a keep-awake call one of whose buses never answers its connect, which spends
+/// the half, in real time: the other half leaves room for the calls on the bus that answers, a
+/// portal's answer among them.
+const BUS_SILENCE: Deadline = Deadline::after(Duration::from_millis(400));
 /// The reason Eileen gives logind and the desktop for keeping the session awake.
 const REASON: &str = "An armed run is in progress";
 /// The settings' desktop entry and icon, which differ from the notifier's defaults.
@@ -62,8 +72,21 @@ impl Fakes {
         path: &str,
         iface: I,
     ) {
+        let _ignored = self.serving(bus, name, path, iface);
+    }
+
+    /// Serves `iface` at `path` under `name`, as [`Self::serve`] does, and answers the service's
+    /// connection, for a test that sends from it.
+    fn serving<I: zbus::object_server::Interface>(
+        &mut self,
+        bus: &PrivateBus,
+        name: &str,
+        path: &str,
+        iface: I,
+    ) -> zbus::Connection {
         let service = self.runtime.block_on(serve(bus, name, path, iface));
-        self.services.push(service);
+        self.services.push(service.clone());
+        service
     }
 
     /// Serves logind: its `manager`, and `session` as the caller's.
@@ -153,6 +176,12 @@ fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSet
 /// A shell on a bridge to `bus`, with `deadline` and no autostart folder.
 fn shell_on(bus: &PrivateBus, deadline: Deadline) -> LinuxShell {
     LinuxShell::new(Bridge::on_private_bus(bus).unwrap(), settings(deadline, None))
+}
+
+/// A shell on a bridge whose session bus is at `session` and whose system bus is at `system`,
+/// with [`BUS_SILENCE`] and no autostart folder.
+fn shell_at(session: &str, system: &str) -> LinuxShell {
+    LinuxShell::new(Bridge::on_addresses(session, system).unwrap(), settings(BUS_SILENCE, None))
 }
 
 /// A toast about no job.
@@ -276,16 +305,126 @@ fn a_silent_portal_has_half_the_deadline_so_loginds_lock_answers_in_time() {
     let manager = FakeManager::default();
     fakes.logind(&bus, manager.clone(), FakeSession::default());
     // No GNOME session manager, and a portal that replies to Inhibit and never answers it.
-    let (portal, mut closes) = FakePortal::reporting_closes(Answer::Later);
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
     fakes.serve(&bus, PORTAL, PORTAL_PATH, portal);
     let shell = shell_on(&bus, PORTAL_SILENCE);
     let request = shell.keep_awake();
     assert!(request.is_ok(), "the call answers within its deadline: {request:?}");
     let mut watch = watch_end(&manager);
     assert!(still_held(&mut watch), "with logind's lock, which holds");
-    assert!(closes.blocking_recv().is_some(), "the portal's unconfirmed request was closed");
+    assert!(
+        reports.closes.blocking_recv().is_some(),
+        "the portal's unconfirmed request was closed"
+    );
     drop(request);
     assert!(closed_now(&mut watch), "the lock is closed once the request has dropped");
+}
+
+#[test]
+fn a_session_bus_that_never_answers_leaves_loginds_lock_to_hold() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    let manager = FakeManager::default();
+    fakes.logind(&bus, manager.clone(), FakeSession::default());
+    let shell = shell_at(silent.address(), bus.address());
+    let request = shell.keep_awake();
+    assert!(request.is_ok(), "the call answers within its deadline: {request:?}");
+    let mut watch = watch_end(&manager);
+    assert!(still_held(&mut watch), "with logind's lock, which holds");
+    drop(request);
+    // Read to its end, not at once: with no desktop hold, the release makes no call that would
+    // order this read after dbus-daemon and the fake have closed the copies they passed on.
+    assert!(closed(watch), "the lock is closed once the request has dropped");
+}
+
+#[test]
+fn a_system_bus_that_never_answers_leaves_the_desktops_hold() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    let (gnome, mut reports) = ReportingGnome::new(None);
+    fakes.serve(&bus, GNOME, GNOME_PATH, gnome);
+    let shell = shell_at(bus.address(), silent.address());
+    let request = shell.keep_awake();
+    assert!(request.is_ok(), "the call answers within its deadline: {request:?}");
+    assert_eq!(
+        reports.inhibits.try_recv(),
+        Ok(("Eileen".to_owned(), 0, REASON.to_owned(), 12)),
+        "with GNOME's inhibitor of suspend and idle"
+    );
+    drop(request);
+    assert_eq!(
+        reports.uninhibits.try_recv(),
+        Ok(COOKIE),
+        "GNOME's inhibitor is ended, by cookie, by the time the drop returns"
+    );
+}
+
+#[test]
+fn a_system_bus_that_never_answers_leaves_the_portal_time_to_answer() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    // No GNOME session manager, and a portal that replies to Inhibit and answers it later.
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
+    let service = fakes.serving(&bus, PORTAL, PORTAL_PATH, portal);
+    let shell = shell_at(bus.address(), silent.address());
+    let (request, call) = std::thread::scope(|scope| {
+        let request = scope.spawn(|| shell.keep_awake());
+        // Once the fake has the call, as the real portal answers after its reply.
+        let call = reports.calls.blocking_recv().unwrap();
+        fakes.runtime.block_on(respond(&service, &call.request, 0));
+        (request.join().unwrap(), call)
+    });
+    assert!(request.is_ok(), "the portal answered within its share of what was left: {request:?}");
+    drop(request);
+    assert_eq!(
+        reports.closes.try_recv(),
+        Ok(call.request),
+        "the portal's request is closed by the time the drop returns"
+    );
+}
+
+#[test]
+fn a_system_bus_that_never_answers_leaves_the_portal_half_of_what_is_left() {
+    let bus = PrivateBus::start();
+    let silent = SilentBus::start();
+    let mut fakes = Fakes::new();
+    // No GNOME session manager, and a portal that replies to Inhibit and never answers it.
+    let (portal, mut reports) = FakePortal::reporting(Answer::Later);
+    fakes.serve(&bus, PORTAL, PORTAL_PATH, portal);
+    let shell = shell_at(bus.address(), silent.address());
+    let start = Instant::now();
+    let error = shell.keep_awake().unwrap_err();
+    let waited = start.elapsed();
+    assert_eq!(
+        error,
+        PlatformError::DeadlineExceeded { call: "system bus" },
+        "nothing holds, and logind's miss, late rather than absent, comes first, before the \
+         call's own deadline"
+    );
+    assert!(
+        waited >= BUS_SILENCE.budget() * 3 / 4,
+        "the connects spent half the deadline and the portal waited half of what was left, so the \
+         call answered no sooner than three quarters of it: {waited:?}"
+    );
+    assert!(
+        reports.closes.blocking_recv().is_some(),
+        "the portal's unconfirmed request was closed"
+    );
+}
+
+#[test]
+fn keep_awake_on_two_buses_that_never_answer_passes_its_deadline() {
+    let silent = SilentBus::start();
+    let shell = shell_at(silent.address(), silent.address());
+    assert_eq!(
+        shell.keep_awake().unwrap_err(),
+        PlatformError::DeadlineExceeded { call: "system bus" },
+        "both buses are there and never answered, so neither holder is absent: logind's miss, \
+         once the half has passed, before the call's own deadline"
+    );
 }
 
 #[test]
@@ -322,7 +461,7 @@ fn a_keep_awake_past_its_deadline_releases_what_it_took_once_it_holds() {
     let gate = Arc::new(Notify::new());
     let (gnome, mut reports) = ReportingGnome::new(Some(Arc::clone(&gate)));
     fakes.serve(&bus, GNOME, GNOME_PATH, gnome);
-    let shell = shell_on(&bus, SHORT);
+    let shell = shell_on(&bus, GNOME_SILENCE);
     assert_eq!(
         shell.keep_awake().unwrap_err(),
         PlatformError::DeadlineExceeded { call: "keep-awake request" },

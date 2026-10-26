@@ -1,0 +1,200 @@
+# The fuzz workspace of BUILD.md section 4.7, as cargo-fuzz lays it out: its own workspace, kept
+# out of the root one, built with the nightly that `rust-toolchain.toml` here pins, on Linux only.
+# Every target of section 4.7 is declared here except the three WP10 adds with its `-linux`
+# crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`). Each target calls a
+# `fuzz_entry` function of the crate that owns the parser; that crate's corpus replay test runs
+# the same function on every OS.
+
+[package]
+name = "eileen-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+eileen-apps = { path = "../crates/eileen-apps" }
+eileen-config = { path = "../crates/eileen-config" }
+eileen-contracts = { path = "../crates/eileen-contracts" }
+eileen-core = { path = "../crates/eileen-core" }
+eileen-dictation = { path = "../crates/eileen-dictation" }
+eileen-fleet = { path = "../crates/eileen-fleet" }
+eileen-harness = { path = "../crates/eileen-harness" }
+eileen-hud = { path = "../crates/eileen-hud" }
+eileen-intent = { path = "../crates/eileen-intent" }
+eileen-mcp = { path = "../crates/eileen-mcp" }
+eileen-record = { path = "../crates/eileen-record" }
+eileen-replay = { path = "../crates/eileen-replay" }
+eileen-runtime = { path = "../crates/eileen-runtime" }
+eileen-scenarios = { path = "../crates/eileen-scenarios" }
+eileen-sim = { path = "../crates/eileen-sim" }
+eileen-skills = { path = "../crates/eileen-skills" }
+eileen-speech = { path = "../crates/eileen-speech" }
+
+[[bin]]
+name = "command_grammar"
+path = "fuzz_targets/command_grammar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_message"
+path = "fuzz_targets/control_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "desktop_state"
+path = "fuzz_targets/desktop_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dictation_cleanup"
+path = "fuzz_targets/dictation_cleanup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dispatch_line"
+path = "fuzz_targets/dispatch_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expected_trace"
+path = "fuzz_targets/expected_trace.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fleet_result"
+path = "fuzz_targets/fleet_result.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_request"
+path = "fuzz_targets/http_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hud_line"
+path = "fuzz_targets/hud_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_client_message"
+path = "fuzz_targets/mcp_client_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_tool_arguments"
+path = "fuzz_targets/mcp_tool_arguments.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "recording"
+path = "fuzz_targets/recording.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "registry_reply"
+path = "fuzz_targets/registry_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolve_reply"
+path = "fuzz_targets/resolve_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scenario_file"
+path = "fuzz_targets/scenario_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shell_command"
+path = "fuzz_targets/shell_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sim"
+path = "fuzz_targets/sim.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "skill_record"
+path = "fuzz_targets/skill_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "speech_frame"
+path = "fuzz_targets/speech_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stream_json_line"
+path = "fuzz_targets/stream_json_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "uia_text"
+path = "fuzz_targets/uia_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "worker_hook_payload"
+path = "fuzz_targets/worker_hook_payload.rs"
+test = false
+doc = false
+bench = false

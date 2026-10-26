@@ -1,0 +1,22 @@
+[package]
+name = "eileen-replay"
+description = "Replays a recording strictly or a scenario against the live core, and answers model commands from a recording"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, tools"
+owns = "WP1"
+unsafe = "forbid"
+
+[dependencies]
+clap.workspace = true
+eileen-contracts.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

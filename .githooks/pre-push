@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs before every git push once `cargo xtask setup` has set core.hooksPath to .githooks
+# (BUILD.md section 4b.3): fmt, clippy with warnings denied, the changed crates' tests and
+# lint-repo, through the build guard. Push with --no-verify to skip it.
+exec cargo xtask pre-push

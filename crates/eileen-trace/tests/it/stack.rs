@@ -1,18 +1,129 @@
 //! The whole stack: the file's line shape, the slow-span event, the reload handle, the stage
-//! stats, and `init` with soft assertions reporting.
+//! stats, which daily files a process keeps, and `init` with soft assertions reporting.
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
+use eileen_contracts::ids::Date;
+use eileen_stdx::clock::{self, Clock as _};
 use eileen_stdx::soft_assert::{self, Mode};
 use eileen_trace::{Console, ProcessKind, TraceConfig, TraceError, names, test_support};
 use serde_json::Value;
 
 struct TempDir(PathBuf);
 
+impl TempDir {
+    /// A new, empty folder for the test `name`.
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("eileen-trace-{name}-{}", std::process::id()));
+        let _ignored = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ignored = std::fs::remove_dir_all(&self.0);
     }
+}
+
+fn touch(dir: &Path, name: &str) {
+    std::fs::File::create(dir.join(name)).unwrap();
+}
+
+fn names_in(dir: &Path) -> BTreeSet<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect()
+}
+
+/// The core's daily file name `back` days before `today`.
+fn core_file(today: Date, back: i64) -> String {
+    format!("eileen.{}.jsonl", Date::from_days_since_epoch(today.days_since_epoch() - back))
+}
+
+/// Builds `kind`'s stack on `dir` with the default retention and drops it, as a process that
+/// starts and stops.
+fn start_and_stop(kind: ProcessKind, dir: &Path) {
+    let mut config = TraceConfig::new(Some(dir.to_path_buf()));
+    config.console = Console::Never;
+    assert_eq!(config.max_log_files, 14, "the default retention");
+    let (_subscriber, guard) = eileen_trace::build(kind, &config).unwrap();
+    drop(guard);
+}
+
+#[test]
+fn the_core_keeps_the_other_processes_files() {
+    // The core's name, `eileen`, begins every other process's file name.
+    let dir = TempDir::new("keeps-others");
+    let others: BTreeSet<String> = ["eileen-speech", "eileen-desktop"]
+        .into_iter()
+        .flat_map(|process| (1..=14).map(move |day| format!("{process}.2026-10-{day:02}.jsonl")))
+        .collect();
+    for name in &others {
+        touch(&dir.0, name);
+    }
+    start_and_stop(ProcessKind::Core, &dir.0);
+    let left = names_in(&dir.0);
+    let gone: Vec<&String> = others.difference(&left).collect();
+    assert!(gone.is_empty(), "the core deleted {} of the others' files: {gone:?}", gone.len());
+}
+
+#[test]
+fn the_core_prunes_its_own_files_by_the_date_in_their_names() {
+    let dir = TempDir::new("prunes-own");
+    let today = clock::system().wall().date();
+    // Made newest first, so their birth times run against the dates in their names.
+    for back in 1..=20 {
+        touch(&dir.0, &core_file(today, back));
+    }
+    let not_daily = [
+        "eileen.jsonl".to_owned(),
+        "eileen.notes.jsonl".to_owned(),
+        "eileen.2026-02-30.jsonl".to_owned(),
+        format!("{}.old", core_file(today, 30)),
+    ];
+    for name in &not_daily {
+        touch(&dir.0, name);
+    }
+    std::fs::create_dir_all(dir.0.join(core_file(today, 40))).unwrap();
+    // Dated after today, as a clock that ran ahead leaves: it stays and takes none of the 13.
+    touch(&dir.0, &core_file(today, -2));
+    start_and_stop(ProcessKind::Core, &dir.0);
+    // Today's, which the stack opened, and the 13 newest days before it.
+    let mut kept: BTreeSet<String> = (0..=13).map(|back| core_file(today, back)).collect();
+    kept.extend(not_daily);
+    kept.insert(core_file(today, 40));
+    kept.insert(core_file(today, -2));
+    assert_eq!(names_in(&dir.0), kept, "the oldest days went, and nothing else");
+}
+
+#[test]
+fn a_first_start_makes_the_folder_and_todays_file() {
+    let parent = TempDir::new("first-start");
+    let dir = parent.0.join("logs");
+    start_and_stop(ProcessKind::Core, &dir);
+    let today = clock::system().wall().date();
+    assert_eq!(names_in(&dir), BTreeSet::from([core_file(today, 0)]), "only today's file");
+}
+
+#[test]
+fn a_max_of_zero_keeps_every_daily_file() {
+    // tracing-appender's `max_log_files(0)` turned pruning off, and 0 keeps that meaning.
+    let dir = TempDir::new("keep-all");
+    let today = clock::system().wall().date();
+    for back in 1..=5 {
+        touch(&dir.0, &core_file(today, back));
+    }
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    config.max_log_files = 0;
+    let (_subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    drop(guard);
+    let every: BTreeSet<String> = (0..=5).map(|back| core_file(today, back)).collect();
+    assert_eq!(names_in(&dir.0), every, "today's and every older day stay");
 }
 
 #[test]
@@ -40,11 +151,7 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     assert_eq!(entries.len(), 1, "one daily file");
     let name = entries[0].to_string_lossy().into_owned();
     assert!(name.starts_with("eileen-desktop."), "{name}");
-    assert_eq!(
-        std::path::Path::new(&name).extension().and_then(|e| e.to_str()),
-        Some("jsonl"),
-        "{name}"
-    );
+    assert_eq!(Path::new(&name).extension().and_then(|e| e.to_str()), Some("jsonl"), "{name}");
     let text = std::fs::read_to_string(dir.0.join(&name)).unwrap();
     let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     let focused = lines.iter().find(|l| l["fields"]["message"] == "focused").unwrap();

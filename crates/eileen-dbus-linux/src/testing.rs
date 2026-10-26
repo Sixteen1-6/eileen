@@ -4,6 +4,8 @@
 //! - [`PrivateBus`] runs a `dbus-daemon` of its own, with a minimal configuration and no service
 //!   activation, so a fake service never meets a real one and the tests need no desktop session.
 //!   The daemon is killed and its folder removed when the bus drops, a panicking test included.
+//! - [`SilentBus`] listens and never answers, as a bus that has hung: a client's connect
+//!   completes, and its handshake then waits for good. Its folder is removed when it drops.
 //! - [`serve`] puts a fake service on the bus under a well-known name.
 //! - [`round_trip`], [`nothing_ready`] and [`ready_now`] assert that nothing more arrived without a wall-clock
 //!   window. The bus delivers each sender's messages in order, so after a round trip to the
@@ -16,11 +18,14 @@
 #![expect(clippy::expect_used, reason = "test support fails the test with a clear message")]
 
 use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::task::{Context, Waker};
 use std::time::Duration;
+
+use zbus::address::transport::{Transport, Unix, UnixSocket};
 
 use crate::stream::Stream;
 
@@ -115,6 +120,43 @@ impl PrivateBus {
     #[must_use]
     pub fn daemon_id(&self) -> u32 {
         self.daemon.0.id()
+    }
+
+    /// The bus's folder, for a test of the guard.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+/// A bus that never answers: a Unix socket that listens and never accepts. The kernel completes
+/// a client's connect, and the client's SASL `AUTH` then waits for good, as on a bus that
+/// accepts and has hung. Fields drop in order: the socket closes before its folder goes.
+#[derive(Debug)]
+pub struct SilentBus {
+    address: String,
+    /// Held for as long as the bus lives: closed, it would refuse a connect at once.
+    _listener: UnixListener,
+    dir: TempDir,
+}
+
+impl SilentBus {
+    /// Starts listening, in a fresh folder of the temporary directory.
+    #[must_use]
+    pub fn start() -> Self {
+        let dir = TempDir::new();
+        let path = dir.path().join("silent");
+        let listener = UnixListener::bind(&path).expect("the silent bus's socket");
+        // The address escapes what the folder's path holds, as a D-Bus address must.
+        let address = zbus::Address::from(Transport::Unix(Unix::new(UnixSocket::File(path))));
+        Self { address: address.to_string(), _listener: listener, dir }
+    }
+
+    /// The bus's address, for `zbus::connection::Builder::address` or
+    /// [`Bridge::on_addresses`](crate::Bridge::on_addresses).
+    #[must_use]
+    pub fn address(&self) -> &str {
+        &self.address
     }
 
     /// The bus's folder, for a test of the guard.
