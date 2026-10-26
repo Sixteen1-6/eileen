@@ -1,20 +1,21 @@
 //! The subscriber stack every Eileen process starts with (observability report section 3.1).
 //!
 //! One `tracing_subscriber::Registry` with a filter per layer: the error layer (so
-//! `SpanTrace::capture` works), the JSON file at INFO behind a reload handle, the flight
-//! recorder ring at `eileen=debug,warn`, the slow-span and stage-stats layer, and a console
-//! at WARN only when stderr is a terminal. `tracing-log` bridges dependencies that log
-//! through the `log` crate.
+//! `SpanTrace::capture` works; a span trace shows each `pii.` field as its length alone), the
+//! JSON file at INFO behind a reload handle, the flight recorder ring at `eileen=debug,warn`,
+//! the slow-span and stage-stats layer, and a console at WARN only when stderr is a terminal.
+//! `tracing-log` bridges dependencies that log through the `log` crate.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal as _;
+use std::io::{IsTerminal as _, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use eileen_stdx::clock;
 use eileen_stdx::soft_assert::{self, Failure, Mode};
-use tracing::{Level, Subscriber};
-use tracing_appender::non_blocking::{ErrorCounter, NonBlockingBuilder, WorkerGuard};
+use tracing::{Dispatch, Level, Subscriber};
+use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::{Layered, SubscriberExt as _};
@@ -24,8 +25,9 @@ use tracing_subscriber::{EnvFilter, Layer, Registry, reload};
 
 use crate::file::{FileLayer, RedactingMakeWriter};
 use crate::names;
-use crate::pii::{PiiKey, Policy};
+use crate::pii::{PiiKey, Policy, SpanTraceFields};
 use crate::redact::Redactor;
+use crate::retention::{Retained, Retention};
 use crate::ring::{Ring, RingLayer};
 use crate::slow::{SlowLayer, Stats};
 
@@ -118,7 +120,12 @@ pub struct TraceConfig {
     pub pii_key: Option<PiiKey>,
     /// Slow-span thresholds by span name, milliseconds.
     pub slow_span_ms: BTreeMap<String, u64>,
-    /// Daily files kept per process.
+    /// Daily files each process keeps of its own, today's included: the newest by the date in
+    /// the name, matched exactly as `<process>.<YYYY-MM-DD>.jsonl`, pruned when tracing starts
+    /// and after each UTC midnight. 1 keeps today's alone, and 0 keeps every file, as
+    /// tracing-appender's `max_log_files(0)` did. Other processes' files and other names are
+    /// never touched; the core's janitor caps the whole folder at 14 days and 500 MB (BUILD.md
+    /// section 2.15).
     pub max_log_files: usize,
 }
 
@@ -227,9 +234,20 @@ fn parse_filter(which: &'static str, filter: &str) -> Result<EnvFilter, TraceErr
     EnvFilter::try_new(filter).map_err(|e| TraceError::Filter { which, detail: e.to_string() })
 }
 
-/// The console layer: `fmt`'s format on `writer` under `filter`, every write through
-/// `redactor`. `pii.` fields stay (a terminal the owner is watching, as the [`crate::pii`]
-/// table says); secrets do not. [`build`] gives it stderr.
+/// The log writer's thread name. Linux keeps 15 bytes of a thread's name (`TASK_COMM_LEN` is
+/// 16) and std cuts a longer one without a word, so `top -H`, gdb and core dumps would show a
+/// cut name.
+const LOG_WRITER_THREAD: &str = "eileen-log";
+
+/// The file sink's writer: lines go to `inner` on the log writer's thread, and a full buffer
+/// drops a line rather than block an always-on process.
+fn log_writer<W: Write + Send + 'static>(inner: W) -> (NonBlocking, WorkerGuard) {
+    NonBlockingBuilder::default().lossy(true).thread_name(LOG_WRITER_THREAD).finish(inner)
+}
+
+/// The console layer: `fmt`'s format on `writer` under `filter`, uncoloured, every write
+/// through `redactor`. `pii.` fields stay (a terminal the owner is watching, as the
+/// [`crate::pii`] table says); secrets do not. [`build`] gives it stderr.
 pub fn console_layer<S, W>(
     writer: W,
     redactor: Arc<Redactor>,
@@ -239,7 +257,11 @@ where
     S: Subscriber + for<'a> LookupSpan<'a> + 'static,
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
+    // Never coloured, whatever features the dependency graph turns on: the Redactor reads the
+    // text `fmt` has written, and a colour code would put its final `m` right before each
+    // value, where the card and token rules need a word to start.
     Ok(tracing_subscriber::fmt::layer()
+        .with_ansi(false)
         .with_writer(RedactingMakeWriter::new(writer, redactor))
         .with_filter(parse_filter("console", filter)?))
 }
@@ -258,26 +280,25 @@ pub fn build(
     ));
     let stats = Arc::new(Stats::default());
     let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> =
-        vec![tracing_error::ErrorLayer::default().boxed()];
+        vec![tracing_error::ErrorLayer::new(SpanTraceFields).boxed()];
 
     let mut file_guard = None;
     let mut dropped = None;
     let mut file_filter = None;
     if let Some(dir) = &config.log_dir {
+        // Not the appender's `max_log_files`: it matches by prefix, so the core (`eileen`)
+        // would prune every other process's files as its own.
         let appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix(process)
             .filename_suffix("jsonl")
-            .max_log_files(config.max_log_files)
             .build(dir)
             .map_err(|e| TraceError::Logs {
                 dir: dir.display().to_string(),
                 detail: e.to_string(),
             })?;
-        let (writer, guard) = NonBlockingBuilder::default()
-            .lossy(true)
-            .thread_name("eileen-log-writer")
-            .finish(appender);
+        let rule = Retention { dir: dir.clone(), process, keep: config.max_log_files };
+        let (writer, guard) = log_writer(Retained::new(appender, rule, clock::system()));
         dropped = Some(writer.error_counter());
         file_guard = Some(guard);
         let policy = if config.include_personal {
@@ -336,14 +357,57 @@ fn soft_assert_hook(failure: &Failure<'_>) {
 }
 
 /// Starts tracing for this process: installs the stack as the global default, bridges the
-/// `log` crate, and switches soft assertions to reporting (log, count, request a dump).
+/// `log` crate, and switches soft assertions to reporting (log, count, request a dump). Call
+/// it once, at the start of `main`.
+///
+/// A global default set before (an earlier `init`, say) is [`TraceError::AlreadyInitialised`].
+/// When a `log` logger was set first (an `env_logger::init()`, say), records logged through
+/// `log` stay with it: the rest starts all the same, and a [`names::LOG_BRIDGE_FAILED`]
+/// warning says so. Under a scoped default (inside `with_default`, or while a `set_default`
+/// guard is held) the stack starts too, but this thread's events go to that default until it
+/// ends.
 pub fn init(kind: ProcessKind, config: &TraceConfig) -> Result<TraceGuard, TraceError> {
     let (subscriber, guard) = build(kind, config)?;
-    subscriber.try_init().map_err(|_| TraceError::AlreadyInitialised)?;
+    let stack = Dispatch::new(subscriber);
+    let installed = stack.clone().try_init();
+    // `try_init` sets the global default, then the bridge: an error with this stack as the
+    // global default is the bridge's alone.
+    if installed.is_err() && !is_global_default(&stack) {
+        return Err(TraceError::AlreadyInitialised);
+    }
     let _first = GLOBAL_RING.set(Arc::clone(&guard.ring));
     soft_assert::set_hook(soft_assert_hook);
     soft_assert::set_mode(Mode::Report);
+    if let Err(error) = installed {
+        // To the stack itself, past any scoped default this thread has.
+        tracing::dispatcher::with_default(&stack, || {
+            tracing::warn!(name: names::LOG_BRIDGE_FAILED, target: "eileen_trace", error = %error);
+        });
+    }
     Ok(guard)
+}
+
+/// The thread that reads the global default for [`init`]: 12 bytes, within Linux's 15.
+const DEFAULT_CHECK_THREAD: &str = "eileen-trace";
+
+/// True when `stack` is the global default. A new thread has no scoped default, so its default
+/// is the global one. If no thread can start, this thread's default stands in, which is the
+/// global one outside any `with_default`.
+fn is_global_default(stack: &Dispatch) -> bool {
+    let ours = stack.clone();
+    eileen_stdx::thread::spawn_named(DEFAULT_CHECK_THREAD, move || {
+        tracing::dispatcher::get_default(|now| same_stack(now, &ours))
+    })
+    .ok()
+    .and_then(|thread| thread.join().ok())
+    .unwrap_or_else(|| tracing::dispatcher::get_default(|now| same_stack(now, stack)))
+}
+
+/// True when `a` and `b` dispatch to the same stack.
+fn same_stack(a: &Dispatch, b: &Dispatch) -> bool {
+    a.downcast_ref::<TraceSubscriber>()
+        .zip(b.downcast_ref::<TraceSubscriber>())
+        .is_some_and(|(a, b)| std::ptr::eq(a, b))
 }
 
 #[cfg(test)]
@@ -358,5 +422,39 @@ mod tests {
         let shown = format!("{config:?}");
         assert!(shown.contains("pii_key: Some(PiiKey(..))"), "{shown}");
         assert!(!shown.contains("171, 171"), "no byte of the key: {shown}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_writers_thread_keeps_its_whole_name_on_linux() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex, PoisonError};
+
+        use super::{LOG_WRITER_THREAD, log_writer};
+
+        /// Keeps the kernel's name for the thread that writes to it, the one `top -H`, gdb
+        /// and core dumps show.
+        struct KernelName(Arc<Mutex<Option<String>>>);
+
+        impl Write for KernelName {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let comm = std::fs::read_to_string("/proc/thread-self/comm")?;
+                *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(comm.trim_end().to_owned());
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(None));
+        let (mut writer, guard) = log_writer(KernelName(Arc::clone(&seen)));
+        writer.write_all(b"a line\n").unwrap();
+        // Dropping the guard waits for the thread to write what it was sent.
+        drop(guard);
+        let name = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        assert_eq!(name.as_deref(), Some(LOG_WRITER_THREAD), "Linux keeps 15 bytes of a name");
     }
 }

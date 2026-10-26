@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Repository tasks for Eileen: the pull request checks and, later, the guarded build commands"
+description = "Repository tasks for Eileen: the guarded build commands, the repository checks and the pull request checks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,8 @@ owns = "WP0"
 unsafe = "forbid"
 
 [dependencies]
+eileen-buildguard.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 
 [lints]
