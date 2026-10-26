@@ -7,15 +7,25 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
 use std::time::Duration;
 
+use eileen_trace::test_support::Captured;
 use eileen_trace::{names, test_support};
+use tokio::io::AsyncReadExt as _;
+use tokio::time::timeout;
 
 use crate::{ChildSpec, MAX_STDERR_LINE, spawn};
 
 #[cfg(target_os = "linux")]
 mod linux;
+
+/// The longest a test waits for a helper that writes a megabyte to stderr to exit, far above
+/// what one whose stderr is drained needs.
+const EXITS_WITHIN: Duration = Duration::from_secs(10);
+
+/// The first line `stderr-hostile` writes, as forwarded, and its last.
+const HOSTILE_FIRST: &str = "not utf-8: \u{fffd}\u{fffd} here";
+const HOSTILE_LAST: &str = "after the long line";
 
 struct TempDir(PathBuf);
 
@@ -87,6 +97,24 @@ async fn read_ready(
     }
 }
 
+/// Stderr a hostile tool writes: bytes that are not UTF-8, then a megabyte without a newline,
+/// many times a pipe's buffer, then an ordinary line.
+fn hostile_stderr() -> Vec<u8> {
+    let mut bytes = b"not utf-8: \xff\xfe here\n".to_vec();
+    bytes.extend(std::iter::repeat_n(b'x', 1024 * 1024));
+    bytes.extend_from_slice(b"\nafter the long line\n");
+    bytes
+}
+
+/// The text of every `child.stderr` event.
+fn forwarded_lines(captured: &Captured) -> Vec<String> {
+    captured
+        .events_named(names::CHILD_STDERR)
+        .iter()
+        .map(|e| e.fields["pii.line"].as_str().unwrap().to_owned())
+        .collect()
+}
+
 fn write_pids(dir: &Path, text: &str) {
     std::fs::write(dir.join("pids.tmp"), text).unwrap();
     std::fs::rename(dir.join("pids.tmp"), dir.join("pids")).unwrap();
@@ -103,13 +131,9 @@ fn helper_entry() {
             eprintln!("eileen helper says hello");
             panic!("the helper exits with a failure on purpose");
         }
-        // Stderr a hostile tool writes: bytes that are not UTF-8, then a megabyte without a
-        // newline, then an ordinary line.
         "stderr-hostile" => {
             let mut err = std::io::stderr().lock();
-            err.write_all(b"not utf-8: \xff\xfe here\n").unwrap();
-            err.write_all(&vec![b'x'; 1024 * 1024]).unwrap();
-            err.write_all(b"\nafter the long line\n").unwrap();
+            err.write_all(&hostile_stderr()).unwrap();
             err.flush().unwrap();
         }
         "block" => lock_file(&dir).lock().unwrap(),
@@ -174,23 +198,113 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
             assert!(status.success(), "every write reached the pipe: {status:?}");
         });
     });
-    let lines: Vec<String> = captured
-        .events_named(names::CHILD_STDERR)
-        .iter()
-        .map(|e| e.fields["pii.line"].as_str().unwrap().to_owned())
-        .collect();
-    assert!(
-        lines.iter().any(|l| l == "not utf-8: \u{fffd}\u{fffd} here"),
-        "decoded with replacements"
-    );
+    let lines = forwarded_lines(&captured);
+    assert!(lines.iter().any(|l| l == HOSTILE_FIRST), "decoded with replacements");
     let long: Vec<&String> = lines.iter().filter(|l| l.starts_with("xxx")).collect();
     assert_eq!(long.len(), 1, "one long line");
     assert_eq!(long[0].len(), MAX_STDERR_LINE, "cut to the limit");
-    assert!(
-        lines.iter().any(|l| l == "after the long line"),
-        "forwarding went on: {:?}",
-        lines.last()
-    );
+    assert!(lines.iter().any(|l| l == HOSTILE_LAST), "forwarding went on: {:?}", lines.last());
+}
+
+/// Checks that every line of `stderr-hostile`, the first and the last, became a
+/// `child.stderr` event.
+fn assert_hostile_lines_forwarded(captured: &Captured) {
+    let lines = forwarded_lines(captured);
+    assert_eq!(lines.first().map(String::as_str), Some(HOSTILE_FIRST), "spawn forwarded it");
+    assert_eq!(lines.last().map(String::as_str), Some(HOSTILE_LAST), "to its end");
+}
+
+#[test]
+fn a_chatty_child_exits_when_its_caller_waits() {
+    let dir = TempDir::new("stderr-wait");
+    let ((), captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            // Nobody takes or forwards its stderr: spawn does.
+            let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
+            let status = timeout(EXITS_WITHIN, child.wait())
+                .await
+                .expect("the child blocked writing to a full stderr pipe")
+                .unwrap();
+            assert!(status.success(), "every write reached the pipe: {status:?}");
+            assert!(child.take_stderr().is_none(), "spawn took the pipe for forwarding");
+            child.forward_stderr().unwrap().await.unwrap();
+        });
+    });
+    assert_hostile_lines_forwarded(&captured);
+}
+
+#[test]
+fn a_chatty_child_exits_when_its_caller_reads_stdout_first() {
+    let dir = TempDir::new("stderr-stdout-first");
+    let ((), captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            // Stdout ends only once the child has exited, so this caller reaches `wait` only
+            // after a child that filled its stderr pipe was drained.
+            let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
+            let mut stdout = child.take_stdout().unwrap();
+            let mut out = Vec::new();
+            timeout(EXITS_WITHIN, stdout.read_to_end(&mut out))
+                .await
+                .expect("the child blocked writing to a full stderr pipe, so stdout stayed open")
+                .unwrap();
+            let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+            assert!(status.success(), "every write reached the pipe: {status:?}");
+            assert_eq!(child.id(), None, "reaped");
+            child.forward_stderr().unwrap().await.unwrap();
+        });
+    });
+    assert_hostile_lines_forwarded(&captured);
+}
+
+#[test]
+fn a_chatty_child_exits_when_its_caller_only_polls_try_wait() {
+    let dir = TempDir::new("stderr-try-wait");
+    let ((), captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
+            let polling = async {
+                loop {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        return status;
+                    }
+                    // Lets the forwarding task and tokio's I/O driver run before the next poll.
+                    tokio::task::yield_now().await;
+                }
+            };
+            let status = timeout(EXITS_WITHIN, polling)
+                .await
+                .expect("try_wait never saw the child exit: it blocked on a full stderr pipe");
+            assert!(status.success(), "every write reached the pipe: {status:?}");
+            assert_eq!(child.id(), None, "reaped");
+            child.forward_stderr().unwrap().await.unwrap();
+        });
+    });
+    assert_hostile_lines_forwarded(&captured);
+}
+
+#[test]
+fn raw_stderr_hands_the_caller_every_byte() {
+    let dir = TempDir::new("stderr-raw");
+    let (read, captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            let spec = ChildSpec { raw_stderr: true, ..helper("stderr-hostile", &dir.0) };
+            let mut child = spawn(&spec).unwrap();
+            let mut stderr = child.take_stderr().expect("the raw pipe is the caller's");
+            let mut read = Vec::new();
+            timeout(EXITS_WITHIN, stderr.read_to_end(&mut read))
+                .await
+                .expect("the child wrote its stderr to the end")
+                .unwrap();
+            let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+            assert!(status.success(), "every write reached the pipe: {status:?}");
+            assert!(child.forward_stderr().is_none(), "the caller has the pipe");
+            read
+        })
+    });
+    let expected = hostile_stderr();
+    assert_eq!(read.len(), expected.len(), "every byte the child wrote");
+    assert!(read == expected, "in order and unchanged");
+    assert!(captured.events_named(names::CHILD_STDERR).is_empty(), "nothing forwarded it");
 }
 
 #[test]
