@@ -178,8 +178,8 @@ The Linux lane runs other packages' branches before they merge (LINUX.md section
 show. Reading the guard's Linux memory code then found a third.
 [LINUX.md section 10](../LINUX.md#10-what-the-linux-lane-found-already) has the detail. With the
 three patches below, as commits on ca336be, that branch passes every Linux lane with 306 of 306
-tests. The owner chose a branch: all three are fixed on `main`, in WP0's base crates as #73
-merged them (a67d096), as this write-up proposed. The QoS test ends the boost with its scope, the
+tests. WP0 fixed all three on its own branch, as this write-up proposed (c74a8c8, 06898a7 and
+9f27f20), and #73 brought them to `main` (a67d096). The QoS test ends the boost with its scope, the
 lock has section 4.1's tokio (1.53.3 by then, #59), and the guard reads commit headroom by
 `vm.overcommit_memory` (`eileen-buildguard`'s `memory.rs`).
 
