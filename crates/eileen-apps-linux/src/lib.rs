@@ -3,18 +3,18 @@
 //!
 //! # Owns
 //!
-//! - The trait implementations, thin adapters over the clients below: `eileen-platform`'s `Apps`
-//!   for [`LinuxApps`], `RecentSources` for [`LinuxRecent`], `MediaSessions` for [`LinuxMedia`].
-//! - For `Apps`: the index of desktop entries (the XDG Desktop Entry Specification 1.5): their
-//!   format, which entries the menu shows, the data folders' precedence, desktop file IDs and which
-//!   apps are packaged; and [`Opener`]: opening through the `OpenURI` portal, and D-Bus activation
-//!   for the entry that [`entry_for`] finds from the trait's `AppEntry`.
-//! - For `RecentSources`: reading `recently-used.xbel` (the Desktop Bookmark Specification 0.8.5):
-//!   which bookmarks are local files, when each was last opened, by which app, of what kind.
-//!   [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
-//! - For `MediaSessions`: [`MprisSessions`] (which bus names are players, their properties as
-//!   `MediaState`s, each `MediaAction`'s call) and [`MprisWatch`]'s rules: which signals read a
-//!   player again, folded into one read per player, and `Gone` when a player loses its name.
+//! - `eileen-platform`'s `Apps` for [`LinuxApps`], a thin adapter like the other two trait
+//!   implementations, over the index of desktop entries (the XDG Desktop Entry Specification 1.5):
+//!   their format, which entries the menu shows, the data folders' precedence, desktop file IDs and
+//!   which apps are packaged; and over [`Opener`]: opening through the `OpenURI` portal, and D-Bus
+//!   activation for the entry that [`entry_for`] finds from the trait's `AppEntry`.
+//! - `RecentSources` for [`LinuxRecent`], over reading `recently-used.xbel` (the Desktop Bookmark
+//!   Specification 0.8.5): which bookmarks are local files, when each was last opened, by which
+//!   app, of what kind. [`RecentItem`] keeps the app's name `Untrusted`, as another app wrote it.
+//! - `MediaSessions` for [`LinuxMedia`], over [`MprisSessions`] (which bus names are players, their
+//!   properties as `MediaState`s, each `MediaAction`'s call) and [`MprisWatch`]'s rules: which
+//!   signals read a player again, folded into one read per player, and `Gone` when a player loses
+//!   its name.
 //!
 //! # Does not own
 //!
