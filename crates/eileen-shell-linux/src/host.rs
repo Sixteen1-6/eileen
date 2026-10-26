@@ -13,9 +13,10 @@
 //! - `lock_workstation` and `session_locked`: [`SessionLock`] on the system bus.
 //! - `set_run_at_sign_in`: [`set_run_at_sign_in`] in the settings' autostart folder, with std
 //!   file I/O on the caller's thread; with no folder it is `Unavailable`.
-//! - `register_hotkey`, `set_tray` and `watch_input`: `Unavailable` until phase L2.
-//!   `register_hotkey` and `watch_input` are the first of it, on the `GlobalShortcuts` portal, as
-//!   the section after next says; `set_tray` still waits.
+//! - `register_hotkey` and `watch_input`: the `GlobalShortcuts` portal, through a holder task,
+//!   as the section after next says.
+//! - `set_tray`: the `tray` module's `StatusNotifierItem`, kept by a holder task, as the section
+//!   after that says.
 //!
 //! # The power request
 //!
@@ -84,6 +85,23 @@
 //!   connection and ends each `watch_input`'s events, or when the portal closes the session;
 //!   the next call then starts a new holder.
 //!
+//! # The tray
+//!
+//! The first `set_tray` starts a holder task on the bridge's thread, which keeps the item and its
+//! menu on a session connection of its own ([`Buses::unshared_session`]). The holder shows that
+//! call's state before it registers the item with the watcher, so that a host's first read has
+//! it, and registers whenever the watcher's name has an owner: at once, and again each time the
+//! name gets a new one, as when the watcher restarts. Each later `set_tray` asks the holder to
+//! show its state, and every call waits for the holder's answer within the settings' deadline.
+//! The mute state picks [`TraySettings`]' icon, the tooltip fills the item's, and the menu
+//! becomes the dbusmenu items. The answer is `Ok` while a watcher has the item, and `Unavailable`
+//! while none does, as on GNOME without its `AppIndicator` extension; the item stays on the bus
+//! and registers once a watcher comes. A menu item the user
+//! chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
+//! with its `TrayItem::id`. When the shell drops, the holder ends and drops its connection, so
+//! the item leaves the bus and the watcher forgets it. A holder whose connection closed has ended
+//! too, and the next `set_tray` starts another, under a new name.
+//!
 //! # Traps
 //!
 //! - zbus bounds no connect, neither its handshake nor its `Hello` call, and the task's own
@@ -110,10 +128,15 @@
 //!   release; one that closes the session ends the holder, and the next call starts one that
 //!   binds that call's shortcut alone. Either way `watch_input` hears nothing more, which
 //!   nothing reports yet. Following the portal is a follow-up.
+//! - A tray choice may not come from a person, as [`LinuxShellEvent::TrayChoice`] says.
+//! - The tray holder registers in turn with its other work, so a watcher that never answers
+//!   holds it for its connection's method timeout, and a `set_tray` made meanwhile can pass its
+//!   deadline. A watcher that answers with an error leaves the item unregistered, as none would.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 
 mod shortcuts;
+mod tray;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -130,8 +153,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::{
-    DbusError, LinuxPowerRequest, Notifier, NotifierSettings, SessionLock, set_run_at_sign_in,
-    trigger_of_chord, trigger_of_key,
+    DbusError, LinuxPowerRequest, Notifier, NotifierSettings, SessionLock, TraySettings,
+    set_run_at_sign_in, trigger_of_chord, trigger_of_key,
 };
 use shortcuts::{ASKS, Ask, EDGES, Edges, EventSink, Holder, put};
 
@@ -191,6 +214,8 @@ pub struct LinuxShellSettings {
     /// Eileen by `notifier`'s desktop entry, whose desktop file the portal's host registry asks
     /// for.
     pub shortcut_names: ShortcutNames,
+    /// The tray's icons. The tray names Eileen by `notifier`'s desktop entry.
+    pub tray: TraySettings,
 }
 
 /// `ShellHost` on Linux, over a [`Bridge`]; the module's doc says what each method uses.
@@ -200,6 +225,8 @@ pub struct LinuxShell {
     settings: LinuxShellSettings,
     /// The shortcuts holder's asks, once a call has started one.
     shortcuts: Mutex<Option<mpsc::Sender<Ask>>>,
+    /// The tray holder's asks, once `set_tray` has started one.
+    tray: Mutex<Option<mpsc::Sender<tray::Ask>>>,
     /// Where the shell's own events go; with none, they are dropped.
     events: Option<EventSink>,
 }
@@ -209,12 +236,13 @@ impl LinuxShell {
     /// nothing yet.
     #[must_use]
     pub const fn new(bridge: Bridge, settings: LinuxShellSettings) -> Self {
-        Self { bridge, settings, shortcuts: Mutex::new(None), events: None }
+        Self { bridge, settings, shortcuts: Mutex::new(None), tray: Mutex::new(None), events: None }
     }
 
-    /// The shell, with `sink` for what no `ShellHost` method returns: each hotkey's press and
-    /// the desktop's answer to the shortcuts ([`LinuxShellEvent`]). The sink runs on the
-    /// bridge's thread, so it must not block, nor call the shell, which the bridge refuses there.
+    /// The shell, with `sink` for what no `ShellHost` method returns: each hotkey's press, the
+    /// desktop's answer to the shortcuts and the tray menu's choices ([`LinuxShellEvent`]). The
+    /// sink runs on the bridge's thread, so it must not block, nor call the shell, which the
+    /// bridge refuses there.
     #[must_use]
     pub fn with_events(mut self, sink: Arc<dyn Fn(LinuxShellEvent) + Send + Sync>) -> Self {
         self.events = Some(EventSink(sink));
@@ -237,6 +265,21 @@ impl LinuxShell {
         let sink = self.events.clone();
         (asks, Some(Holder { asks: taken, deadline: *deadline, app_id, sink }))
     }
+
+    /// The tray holder's asks, and, when there is no holder yet or the last has ended, a new one
+    /// to start on them.
+    fn tray(&self) -> (mpsc::Sender<tray::Ask>, Option<tray::Holder>) {
+        let mut held = self.tray.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(asks) = held.as_ref().filter(|asks| !asks.is_closed()) {
+            return (asks.clone(), None);
+        }
+        let (asks, taken) = mpsc::channel(tray::ASKS);
+        *held = Some(asks.clone());
+        drop(held);
+        let LinuxShellSettings { notifier, tray: settings, .. } = &self.settings;
+        let (id, settings) = (notifier.desktop_entry.clone(), settings.clone());
+        (asks, Some(tray::Holder { asks: taken, id, settings, sink: self.events.clone() }))
+    }
 }
 
 impl ShellHost for LinuxShell {
@@ -252,9 +295,12 @@ impl ShellHost for LinuxShell {
         })
     }
 
-    /// `Unavailable` until phase L2 brings the tray as a `StatusNotifierItem`.
-    fn set_tray(&self, _state: TrayState) -> Result<(), PlatformError> {
-        Err(PlatformError::Unavailable { what: TRAY })
+    /// Shows `state` as Eileen's `StatusNotifierItem`, through the tray holder; the module's doc
+    /// says how. `Unavailable` while no watcher has the item.
+    fn set_tray(&self, state: TrayState) -> Result<(), PlatformError> {
+        let (asks, holder) = self.tray();
+        self.bridge
+            .call(TRAY, self.settings.deadline, move |buses| tray::show(buses, asks, holder, state))
     }
 
     /// [`Notifier::notify`] on the session bus. The notification's id is dropped: no trait
