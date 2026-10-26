@@ -77,7 +77,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 28 | #104 | `wp10/linux-crate-docs-owns` | Merged on 2026-10-26 as 84822d2: the Linux crates' `# Owns` sections kept to three bullets, which leaves `lint-repo` the two check 14 problems in `eileen-dbus-linux`'s `testing.rs` |
 | 29 | #107, #110 | `wp10/shell-shortcuts-holder`, `wp10/shell-tray` | Merged on 2026-10-26 as d94057a and e4139be: `register_hotkey` and `watch_input` through the GlobalShortcuts portal, and `set_tray` as a StatusNotifierItem with a dbusmenu menu |
 | 30 | #83 | `wp10/linux-desktop-lane` | Merged on 2026-10-26 as d446972: amendment of section 4.6 with the nightly Linux desktop lane, its `session` job and the first four `linux_session` tests |
-| 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of the desktop lane's L2 pull requests |
+| 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
@@ -596,10 +596,11 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
 - Why: logind and polkit treat a process by its session, and the lock, the inhibitors and the
   power profile need an active local one, which a plain `dbus-run-session` on the runner is not.
 - Consequences: Tests that need such a session live in `linux_session` modules in a crate's
-  `tests/session/` binary, which only the lane's `linux-session` profile runs; the `ci` and
-  default profiles leave them out. systemd 259's logind defaults to `RemoveIPC=yes`, so the
-  runner user's SysV IPC and POSIX shared memory go when a session step's session is the user's
-  last; no step of the lane keeps any between steps.
+  `tests/session/` binary, which the lane's `linux-session` profile runs, and the owner
+  profile's `all()` filter takes too (Still open); the `ci` and default profiles leave them out.
+  systemd 259's logind defaults to `RemoveIPC=yes`, so the runner user's SysV IPC and POSIX
+  shared memory go when a session step's session is the user's last; no step of the lane keeps
+  any between steps.
 - Source: #83, on `main` as d446972; `.config/nextest.toml`; BUILD.md section 4.6; LINUX.md
   section 6.
 
@@ -697,8 +698,9 @@ Measured so far, each where it is recorded:
   `ubuntu-24.04` image, version 20261012.334.1.
 - #83's `session` job, on the hosted `ubuntu-26.04` runner: its four session tests pass against
   the real services in the headless session, at e24cb4a and at its last head 8aca526 (run
-  40404308881, on the runner image of 2026-10-23, Ubuntu 26.04.1 with systemd 259.5), in about 2
-  minutes with the Linux build cache restored. A run at 1ca07be failed after 34 minutes because
+  40404308881 of 2026-10-26, on the `ubuntu-26.04` image, version 20261012.163.1: Ubuntu 26.04.1
+  with systemd 259.5, which the job's package install moves to 259.9), in about 2 minutes with
+  the Linux build cache restored. A run at 1ca07be failed after 34 minutes because
   WirePlumber started before PipeWire's sockets. No scheduled run on `main` has happened yet.
 - #91's lane run 40406035648 at 2d7d033 (open, on `ubuntu-26.04`): nine `linux_session` tests
   pass. Its first run at 43b8fc8 failed the three notification tests: notification-daemon
