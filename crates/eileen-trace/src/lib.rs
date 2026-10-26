@@ -29,8 +29,10 @@
 //!   record's ids and times (test `ring::tests::span_ids_of_reused_slots_survive_the_dump`),
 //!   and a ring's size bounds what its lines and their queue allocate
 //!   (`ring::tests::the_bound_counts_what_the_lines_allocate`).
-//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in
-//!   (test `it::stack::file_lines_carry_their_span_and_reduce_pii`), and no log line or ring
+//! - `pii.` fields reach the files only as length and keyed hash unless the user opted in (test
+//!   `it::stack::file_lines_carry_their_span_and_reduce_pii`); a span trace shows them as their
+//!   length alone even then (`it::stack::a_logged_span_trace_shows_pii_fields_as_their_length` and
+//!   `it::stack::a_logged_span_trace_shows_pii_lengths_with_personal_logs_on`). No log line or ring
 //!   record carries a build PC's home folder (`it::canary::no_home_folder_reaches_disk_or_a_dump`,
 //!   and for `log` records `it::canary::a_log_crate_record_keeps_its_own_target_and_location`).
 //! - A process deletes only its own daily log files, `<process>.<YYYY-MM-DD>.jsonl` matched
@@ -61,14 +63,13 @@
 //! - A `log` record arrives as tracing-log's `log event`: read its origin with `record::Origin`.
 //! - [`TraceConfig::pii_key`] is the per-install key the runtime derives; a process started
 //!   without it writes `pii.` fields as their length alone.
-//! - The core's process name, `eileen`, begins every other process's file name: match log
-//!   file names exactly, never by prefix (tracing-appender's `max_log_files` matches by
-//!   prefix, so it stays off).
+//! - The core's process name, `eileen`, begins every other process's file name: match log file
+//!   names exactly, never by prefix (tracing-appender's `max_log_files` does, so it stays off).
 //!
 //! # Logs and tracing
 //!
-//! - Emits `span.slow` (target `eileen_trace::slow`) and `soft_assert.failed` (target
-//!   `eileen_trace`); owns no spans.
+//! - Emits `span.slow` (target `eileen_trace::slow`), and `soft_assert.failed` and
+//!   `log_bridge.failed` (target `eileen_trace`); owns no spans.
 //! - Pruning old log files writes nothing to the logs or to stderr.
 //! - Read back with `eileen trace <id>`, or open an incident's `timeline.json` in Perfetto.
 //!
