@@ -8,7 +8,7 @@ The project is named Eileen. The owner chose the name on 2026-10-11, and the cho
 |---|---|
 | Product | Eileen |
 | Repository | `github.com/Sixteen1-6/eileen` |
-| Python package and command | `eileen`, run as `eileen doctor` or `python -m eileen doctor` |
+| Binary and command | `eileen` (the `eileen-cli` crate), for example `eileen --version` |
 | Environment variables | `EILEEN_` prefix, for example `EILEEN_LOCAL_ONLY` |
 | Data directory | `%LOCALAPPDATA%\eileen` |
 | MCP server names | `eileen-` prefix, for example `eileen-desktop` |

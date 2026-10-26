@@ -1,0 +1,39 @@
+[package]
+name = "eileen-shell-win"
+description = "Eileen's shell on Windows: the tray, hotkeys, Raw Input, toasts, secrets, memory figures and the machine id"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP2"
+unsafe = "ffi"
+
+# The native libraries of BUILD.md section 4.1, declared from W0 so their build failures show up
+# before WP2 uses them; the stub does not use them yet.
+[package.metadata.cargo-machete]
+ignored = [
+  "global-hotkey",
+  "keyring-core",
+  "tauri-winrt-notification",
+  "tray-icon",
+  "windows-native-keyring-store",
+]
+
+# Windows only, as the -linux crates are Linux only: off Windows the crate is empty and has no
+# dependencies.
+[target.'cfg(windows)'.dependencies]
+eileen-contracts.workspace = true
+eileen-platform.workspace = true
+global-hotkey.workspace = true
+keyring-core.workspace = true
+tauri-winrt-notification.workspace = true
+tray-icon.workspace = true
+windows-native-keyring-store.workspace = true
+
+[lints]
+workspace = true

@@ -130,8 +130,6 @@ const PORTAL: &str = "Inhibit portal";
 const RESPONSE: &str = "portal response";
 const REASON: &str = "keep-awake reason";
 const HOLDER: &str = "keep-awake holder";
-const SYSTEM_BUS: &str = "system bus";
-const SESSION_BUS: &str = "session bus";
 
 /// The portal's `Response` code 2 to an inhibition: its backend refused or failed.
 const BACKEND_FAILED: DbusError = DbusError::Refused { what: PORTAL, reason: "its backend failed" };
@@ -225,9 +223,12 @@ impl DesktopHold {
 impl LinuxPowerRequest {
     /// Keeps the PC from sleeping and the session from going idle and locking until the request
     /// drops: logind's lock on `system`, then the desktop's hold on `session`, GNOME's session
-    /// manager first and the Inhibit portal second. `None` stands for a bus the caller could not
-    /// reach. Give `session` to the request alone, a new `eileen_dbus_linux::session_bus()`: the
-    /// request keeps it, and closing it is how a dropped request ends the desktop's hold.
+    /// manager first and the Inhibit portal second. An `Err` stands for a bus the caller could not
+    /// reach, and is that holder's miss: [`DbusError::Unavailable`] for a bus that is not there,
+    /// a holder merely absent, or [`DbusError::DeadlineExceeded`] for one that did not answer the
+    /// connect in time. Give `session` to the request alone, a new
+    /// `eileen_dbus_linux::session_bus()`: the request keeps it, and closing it is how a dropped
+    /// request ends the desktop's hold.
     ///
     /// `why` is the reason the desktop and `systemd-inhibit --list` show beside "Eileen"; GNOME's
     /// session manager refuses an empty one, so a blank `why` is [`DbusError::Invalid`].
@@ -240,8 +241,8 @@ impl LinuxPowerRequest {
     /// It fails only when nothing holds: with logind's error, or the desktop's when logind was
     /// merely absent, or [`DbusError::Unavailable`] when every holder is absent.
     pub async fn keep_awake(
-        system: Option<&zbus::Connection>,
-        session: Option<zbus::Connection>,
+        system: Result<&zbus::Connection, DbusError>,
+        session: Result<zbus::Connection, DbusError>,
         why: &str,
         deadline: Duration,
     ) -> Result<Self, DbusError> {
@@ -249,12 +250,12 @@ impl LinuxPowerRequest {
             return Err(DbusError::Invalid { what: REASON, detail: "empty".to_owned() });
         }
         let sleep = match system {
-            Some(system) => inhibit_sleep(system, why).await,
-            None => Err(DbusError::Unavailable { what: SYSTEM_BUS }),
+            Ok(system) => inhibit_sleep(system, why).await,
+            Err(unreached) => Err(unreached),
         };
         let desktop = match session {
-            Some(session) => hold_desktop(session, why, deadline).await,
-            None => Err(DbusError::Unavailable { what: SESSION_BUS }),
+            Ok(session) => hold_desktop(session, why, deadline).await,
+            Err(unreached) => Err(unreached),
         };
         match (sleep, desktop) {
             (Err(sleep), Err(desktop)) => Err(if absent(&sleep) && absent(&desktop) {

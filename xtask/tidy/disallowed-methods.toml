@@ -1,0 +1,82 @@
+# Check 14 (BUILD.md section 4b.3): the only places an `#[expect(clippy::disallowed_methods)]` may
+# sit, and the only functions that may call `Command::new` (`spawns = true`), as section 4b.2's
+# sanctioned exceptions stand after wp0/base-crates. A new one needs a decision record.
+
+# The development tools run cargo, git and the repository tools and are never shipped; each has its
+# own clippy.toml.
+[[exempt]]
+path = "xtask"
+reason = "the development tool: runs and times cargo, git and the repository tools"
+
+[[exempt]]
+path = "tools/repo-tools"
+reason = "the development tool: runs the syn-based checks and external linters"
+
+[[site]]
+path = "crates/eileen-stdx/src/clock.rs"
+function = "now"
+reason = "SystemClock: the one real clock"
+
+[[site]]
+path = "crates/eileen-stdx/src/clock.rs"
+function = "system_now"
+reason = "SystemClock: the one real clock, wall time"
+
+[[site]]
+path = "crates/eileen-stdx/src/ids.rs"
+function = "ulid"
+reason = "OsIds: the one ID generator"
+
+[[site]]
+path = "crates/eileen-stdx/src/thread.rs"
+function = "spawn_named_with_stack"
+reason = "the one named thread spawn, which spawn_named calls"
+
+[[site]]
+path = "crates/eileen-stdx/src/thread.rs"
+function = "sleep"
+reason = "the one sleep, for named threads"
+
+[[site]]
+path = "crates/eileen-rt/src/task.rs"
+function = "spawn_raw"
+reason = "task::spawn: names the task, keeps the span and registers it"
+
+[[site]]
+path = "crates/eileen-rt/src/task.rs"
+function = "spawn_blocking"
+reason = "task::spawn_blocking: named, on the bounded pool"
+
+[[site]]
+path = "crates/eileen-supervisor/src/child.rs"
+function = "base_command"
+spawns = true
+reason = "the one Command::new for every child of the running product"
+
+[[site]]
+path = "crates/eileen-buildguard/src/clock.rs"
+function = "instant_now"
+reason = "the build guard's sampling clock (std and windows-sys only)"
+
+[[site]]
+path = "crates/eileen-buildguard/src/clock.rs"
+function = "system_now"
+reason = "the build guard's sampling clock, wall time"
+
+[[site]]
+path = "crates/eileen-buildguard/src/clock.rs"
+function = "sleep"
+reason = "RealClock: the build guard's sampling sleep"
+
+[[site]]
+path = "crates/eileen-buildguard/src/spawn.rs"
+function = "spawn_cargo"
+spawns = true
+reason = "cargo in the guard's own kill-on-close Job Object at below-normal priority"
+
+# WP2 builds it; its file is not fixed yet, so the whole crate is named.
+[[site]]
+path = "crates/eileen-guard"
+function = "restart_core"
+spawns = true
+reason = "the guard restarts a hung core from outside the core's Job Object"
