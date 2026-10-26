@@ -8,7 +8,10 @@ use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
 use rustix::io::Errno;
-use rustix::process::{Signal, getpid, getppid, set_parent_process_death_signal, setsid};
+use rustix::process::{
+    Signal, getpid, getppid, getpriority_process, set_parent_process_death_signal,
+    setpriority_process, setsid,
+};
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 
@@ -20,10 +23,15 @@ pub(crate) fn watch_pidfd(pidfd: OwnedFd) -> io::Result<AsyncFd<OwnedFd>> {
     unsafe { AsyncFd::register_with_interest(pidfd, Interest::READABLE) }.map_err(io::Error::from)
 }
 
+/// The nicest value a process can have.
+const NICEST: i32 = 19;
+
 /// Makes the child of `command` lead a session of its own, which makes it the leader of a new
 /// process group with no controlling terminal, and get `SIGKILL` when the thread that forks it
-/// ends (the parent-death signal follows the forking thread, not the process).
-pub(crate) fn own_session_killed_with_parent(command: &mut Command) {
+/// ends (the parent-death signal follows the forking thread, not the process). With `nicer_by`
+/// above zero it also runs that many nice steps below the forking thread, at most at 19: raising
+/// the nice value needs no privilege, and everything the child starts inherits it.
+pub(crate) fn own_session_killed_with_parent(command: &mut Command, nicer_by: i32) {
     let parent = getpid();
     let setup = move || -> io::Result<()> {
         setsid()?;
@@ -33,11 +41,15 @@ pub(crate) fn own_session_killed_with_parent(command: &mut Command) {
         if getppid() != Some(parent) {
             return Err(Errno::SRCH.into());
         }
+        if nicer_by > 0 {
+            let now = getpriority_process(None)?;
+            setpriority_process(None, now.saturating_add(nicer_by).min(NICEST))?;
+        }
         Ok(())
     };
     // SAFETY: `setup` runs in the forked child before exec, where only async-signal-safe
-    // work is sound. It makes three raw system calls through rustix (setsid, prctl and
-    // getppid) and turns a failure into an `io::Error` from its raw code; it allocates
-    // nothing, takes no lock and reads only the pid it was given.
+    // work is sound. It makes raw system calls through rustix (setsid, prctl, getppid, and
+    // getpriority and setpriority) and turns a failure into an `io::Error` from its raw code;
+    // it allocates nothing, takes no lock and reads only the two values it was given.
     unsafe { command.pre_exec(setup) };
 }

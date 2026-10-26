@@ -25,7 +25,8 @@
 //!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
 //! - On Linux a child leads its own session, and its whole group dies before the reap: on drop,
 //!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
-//!   spawned it, from any thread (a test of `tests::linux` for each).
+//!   spawned it, from any thread. A Claude session runs ten nice steps below the core, and
+//!   `wait` forwards a stderr pipe nobody took (a test of `tests::linux` for each).
 //! - The detached spawn outlives its parent (Windows test
 //!   `tests::the_guard_spawn_outlives_its_parent`).
 //! - A failing child restarts at most `max_restarts` times per window
@@ -59,7 +60,8 @@
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
 //! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime with I/O (tokio's process
-//!   driver, and on Linux the child's pidfd).
+//!   driver, and on Linux the child's pidfd). A child blocks on a full stderr pipe: take or
+//!   forward it before reading stdout to its end (on Linux, take it before [`Child::wait`]).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.

@@ -14,10 +14,12 @@
 //! supervisor's own thread, which lives as long as the process, with `SIGKILL` as its
 //! parent-death signal, so a crash of Eileen kills every child. Their descendants are not
 //! reached: one that outlives its child in a crash, or leaves the group (`setsid`, `setpgid`),
-//! is for the cgroup scope of LINUX.md section 5, which this crate does not have yet. On other
-//! Unix systems the child leads its own process group.
+//! is for the cgroup scope of LINUX.md section 5, which this crate does not have yet. A Claude
+//! session runs ten nice steps below the core, which its builds inherit. On other Unix systems
+//! the child leads its own process group.
 //!
-//! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`.
+//! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`, and
+//! on Linux [`Child::wait`] does so for a pipe nobody took, so a full pipe cannot hang the wait.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -41,7 +43,8 @@ pub const MAX_STDERR_LINE: usize = 4 * 1024;
 pub enum ChildClass {
     /// A sidecar (`eileen-speech`, `eileen-desktop`, `eileen-apps`, `eileen-hud`): normal priority.
     Sidecar,
-    /// A Claude session (brain, spare, pooled or job worker, librarian): below normal.
+    /// A Claude session (brain, spare, pooled or job worker, librarian): below normal on
+    /// Windows, ten nice steps below the core on Linux; other Unix systems keep the core's.
     ClaudeSession,
     /// A short tool run (`fuscript`, a probe): normal priority.
     Tool,
@@ -170,6 +173,10 @@ pub struct Child {
 /// Starts `spec` supervised: in a kill-on-close Job Object, without a console window, killed
 /// when the returned [`Child`] is dropped. On Linux, in a session of its own, forked on the
 /// supervisor's own thread inside the caller's tokio runtime.
+///
+/// Stderr is always a pipe, and a child that fills it blocks until it is read: take it or
+/// forward it before reading stdout to its end. On Linux [`Child::wait`] forwards a pipe that
+/// nobody took; on Windows nothing reads it unless the caller does.
 pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let mut command = tokio::process::Command::from(base_command(spec));
     if spec.piped {
@@ -206,9 +213,18 @@ fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
     wrap.wrap(CreationFlags(flags)).wrap(JobObject);
 }
 
+/// On Linux a Claude session runs this many nice steps below the core (at most at 19), the
+/// counterpart of Windows' `BELOW_NORMAL_PRIORITY_CLASS`, so its builds yield to the voice loop.
 #[cfg(target_os = "linux")]
-fn wrap_platform(wrap: &mut CommandWrap, _class: ChildClass) {
-    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut());
+pub(crate) const CLAUDE_SESSION_NICER_BY: i32 = 10;
+
+#[cfg(target_os = "linux")]
+fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
+    let nicer_by = match class {
+        ChildClass::ClaudeSession => CLAUDE_SESSION_NICER_BY,
+        ChildClass::Sidecar | ChildClass::Tool => 0,
+    };
+    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut(), nicer_by);
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -283,9 +299,15 @@ impl Child {
     }
 
     /// Waits for the child (and, on Windows, every process in its job) to exit. On Linux it
+    /// first forwards stderr into tracing unless [`Self::take_stderr`] or
+    /// [`Self::forward_stderr`] took it, so a chatty child cannot block on a full pipe, and it
     /// kills what is left of the child's process group once the child has exited, then reaps
     /// it.
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+        // A child that fills the stderr pipe blocks in write(2) and never exits, so on Linux a
+        // pipe nobody took is forwarded from here; the task outlives this future.
+        #[cfg(target_os = "linux")]
+        let _ignored = self.forward_stderr();
         let status = self.inner.wait().await?;
         tracing::info!(name: names::CHILD_EXITED, child = self.name, code = status.code());
         Ok(status)
