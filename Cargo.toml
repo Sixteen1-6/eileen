@@ -18,13 +18,43 @@ publish = false
 # Internal crates: one line each, path = "crates/<name>", for every crate in section 3.1. Each
 # line joins in the WP0 pull request that creates its crate, as `members` does: Dependabot's
 # cargo updater fails the whole run on a workspace dependency whose path holds no Cargo.toml.
+eileen-apps = { path = "crates/eileen-apps" }
+eileen-apps-win = { path = "crates/eileen-apps-win" }
+eileen-audio = { path = "crates/eileen-audio" }
 eileen-audio-linux = { path = "crates/eileen-audio-linux" }
+eileen-audio-win = { path = "crates/eileen-audio-win" }
 eileen-buildguard = { path = "crates/eileen-buildguard" }
+eileen-cli = { path = "crates/eileen-cli" }
+eileen-config = { path = "crates/eileen-config" }
 eileen-contracts = { path = "crates/eileen-contracts" }
+eileen-core = { path = "crates/eileen-core" }
+eileen-crash = { path = "crates/eileen-crash" }
 eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
+eileen-desktop = { path = "crates/eileen-desktop" }
+eileen-desktop-win = { path = "crates/eileen-desktop-win" }
+eileen-dictation = { path = "crates/eileen-dictation" }
+eileen-e2e = { path = "crates/eileen-e2e" }
+eileen-fleet = { path = "crates/eileen-fleet" }
+eileen-guard = { path = "crates/eileen-guard" }
+eileen-harness = { path = "crates/eileen-harness" }
+eileen-hud = { path = "crates/eileen-hud" }
+eileen-hud-win = { path = "crates/eileen-hud-win" }
+eileen-intent = { path = "crates/eileen-intent" }
+eileen-learn = { path = "crates/eileen-learn" }
+eileen-mcp = { path = "crates/eileen-mcp" }
 eileen-platform = { path = "crates/eileen-platform" }
+eileen-record = { path = "crates/eileen-record" }
+eileen-replay = { path = "crates/eileen-replay" }
 eileen-rt = { path = "crates/eileen-rt" }
+eileen-runtime = { path = "crates/eileen-runtime" }
+eileen-scenarios = { path = "crates/eileen-scenarios" }
+eileen-shell-win = { path = "crates/eileen-shell-win" }
+eileen-shim = { path = "crates/eileen-shim" }
+eileen-sim = { path = "crates/eileen-sim" }
+eileen-skills = { path = "crates/eileen-skills" }
+eileen-speech = { path = "crates/eileen-speech" }
 eileen-stdx = { path = "crates/eileen-stdx" }
+eileen-stub-harness = { path = "crates/eileen-stub-harness" }
 eileen-supervisor = { path = "crates/eileen-supervisor" }
 eileen-trace = { path = "crates/eileen-trace" }
 

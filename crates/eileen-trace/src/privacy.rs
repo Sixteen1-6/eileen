@@ -4,9 +4,10 @@
 //!
 //! A scenario folder passes when no file is binary (except consented audio), no file is over
 //! its size cap, `scenario.toml` never says `origin = "user"`, no text line holds a secret the
-//! [`Redactor`] finds or anything the PII scan finds (e-mail addresses, phone numbers, user
-//! folders such as `C:\Users\<name>` and `/home/<name>`, machine names and token prefixes),
-//! and:
+//! [`Redactor`] finds or anything the PII scan finds (e-mail addresses, phone numbers but not
+//! ISO 8601 or TOML dates with a time, user folders such as `C:\Users\<name>`, `/home/<name>`,
+//! `/media/<name>` and a WSL distro's `\\wsl.localhost\<distro>\home\<name>` but not a web
+//! page's `https://<host>/users/...`, machine names and token prefixes), and:
 //!
 //! - **Audio only with its consent record.** `scenario.toml` parses as a [`Scenario`] with
 //!   `origin = "contributed-consented-audio"`, its `intent.audio.file` names the audio file,
@@ -219,6 +220,48 @@ fn emails(line: &str, out: &mut Vec<PiiFinding>) {
     }
 }
 
+/// The length of the date and time at the start of `bytes`, if one starts there: ISO 8601's and
+/// TOML's `2026-10-21 15:30` or `2026-10-21T15:30`, with any seconds, fraction and offset
+/// (`:00.123456-07:00`, `Z`). The phone rule would read a number in it: the ten digits in four
+/// groups up to a spaced hour, or the ten of the seconds, fraction and offset hour.
+fn date_time_len(bytes: &[u8]) -> Option<usize> {
+    let digits = |at: usize, n: usize| {
+        bytes.get(at..at + n).is_some_and(|run| run.iter().all(u8::is_ascii_digit))
+    };
+    let byte = |at: usize| bytes.get(at).copied();
+    let date = digits(0, 4)
+        && byte(4) == Some(b'-')
+        && digits(5, 2)
+        && byte(7) == Some(b'-')
+        && digits(8, 2);
+    let time = matches!(byte(10), Some(b' ' | b'T' | b't'))
+        && digits(11, 2)
+        && byte(13) == Some(b':')
+        && digits(14, 2);
+    if !(date && time) {
+        return None;
+    }
+    let mut end = 16;
+    if byte(end) == Some(b':') && digits(end + 1, 2) {
+        end += 3;
+        let fraction = bytes.get(end + 1..).unwrap_or_default();
+        let fraction = fraction.iter().take_while(|b| b.is_ascii_digit()).count();
+        if byte(end) == Some(b'.') && fraction > 0 {
+            end += 1 + fraction;
+        }
+    }
+    if matches!(byte(end), Some(b'Z' | b'z')) {
+        end += 1;
+    } else if matches!(byte(end), Some(b'+' | b'-'))
+        && digits(end + 1, 2)
+        && byte(end + 3) == Some(b':')
+        && digits(end + 4, 2)
+    {
+        end += 6;
+    }
+    Some(end)
+}
+
 fn phones(line: &str, out: &mut Vec<PiiFinding>) {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -229,6 +272,12 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
                 .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'.');
         if !starts {
             i += 1;
+            continue;
+        }
+        // A date and time is no phone number, bare or in brackets: `(` can start a number too.
+        let open = usize::from(bytes.get(i) == Some(&b'('));
+        if let Some(len) = date_time_len(bytes.get(i + open..).unwrap_or_default()) {
+            i += open + len;
             continue;
         }
         let plus = bytes.get(i) == Some(&b'+');
@@ -263,10 +312,106 @@ fn phones(line: &str, out: &mut Vec<PiiFinding>) {
     }
 }
 
+/// True when `before`, the text in front of a `/home/` or `/users/` marker, ends with the
+/// scheme and host of an `http://` or `https://` address (a name or an IPv4 address, with any
+/// port), so the marker is the first folder of a page's path, as in
+/// `https://api.example.com/users/42`, and no folder on a PC. Anywhere else the marker is
+/// scanned: further in a path, where a dev server puts a PC's own paths (Vite's
+/// `/@fs/home/<name>/...`); on a host of this PC (`localhost`, a name under `.localhost`,
+/// `127.*`, `0.0.0.0`), where a server run from `/` shows its folders; on an IPv6 host in
+/// brackets, `[::1]` among them; and after any other scheme, `file://` and `sftp://` among them.
+///
+/// It reads back over the host and port alone. A line can hold a marker every few bytes, and
+/// reading back to a `://` for each, or to the line's start where none is, makes the scan of one
+/// line grow with the square of its length.
+fn at_web_root(before: &str) -> bool {
+    let front = before
+        .trim_end_matches(|c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+    let host = before.get(front.len()..).unwrap_or_default();
+    let Some(scheme) = front.strip_suffix("://") else {
+        return false;
+    };
+    let name = host
+        .rsplit_once(':')
+        .filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(host, |(name, _)| name);
+    let this_pc = name == "localhost"
+        || name.ends_with(".localhost")
+        || name.starts_with("127.")
+        || name == "0.0.0.0";
+    (scheme.ends_with("http") || scheme.ends_with("https"))
+        && !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        && !this_pc
+}
+
+/// True when `before`, the text in front of a `/media/` marker, ends where an absolute path
+/// starts, as a mount point's does: at the start of the line, after a space, a quote, `=`, `(`
+/// or `,`, after `file://`, or after a `/run` that starts one (`/run/media/<name>`). A folder
+/// named media further in a path (`assets/media/`, `/srv/media/`, `{HOME}/media/`) is no
+/// user's mount point.
+fn at_path_start(before: &str) -> bool {
+    let before = before.strip_suffix("/run").unwrap_or(before);
+    before.is_empty()
+        || before.ends_with("file://")
+        || before.ends_with(|c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '=' | '(' | ',')
+        })
+}
+
+/// True when `before`, the text in front of a `\home\` marker, ends with a WSL distro's root,
+/// `\\wsl.localhost\<distro>` or `\\wsl$\<distro>`, plain or JSON-escaped.
+fn under_wsl_distro(before: &str) -> bool {
+    let mut parts = before.rsplit('\\').filter(|part| !part.is_empty());
+    parts.next().is_some() && matches!(parts.next(), Some("wsl.localhost" | "wsl$"))
+}
+
+/// Where a marker of [`USER_FOLDERS`] names a user's folder. Each check reads back from the
+/// marker only as far as it needs, so a line full of markers still scans in linear time.
+#[derive(Debug, Clone, Copy)]
+enum Counts {
+    /// Anywhere: a drive's `Users` folder, which a web address holds only as a PC's own path
+    /// (Vite's `/@fs/C:/Users/<name>/...`).
+    Anywhere,
+    /// Anywhere but as the first folder of a web page's path ([`at_web_root`]).
+    NotAtWebRoot,
+    /// Only where an absolute path starts ([`at_path_start`]), as a mount point does.
+    AtPathStart,
+    /// Only under a WSL distro's root ([`under_wsl_distro`]), so a Windows folder named Home is
+    /// not read as one.
+    UnderWslDistro,
+}
+
+/// The folders a user's name follows, with where each counts: Windows' and macOS's `Users`
+/// (plain, JSON-escaped and with forward slashes), Linux's `/home/`, `/media/`, where Ubuntu
+/// mounts a user's drives (`/media/<name>/<label>`; Fedora's and Arch's `/run/media/<name>`
+/// too), and the Linux home a Windows app shows for a WSL distro's files, `\home\` plain and
+/// JSON-escaped.
+const USER_FOLDERS: [(&str, Counts); 8] = [
+    (":\\users\\", Counts::Anywhere),
+    (":\\\\users\\\\", Counts::Anywhere),
+    (":/users/", Counts::Anywhere),
+    ("/home/", Counts::NotAtWebRoot),
+    ("/users/", Counts::NotAtWebRoot),
+    ("/media/", Counts::AtPathStart),
+    ("\\home\\", Counts::UnderWslDistro),
+    ("\\\\home\\\\", Counts::UnderWslDistro),
+];
+
 fn user_paths(line: &str, out: &mut Vec<PiiFinding>) {
     let lower = line.to_ascii_lowercase();
-    for marker in [":\\users\\", ":\\\\users\\\\", ":/users/", "/home/", "/users/"] {
+    for (marker, counts) in USER_FOLDERS {
         for (at, _) in lower.match_indices(marker) {
+            let before = lower.get(..at).unwrap_or_default();
+            let names_a_user = match counts {
+                Counts::Anywhere => true,
+                Counts::NotAtWebRoot => !at_web_root(before),
+                Counts::AtPathStart => at_path_start(before),
+                Counts::UnderWslDistro => under_wsl_distro(before),
+            };
+            if !names_a_user {
+                continue;
+            }
             let name_start = at + marker.len();
             let name: String = line
                 .get(name_start..)
@@ -509,7 +654,11 @@ fn origin_value(line: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PiiKind, Problem, ScenarioFile, check_files, scan_line};
+    use std::time::Duration;
+
+    use eileen_stdx::clock::{Clock as _, SystemClock};
+
+    use super::{MAX_TEXT_BYTES, PiiKind, Problem, ScenarioFile, check_files, scan_line};
     use crate::redact::{Redactor, SecretKind};
 
     fn kinds(line: &str) -> Vec<PiiKind> {
@@ -520,17 +669,53 @@ mod tests {
     fn the_scan_finds_personal_data() {
         assert_eq!(kinds("mail sam.lee@quillpost.net now"), [PiiKind::Email], "e-mail");
         assert_eq!(kinds("call +1 (555) 123-4567"), [PiiKind::Phone], "phone");
+        assert_eq!(kinds("(555) 123-4567"), [PiiKind::Phone], "a number that starts with (");
+        for (line, what) in [
+            (r"C:\Users\samlee\Documents\cv.docx", "Windows user folder"),
+            (r#"{"path":"C:\\Users\\samlee\\x"}"#, "JSON-escaped"),
+            ("/home/samlee/notes", "Linux home"),
+            (r"\\wsl.localhost\Ubuntu\home\samlee\notes.txt", "a WSL home as Windows shows it"),
+            (r"\\wsl$\Ubuntu-24.04\home\samlee\notes.txt", "the older wsl$ form"),
+            (r#"{"path":"\\\\wsl.localhost\\Ubuntu\\home\\samlee\\notes.txt"}"#, "JSON-escaped"),
+            (r#"{"path":"\\\\wsl$\\Ubuntu\\home\\samlee\\notes.txt"}"#, "wsl$ JSON-escaped"),
+            // A drive mount, wherever its absolute path starts.
+            ("/media/samlee/USB/cv.pdf", "Ubuntu's drive mounts"),
+            ("/run/media/samlee/USB/cv.pdf", "Fedora's and Arch's"),
+            ("opened /media/samlee/USB/cv.pdf", "a mount after a space"),
+            ("path = \"/media/samlee/USB/cv.pdf\"", "a mount after a quote"),
+            ("path = '/media/samlee/USB/cv.pdf'", "a mount after a single quote"),
+            ("`/media/samlee/USB/cv.pdf`", "a mount after a backtick"),
+            ("path=/media/samlee/USB/cv.pdf", "a mount after ="),
+            ("(/media/samlee/USB/cv.pdf)", "a mount after a bracket"),
+            ("a.pdf,/media/samlee/USB/cv.pdf", "a mount after a comma"),
+            ("file:///media/samlee/USB/cv.pdf", "a mount in a file address"),
+            ("file:///run/media/samlee/USB/cv.pdf", "a mount under /run in a file address"),
+            // A folder on a PC in or after an address; only a web page's first folder is not one.
+            ("file:///home/samlee/notes.txt", "a file address names a folder on a PC"),
+            ("see https://site.test/docs or /home/samlee/notes", "a path after a space"),
+            ("https://files.example.com/open?path=/home/samlee/notes.txt", "a path in a query"),
+            (r#"{"url":"https://a.test/x","path":"/home/samlee/notes.txt"}"#, "a quoted path"),
+            ("https://a.test/x,/home/samlee/notes.txt", "a path after a comma"),
+            ("https://a.test/x#/home/samlee/notes.txt", "a path after a fragment's #"),
+            ("(https://a.test/x)/home/samlee/notes.txt", "a path after a bracket"),
+            ("https://a.test/x/home/samlee/notes", "a path past the first folder"),
+            ("https://a.test/x]/home/samlee/notes", "a bracket in the path"),
+            ("http://localhost:5173/@fs/home/samlee/app/src/App.tsx", "Vite's /@fs/"),
+            ("http://localhost:8888/files/home/samlee/nb.ipynb", "Jupyter's /files/"),
+            ("http://localhost:8000/home/samlee/notes.txt", "a server on this PC run from /"),
+            ("http://127.0.0.1/home/samlee/notes.txt", "127.*"),
+            ("http://0.0.0.0:8000/home/samlee/notes.txt", "0.0.0.0"),
+            ("http://app.localhost:3000/home/samlee/notes.txt", "a name under .localhost"),
+            ("http://[::1]:8000/home/samlee/notes.txt", "an IPv6 host"),
+            ("sftp://nas.example.com/home/samlee/notes.txt", "a scheme other than http"),
+        ] {
+            assert_eq!(kinds(line), [PiiKind::UserPath], "{what}: {line}");
+        }
         assert_eq!(
-            kinds(r"C:\Users\samlee\Documents\cv.docx"),
-            [PiiKind::UserPath],
-            "Windows user folder"
+            kinds("at main (http://localhost:5173/@fs/C:/Users/samlee/app/src/main.ts:3:1)"),
+            [PiiKind::UserPath, PiiKind::UserPath],
+            "a drive's Users folder in a dev server's path, as Vite's stack traces show it"
         );
-        assert_eq!(
-            kinds(r#"{"path":"C:\\Users\\samlee\\x"}"#),
-            [PiiKind::UserPath],
-            "JSON-escaped"
-        );
-        assert_eq!(kinds("/home/samlee/notes"), [PiiKind::UserPath], "Linux home");
         assert_eq!(kinds("host DESKTOP-4F7Q2ZK"), [PiiKind::MachineName], "default machine name");
         assert_eq!(kinds(r"\\NAS01\photos"), [PiiKind::MachineName], "UNC host");
         assert!(
@@ -570,12 +755,49 @@ mod tests {
             "test@example.com",
             "\"at_us\": 1761134400000000, \"mono\": 12345",
             "go to 15:30 on 2026-10-21",
+            "2026-10-21 15:30:00",
+            "created = 2026-10-21 15:30:00",
+            "at = 1979-05-27T07:32:00.999999-07:00",
+            "{\"at\": \"2026-10-21 15:30:00.5Z\"}",
+            "saved (2026-10-21 15:30)",
+            "(2026-10-21 15:30:00)",
+            "(1979-05-27T07:32:00.999999-07:00)",
+            "https://api.example.com/users/42",
+            "https://site.test/home/index.html",
+            "[the guide](HTTPS://site.test/users/guide)",
+            "https://api.example.com:8443/users/42",
             "server 192.168.100.200",
             r"C:\Users\Public\Desktop",
+            r"\\wsl.localhost\Ubuntu\home\{NAME}\notes.txt",
+            "/media/{NAME}/USB/{TITLE}",
+            r"{DOCS}\Home\Recipes.docx",
+            "https://cdn.example.com/static/media/logo.png",
+            "assets/media/logo.png",
+            "/srv/media/eileen",
+            "{HOME}/media/movie.mkv",
+            "C:/Windows/Media/chimes.wav",
             "version 1.13.8",
         ] {
             assert!(kinds(line).is_empty(), "{line}: {:?}", kinds(line));
         }
+    }
+
+    #[test]
+    fn a_long_line_of_folders_scans_in_linear_time() {
+        // A user folder every 7 bytes, in a line as long as the largest text file (a file over
+        // its cap is still scanned, so no cap bounds a line). Each marker's checks read back
+        // only over the text right in front of it. Were one to read back to the line's start,
+        // this line would take seconds in the dev profile; it takes milliseconds, far under
+        // the bound.
+        let unit = "/home/a";
+        let markers = MAX_TEXT_BYTES / unit.len();
+        let line = unit.repeat(markers);
+        let clock = SystemClock::new();
+        let found = kinds(&line);
+        let took = Duration::from_nanos(clock.mono().0);
+        assert_eq!(found.len(), markers, "one finding per marker");
+        assert!(found.iter().all(|kind| *kind == PiiKind::UserPath), "each a user folder");
+        assert!(took < Duration::from_secs(1), "{markers} user folders in one line took {took:?}");
     }
 
     /// A valid `scenario.toml` with this origin, and `extra` appended (an `[intent.audio]`

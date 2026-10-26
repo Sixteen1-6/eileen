@@ -1,0 +1,7 @@
+# Modules whose job is numeric (BUILD.md section 4b.2, "Casts and indexing in numeric code"): each
+# may carry one module-level #![expect(...)] for the cast and indexing lints, and its public
+# functions check lengths once at the boundary. Anywhere else, use eileen_stdx::num.
+
+[[module]]
+path = "xtask::sha256"
+reason = "SHA-256's message schedule and rounds index fixed 64-word arrays"

@@ -1,0 +1,28 @@
+[package]
+name = "eileen-audio"
+description = "Eileen's audio: capture, playback and loopback, echo cancellation, the speech ring buffer and test sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP4"
+unsafe = "forbid"
+
+# cpal is a native library of BUILD.md section 4.1, declared from W0 so its build failures show
+# up before WP4 uses it; the stub does not use it yet.
+[package.metadata.cargo-machete]
+ignored = ["cpal"]
+
+[dependencies]
+eileen-contracts.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+cpal.workspace = true
+
+[lints]
+workspace = true

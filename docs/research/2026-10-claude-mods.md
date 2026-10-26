@@ -289,7 +289,7 @@ or, inside a session, `/plugin install eileen --marketplace Sixteen1-6/eileen`. 
 
 ## 4. What was verified on this PC
 
-All work under `C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\claude-mods\`:
+All work under `%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\claude-mods\`:
 
 | Path | What it is |
 |---|---|
@@ -377,4 +377,4 @@ Anthropic, read 2026-10-20: [mods overview](https://code.claude.com/docs/en/plug
 
 Secondary: search summaries of [local MCP servers on Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) and [build a desktop extension with MCPB](https://claude.com/docs/connectors/building/mcpb).
 
-Eileen: [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md), [2026-10-brain-latency.md](2026-10-brain-latency.md), [2026-10-learning-loop.md](2026-10-learning-loop.md), [2026-10-rust-architecture.md](2026-10-rust-architecture.md), [ARCHITECTURE.md](../ARCHITECTURE.md).
+Eileen: [2026-10-subscription-harnesses.md](2026-10-subscription-harnesses.md), [2026-10-brain-latency.md](2026-10-brain-latency.md), [2026-10-learning-loop.md](2026-10-learning-loop.md), [2026-10-rust-architecture.md](2026-10-rust-architecture.md), [ARCHITECTURE.md](../../ARCHITECTURE.md).

@@ -4,10 +4,12 @@
 use std::fmt;
 use std::io;
 
+use eileen_platform::PlatformError;
+
 /// What went wrong with a local file: the one error type for every file this crate reads or
 /// opens, such as `recently-used.xbel`. The variants are `eileen-platform`'s `PlatformError`
-/// (on the unmerged base crates) for files, field for field, so each maps one to one when the
-/// traits land. None holds a path or the file's text.
+/// for files, field for field, and each becomes its twin through `From`. None holds a path or
+/// the file's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileError {
     /// The file is not there.
@@ -67,9 +69,23 @@ impl fmt::Display for FileError {
 
 impl std::error::Error for FileError {}
 
+/// Each variant becomes the `PlatformError` variant of its name, with the same fields.
+impl From<FileError> for PlatformError {
+    fn from(error: FileError) -> Self {
+        match error {
+            FileError::NotFound { what } => Self::NotFound { what },
+            FileError::Refused { what, reason } => Self::Refused { what, reason },
+            FileError::Invalid { what, detail } => Self::Invalid { what, detail },
+            FileError::Io { what, detail } => Self::Io { what, detail },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
+
+    use eileen_platform::PlatformError;
 
     use super::FileError;
 
@@ -110,6 +126,29 @@ mod tests {
         ];
         for (error, text) in texts {
             assert_eq!(error.to_string(), text, "{error:?}");
+            assert_eq!(PlatformError::from(error).to_string(), text, "and as its twin");
+        }
+    }
+
+    #[test]
+    fn each_error_becomes_its_platform_twin() {
+        let pairs = [
+            (FileError::NotFound { what: "a" }, PlatformError::NotFound { what: "a" }),
+            (
+                FileError::Refused { what: "a", reason: "b" },
+                PlatformError::Refused { what: "a", reason: "b" },
+            ),
+            (
+                FileError::Invalid { what: "a", detail: "b".to_owned() },
+                PlatformError::Invalid { what: "a", detail: "b".to_owned() },
+            ),
+            (
+                FileError::Io { what: "a", detail: "b".to_owned() },
+                PlatformError::Io { what: "a", detail: "b".to_owned() },
+            ),
+        ];
+        for (error, twin) in pairs {
+            assert_eq!(PlatformError::from(error.clone()), twin, "{error:?}");
         }
     }
 }
