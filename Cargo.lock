@@ -1093,8 +1093,10 @@ name = "eileen-supervisor"
 version = "0.0.0"
 dependencies = [
  "eileen-rt",
+ "eileen-stdx",
  "eileen-trace",
  "process-wrap",
+ "rustix",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
