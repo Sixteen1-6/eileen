@@ -1,7 +1,9 @@
 # cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
 # allowed for jpeg-encoder, one license exception for webpki-roots, the Linux target added so the
-# Linux lane is checked too, three advisory ignores (decision D78), and a ban on zip outside
-# sherpa-onnx-sys so those ignores cover nothing else.
+# Linux lane is checked too, seven advisory ignores against crates that only sherpa-onnx-sys's
+# build script brings in (three against zip, decision D78, and four against the zstd crates zip
+# takes, decision D80), and bans that keep each of those crates on that path so the ignores cover
+# nothing else.
 
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
@@ -14,10 +16,21 @@ yanked = "deny"
 # (pinned exactly in BUILD.md section 4.1), whose build script calls it only for iOS archives; the
 # only patched release, zip 9.0.0, needs a sherpa-onnx pin past the cooling-off period. These
 # three come out with that pin.
+# Decision D80: on the same path zip takes zstd 0.13.3, zstd-safe 7.3.0 and zstd-sys 2.1.1, and
+# none of the four advisories against them reaches code that path runs: zip never calls
+# with_context (0391), zstd-safe's seekable feature is never enabled (0398), its legacy feature is
+# off and zip decodes through read::Decoder, never write::Decoder (0403), and 0410 is for wasm32,
+# which is not a graph target. These four come out when the lock moves to zstd 0.14.3, zstd-safe
+# 8.2.0 and zstd-sys 2.1.2, which needs a zip that takes zstd 0.14 (9.0.2 or later, which the pin
+# move above allows); 0410 alone can go sooner, with a lock update to zstd-sys 2.1.2.
 ignore = [
   { id = "RUSTSEC-2026-0367", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
   { id = "RUSTSEC-2026-0368", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
   { id = "RUSTSEC-2026-0369", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0391", reason = "D80: zstd under zip, which never calls with_context" },
+  { id = "RUSTSEC-2026-0398", reason = "D80: zstd-safe under zip, seekable feature never enabled" },
+  { id = "RUSTSEC-2026-0403", reason = "D80: zstd-safe under zip, legacy off, read::Decoder only" },
+  { id = "RUSTSEC-2026-0410", reason = "D80: zstd-sys, wasm32 only, which is not a graph target" },
 ]
 
 [licenses]
@@ -54,6 +67,12 @@ deny = [
   { crate = "native-tls", reason = "use rustls" },
   # D78 ignores three advisories against zip; this keeps them from covering zip anywhere else.
   { crate = "zip", wrappers = ["sherpa-onnx-sys"], reason = "D78: only sherpa-onnx-sys's build script may bring in zip" },
+  # D80 ignores four advisories against the zstd crates zip takes; these keep each of them under
+  # its parent on that path. The zstd ban stops at 0.14.3, RUSTSEC-2026-0391's patched release, so
+  # Eileen's own crates can take the workspace's zstd 0.14.3 (BUILD.md section 4.1).
+  { crate = "zstd:<0.14.3", wrappers = ["zip"], reason = "D80: below 0.14.3, only zip may bring in zstd" },
+  { crate = "zstd-safe", wrappers = ["zstd"], reason = "D80: only zstd may bring in zstd-safe" },
+  { crate = "zstd-sys", wrappers = ["zstd-safe"], reason = "D80: only zstd-safe may bring in zstd-sys" },
 ]
 
 [sources]
