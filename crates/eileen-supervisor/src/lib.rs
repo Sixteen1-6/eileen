@@ -12,9 +12,8 @@
 //!
 //! # Does not own
 //!
-//! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`),
-//!   cargo under the build guard (`eileen-buildguard::spawn_cargo`), worker flags
-//!   (`eileen-harness`).
+//! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`), cargo
+//!   under the build guard (`eileen-buildguard::spawn_cargo`), worker flags (`eileen-harness`).
 //!
 //! # Invariants
 //!
@@ -60,10 +59,9 @@
 //!   which a descendant can leave, or outlive in a crash): keep it while the child should live.
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
-//! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd). With
-//!   no runtime entered it fails before the child starts; in one without I/O tokio panics once
-//!   the child has started (on Linux the fork thread makes that an error). A
-//!   [`ChildSpec::raw_stderr`] caller must read stderr.
+//! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd): with
+//!   none it fails before the child starts, without I/O it panics or fails after (see [`spawn`]).
+//!   A [`ChildSpec::raw_stderr`] caller must read stderr.
 //! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
