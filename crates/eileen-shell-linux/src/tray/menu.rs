@@ -40,7 +40,7 @@ pub(crate) struct Menu {
 
 impl Menu {
     /// An empty menu, at revision 0.
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { ids: BTreeMap::new(), next: ROOT + 1, items: Vec::new(), revision: 0 }
     }
 
