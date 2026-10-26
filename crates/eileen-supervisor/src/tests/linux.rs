@@ -10,6 +10,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use eileen_trace::{names, test_support};
 use rustix::process::{
     Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, getpgrp, getpriority_process, getsid,
     pidfd_open, pidfd_send_signal, waitid,
@@ -216,15 +217,17 @@ async fn nice_of(class: ChildClass, dir: &Path) -> i32 {
 fn a_claude_session_runs_nicer_than_a_sidecar() {
     let dir = TempDir::new("nice");
     current_thread().block_on(async {
-        let core = getpriority_process(None).unwrap();
+        // Children inherit the fork thread's nice value, not this thread's, so the sidecar's
+        // is the baseline.
         let sidecar = nice_of(ChildClass::Sidecar, &dir.0).await;
+        assert!(sidecar < 19, "at nice {sidecar} a session cannot run nicer than a sidecar");
         let tool = nice_of(ChildClass::Tool, &dir.0).await;
         let session = nice_of(ChildClass::ClaudeSession, &dir.0).await;
-        assert_eq!((sidecar, tool), (core, core), "a sidecar and a tool keep the core's priority");
+        assert_eq!(tool, sidecar, "a tool keeps a sidecar's priority");
         assert_eq!(
             session,
-            (core + CLAUDE_SESSION_NICER_BY).min(19),
-            "a Claude session runs ten nice steps below the core, at most at 19"
+            (sidecar + CLAUDE_SESSION_NICER_BY).min(19),
+            "a Claude session runs ten nice steps below a sidecar, at most at 19"
         );
     });
 }
@@ -232,13 +235,24 @@ fn a_claude_session_runs_nicer_than_a_sidecar() {
 #[test]
 fn waiting_drains_a_stderr_pipe_nobody_took() {
     let dir = TempDir::new("stderr-undrained");
-    current_thread().block_on(async {
-        // A megabyte on stderr, many times a pipe's 64 KiB, and nobody forwards or takes it.
-        let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
-        let status = tokio::time::timeout(KILL_LANDS, child.wait())
-            .await
-            .expect("the child blocked writing to a full stderr pipe")
-            .unwrap();
-        assert!(status.success(), "every write reached the pipe: {status:?}");
+    let ((), captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            // A line, then a megabyte on stderr, many times a pipe's 64 KiB, and nobody
+            // forwards or takes it.
+            let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
+            let status = tokio::time::timeout(KILL_LANDS, child.wait())
+                .await
+                .expect("the child blocked writing to a full stderr pipe")
+                .unwrap();
+            assert!(status.success(), "every write reached the pipe: {status:?}");
+            assert!(child.take_stderr().is_none(), "wait took the pipe for forwarding");
+        });
     });
+    // The child could finish its megabyte only once the reader was past the first line, and
+    // the reader logs a line before it reads on, so that line was forwarded, not discarded.
+    let lines = captured.events_named(names::CHILD_STDERR);
+    assert!(
+        lines.iter().any(|e| e.fields["pii.line"] == "not utf-8: \u{fffd}\u{fffd} here"),
+        "wait forwarded the pipe into child.stderr events: {lines:?}"
+    );
 }
