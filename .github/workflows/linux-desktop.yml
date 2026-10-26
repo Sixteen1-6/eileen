@@ -1,0 +1,84 @@
+# The Linux desktop lane of BUILD.md section 4.6 (WP10; docs/LINUX.md section 6): the -linux
+# crates' tests inside a headless desktop session on ubuntu-26.04, then their `linux_session`
+# tests (section 4.7) against that session's real services. .github/linux-desktop/session.sh
+# makes the session, checks each service and records what it found in the run's summary. It
+# runs nightly, on demand, and on pull requests that change the lane or a -linux crate's session
+# tests, so those show it running. It is not a required check: a failed night shows in this
+# workflow's runs until WP0's nightly.yml reports failures as issues.
+name: Linux desktop
+
+on:
+  schedule:
+    - cron: "41 3 * * *" # 03:41 UTC, off the hour, when scheduled runs bunch up
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/linux-desktop.yml
+      - .github/linux-desktop/**
+      - crates/*-linux/tests/session/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  session:
+    name: session
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the session script (shellcheck)
+        run: shellcheck .github/linux-desktop/session.sh
+      - name: Install the session's compositor and services
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            at-spi2-core gnome-keyring libglib2.0-bin libpam-systemd libsecret-tools mpv \
+            mpv-mpris notification-daemon pipewire pipewire-bin polkitd power-profiles-daemon \
+            upower weston wireplumber xdg-desktop-portal xdg-desktop-portal-gtk xvfb
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux
+          save-if: false # only pushes to main save the cache (BUILD.md section 4.6)
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: Build the tests
+        run: cargo nextest run --workspace --locked --profile ci --no-run
+      - name: The -linux crates' tests, inside the session
+        run: >-
+          bash .github/linux-desktop/session.sh
+          cargo nextest run --workspace --locked --profile ci -E 'package(/-linux$/)'
+      - name: The session tests, against its services
+        if: ${{ !cancelled() }}
+        run: >-
+          bash .github/linux-desktop/session.sh
+          cargo nextest run --workspace --locked --profile linux-session --no-tests=fail
+      - name: Keep the session's logs and the test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-desktop
+          path: |
+            ${{ runner.temp }}/eileen-session/logs/
+            target/nextest/ci/junit.xml
+            target/nextest/linux-session/junit.xml
+          if-no-files-found: ignore

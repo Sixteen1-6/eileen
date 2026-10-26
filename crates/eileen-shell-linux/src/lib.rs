@@ -58,10 +58,10 @@
 //! - Layers: unit tests for each parser over the kernel's text formats, and property tests for the
 //!   CPU lists, the busy share, the MB conversion, the `os-release` quotes and the hotkey chords;
 //!   the fuzz targets of `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in
-//!   `tests/fixtures/` (one recorded under WSL2, five synthetic), one live test of this machine,
-//!   and the autostart entry in folders a guard removes. D-Bus clients run against fakes on
-//!   `eileen-dbus-linux`'s private bus (its `private-bus` feature, tests only), their deadlines in
-//!   tokio's paused time, and [`LinuxShell`] on the same fakes through `Bridge::on_private_bus`.
+//!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
+//!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (feature
+//!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] on them
+//!   over `Bridge::on_private_bus` and on the Linux desktop lane's real buses (`tests/session/`).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
