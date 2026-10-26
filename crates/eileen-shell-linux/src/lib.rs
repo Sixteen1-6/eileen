@@ -1,11 +1,11 @@
 //! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
 //! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
-//! memory sample (2.5), `ShellHost`'s toasts and session calls, and the power facts over D-Bus.
+//! memory sample (2.5), `ShellHost`'s toasts and session calls, secrets, and power over D-Bus.
 //!
 //! # Owns
 //!
-//! - The trait implementations: `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], and
-//!   `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`.
+//! - The trait implementations: `SystemMemory` for [`LinuxSystemMemory`], `ShellHost` for
+//!   [`LinuxShell`] and `SecretStore` for [`LinuxSecretStore`], on `eileen-dbus-linux`'s `Bridge`.
 //! - The machine's facts and load on Linux: the processor and its core classes, memory totals,
 //!   GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors,
 //!   read under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists.
@@ -35,8 +35,8 @@
 //! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, asks the
 //!   session to lock only in [`SessionLock::lock_workstation`], keeps it awake no longer than a
 //!   [`LinuxPowerRequest`] and the connections it was given, shows a toast only in
-//!   [`Notifier::notify`] and binds shortcuts only in [`ShortcutsSession::bind`]. It starts no
-//!   process itself (a call may let the bus start a service) and never needs elevation.
+//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`] and changes secrets
+//!   only in `LinuxSecretStore`'s `set` and `delete`. It starts no process and needs no elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -48,7 +48,7 @@
 //!
 //! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
-//!   `tokio` (the portal's deadline, the keep-awake holder), `rustix` (`statvfs`) and `thiserror`.
+//!   `tokio` (deadlines, the keep-awake holder), `rustix` (`statvfs`), `secrecy` and `thiserror`.
 //!   Only the composition root on Linux may depend on it. Wire types: none of its own.
 //!
 //! # Testing
@@ -60,14 +60,14 @@
 //!   `tests/fixtures/` (one recorded under WSL2, five synthetic), one live test of this machine,
 //!   and the autostart entry in folders a guard removes. D-Bus clients run against fakes on
 //!   `eileen-dbus-linux`'s private bus (its `private-bus` feature, tests only), their deadlines in
-//!   tokio's paused time, and [`LinuxShell`] on the same fakes through `Bridge::on_private_bus`.
+//!   tokio's paused time, [`LinuxShell`] and [`LinuxSecretStore`] through `Bridge::on_private_bus`.
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
 //! # Traps
 //!
-//! - Each source's traps are in its own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`, `host`,
-//!   `session_lock`, `keep_awake`, `notifications`, `shortcuts`, `upower`; D-Bus's in its crate.
+//! - In each source's own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`, `host`, `upower`,
+//!   `session_lock`, `keep_awake`, `notifications`, `shortcuts`, `secrets`; D-Bus's in its crate.
 //!
 //! # Logs and tracing
 //!
@@ -102,6 +102,8 @@ mod power;
 mod pressure;
 mod probe;
 mod root;
+mod secret_store;
+mod secrets;
 mod session_lock;
 mod shortcuts;
 mod upower;
@@ -119,6 +121,7 @@ pub use notifications::{
 pub use pressure::{LinuxSystemMemory, MIN_RATE_INTERVAL_MS};
 pub use probe::{LinuxMachineProbe, default_data_dir};
 pub use root::SysRoot;
+pub use secret_store::{LinuxSecretStore, SecretSettings};
 pub use session_lock::SessionLock;
 pub use shortcuts::{
     BoundShortcut, Shortcut, ShortcutEvent, ShortcutEvents, ShortcutsSession, trigger_of_chord,

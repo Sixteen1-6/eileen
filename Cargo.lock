@@ -1006,6 +1006,7 @@ dependencies = [
  "eileen-stdx",
  "proptest",
  "rustix",
+ "secrecy",
  "thiserror 2.0.21",
  "tokio",
  "zbus",
