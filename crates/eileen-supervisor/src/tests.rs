@@ -14,6 +14,9 @@ use eileen_trace::{names, test_support};
 
 use crate::{ChildSpec, MAX_STDERR_LINE, spawn};
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 struct TempDir(PathBuf);
 
 impl TempDir {
@@ -42,7 +45,7 @@ fn lock_file(dir: &Path) -> File {
 }
 
 /// Holds `block.lock` so the blocking helpers stay alive until it is dropped.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn hold_block(dir: &Path) -> File {
     let file = lock_file(dir);
     file.try_lock().unwrap();
@@ -69,7 +72,7 @@ fn say_ready(text: &str) {
 /// Blocks until a supervised child writes its `ready ...` line, skipping the test harness's
 /// own lines, and returns the rest of it with the reader, which the test keeps while the child
 /// runs. A child that ends without one fails the test.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 async fn read_ready(
     child: &mut crate::Child,
 ) -> (String, tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>) {
@@ -122,6 +125,10 @@ fn helper_entry() {
         "guard-parent" => {
             let guard = crate::spawn_detached(&helper("block", &dir)).unwrap();
             write_pids(&dir, &guard.pid.to_string());
+        }
+        #[cfg(target_os = "linux")]
+        name @ ("session" | "parent" | "parent-exits" | "core" | "echo") => {
+            linux::helper_entry(name, &dir);
         }
         // Blocks until released, then exits with 259, which is STILL_ACTIVE.
         #[cfg(windows)]

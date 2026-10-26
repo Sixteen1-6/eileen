@@ -1,0 +1,20 @@
+[package]
+name = "eileen-mcp"
+description = "Eileen's one doorway to MCP: the servers in the sidecars, the clients in the core, and the shim's protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, sidecars, shim"
+owns = "WP2"
+unsafe = "forbid"
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

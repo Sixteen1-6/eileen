@@ -13,7 +13,7 @@ the remaining repository checks and the nightly, weekly, long and release workfl
 
 ## Done when
 
-The acceptance list of BUILD.md section 6.2, items 1 to 12, each recorded below with its evidence.
+The acceptance list of BUILD.md section 6.2, items 1 to 13, each recorded below with its evidence.
 Items 4 and 10 need measurements on the owner's PC and on the first CI runs, which this file
 records when they exist.
 
@@ -24,9 +24,9 @@ records when they exist.
 | 1 | `wp0/ci-bootstrap` | Pull request #13, 2026-10-21: green, required checks switched, Python scaffold deleted |
 | 2 | `wp0/contracts` | Pull request #15, 2026-10-21: green on Windows and Linux with no Python job; its amendment of section 3.3, pull request #16, merged first |
 | 3 | `wp0/base-crates` | Pull request #73, merged on 2026-10-25 as a67d096: the six base crates, with the first review's fixes and the three fixes from WP10's Ubuntu 24.04 run; its amendment of section 6.1, pull request #22, merged on 2026-10-21. The second review's fixes follow in pull request #75, `wp0/base-crates-review` |
-| 4 | `wp0/stubs` | Not started |
-| 5 | `wp0/xtask` | Not started |
-| 6 | `wp0/guidance` | Not started |
+| 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
+| 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
+| 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -67,6 +67,60 @@ child stderr as `pii.` fields, bounds the Redactor's literals, makes `ThreadTick
 removes the overflow panics from the supervisor's backoff and heartbeat, and tightens the
 span-parent table, with a test for each.
 
+`wp0/stubs` adds the other 30 crates of section 3.1, every one but the `-linux` crates, which
+WP10 creates itself, and their `[workspace.dependencies]` lines. Each has the crate doc with the
+eight headings of section 4b.4 naming its owner package, `[package.metadata.eileen]`, the
+signatures section 3 gives it, and bodies that return a typed `Unavailable` error or do nothing.
+`component(cfg)` returns `eileen_contracts::ports::IdleComponent`, which drops the effects routed
+to it until its source closes or the runtime shuts down; `eileen-cli` wires the components whose crates exist and
+every subcommand of section 3.5, and each subcommand reaches its crate's `cli` module, which says
+it is not built yet. The real native dependencies sit under their Windows target tables, with
+`cargo-machete` told why each stub does not use them yet. The `-win` crates are
+`#![cfg(windows)]`. `eileen-shim` answers `initialize` and an empty `tools/list` through
+`eileen_mcp::handshake`. `fuzz/` declares every target of section 4.7 but WP10's three, each
+calling a stub `fuzz_entry`. `crates/eileen-core/clippy.toml` is the root file plus the `HashMap`
+ban, and `.config/nextest.toml` takes back the `package()` terms it left out until the crates
+existed. The stubs were cut off on the owner's PC before their first build; this cloud session
+merged `main` into them, compiled them on Linux and for Windows, and fixed what the build, clippy
+and rustdoc found.
+
+`wp0/xtask` completes `cargo xtask` (section 4b.5) on top of the build guard: one build slot per
+command through `eileen-buildguard` (admission, the re-check before each cargo invocation, the
+reason and holders every 30 s while refused, exit code 75 after `--wait-max`), and the guard's log,
+one JSON line per admission and refusal in `buildguard-log.jsonl` under the machine root, which
+acceptance 4's owner's-PC half reads. The commands: `check`, `test` (with `--owner`; on Windows the
+`desktop` group runs apart under `desktop.lock`, with the filter `.config/nextest.toml` gives it),
+`clippy`, `build` (cargo's own `--timings`; `--release` takes both slots), `insta`, `ci` (the pull
+request lane's steps, then `lint-repo`, then what it skipped and why), `pre-push` (fmt, clippy, the
+changed crates' tests and `lint-repo`; `.githooks/pre-push` runs it once `setup` sets
+`core.hooksPath`), `sim`, `lint-repo`, `setup` (the pinned toolchain, the prebuilt tools through
+cargo-binstall, never from source, the hooks and, on Windows, `fetch-native`), `slots` (the holders,
+`--kill-stale`, `--baseline [--hours <n>]`, which keeps `buildguard.toml` and the percentiles in the
+section below current every 5 minutes, and `--pressure <GB>`), `desktop-lock --hold`,
+`fetch-native` (the native table's one entry, checked by size and SHA-256 with xtask's own std-only
+SHA-256, unpacked with tar, older pins removed; `--print-env` gives the variables the Windows CI
+jobs now take) and `lock`. Every other command of section 4b.5 parses and says which later pull
+request builds it. `lint-repo` runs checks 1, 2, 4, 6, 10, 14 and 16 with a failing fixture test
+each, over the data in `xtask/tidy/` (the hashed denylist with its salt and no entries yet, the
+exempt research reports, the long modules, the nested guidance folders, the sanctioned
+`disallowed_methods` sites and the credential boundary). `eileen-sim` gets its skeleton: a `World`
+around the stub core, TOML profiles with a checked-in JSON Schema, seeded runs from an
+`arbitrary::Unstructured` buffer, the fixed-column step log, `--doublecheck` over a stable FNV-1a
+trace hash, `crates/eileen-sim/regressions/`, invariants 6, 10 and 13, a 64 MiB simulator stack,
+one test per pull request seed, and the `eileen-sim` binary `cargo xtask sim` runs.
+
+`wp0/guidance` adds the guidance of section 4b.4. The root `AGENTS.md` stays within check 2's
+150 lines, and `CLAUDE.md` imports it and adds a Claude-only section. Nested pairs sit in
+`crates/eileen-desktop-win/`, `crates/eileen-apps-win/`, `crates/eileen-speech/`, `fuzz/` and
+`scenarios/`; `integrations/claude-plugin/` gets its pair when WP8 creates the folder.
+`.claude/settings.json` denies direct cargo builds, test runs, lints and benchmarks,
+`cargo install`, `cargo clean` and release builds, allows `cargo xtask`, and denies reads of
+vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRIBUTING.md`,
+`docs/DEV-SETUP.md` and `SECURITY.md` are rewritten for the Rust workspace, `NOTICE` lists the
+third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
+and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
+in the workspace.
+
 ## Acceptance records
 
 Acceptance 4 (its fake-memory half), 5, 6 and 12 passed in pull request #73's CI run on its
@@ -105,11 +159,26 @@ paths; `it::` is a crate's integration test target):
 - Acceptance 6, in `eileen-trace`: `it::canary::fake_secrets_never_reach_disk_or_a_dump` and
   `it::canary::fake_secrets_never_reach_the_console`, joined in pull request #75 by
   `it::canary::no_home_folder_reaches_disk_or_a_dump`.
+- Acceptance 3, from `wp0/stubs` (pull request #96; CI run 40217929368 on ce4dd65 green on
+  `ubuntu-latest` and `windows-latest`): every stub builds on both OSes with its native
+  dependencies under target tables, and the `hygiene` job's `cargo deny --locked check` passes
+  with the `webpki-roots` exception and D78's three ignores; `eileen --version` runs
+  (`eileen-cli::it::process::eileen_version_runs`); every subcommand of section 3.5 exists and
+  says it is not built yet (`eileen-cli::it::commands::every_command_of_section_3_5_says_not_built_yet`,
+  `eileen-cli::it::process::a_command_says_it_is_not_built_yet_and_fails`); the stub shim
+  answers `initialize` within 100 ms once it is up
+  (`eileen-shim::it::process::the_binary_answers_initialize_within_100_ms`).
 - Acceptance 12, in `eileen-platform`, on both runners: `it::machine::the_golden_vector_is_stable`,
   `it::machine::windows_guid_form_and_linux_form_give_one_hash`,
   `it::machine::a_cloned_image_with_two_install_ids_gives_two_hashes`,
   `it::machine::an_unusable_os_id_gives_the_install_id_only_hash` and
   `it::machine::file_identity_reads_etc_then_falls_back_to_dbus`.
+
+Acceptance 7 passed in pull request #98's run 40223792187: `logic-linux` ran the simulator's 12
+pull request seeds twice each with `--doublecheck` (one trace hash per seed) in 61 s including
+the simulator's build, under the 90 s budget; locally the runs themselves take under a second.
+On CI the step runs the binary directly, since runners are not build-guarded; `cargo xtask sim`
+runs the same command under the guard on the owner's PC.
 
 ## Switching main's required checks
 
@@ -164,10 +233,24 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   of every crate they create, `name = { path = "crates/<name>" }`, beside the `members` entry.
 - After `wp0/stubs` merges, check that Dependabot's next `cargo` run finishes (the repository's
   Insights, Dependency graph, Dependabot tab) and record it here.
-- `wp0/stubs` is the first pull request to lock `shuttle` and `shuttle-tokio`. Its description
-  lists the publish date of every package it adds to `Cargo.lock`, and any package younger than 14
-  days that no section 4.1 pin names is held back with `cargo update -p <name> --precise
-  <version>` to its newest older release, or named in the description with the reason it stays.
+- `wp0/stubs` lists the publish date of every package it adds to `Cargo.lock` in its
+  description, and any package younger than 14 days that no section 4.1 pin names is held back
+  with `cargo update -p <name> --precise <version>` to its newest older release, or named in the
+  description with the reason it stays. (Done in pull request #96. No stub uses `shuttle` or
+  `shuttle-tokio`, so WP2's first use locks them, under the same rule.)
+- After `wp0/stubs` merges, pull request #77 (`wp0/platform-file-deadlines`) adds `Deadline` to
+  `Apps`, `RecentSources` and `ShellHost` methods that the `eileen-apps-win` and
+  `eileen-shell-win` stubs implement, so it updates those two stubs' signatures before it
+  merges; only its Windows lanes would show it.
+- The next amendment of section 4b.3 adds the `zip` ban `deny.toml` carries since `wp0/stubs`
+  (`zip` only as a direct dependency of `sherpa-onnx-sys`, so D78's ignores cover nothing
+  else) to the text and to D78's consequences. (Done in pull request #101.)
+- `cargo xtask build -r` and `--profile release`, and the same flags on `check`, `test`,
+  `clippy` and `insta`, take both slots like `--release` since `wp0/release-slots`.
+- The fuzz workspace builds from a copy of the root `Cargo.lock` (`cp Cargo.lock fuzz/`), so its
+  versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
+  package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development
+  tool never shipped. Phase B's fuzz job copies the lock before `cargo fuzz build`.
 
 - `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
   `SystemMemory::new(&RealClock)`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
@@ -184,6 +267,21 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   per admission and per refusal (the time, the slot or slots, the reason, the job count, and the
   window's paging average, lowest headroom and available memory) to a machine-wide JSON-lines
   file under `samples::machine_root()`, and the acceptance record is taken from it.
+- `cargo xtask lint-repo` stays out of CI in phase A. On `main` after `wp0/xtask` it finds the
+  root `AGENTS.md` and `CLAUDE.md` missing, which `wp0/guidance` adds; `# Owns` sections of more
+  than three bullets in `eileen-apps-linux`, `eileen-dbus-linux` and `eileen-shell-linux`; and
+  check 14 at `crates/eileen-dbus-linux/src/testing.rs` lines 70 and 74 (`Command::new` outside
+  the sanctioned sites). Those three crates are WP10's, so WP10 fixes them, and the CI step
+  joins once the tree is clean. Until then `cargo xtask pre-push` reports `lint-repo`'s findings
+  without blocking the push, and `cargo xtask ci` (acceptance 1) passes only once they are
+  fixed; phase B makes the hook block when it adds `lint-repo` to CI.
+- Check 16 in `wp0/xtask` covers `#[ignore]` and `#[should_panic]` (also under `cfg_attr`) and
+  real sleeps in test code. Its other half, that owner's-PC and real-Claude tests live only in
+  `owner_pc::` and `real_claude::` modules (section 4.7), needs a way to tell such a test from
+  its code and arrives with phase B's full check set.
+- `eileen-sim`'s input generator draws `timer` inputs with made-up timer IDs, which only works
+  while the stub core sets no timers. WP1, whose core sets them, draws timer firings from the
+  world's pending timers instead (or leaves them to `World::advance`).
 - Check 14's list of `#[expect(clippy::disallowed_methods)]` functions after `wp0/base-crates`,
   which differs from section 4b.2's shorter names: `eileen_stdx::clock::SystemClock::now` and
   `::system_now`, `eileen_stdx::ids::OsIds::ulid` (its `Ids` impl),
@@ -300,7 +398,54 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   `git rebase --onto origin/main 3fde1ab`, which replays only its own commits; WP0 changes
   nothing on those branches.
 
+- Stubs: `sherpa-onnx-sys` 1.13.8 takes `zip` 2.6.1 as a build dependency, and three advisories
+  against it (RUSTSEC-2026-0367 to RUSTSEC-2026-0369) list only `zip` 9.0.0 as patched, which no
+  1.x release accepts. Its build script calls `zip` only for iOS archives. The amendment, pull
+  request #95, records decision D78, and `deny.toml` ignores the three with their reasons until
+  the pin moves.
+- Stubs: three crates the first lock of the native dependencies brings in are security patches
+  inside the cooling-off period, taken under section 4.1's rule as the oldest patched releases:
+  `rustls` 0.23.46, `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10. Cargo also chose 15
+  other releases younger than 14 days (the `icu_*` 2.4 family with `tinystr`, `yoke`, `zerovec`
+  and `zerovec-derive`, `combine`, `crc32fast`, `memmap2` and `zstd-sys`); `cargo update
+  --precise` took each back to its newest older release. `keyring-core` 1.0.1 and `global-hotkey`
+  0.9.0 are section 4.1's own pins. `ring`'s `Apache-2.0 AND ISC` passes `cargo deny`.
+- Stubs: the unit-struct configurations (`HarnessConfig` and the others) are zero-sized, so
+  pedantic clippy asks to pass them by value; section 3.3.15's `component(cfg: &...)` signature
+  stays, with an `#[expect(clippy::trivially_copy_pass_by_ref)]` that fails the build once the
+  owning package's fields make the type too large for the lint, so the expectation cannot
+  outlive its reason.
+- Stubs: a `-win` crate is empty off Windows, so an intra-doc link in its crate doc breaks
+  `cargo doc` on Linux under `-D warnings`. Their crate docs name their types in plain code
+  spans instead.
+- Stubs: `shuttle` and `shuttle-tokio` are still not in the lock: no stub uses them, and the lock
+  holds only what a member uses. WP2 locks them with its `shuttle` feature.
+- Stubs: until `wp0/xtask`'s `fetch-native` exists, both Windows CI jobs fetch the pinned
+  sherpa-onnx archive themselves, check its SHA256 and point `SHERPA_ONNX_ARCHIVE_DIR` at it;
+  otherwise `sherpa-onnx-sys`'s build script downloads it unchecked and without retries.
+  `deny.toml` also bans `zip` everywhere but under `sherpa-onnx-sys`, so D78's three advisory
+  ignores cannot cover a `zip` that arrives some other way.
+
 ## Decisions
+
+- Stubs: the component that does nothing is `eileen_contracts::ports::IdleComponent`, beside the
+  `Component` trait, rather than a copy in each stub crate; it has no serialized form, so no
+  snapshot changes. The contracts doc now names it as its one piece of behaviour.
+- Stubs: `eileen-cli` names `Component` through `eileen_runtime::Component`, a re-export, because
+  section 3.1's row for `eileen-cli` does not list `eileen-contracts`, and the runtime is the
+  crate that composes components.
+- Stubs: a crate's dev-dependencies for its process tests sit outside section 3.1's "may depend
+  on" column, which governs what its code links. `eileen-shim`'s process tests start the binary
+  through `eileen-supervisor`, the one sanctioned way to start a child.
+- Stubs: every stub command returns a typed error (`CliError::NotBuilt` in each crate's `cli`
+  module, `RunError` in the guard and the stub harness, `eileen_cli::CommandError` around them),
+  so section 4b.2's reason for allowing `missing_errors_doc` holds; no stub uses `anyhow`. Each
+  binary parses with `try_parse` and returns its exit code, so clap never calls
+  `std::process::exit`.
+- Stubs: `eileen-skills` has the pure functions the `SkillEngine` port calls. Section 3.3.13
+  names the rest in prose without argument types (the evidence, the store index, templates,
+  ranked routes, provenance, faults and notes are WP7's to shape), so WP7 adds them rather than
+  WP0 fixing shapes it has not designed.
 
 - Workflows install the toolchain with `rustup toolchain install`, which reads
   `rust-toolchain.toml`, before `rustup show`, so a job does not depend on whether `rustup show`
@@ -575,6 +720,30 @@ build guard and of the supervisor's `qos` module was linted by compiling it here
 `cfg(windows)` and `cfg(not(windows))` swapped, under the workspace's lint table and
 `clippy.toml`; the supervisor's `cfg(unix)` process code uses Unix-only APIs and waits for
 `logic-linux`.
+
+`wp0/stubs` on 2026-10-25, the full stub workspace (40 crates), pull request #96's run
+40214464644 on 9e02dc5: the Linux and Windows jobs restored `main`'s caches as partial matches,
+since the lockfile changed, so the stubs and their new dependencies (the native ones included)
+built cold. `plan` 6 s, `hygiene` 21 s, `logic-linux` 97 s, `windows-clippy` 385 s,
+`windows-test` 540 s, `all-green` 2 s; `pr-meta` 21 s. Warm times need the caches this pull
+request's push to `main` saves, so `wp0/xtask` records them. The per-worktree target folder in
+this cloud session (Ubuntu 24.04, debug, after `check`, `clippy`, `nextest` and the doc tests of
+the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows cross-check and
+`cargo doc` beside it. The owner's PC's Windows figure waits for a build there.
+
+`wp0/xtask` on 2026-10-25, pull request #98's run 40223792187 on 2c12a07, the first with
+`main`'s caches from `wp0/stubs` (warm, partial matches): `plan` 4 s, `hygiene` 21 s,
+`logic-linux` 190 s (tests 55 s, the simulator's seed set 61 s with its build), `windows-clippy`
+120 s (clippy 50 s, `fetch-native` 15 s), `windows-test` 165 s (tests 93 s), `all-green` 3 s;
+`pr-meta` 21 s. Against `wp0/stubs`' cold run each Windows job took about 69 percent less time.
+
+The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
+the owner's PC writes its percentiles between these markers and its thresholds to
+`buildguard.toml`.
+
+<!-- baseline:start -->
+Not measured yet.
+<!-- baseline:end -->
 
 ## Outcome
 

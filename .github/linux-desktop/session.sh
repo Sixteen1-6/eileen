@@ -155,6 +155,10 @@ running() {
   return 1
 }
 
+pipewire_listens() {
+  [ -S "$XDG_RUNTIME_DIR/pipewire-0" ] && [ -S "$XDG_RUNTIME_DIR/pipewire-0-manager" ]
+}
+
 session_call() { gdbus call --session --timeout 5 "$@"; }
 session_get() {
   session_call --dest "$1" --object-path "$2" --method org.freedesktop.DBus.Properties.Get "$3" "$4"
@@ -228,6 +232,8 @@ services() {
     --no-config
   await "the compositor (weston)" test -S "$XDG_RUNTIME_DIR/$wayland"
   start pipewire pipewire
+  # WirePlumber exits when PipeWire is not listening yet, so it starts once both sockets are there.
+  await "PipeWire's sockets" pipewire_listens
   start wireplumber wireplumber
   await "the null sink as the default sink (PipeWire and WirePlumber)" null_sink_is_default
   await "the accessibility bus (at-spi-bus-launcher)" a11y_address

@@ -161,6 +161,9 @@ names! {
     /// A soft assertion failed (`always!` or `never!`).
     SOFT_ASSERT_FAILED = "soft_assert.failed", Event, "all", parents: [Any], outlives: false,
         fields: ["file", "line", "message"];
+    /// Tracing started without the `log` bridge: a `log` logger was set first (an
+    /// `env_logger::init()`, say), and records logged through `log` go to it.
+    LOG_BRIDGE_FAILED = "log_bridge.failed", Event, "all", parents: [Any], outlives: false, fields: ["error"];
     /// A task started through `eileen_rt::task` panicked; the message can quote anything.
     TASK_PANICKED = "task.panicked", Event, "all", parents: [Any], outlives: false, fields: ["task", "pii.message"];
     /// A bounded channel was full and a send was refused or had to wait.
