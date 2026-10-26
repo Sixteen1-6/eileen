@@ -4,11 +4,14 @@
 //! `SpanTrace::capture` works; a span trace shows each `pii.` field as its length alone), the
 //! JSON file at INFO behind a reload handle, the flight recorder ring at `eileen=debug,warn`,
 //! the slow-span and stage-stats layer, and a console at WARN only when stderr is a terminal.
-//! `tracing-log` bridges dependencies that log through the `log` crate.
+//! The file and the console write on threads of their own, so a stalled disk or a terminal that
+//! stopped reading never blocks a thread that logs. `tracing-log` bridges dependencies that log
+//! through the `log` crate.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -176,10 +179,84 @@ pub enum TraceError {
 /// The subscriber [`build`] makes.
 pub type TraceSubscriber = Layered<Vec<Box<dyn Layer<Registry> + Send + Sync>>, Registry>;
 
-/// Keeps tracing running: dropping it flushes the file writer.
+/// How long dropping a [`WriterThread`] waits for its thread to write what it holds.
+/// tracing-appender's guard waits at most 1.1 s (100 ms to queue the stop, 1 s for the thread to
+/// take it), except when the buffer is full: then it first prints that on stdout, and a print to
+/// a terminal that stopped reading waits until the terminal reads again.
+const FLUSH_WAIT: Duration = Duration::from_millis(1_200);
+
+// Longer than the guard's own 100 ms + 1 s, so a flush that finishes is never cut short.
+const _: () = assert!(
+    FLUSH_WAIT.as_millis() > 100 + 1_000,
+    "FLUSH_WAIT must outlast tracing-appender's own 1.1 s wait"
+);
+
+/// The thread that drops a writer's guard for [`WriterThread`]: 12 bytes, within Linux's 15.
+const FLUSH_THREAD: &str = "eileen-flush";
+
+/// A sink's writer thread as [`TraceGuard`] keeps it: `dropped` counts the lines a full buffer
+/// dropped, and dropping it lets the thread write what it holds, waiting at most [`FLUSH_WAIT`].
+struct WriterThread {
+    flush: Option<WorkerGuard>,
+    dropped: ErrorCounter,
+}
+
+impl WriterThread {
+    fn new(writer: &NonBlocking, flush: WorkerGuard) -> Self {
+        Self { flush: Some(flush), dropped: writer.error_counter() }
+    }
+}
+
+impl Drop for WriterThread {
+    fn drop(&mut self) {
+        let Some(flush) = self.flush.take() else { return };
+        // The guard goes to a thread of its own, so a guard stuck on stdout stays behind there.
+        // If no thread can start, the guard drops here, with the closure.
+        let (done_tx, done) = sync_channel(1);
+        let flusher = eileen_stdx::thread::spawn_named(FLUSH_THREAD, move || {
+            drop(flush);
+            let _ignored = done_tx.send(());
+        });
+        if flusher.is_ok() {
+            let _ignored = done.recv_timeout(FLUSH_WAIT);
+        }
+    }
+}
+
+/// Keeps tracing running. The files and the console write on threads of their own, and only
+/// while this lives, so hold it for all of `main`:
+///
+/// - A process that ends without dropping it loses the lines still queued:
+///   `std::process::exit` runs no destructors, which is why clippy.toml bans it.
+/// - Once it drops, the files and the console write nothing more; the ring still records.
+/// - Dropping it lets each writer write what it holds, waiting at most about 1.2 s for each.
+///   With a terminal that stopped reading, the wait for the console ends there, and the lines
+///   it still holds are lost when the process ends.
+///
+/// ```no_run
+/// # fn main() -> Result<(), eileen_trace::TraceError> {
+/// let config = eileen_trace::TraceConfig::new(None);
+/// let _guard = eileen_trace::init(eileen_trace::ProcessKind::Cli, &config)?;
+/// // The rest of `main`: `_guard` drops when it returns (`let _ =` would drop it at once).
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Discarding it stops both writers at once, so the compiler warns, and the workspace's lints
+/// make that an error:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// # fn main() -> Result<(), eileen_trace::TraceError> {
+/// let config = eileen_trace::TraceConfig::new(None);
+/// eileen_trace::init(eileen_trace::ProcessKind::Cli, &config)?;
+/// # Ok(())
+/// # }
+/// ```
+#[must_use = "dropping it stops the file and console writers"]
 pub struct TraceGuard {
-    _file: Option<WorkerGuard>,
-    dropped: Option<ErrorCounter>,
+    file: Option<WriterThread>,
+    console: Option<WriterThread>,
     file_filter: Option<reload::Handle<EnvFilter, Registry>>,
     ring: Arc<Ring>,
     stats: Arc<Stats>,
@@ -214,7 +291,14 @@ impl TraceGuard {
     /// Lines the file writer dropped because its buffer was full (`logs.dropped`).
     #[must_use]
     pub fn dropped_lines(&self) -> usize {
-        self.dropped.as_ref().map_or(0, ErrorCounter::dropped_lines)
+        self.file.as_ref().map_or(0, |file| file.dropped.dropped_lines())
+    }
+
+    /// Lines the console dropped because its buffer was full, as when its terminal stopped
+    /// reading for a while; 0 when no console runs.
+    #[must_use]
+    pub fn console_dropped_lines(&self) -> usize {
+        self.console.as_ref().map_or(0, |console| console.dropped.dropped_lines())
     }
 
     /// Changes the file filter at once (`logging.level`, or "detailed logging for the
@@ -245,9 +329,29 @@ fn log_writer<W: Write + Send + 'static>(inner: W) -> (NonBlocking, WorkerGuard)
     NonBlockingBuilder::default().lossy(true).thread_name(LOG_WRITER_THREAD).finish(inner)
 }
 
+/// The console writer's thread name: 14 bytes, within Linux's 15.
+const CONSOLE_WRITER_THREAD: &str = "eileen-console";
+
+/// The lines the console holds while its terminal is not reading. A console at WARN writes far
+/// fewer lines than the files at INFO, and the channel allocates every slot at the start: the
+/// default 128,000 lines cost about 4 MB of resident memory, 4,096 about 0.25 MB.
+const CONSOLE_LINES: usize = 4_096;
+
+/// The console's writer: lines go to `inner` on the console writer's thread, so a terminal that
+/// stops reading (Ctrl-S, a mouse selection in a Windows console, a stalled SSH session) blocks
+/// that thread alone, and a full buffer drops a line rather than block the thread that logs.
+fn console_writer<W: Write + Send + 'static>(inner: W) -> (NonBlocking, WorkerGuard) {
+    NonBlockingBuilder::default()
+        .lossy(true)
+        .buffered_lines_limit(CONSOLE_LINES)
+        .thread_name(CONSOLE_WRITER_THREAD)
+        .finish(inner)
+}
+
 /// The console layer: `fmt`'s format on `writer` under `filter`, uncoloured, every write
 /// through `redactor`. `pii.` fields stay (a terminal the owner is watching, as the
-/// [`crate::pii`] table says); secrets do not. [`build`] gives it stderr.
+/// [`crate::pii`] table says); secrets do not. It writes on the thread that logs, so [`build`]
+/// gives it stderr through a writer with a thread of its own, which never waits for the terminal.
 pub fn console_layer<S, W>(
     writer: W,
     redactor: Arc<Redactor>,
@@ -271,6 +375,16 @@ pub fn build(
     kind: ProcessKind,
     config: &TraceConfig,
 ) -> Result<(TraceSubscriber, TraceGuard), TraceError> {
+    build_on(kind, config, std::io::stderr())
+}
+
+/// [`build`], with the console, when `config` runs one, writing to `stderr` (a terminal of a
+/// test's own in the unit tests).
+fn build_on<E: Write + Send + 'static>(
+    kind: ProcessKind,
+    config: &TraceConfig,
+    stderr: E,
+) -> Result<(TraceSubscriber, TraceGuard), TraceError> {
     let process = kind.process_name();
     let redactor = Arc::new(Redactor::new());
     let ring = Arc::new(Ring::new(
@@ -282,8 +396,7 @@ pub fn build(
     let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> =
         vec![tracing_error::ErrorLayer::new(SpanTraceFields).boxed()];
 
-    let mut file_guard = None;
-    let mut dropped = None;
+    let mut file = None;
     let mut file_filter = None;
     if let Some(dir) = &config.log_dir {
         // Not the appender's `max_log_files`: it matches by prefix, so the core (`eileen`)
@@ -299,8 +412,7 @@ pub fn build(
             })?;
         let rule = Retention { dir: dir.clone(), process, keep: config.max_log_files };
         let (writer, guard) = log_writer(Retained::new(appender, rule, clock::system()));
-        dropped = Some(writer.error_counter());
-        file_guard = Some(guard);
+        file = Some(WriterThread::new(&writer, guard));
         let policy = if config.include_personal {
             Policy::Keep
         } else {
@@ -320,23 +432,22 @@ pub fn build(
             .boxed(),
     );
     layers.push(SlowLayer::new(config.slow_span_ms.clone(), Arc::clone(&stats)).boxed());
-    let console = match config.console {
+    let wants_console = match config.console {
         Console::Auto => std::io::stderr().is_terminal(),
         Console::Always => true,
         Console::Never => false,
     };
-    if console {
+    let mut console = None;
+    if wants_console {
+        let (writer, guard) = console_writer(stderr);
+        console = Some(WriterThread::new(&writer, guard));
         layers.push(
-            console_layer::<Registry, _>(
-                std::io::stderr,
-                Arc::clone(&redactor),
-                &config.console_filter,
-            )?
-            .boxed(),
+            console_layer::<Registry, _>(writer, Arc::clone(&redactor), &config.console_filter)?
+                .boxed(),
         );
     }
     let subscriber = tracing_subscriber::registry().with(layers);
-    Ok((subscriber, TraceGuard { _file: file_guard, dropped, file_filter, ring, stats, redactor }))
+    Ok((subscriber, TraceGuard { file, console, file_filter, ring, stats, redactor }))
 }
 
 static GLOBAL_RING: OnceLock<Arc<Ring>> = OnceLock::new();
@@ -358,7 +469,7 @@ fn soft_assert_hook(failure: &Failure<'_>) {
 
 /// Starts tracing for this process: installs the stack as the global default, bridges the
 /// `log` crate, and switches soft assertions to reporting (log, count, request a dump). Call
-/// it once, at the start of `main`.
+/// it once, at the start of `main`, and hold the [`TraceGuard`] it returns until `main` returns.
 ///
 /// A global default set before (an earlier `init`, say) is [`TraceError::AlreadyInitialised`].
 /// When a `log` logger was set first (an `env_logger::init()`, say), records logged through
@@ -412,8 +523,20 @@ fn same_stack(a: &Dispatch, b: &Dispatch) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::TraceConfig;
+    use std::io::Write;
+    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+    use std::sync::{Arc, Mutex, PoisonError};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
+
+    use tracing::Dispatch;
+
+    use super::{CONSOLE_LINES, Console, ProcessKind, TraceConfig, TraceGuard, build_on};
     use crate::pii::PiiKey;
+
+    /// How long a test waits for a thread before calling it stuck: a writer thread takes a line
+    /// at once, and a thread that logs returns at once, so only a failing run waits this long.
+    const DEADLINE: Duration = Duration::from_secs(5);
 
     #[test]
     fn a_config_never_shows_its_pii_key_in_debug() {
@@ -424,37 +547,199 @@ mod tests {
         assert!(!shown.contains("171, 171"), "no byte of the key: {shown}");
     }
 
+    /// Keeps the kernel's name for the thread that writes to it, the one `top -H`, gdb and core
+    /// dumps show.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn the_log_writers_thread_keeps_its_whole_name_on_linux() {
-        use std::io::Write;
-        use std::sync::{Arc, Mutex, PoisonError};
+    struct KernelName(Arc<Mutex<Option<String>>>);
 
-        use super::{LOG_WRITER_THREAD, log_writer};
-
-        /// Keeps the kernel's name for the thread that writes to it, the one `top -H`, gdb
-        /// and core dumps show.
-        struct KernelName(Arc<Mutex<Option<String>>>);
-
-        impl Write for KernelName {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                let comm = std::fs::read_to_string("/proc/thread-self/comm")?;
-                *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
-                    Some(comm.trim_end().to_owned());
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    #[cfg(target_os = "linux")]
+    impl Write for KernelName {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let comm = std::fs::read_to_string("/proc/thread-self/comm")?;
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(comm.trim_end().to_owned());
+            Ok(buf.len())
         }
 
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The kernel's name for the thread of the writer that `make` builds.
+    #[cfg(target_os = "linux")]
+    fn writer_thread_name(
+        make: fn(KernelName) -> (super::NonBlocking, super::WorkerGuard),
+    ) -> Option<String> {
         let seen = Arc::new(Mutex::new(None));
-        let (mut writer, guard) = log_writer(KernelName(Arc::clone(&seen)));
+        let (mut writer, guard) = make(KernelName(Arc::clone(&seen)));
         writer.write_all(b"a line\n").unwrap();
         // Dropping the guard waits for the thread to write what it was sent.
         drop(guard);
-        let name = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        seen.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_writers_thread_keeps_its_whole_name_on_linux() {
+        use super::{LOG_WRITER_THREAD, log_writer};
+
+        let name = writer_thread_name(log_writer);
         assert_eq!(name.as_deref(), Some(LOG_WRITER_THREAD), "Linux keeps 15 bytes of a name");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_console_writers_thread_keeps_its_whole_name_on_linux() {
+        use super::{CONSOLE_WRITER_THREAD, console_writer};
+
+        let name = writer_thread_name(console_writer);
+        assert_eq!(name.as_deref(), Some(CONSOLE_WRITER_THREAD), "Linux keeps 15 bytes of a name");
+    }
+
+    /// A terminal that stops reading at the first line it is given, until the test resumes it,
+    /// and keeps every line.
+    struct Terminal {
+        stop: Option<(SyncSender<()>, Receiver<()>)>,
+        lines: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl Write for Terminal {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if let Some((stopped, resume)) = self.stop.take() {
+                let _ignored = stopped.send(());
+                let _ignored = resume.recv();
+            }
+            self.lines.lock().unwrap_or_else(PoisonError::into_inner).push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A stack whose console's terminal stopped at its first line, after which another thread
+    /// logged 10 lines more than the console's buffer holds.
+    struct StoppedConsole {
+        guard: TraceGuard,
+        /// Resumes the terminal.
+        resume: SyncSender<()>,
+        /// What the terminal got.
+        lines: Arc<Mutex<Vec<Vec<u8>>>>,
+        /// The thread that logged the lines, and whether it returned within the deadline.
+        filler: JoinHandle<()>,
+        returned: bool,
+    }
+
+    fn stopped_console() -> StoppedConsole {
+        let (stopped_tx, stopped) = sync_channel(1);
+        let (resume, resume_rx) = sync_channel(1);
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let terminal = Terminal { stop: Some((stopped_tx, resume_rx)), lines: Arc::clone(&lines) };
+        let mut config = TraceConfig::new(None);
+        config.console = Console::Always;
+        let (subscriber, guard) = build_on(ProcessKind::Cli, &config, terminal).unwrap();
+        let stack = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&stack, || {
+            tracing::warn!(target: "eileen_core", "the line the terminal stops on");
+        });
+        // The console's thread holds that line, blocked on the terminal, and its buffer is empty.
+        stopped.recv_timeout(DEADLINE).unwrap();
+        let (returned_tx, returned_rx) = sync_channel(1);
+        let filler = eileen_stdx::thread::spawn_named("console-filler", move || {
+            tracing::dispatcher::with_default(&stack, || {
+                for _ in 0..CONSOLE_LINES + 10 {
+                    tracing::warn!(target: "eileen_core", "a line");
+                }
+            });
+            let _ignored = returned_tx.send(());
+        })
+        .unwrap();
+        let returned = returned_rx.recv_timeout(DEADLINE).is_ok();
+        StoppedConsole { guard, resume, lines, filler, returned }
+    }
+
+    #[test]
+    fn the_console_drops_and_counts_lines_past_its_buffer() {
+        let console = stopped_console();
+        console.resume.send(()).unwrap();
+        console.filler.join().unwrap();
+        let dropped = console.guard.console_dropped_lines();
+        // Dropping the guard waits for the console's thread to write what its buffer held.
+        drop(console.guard);
+        let written = console.lines.lock().unwrap_or_else(PoisonError::into_inner).len();
+        assert!(console.returned, "a full console made a thread that logs wait");
+        assert_eq!(dropped, 10, "the lines past the buffer were dropped and counted");
+        assert_eq!(written, 1 + CONSOLE_LINES, "the terminal got every line the buffer held");
+    }
+
+    /// Stdout's lock, held on a thread of its own until this is dropped, as a print to a
+    /// terminal that stopped reading holds it.
+    struct HeldStdout {
+        release: Option<SyncSender<()>>,
+        holder: Option<JoinHandle<()>>,
+    }
+
+    impl HeldStdout {
+        fn hold() -> Self {
+            let (held_tx, held) = sync_channel(1);
+            let (release, release_rx) = sync_channel::<()>(1);
+            let holder = eileen_stdx::thread::spawn_named("held-stdout", move || {
+                let _lock = std::io::stdout().lock();
+                held_tx.send(()).unwrap();
+                // Until the test releases it, or drops the sender as it unwinds.
+                let _ignored = release_rx.recv();
+            })
+            .unwrap();
+            held.recv().unwrap();
+            Self { release: Some(release), holder: Some(holder) }
+        }
+    }
+
+    impl Drop for HeldStdout {
+        fn drop(&mut self) {
+            drop(self.release.take());
+            if let Some(holder) = self.holder.take() {
+                let _ignored = holder.join();
+            }
+        }
+    }
+
+    /// Whether libtest's output capture is off: nextest runs each test with `--nocapture`, and
+    /// `cargo test` needs `-- --no-capture` (or its older spelling `--nocapture`), or
+    /// `RUST_TEST_NOCAPTURE` set to anything but `0`, as libtest reads it.
+    fn output_capture_is_off() -> bool {
+        std::env::args_os().any(|arg| arg == "--nocapture" || arg == "--no-capture")
+            || std::env::var("RUST_TEST_NOCAPTURE").is_ok_and(|value| value != "0")
+    }
+
+    #[test]
+    fn dropping_the_guard_never_waits_for_a_stopped_terminal() {
+        // Every thread a test starts inherits libtest's output capture, which takes
+        // tracing-appender's print into its buffer: the print never waits for stdout, and the
+        // test would pass whatever the drop does.
+        assert!(
+            output_capture_is_off(),
+            "needs nextest or `cargo test -- --no-capture`: libtest's output capture keeps \
+             tracing-appender's print off stdout, so this test cannot see a drop that waits for it"
+        );
+        let console = stopped_console();
+        // tracing-appender's guard finds the console's buffer full and prints that on stdout,
+        // whose lock this holds, as a print to a terminal that stopped reading holds it.
+        let stdout = HeldStdout::hold();
+        let guard = console.guard;
+        let (returned_tx, returned_rx) = sync_channel(1);
+        let dropper = eileen_stdx::thread::spawn_named("guard-dropper", move || {
+            drop(guard);
+            let _ignored = returned_tx.send(());
+        })
+        .unwrap();
+        let returned = returned_rx.recv_timeout(DEADLINE).is_ok();
+        drop(stdout);
+        console.resume.send(()).unwrap();
+        console.filler.join().unwrap();
+        dropper.join().unwrap();
+        assert!(returned, "dropping the guard waited for a stopped terminal");
     }
 }

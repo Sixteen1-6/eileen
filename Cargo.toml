@@ -21,6 +21,7 @@ publish = false
 eileen-apps = { path = "crates/eileen-apps" }
 eileen-apps-win = { path = "crates/eileen-apps-win" }
 eileen-audio = { path = "crates/eileen-audio" }
+eileen-audio-linux = { path = "crates/eileen-audio-linux" }
 eileen-audio-win = { path = "crates/eileen-audio-win" }
 eileen-buildguard = { path = "crates/eileen-buildguard" }
 eileen-cli = { path = "crates/eileen-cli" }
@@ -30,6 +31,7 @@ eileen-core = { path = "crates/eileen-core" }
 eileen-crash = { path = "crates/eileen-crash" }
 eileen-dbus-linux = { path = "crates/eileen-dbus-linux" }
 eileen-desktop = { path = "crates/eileen-desktop" }
+eileen-desktop-linux = { path = "crates/eileen-desktop-linux" }
 eileen-desktop-win = { path = "crates/eileen-desktop-win" }
 eileen-dictation = { path = "crates/eileen-dictation" }
 eileen-e2e = { path = "crates/eileen-e2e" }
