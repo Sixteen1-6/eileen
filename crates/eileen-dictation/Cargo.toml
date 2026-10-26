@@ -1,0 +1,20 @@
+[package]
+name = "eileen-dictation"
+description = "Eileen's tier-0 dictation cleanup: vocabulary, scratch-that, fillers, stutters, self-corrections and spoken punctuation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP4"
+unsafe = "forbid"
+
+[dependencies]
+eileen-contracts.workspace = true
+
+[lints]
+workspace = true

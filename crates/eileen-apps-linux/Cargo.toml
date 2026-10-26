@@ -19,6 +19,7 @@ unsafe = "forbid"
 eileen-contracts.workspace = true
 eileen-dbus-linux.workspace = true
 eileen-platform.workspace = true
+eileen-stdx.workspace = true
 quick-xml.workspace = true
 rustix.workspace = true
 tokio.workspace = true
