@@ -61,6 +61,8 @@ pub fn spawn_detached(spec: &ChildSpec) -> Result<Detached, SupervisorError> {
     }
     #[cfg(unix)]
     {
+        // Exactly `spawn_reaped` with the reaper's handle dropped, which detaches the thread:
+        // `tests::linux::the_guard_spawn_is_reaped` tests this path through `spawn_reaped`.
         let (detached, _reaper) = spawn_reaped(spec).map_err(error)?;
         Ok(detached)
     }

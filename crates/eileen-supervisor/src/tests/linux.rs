@@ -258,6 +258,11 @@ fn waiting_drains_a_stderr_pipe_nobody_took() {
     );
 }
 
+/// Covers `spawn_reaped`, not `spawn_detached` itself: the reap is asynchronous, and only the
+/// reaper's join handle lets the test wait for it without polling. On Unix `spawn_detached` is
+/// `spawn_reaped` with the handle dropped, and nothing else calls `spawn_reaped`, so a
+/// `spawn_detached` that bypassed it would leave it unused, which the `dead_code` lint (an
+/// error under clippy's `-D warnings`) reports.
 #[test]
 fn the_guard_spawn_is_reaped() {
     let dir = TempDir::new("detached-reap");
