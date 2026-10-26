@@ -22,8 +22,9 @@
 //!   unknown id answered `InvalidArgs`. A `clicked` event on an item passes its `TrayItem::id`
 //!   to the caller's channel; any other event, and one on the root (a host's `opened` and
 //!   `closed`), passes nothing. `EventGroup` answers the ids it does not know, and
-//!   `InvalidArgs` when it knows none. `AboutToShow` never asks for an update. A change of the
-//!   menu sends `LayoutUpdated(revision, 0)`, after which a host fetches the layout again.
+//!   `InvalidArgs` when it knows none, as `AboutToShowGroup` does; `AboutToShow` never asks for
+//!   an update. A change of the menu sends `LayoutUpdated(revision, 0)`, after which a host
+//!   fetches the layout again.
 //!
 //! Traps:
 //!
@@ -330,6 +331,15 @@ fn unknown(id: i32) -> fdo::Error {
     fdo::Error::InvalidArgs(format!("no menu item {id}"))
 }
 
+/// The `idErrors` of a group call on `asked` ids, `errors` of them unknown: `InvalidArgs` when
+/// all were, as dbusmenu asks.
+fn id_errors(asked: usize, errors: Vec<i32>) -> fdo::Result<Vec<i32>> {
+    if asked > 0 && errors.len() == asked {
+        return Err(fdo::Error::InvalidArgs("no such menu items".to_owned()));
+    }
+    Ok(errors)
+}
+
 #[zbus::interface(name = "com.canonical.dbusmenu")]
 #[expect(
     clippy::unused_self,
@@ -399,21 +409,22 @@ impl MenuServer {
     /// Several events: the ids the menu does not know, or `InvalidArgs` when it knows none.
     fn event_group(&self, events: Vec<(i32, String, OwnedValue, u32)>) -> fdo::Result<Vec<i32>> {
         let taken = |(id, event, _, _): &(i32, String, OwnedValue, u32)| self.take(*id, event);
-        let errors: Vec<i32> = events.iter().filter(|event| !taken(event)).map(|e| e.0).collect();
-        if errors.len() == events.len() && !events.is_empty() {
-            return Err(fdo::Error::InvalidArgs("no such menu items".to_owned()));
-        }
-        Ok(errors)
+        let errors = events.iter().filter(|event| !taken(event)).map(|e| e.0).collect();
+        id_errors(events.len(), errors)
     }
 
-    /// Whether the node `id` needs an update before it is shown: never.
-    fn about_to_show(&self, id: i32) -> bool {
-        false
+    /// Whether the node `id` needs an update before it is shown: never. `InvalidArgs` for an
+    /// unknown `id`.
+    fn about_to_show(&self, id: i32) -> fdo::Result<bool> {
+        if self.menu.knows(id) { Ok(false) } else { Err(unknown(id)) }
     }
 
-    /// The nodes of `ids` that need an update, none, and those the menu does not know.
-    fn about_to_show_group(&self, ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
-        (Vec::new(), ids.into_iter().filter(|id| !self.menu.knows(*id)).collect())
+    /// The nodes of `ids` that need an update, none, and those the menu does not know, or
+    /// `InvalidArgs` when it knows none.
+    fn about_to_show_group(&self, ids: Vec<i32>) -> fdo::Result<(Vec<i32>, Vec<i32>)> {
+        let asked = ids.len();
+        let errors = ids.into_iter().filter(|id| !self.menu.knows(*id)).collect();
+        Ok((Vec::new(), id_errors(asked, errors)?))
     }
 
     #[zbus(signal)]

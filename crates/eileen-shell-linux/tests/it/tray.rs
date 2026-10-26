@@ -398,6 +398,10 @@ fn the_menu_answers_for_its_items_and_never_asks_to_update() {
     let reply = rig.menu_call(&item, "AboutToShowGroup", &(vec![0_i32, quit, 99],)).unwrap();
     let (updates, errors): (Vec<i32>, Vec<i32>) = reply.body().deserialize().unwrap();
     assert_eq!((updates, errors), (Vec::new(), vec![99]), "no update, and the unknown id");
+    let unknown = rig.menu_call(&item, "AboutToShow", &(99_i32,));
+    assert_eq!(error_name(unknown).as_deref(), Some(INVALID_ARGS), "an unknown id");
+    let none = rig.menu_call(&item, "AboutToShowGroup", &(vec![98_i32, 99],));
+    assert_eq!(error_name(none).as_deref(), Some(INVALID_ARGS), "no known id");
 }
 
 #[test]
