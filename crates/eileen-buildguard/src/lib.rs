@@ -38,8 +38,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-buildguard` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-buildguard`).
+//! - Fast command: `cargo xtask test -p eileen-buildguard`.
 //! - Layers: unit tests of the rules with fake memory and a manual clock; integration tests
 //!   with child processes (the test binary re-run as a helper) for the cross-process files,
 //!   the stale holder and, on Windows, the kill-on-close job.

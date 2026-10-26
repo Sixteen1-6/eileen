@@ -1,0 +1,29 @@
+# Check 16 (BUILD.md section 4b.3): modules over 800 lines, each with its reason. Split a module
+# before listing it; list it only when one subject needs the length.
+
+[[module]]
+path = "crates/eileen-trace/src/privacy.rs"
+reason = "the scenario privacy rules and the PII scan stay one module, shared by repo-tools and eileen-scenarios; its table tests are the last 300 lines"
+
+[[module]]
+path = "crates/eileen-trace/src/redact.rs"
+reason = "the Redactor's patterns and their literal prefilter stay one module; its tests are the last 300 lines"
+
+# WP10's integration test files, one D-Bus service each against its fakes on a private bus, listed
+# when lint-repo arrived; WP10 may split them instead.
+
+[[module]]
+path = "crates/eileen-apps-linux/tests/it/open.rs"
+reason = "the opener's tests against a fake OpenURI portal and D-Bus-activatable apps, with the fakes"
+
+[[module]]
+path = "crates/eileen-shell-linux/tests/it/keep_awake.rs"
+reason = "keeping the session awake against fake logind, session manager and Inhibit portal services"
+
+[[module]]
+path = "crates/eileen-shell-linux/tests/it/notifications.rs"
+reason = "the notification client against fake notification servers, one per capability set"
+
+[[module]]
+path = "crates/eileen-shell-linux/tests/it/upower.rs"
+reason = "the power facts against a fake UPower and a fake profiles daemon"

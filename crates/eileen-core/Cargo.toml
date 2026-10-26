@@ -1,0 +1,21 @@
+[package]
+name = "eileen-core"
+description = "Eileen's decisions as one state machine with no IO: every input in, every effect out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP1"
+unsafe = "forbid"
+
+[dependencies]
+eileen-contracts.workspace = true
+eileen-stdx.workspace = true
+
+[lints]
+workspace = true

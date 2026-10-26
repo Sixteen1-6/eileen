@@ -40,7 +40,7 @@ It builds on, and does not repeat, four sibling reports written the same day: th
 | One cloning TTS test (Pocket TTS v4 or Chatterbox-Nano) | **Not run** for the same reason; cited from [voice-stack] and published numbers | |
 | Insertion in real Notepad | **Not run here.** Windows 11 Notepad restores unsaved tabs between sessions, so test text would persist in the owner's Notepad; the computer-use run's 2026-10-11 Notepad measurements are cited instead | [computer-use] |
 
-Scripts and result files: `C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\dictation-voices\` (`scripts\target.py`, `scripts\insert_bench.py`, `scripts\cleanup_rules.py`, `results\*.json`). The venv there holds only `comtypes` 1.4.17. All processes started were closed; a final check found none left.
+Scripts and result files: `%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\dictation-voices\` (`scripts\target.py`, `scripts\insert_bench.py`, `scripts\cleanup_rules.py`, `results\*.json`). The venv there holds only `comtypes` 1.4.17. All processes started were closed; a final check found none left.
 
 ## 3. Dictation: the field on 2026-10-20
 

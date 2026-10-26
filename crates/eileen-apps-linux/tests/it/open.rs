@@ -1,6 +1,6 @@
 //! The opener against fakes on the private bus: an `OpenURI` portal that records each call and
 //! answers on the request handle its `handle_token` names, as the real portal does, and
-//! D-Bus-activatable apps.
+//! D-Bus-activatable apps. The `apps` tests reuse the fakes through the trait.
 
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd};
@@ -13,8 +13,10 @@ use eileen_apps_linux::{
     index,
 };
 use eileen_contracts::ids::Personal;
+use eileen_dbus_linux::CLOSE_GRACE;
 use eileen_dbus_linux::testing::{PrivateBus, round_trip, serve};
 use rustix::fs::{CWD, Mode as Permissions, OFlags, fcntl_getfl, mkfifoat};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue};
@@ -28,18 +30,21 @@ const REQUEST: &str = "org.freedesktop.portal.Request";
 
 /// What the fake portal does with a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Answer {
+pub(crate) enum Answer {
     /// Emits `Response` with this code before it replies, as a quick portal can.
     Now(u32),
     /// Replies and stays silent: the test answers, or lets the deadline pass.
     Later,
+    /// Replies after this long and stays silent, as a portal that the bus starts on its first
+    /// use replies late.
+    Slow(Duration),
     /// Refuses, as the portal does when the desktop's lockdown turns handlers off.
     NotAllowed,
 }
 
 /// What the fake portal saw.
 #[derive(Debug)]
-enum Event {
+pub(crate) enum Event {
     /// A call to the portal.
     Call(PortalCall),
     /// `Close` on a request.
@@ -48,11 +53,11 @@ enum Event {
 
 /// One call to the portal.
 #[derive(Debug)]
-struct PortalCall {
-    method: &'static str,
+pub(crate) struct PortalCall {
+    pub(crate) method: &'static str,
     parent_window: String,
     /// The URI, or the path the descriptor names.
-    target: String,
+    pub(crate) target: String,
     /// How the descriptor is open; `None` for a URI.
     mode: Option<Mode>,
     /// The options' names.
@@ -60,7 +65,7 @@ struct PortalCall {
     /// The `handle_token` option.
     token: Option<String>,
     /// The handle the fake answered.
-    handle: OwnedObjectPath,
+    pub(crate) handle: OwnedObjectPath,
 }
 
 /// The portal's errors the fake answers.
@@ -105,8 +110,10 @@ impl FakePortal {
         connection.object_server().at(&handle, FakeRequest { events: self.events.clone() }).await?;
         call.handle = handle.clone();
         self.events.send(Event::Call(call)).await.unwrap();
-        if let Answer::Now(code) = self.answer {
-            respond(connection, handle.as_str(), code).await;
+        match self.answer {
+            Answer::Now(code) => respond(connection, handle.as_str(), code).await,
+            Answer::Slow(delay) => tokio::time::sleep(delay).await,
+            Answer::Later | Answer::NotAllowed => {}
         }
         Ok(handle)
     }
@@ -227,7 +234,10 @@ impl OddPortal {
 }
 
 /// The fake portal on `bus`, and what it sees. Hold the connection for the whole test.
-async fn portal(bus: &PrivateBus, answer: Answer) -> (zbus::Connection, mpsc::Receiver<Event>) {
+pub(crate) async fn portal(
+    bus: &PrivateBus,
+    answer: Answer,
+) -> (zbus::Connection, mpsc::Receiver<Event>) {
     let (events, seen) = mpsc::channel(16);
     (serve(bus, PORTAL, PORTAL_PATH, FakePortal { answer, events }).await, seen)
 }
@@ -255,12 +265,12 @@ async fn respond_to(
 }
 
 /// What the fake saw next. No timer: nextest's slow-timeout ends a test that waits for good.
-async fn next(seen: &mut mpsc::Receiver<Event>) -> Event {
+pub(crate) async fn next(seen: &mut mpsc::Receiver<Event>) -> Event {
     seen.recv().await.expect("the fake portal is still on the bus")
 }
 
 /// The next call the fake portal saw.
-async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
+pub(crate) async fn call_seen(seen: &mut mpsc::Receiver<Event>) -> PortalCall {
     match next(seen).await {
         Event::Call(call) => call,
         other @ Event::Closed(_) => panic!("not a call: {other:?}"),
@@ -287,9 +297,14 @@ impl Scratch {
     }
 
     /// A file in the folder.
-    fn file(&self, name: &str) -> PathBuf {
+    pub(crate) fn file(&self, name: &str) -> PathBuf {
+        self.write(name, "a fixture document")
+    }
+
+    /// A file in the folder that holds `contents`.
+    pub(crate) fn write(&self, name: &str, contents: &str) -> PathBuf {
         let path = self.0.join(name);
-        std::fs::write(&path, "a fixture document").unwrap();
+        std::fs::write(&path, contents).unwrap();
         path
     }
 
@@ -307,8 +322,11 @@ impl Drop for Scratch {
     }
 }
 
-/// A runtime whose blocking pool has one thread. tokio runs the opener's file checks there.
-fn one_blocking_thread() -> tokio::runtime::Runtime {
+/// A runtime whose blocking pool has one thread, for an opener that checks files there
+/// (`Opener::checking_files_on`) or apps that read their index there
+/// (`LinuxApps::reading_files_on`), which a test can stall as no unprivileged test can stall a
+/// stat or a read.
+pub(crate) fn one_blocking_thread() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(1)
@@ -321,7 +339,7 @@ fn one_blocking_thread() -> tokio::runtime::Runtime {
 /// runtime from [`one_blocking_thread`]; a test that panics drops the sender as it unwinds.
 fn stall_file_checks() -> tokio::sync::oneshot::Sender<()> {
     let (release, released) = tokio::sync::oneshot::channel();
-    let _stall = tokio::runtime::Handle::current().spawn_blocking(move || released.blocking_recv());
+    let _stall = Handle::current().spawn_blocking(move || released.blocking_recv());
     release
 }
 
@@ -330,22 +348,22 @@ const APP: &str = "org.eileen.TestApp";
 const APP_PATH: &str = "/org/eileen/TestApp";
 const APP_ID: &str = "org.eileen.TestApp.desktop";
 
-/// What a fake app does with `Activate`.
+/// What a fake app does with a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Behaviour {
+pub(crate) enum Behaviour {
     /// Answers at once.
     Answer,
-    /// Records the call, then never answers.
+    /// Records the call, `Activate` or `Open`, then never answers.
     Hang,
-    /// Fails as the bus answers for a service whose process exited as it started.
+    /// Fails `Activate` as the bus answers for a service whose process exited as it started.
     ExitAtStart,
 }
 
 /// One call to a fake app's `org.freedesktop.Application`.
 #[derive(Debug)]
-struct AppCall {
-    method: &'static str,
-    uris: Vec<String>,
+pub(crate) struct AppCall {
+    pub(crate) method: &'static str,
+    pub(crate) uris: Vec<String>,
     platform_data: Vec<String>,
 }
 
@@ -382,12 +400,15 @@ impl FakeApp {
     async fn open(&self, uris: Vec<String>, platform_data: HashMap<String, OwnedValue>) {
         let platform_data = platform_data.into_keys().collect();
         self.calls.send(AppCall { method: "Open", uris, platform_data }).await.unwrap();
+        if self.behaviour == Behaviour::Hang {
+            std::future::pending::<()>().await;
+        }
     }
 }
 
 /// A fake app owning `name` on `bus` with its interface at `path`, and the calls it sees. Hold
 /// the connection for the whole test.
-async fn app(
+pub(crate) async fn app(
     bus: &PrivateBus,
     name: &str,
     path: &str,
@@ -398,7 +419,7 @@ async fn app(
 }
 
 /// The next call a fake app saw. No timer, as for the portal's.
-async fn app_seen(seen: &mut mpsc::Receiver<AppCall>) -> AppCall {
+pub(crate) async fn app_seen(seen: &mut mpsc::Receiver<AppCall>) -> AppCall {
     seen.recv().await.expect("the fake app is still on the bus")
 }
 
@@ -496,6 +517,32 @@ async fn a_silent_portal_passes_the_deadline_and_the_request_is_closed() {
         opener.open_url("https://example.com", DEADLINE).await,
         Err(DbusError::DeadlineExceeded { call: "portal response" }),
         "no Response within the deadline"
+    );
+    let call = call_seen(&mut seen).await;
+    match next(&mut seen).await {
+        Event::Closed(path) => assert_eq!(path, call.handle, "the pending request closed"),
+        other @ Event::Call(_) => panic!("not a Close: {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_response_waits_only_for_what_a_slow_reply_leaves_of_the_deadline() {
+    // Paused time: the fake's delay and then the opener's wait are the only timers, and tokio
+    // fires each once the runtime is idle, so the clock moves by them alone.
+    let bus = PrivateBus::start();
+    let slow = DEADLINE / 3;
+    let (_service, mut seen) = portal(&bus, Answer::Slow(slow)).await;
+    let opener = Opener::new(&bus.connect().await);
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        opener.open_url("https://example.com", DEADLINE).await,
+        Err(DbusError::DeadlineExceeded { call: "portal response" }),
+        "the reply came late, and no Response after it"
+    );
+    let took = started.elapsed();
+    assert!(
+        took >= DEADLINE && took <= DEADLINE + CLOSE_GRACE,
+        "one deadline for the reply and the wait together, not {slow:?} more: {took:?}"
     );
     let call = call_seen(&mut seen).await;
     match next(&mut seen).await {
@@ -640,12 +687,13 @@ async fn paths_are_checked_before_the_portal_is_asked() {
 
 #[test]
 fn a_file_check_that_stalls_passes_the_deadline() {
-    // A real timer: tokio's paused time stands still while a blocking task runs, and the checks
-    // run on the blocking pool. Nothing is asserted about how long anything took.
+    // A real timer: tokio's paused time stands still while a blocking task runs, and these
+    // checks run on the test runtime's blocking pool. Nothing is asserted about how long
+    // anything took.
     one_blocking_thread().block_on(async {
         let bus = PrivateBus::start();
         let (_service, mut seen) = portal(&bus, Answer::Now(0)).await;
-        let opener = Opener::new(&bus.connect().await);
+        let opener = Opener::new(&bus.connect().await).checking_files_on(Handle::current());
         let scratch = Scratch::new();
         let file = scratch.file("notes.txt");
         let release = stall_file_checks();
@@ -866,7 +914,8 @@ fn a_file_check_that_stalls_passes_the_method_timeout() {
     one_blocking_thread().block_on(async {
         let bus = PrivateBus::start();
         let (_service, mut seen) = app(&bus, APP, APP_PATH, Behaviour::Answer).await;
-        let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await);
+        let opener = Opener::new(&bus.connect_within(Duration::from_millis(50)).await)
+            .checking_files_on(Handle::current());
         let scratch = Scratch::new();
         let file = scratch.file("notes.txt");
         let with = entry(APP_ID, true, AppKind::Desktop);
@@ -883,7 +932,7 @@ fn a_file_check_that_stalls_passes_the_method_timeout() {
         assert!(seen.try_recv().is_err(), "the app was not called");
         drop(release);
         // A connection without a method timeout, whose checks take METHOD_TIMEOUT.
-        let unstalled = Opener::new(&bus.connect().await);
+        let unstalled = Opener::new(&bus.connect().await).checking_files_on(Handle::current());
         assert_eq!(
             unstalled.open_path_with(&file, &with).await,
             Ok(()),

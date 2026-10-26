@@ -1,0 +1,38 @@
+[package]
+name = "eileen-sim"
+description = "The deterministic simulator: the whole core under seeded inputs and faults, checked by invariants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "tests"
+owns = "WP1"
+unsafe = "forbid"
+
+[[bin]]
+name = "eileen-sim"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+arbitrary.workspace = true
+eileen-contracts.workspace = true
+eileen-core.workspace = true
+eileen-dictation.workspace = true
+eileen-intent.workspace = true
+eileen-skills.workspace = true
+eileen-stdx.workspace = true
+eileen-trace.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+# The default simulation profile (BUILD.md section 4.7): a balanced mix of inputs. Its schema is
+# profile.schema.json beside it, generated from eileen_sim::Profile.
+name = "default"
+steps = 2000
+seeds = 64
+max_step_ms = 200
+speech_queue_max = 8
+bus_subscriber_capacity = 64
+bus_subscriber_drain = 2
+
+[input_mix]
+voice = 5
+user = 2
+playback = 2
+timer = 1
