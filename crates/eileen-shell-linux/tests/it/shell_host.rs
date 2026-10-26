@@ -3,6 +3,7 @@
 //! watcher of the clients' own tests, and a GNOME session manager that reports what it is asked;
 //! a silent bus stands in for a bus that has hung. The test's thread calls the shell as the core
 //! does, blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
+//! The shortcut methods' tests, in `shell_shortcuts`, share its fakes, settings and shells.
 
 use std::fs;
 use std::io::Read;
@@ -15,9 +16,9 @@ use std::time::Duration;
 use eileen_contracts::core_io::Toast;
 use eileen_dbus_linux::testing::{PrivateBus, SilentBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_changes};
-use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
+use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState};
 use eileen_shell_linux::{
-    LinuxShell, LinuxShellEvent, LinuxShellSettings, NotifierSettings, TraySettings,
+    LinuxShell, LinuxShellEvent, LinuxShellSettings, NotifierSettings, ShortcutNames, TraySettings,
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
@@ -29,6 +30,7 @@ use crate::keep_awake::{
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
+use crate::shortcuts::{FakeShortcuts, serve_portal};
 use crate::tray::{ITEM, ITEM_PATH, Registration, Rig, state, tray_item};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
@@ -55,20 +57,20 @@ const ICON: &str = "eileen-tray";
 const PROGRAM: &str = "/opt/eileen/bin/eileen";
 
 /// The fakes, on a multi-thread runtime of their own.
-struct Fakes {
-    runtime: tokio::runtime::Runtime,
+pub(super) struct Fakes {
+    pub(super) runtime: tokio::runtime::Runtime,
     services: Vec<zbus::Connection>,
 }
 
 impl Fakes {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let runtime =
             tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build();
         Self { runtime: runtime.unwrap(), services: Vec::new() }
     }
 
     /// Serves `iface` at `path` under `name` until the fakes drop.
-    fn serve<I: zbus::object_server::Interface>(
+    pub(super) fn serve<I: zbus::object_server::Interface>(
         &mut self,
         bus: &PrivateBus,
         name: &str,
@@ -88,6 +90,14 @@ impl Fakes {
         iface: I,
     ) -> zbus::Connection {
         let service = self.runtime.block_on(serve(bus, name, path, iface));
+        self.services.push(service.clone());
+        service
+    }
+
+    /// Serves `fake` as the `GlobalShortcuts` portal, with its host registry, until the fakes drop,
+    /// and answers the portal's connection.
+    pub(super) fn shortcuts(&mut self, bus: &PrivateBus, fake: FakeShortcuts) -> zbus::Connection {
+        let service = self.runtime.block_on(serve_portal(bus, fake));
         self.services.push(service.clone());
         service
     }
@@ -162,8 +172,8 @@ impl Silent {
     }
 }
 
-/// The settings the tests give: `deadline`, the autostart folder `autostart_dir`, and the tray's
-/// default icons.
+/// The settings the tests give: `deadline`, the autostart folder `autostart_dir`, and the
+/// shortcuts' default names and the tray's default icons.
 pub(super) fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSettings {
     LinuxShellSettings {
         notifier: NotifierSettings {
@@ -174,12 +184,13 @@ pub(super) fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> Li
         autostart_id: "eileen".to_owned(),
         program: PathBuf::from(PROGRAM),
         deadline,
+        shortcut_names: ShortcutNames::default(),
         tray: TraySettings::default(),
     }
 }
 
 /// A shell on a bridge to `bus`, with `deadline` and no autostart folder.
-fn shell_on(bus: &PrivateBus, deadline: Deadline) -> LinuxShell {
+pub(super) fn shell_on(bus: &PrivateBus, deadline: Deadline) -> LinuxShell {
     LinuxShell::new(Bridge::on_private_bus(bus).unwrap(), settings(deadline, None))
 }
 
@@ -538,23 +549,6 @@ fn run_at_sign_in_maps_its_errors_and_needs_a_folder() {
         shell_on(&bus, DEFAULT_DEADLINE).set_run_at_sign_in(true),
         Err(PlatformError::Unavailable { what: "autostart folder" }),
         "no folder to write in"
-    );
-}
-
-#[test]
-fn hotkeys_and_input_wait_for_phase_l2() {
-    let bus = PrivateBus::start();
-    let shell = shell_on(&bus, DEFAULT_DEADLINE);
-    assert_eq!(
-        shell.register_hotkey("Ctrl+Alt+Space", 1),
-        Err(PlatformError::Unavailable { what: "global hotkey" }),
-        "the GlobalShortcuts portal"
-    );
-    let watch = shell.watch_input(VirtualKey(0x14), Box::new(|_event| {}));
-    assert_eq!(
-        watch.unwrap_err(),
-        PlatformError::Unavailable { what: "input watch" },
-        "the GlobalShortcuts portal, and a source of physical activity not chosen yet"
     );
 }
 

@@ -99,6 +99,52 @@ pub(crate) fn read_ready(stdout: &mut impl BufRead) -> String {
     }
 }
 
+/// The abstract socket a stand-in with process id `pid` listens on (Linux).
+#[cfg(target_os = "linux")]
+fn end_address(pid: u32) -> std::os::unix::net::SocketAddr {
+    use std::os::linux::net::SocketAddrExt as _;
+
+    std::os::unix::net::SocketAddr::from_abstract_name(format!("eileen-buildguard-it-{pid}"))
+        .unwrap()
+}
+
+/// Called by a stand-in on Linux, which keeps what it returns until it ends: a socket that
+/// listens under its process id and never accepts, so a test's connection to it ends when the
+/// stand-in does ([`Watched`]). On Windows a test opens the process itself.
+#[cfg(target_os = "linux")]
+pub(crate) fn listen_for_end() -> std::os::unix::net::UnixListener {
+    std::os::unix::net::UnixListener::bind_addr(&end_address(std::process::id())).unwrap()
+}
+
+/// A stand-in opened so its end can be waited on without polling (Linux; on Windows,
+/// `eileen_buildguard::procs::Watched` opens the process itself): a connection to the socket
+/// it listens on, which the kernel resets when the listener closes, so when the stand-in ends,
+/// however it ends.
+#[cfg(target_os = "linux")]
+pub(crate) struct Watched(std::os::unix::net::UnixStream);
+
+#[cfg(target_os = "linux")]
+impl Watched {
+    /// Connects to the stand-in `pid`, which must be listening already.
+    pub(crate) fn open(pid: u32) -> std::io::Result<Self> {
+        std::os::unix::net::UnixStream::connect_addr(&end_address(pid)).map(Self)
+    }
+
+    /// Waits up to `timeout` for the stand-in to end; true once it has, false at the timeout.
+    pub(crate) fn wait_exit(&self, timeout: std::time::Duration) -> std::io::Result<bool> {
+        use std::io::{ErrorKind, Read as _};
+
+        self.0.set_read_timeout(Some(timeout))?;
+        match (&self.0).read(&mut [0_u8; 1]) {
+            Ok(0) => Ok(true),
+            Err(e) if e.kind() == ErrorKind::ConnectionReset => Ok(true),
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(false),
+            Ok(_) => Err(std::io::Error::other("a stand-in wrote to the socket it listens on")),
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// Blocks until the lock file `name` under `dir` is free (the OS releases a dead holder's lock
 /// on its own schedule), then lets go of it.
 pub(crate) fn wait_until_free(dir: &Path, name: &str) {

@@ -1,23 +1,23 @@
 //! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
 //! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
-//! memory sample (2.5), `ShellHost`'s toasts and session calls, and the power facts over D-Bus.
+//! memory sample (2.5), `ShellHost`'s toasts, session calls, shortcuts and tray, and power facts.
 //!
 //! # Owns
 //!
-//! - The trait implementations: `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], and
-//!   `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`.
-//! - The machine's facts and load on Linux: the processor and its core classes, memory totals,
-//!   GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors,
-//!   read under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists.
-//! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
-//!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
-//!   process outside Eileen's tree.
-//! - `ShellHost`'s clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state
-//!   over logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
-//!   ([`Notifier`], [`NotificationEvents`]), the `GlobalShortcuts` portal ([`ShortcutsSession`],
-//!   [`ShortcutEvents`], [`trigger_of_chord`]) and the tray's item and menu ([`TraySettings`]).
-//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) and a
-//!   stream of their changes ([`PowerChanges`]); [`LinuxMachineProbe`] does not use them yet.
+//! - The machine's facts and load on Linux: the processor and its core classes, memory totals, GPUs
+//!   and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors, read
+//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; and
+//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a
+//!   stream of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet.
+//! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
+//!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
+//!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
+//! - `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`, and
+//!   the trait's clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state over
+//!   logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
+//!   ([`Notifier`], [`NotificationEvents`]), global shortcuts from the `GlobalShortcuts` portal
+//!   ([`ShortcutsSession`], [`ShortcutEvents`], [`trigger_of_chord`]) and the tray's item and
+//!   menu ([`TraySettings`]).
 //!
 //! # Does not own
 //!
@@ -111,7 +111,10 @@ pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
 pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
-pub use host::{LinuxShell, LinuxShellEvent, LinuxShellSettings, RELEASE_WAIT};
+pub use host::{
+    BoundHotkey, CONSENT_WAIT, LinuxShell, LinuxShellEvent, LinuxShellSettings, RELEASE_WAIT,
+    SETTLE, ShortcutId, ShortcutNames,
+};
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use notifications::{
     NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,

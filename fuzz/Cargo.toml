@@ -1,9 +1,9 @@
 # The fuzz workspace of BUILD.md section 4.7, as cargo-fuzz lays it out: its own workspace, kept
 # out of the root one, built with the nightly that `rust-toolchain.toml` here pins, on Linux only.
-# Every target of section 4.7 is declared here except the three WP10 adds with its `-linux`
+# Every target of section 4.7 is declared here, among them the three WP10 adds with its `-linux`
 # crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`). Each target calls a
 # `fuzz_entry` function of the crate that owns the parser; that crate's corpus replay test runs
-# the same function on every OS.
+# the same function on every OS (on Linux only for the `-linux` crates' targets).
 
 [package]
 name = "eileen-fuzz"
@@ -21,6 +21,7 @@ members = ["."]
 [dependencies]
 libfuzzer-sys = "0.4.13"
 eileen-apps = { path = "../crates/eileen-apps" }
+eileen-apps-linux = { path = "../crates/eileen-apps-linux" }
 eileen-config = { path = "../crates/eileen-config" }
 eileen-contracts = { path = "../crates/eileen-contracts" }
 eileen-core = { path = "../crates/eileen-core" }
@@ -34,6 +35,7 @@ eileen-record = { path = "../crates/eileen-record" }
 eileen-replay = { path = "../crates/eileen-replay" }
 eileen-runtime = { path = "../crates/eileen-runtime" }
 eileen-scenarios = { path = "../crates/eileen-scenarios" }
+eileen-shell-linux = { path = "../crates/eileen-shell-linux" }
 eileen-sim = { path = "../crates/eileen-sim" }
 eileen-skills = { path = "../crates/eileen-skills" }
 eileen-speech = { path = "../crates/eileen-speech" }
@@ -55,6 +57,13 @@ bench = false
 [[bin]]
 name = "control_message"
 path = "fuzz_targets/control_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "desktop_entry"
+path = "fuzz_targets/desktop_entry.rs"
 test = false
 doc = false
 bench = false
@@ -104,6 +113,20 @@ bench = false
 [[bin]]
 name = "hud_line"
 path = "fuzz_targets/hud_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "linux_mountinfo"
+path = "fuzz_targets/linux_mountinfo.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "linux_proc_status"
+path = "fuzz_targets/linux_proc_status.rs"
 test = false
 doc = false
 bench = false
