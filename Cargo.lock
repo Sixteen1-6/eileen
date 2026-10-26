@@ -759,6 +759,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eileen-audio-linux"
+version = "0.0.0"
+dependencies = [
+ "eileen-dbus-linux",
+ "eileen-platform",
+ "proptest",
+ "rustix",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eileen-audio-win"
 version = "0.0.0"
 dependencies = [
@@ -850,6 +862,17 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "eileen-desktop-linux"
+version = "0.0.0"
+dependencies = [
+ "eileen-contracts",
+ "eileen-dbus-linux",
+ "eileen-platform",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]
@@ -1093,8 +1116,10 @@ name = "eileen-supervisor"
 version = "0.0.0"
 dependencies = [
  "eileen-rt",
+ "eileen-stdx",
  "eileen-trace",
  "process-wrap",
+ "rustix",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

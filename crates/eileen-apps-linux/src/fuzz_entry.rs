@@ -7,9 +7,9 @@
 //!
 //! Bytes are decoded lossily, as `uia_text` decodes them, so every input reaches the parser. An
 //! absolute `TryExec` is looked up on the machine the target runs on, which can only move an
-//! entry between listed and hidden. The cargo-fuzz target itself
-//! (`fuzz/fuzz_targets/desktop_entry.rs`) waits for WP0's `fuzz/Cargo.toml`. This crate builds
-//! only on Linux, so the corpus replays only there, which is where fuzzing runs.
+//! entry between listed and hidden. The cargo-fuzz target itself is
+//! `fuzz/fuzz_targets/desktop_entry.rs`. This crate builds only on Linux, so the corpus replays
+//! only there, which is where fuzzing runs.
 
 use std::path::Path;
 

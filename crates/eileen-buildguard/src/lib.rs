@@ -9,7 +9,8 @@
 //!   by available memory, commit headroom and paging ([`admission`]), the wait and exit 75.
 //! - The machine-wide files: the memory samples, the 30 s paging windows and
 //!   `buildguard.toml`, with the baseline that writes it ([`samples`], [`baseline`]).
-//! - [`spawn_cargo`]: cargo in a kill-on-close Job Object at below-normal priority.
+//! - [`spawn_cargo`]: cargo in a kill-on-close Job Object at below-normal priority, or on Unix
+//!   in a process group its watchdog kills, at nice +10 ([`spawn`]).
 //!
 //! # Does not own
 //!
@@ -41,7 +42,7 @@
 //! - Fast command: `cargo xtask test -p eileen-buildguard`.
 //! - Layers: unit tests of the rules with fake memory and a manual clock; integration tests
 //!   with child processes (the test binary re-run as a helper) for the cross-process files,
-//!   the stale holder and, on Windows, the kill-on-close job.
+//!   the stale holder, and the kill-on-close job or (on Linux) process group and nice value.
 //! - A bug here starts as a build that ran when it should have waited, or waited for ever.
 //!
 //! # Traps
@@ -62,8 +63,10 @@
 //!   the next.
 //! - Unlock a lock before its handle closes: Windows releases a lock left on a closed handle
 //!   only when the system gets to it, so a probe or a finished build could hold a slot longer
-//!   than it ran (test
-//!   `slots::tests::a_slot_is_free_to_take_straight_after_a_release_and_a_probe`).
+//!   (`slots::tests::a_slot_is_free_to_take_straight_after_a_release_and_a_probe`).
+//! - On Unix a guarded build runs in a process group of its own, not the terminal's: Ctrl-C
+//!   stops it by ending xtask, Ctrl-Z pauses xtask alone, and a process that leaves the group
+//!   (each test `cargo nextest` runs) is not killed with it ([`spawn`]).
 //!
 //! # Logs and tracing
 //!

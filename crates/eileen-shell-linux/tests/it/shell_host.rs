@@ -1,8 +1,9 @@
 //! `ShellHost` on Linux: `LinuxShell` through a bridge on the private bus, against the fake
-//! logind, logind session, GNOME session manager, Inhibit portal and notification server of the
-//! clients' own tests, and a GNOME session manager that reports what it is asked; a silent bus
-//! stands in for a bus that has hung. The test's thread calls the shell as the core does,
-//! blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
+//! logind, logind session, GNOME session manager, Inhibit portal, notification server and tray
+//! watcher of the clients' own tests, and a GNOME session manager that reports what it is asked;
+//! a silent bus stands in for a bus that has hung. The test's thread calls the shell as the core
+//! does, blocking; the fakes run on a runtime of their own, whose workers serve them meanwhile.
+//! The shortcut methods' tests, in `shell_shortcuts`, share its fakes, settings and shells.
 
 use std::fs;
 use std::io::Read;
@@ -15,8 +16,10 @@ use std::time::Duration;
 use eileen_contracts::core_io::Toast;
 use eileen_dbus_linux::testing::{PrivateBus, SilentBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, name_owner, owner_changes};
-use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState, VirtualKey};
-use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
+use eileen_platform::{Deadline, PlatformError, ShellHost, TrayState};
+use eileen_shell_linux::{
+    LinuxShell, LinuxShellEvent, LinuxShellSettings, NotifierSettings, ShortcutNames, TraySettings,
+};
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
 
@@ -27,6 +30,8 @@ use crate::keep_awake::{
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
+use crate::shortcuts::{FakeShortcuts, serve_portal};
+use crate::tray::{ITEM, ITEM_PATH, Registration, Rig, state, tray_item};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
 /// its length, and a short one keeps the test short. Not for `keep_awake`, whose connects have
@@ -46,26 +51,26 @@ const BUS_SILENCE: Deadline = Deadline::after(Duration::from_millis(400));
 /// The reason Eileen gives logind and the desktop for keeping the session awake.
 const REASON: &str = "An armed run is in progress";
 /// The settings' desktop entry and icon, which differ from the notifier's defaults.
-const DESKTOP_ENTRY: &str = "org.eileen.Eileen";
+pub(super) const DESKTOP_ENTRY: &str = "org.eileen.Eileen";
 const ICON: &str = "eileen-tray";
 /// The program the autostart entry starts.
 const PROGRAM: &str = "/opt/eileen/bin/eileen";
 
 /// The fakes, on a multi-thread runtime of their own.
-struct Fakes {
-    runtime: tokio::runtime::Runtime,
+pub(super) struct Fakes {
+    pub(super) runtime: tokio::runtime::Runtime,
     services: Vec<zbus::Connection>,
 }
 
 impl Fakes {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let runtime =
             tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build();
         Self { runtime: runtime.unwrap(), services: Vec::new() }
     }
 
     /// Serves `iface` at `path` under `name` until the fakes drop.
-    fn serve<I: zbus::object_server::Interface>(
+    pub(super) fn serve<I: zbus::object_server::Interface>(
         &mut self,
         bus: &PrivateBus,
         name: &str,
@@ -85,6 +90,14 @@ impl Fakes {
         iface: I,
     ) -> zbus::Connection {
         let service = self.runtime.block_on(serve(bus, name, path, iface));
+        self.services.push(service.clone());
+        service
+    }
+
+    /// Serves `fake` as the `GlobalShortcuts` portal, with its host registry, until the fakes drop,
+    /// and answers the portal's connection.
+    pub(super) fn shortcuts(&mut self, bus: &PrivateBus, fake: FakeShortcuts) -> zbus::Connection {
+        let service = self.runtime.block_on(serve_portal(bus, fake));
         self.services.push(service.clone());
         service
     }
@@ -159,8 +172,9 @@ impl Silent {
     }
 }
 
-/// The settings the tests give: `deadline`, and the autostart folder `autostart_dir`.
-fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSettings {
+/// The settings the tests give: `deadline`, the autostart folder `autostart_dir`, and the
+/// shortcuts' default names and the tray's default icons.
+pub(super) fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSettings {
     LinuxShellSettings {
         notifier: NotifierSettings {
             desktop_entry: DESKTOP_ENTRY.to_owned(),
@@ -170,11 +184,13 @@ fn settings(deadline: Deadline, autostart_dir: Option<PathBuf>) -> LinuxShellSet
         autostart_id: "eileen".to_owned(),
         program: PathBuf::from(PROGRAM),
         deadline,
+        shortcut_names: ShortcutNames::default(),
+        tray: TraySettings::default(),
     }
 }
 
 /// A shell on a bridge to `bus`, with `deadline` and no autostart folder.
-fn shell_on(bus: &PrivateBus, deadline: Deadline) -> LinuxShell {
+pub(super) fn shell_on(bus: &PrivateBus, deadline: Deadline) -> LinuxShell {
     LinuxShell::new(Bridge::on_private_bus(bus).unwrap(), settings(deadline, None))
 }
 
@@ -537,23 +553,46 @@ fn run_at_sign_in_maps_its_errors_and_needs_a_folder() {
 }
 
 #[test]
-fn hotkeys_the_tray_and_input_wait_for_phase_l2() {
-    let bus = PrivateBus::start();
-    let shell = shell_on(&bus, DEFAULT_DEADLINE);
+fn set_tray_shows_the_mute_state_and_menu_and_reports_choices() {
+    let mut rig = Rig::new();
+    let mut registrations = rig.watcher();
+    let tray = TraySettings { icon: "eileen-on".to_owned(), muted_icon: "eileen-muted".to_owned() };
+    let (shell, mut events) =
+        rig.shell_with(LinuxShellSettings { tray, ..settings(DEFAULT_DEADLINE, None) });
+    // No D-Bus string may hold U+0000, and the bus would drop the tray's connection for one.
+    let muted = TrayState { muted: true, tooltip: "Mu\0ted".to_owned(), ..state() };
+    assert_eq!(shell.set_tray(muted), Ok(()), "a watcher has the item");
+    let Registration { service: item, icon: first, .. } = rig.registered(&mut registrations);
+    assert_eq!(first.as_deref(), Some("eileen-muted"), "shown before the watcher heard of it");
+    let icon = || String::try_from(rig.property(&item, ITEM_PATH, ITEM, "IconName"));
+    assert_eq!(icon().unwrap(), "eileen-muted", "the settings' muted icon");
+    let tooltip = rig.property(&item, ITEM_PATH, ITEM, "ToolTip");
+    let (_icon, _pixmaps, _title, text) =
+        <(String, Vec<(i32, i32, Vec<u8>)>, String, String)>::try_from(tooltip).unwrap();
+    assert_eq!(text, "Muted", "the state's tooltip, without its U+0000");
+    shell.set_tray(state()).unwrap();
+    assert_eq!(icon().unwrap(), "eileen-on", "the settings' icon");
+    let (_revision, root) = rig.layout(&item, 0, -1);
+    assert_eq!(root.labels(), ["Mute", "Quit"], "the state's menu");
+    rig.menu_event(&item, root.children[0].id, "clicked").unwrap();
+    assert_eq!(rig.event(&mut events), LinuxShellEvent::TrayChoice("mute".to_owned()), "chosen");
+    assert!(registrations.try_recv().is_err(), "registered once");
+}
+
+#[test]
+fn set_tray_without_a_watcher_is_unavailable_and_registers_once_one_appears() {
+    let mut rig = Rig::new();
+    let (shell, _events) = rig.shell();
+    let menu = vec![tray_item("quit", "Quit", None)];
+    let tray = TrayState { menu, ..state() };
     assert_eq!(
-        shell.register_hotkey("Ctrl+Alt+Space", 1),
-        Err(PlatformError::Unavailable { what: "global hotkey" }),
-        "the GlobalShortcuts portal"
-    );
-    assert_eq!(
-        shell.set_tray(TrayState::default()),
+        shell.set_tray(tray.clone()),
         Err(PlatformError::Unavailable { what: "tray" }),
-        "StatusNotifierItem"
+        "no watcher, as on GNOME without its AppIndicator extension"
     );
-    let watch = shell.watch_input(VirtualKey(0x14), Box::new(|_event| {}));
-    assert_eq!(
-        watch.unwrap_err(),
-        PlatformError::Unavailable { what: "input watch" },
-        "the GlobalShortcuts portal, and a source of physical activity not chosen yet"
-    );
+    let mut registrations = rig.watcher();
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
+    assert_eq!(shell.set_tray(tray), Ok(()), "registered once the watcher came");
+    let (_revision, root) = rig.layout(&item, 0, -1);
+    assert_eq!(root.labels(), ["Quit"], "what the first call showed, kept");
 }

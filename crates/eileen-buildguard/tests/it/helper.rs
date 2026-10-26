@@ -14,8 +14,10 @@ use std::time::Duration;
 use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::samples::{self, PagingWindow, Sample, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
-use eileen_buildguard::{CargoInvocation, spawn_cargo};
+use eileen_buildguard::{CargoChild, CargoInvocation, spawn_cargo};
 
+#[cfg(target_os = "linux")]
+use crate::support::listen_for_end;
 use crate::support::read_ready;
 
 fn dir() -> PathBuf {
@@ -45,6 +47,14 @@ fn invocation(mode: &str) -> CargoInvocation {
     let exe = std::env::current_exe().unwrap();
     CargoInvocation::program(exe, ["helper::entry", "--exact", "--nocapture", "--quiet"])
         .with_env([("EILEEN_BG_HELPER", mode)])
+}
+
+/// Starts the stand-in rustc in this process's job or group and returns once it says ready
+/// (on Linux, once it listens for a test to see it end).
+fn fake_rustc() -> CargoChild {
+    let mut rustc = spawn_cargo(&invocation("fake-rustc").piped_stdout().in_caller_job()).unwrap();
+    assert_eq!(read_ready(&mut BufReader::new(rustc.take_stdout().unwrap())), "rustc");
+    rustc
 }
 
 #[test]
@@ -100,15 +110,29 @@ fn entry() {
             block();
         }
         // The stand-in cargo: starts a stand-in rustc the way real cargo does, as a plain child
-        // with no job of its own (so only xtask's job can take it), says both process ids, and
-        // waits.
+        // with no job or group of its own (so only xtask's can take it), waits until it is
+        // ready, says both process ids, and waits.
         "fake-cargo" => {
-            let rustc = spawn_cargo(&invocation("fake-rustc").quiet().in_caller_job()).unwrap();
+            #[cfg(target_os = "linux")]
+            let _end = listen_for_end();
+            let rustc = fake_rustc();
             say_ready(&format!("{} {}", std::process::id(), rustc.id()));
             block();
             drop(rustc);
         }
-        "fake-rustc" => block(),
+        // A stand-in cargo that exits once its rustc runs, leaving it running.
+        "fake-cargo-leaves" => {
+            let rustc = fake_rustc();
+            say_ready(&format!("{} {}", std::process::id(), rustc.id()));
+            // Never dropped, which would kill it.
+            let _left_running = std::mem::ManuallyDrop::new(rustc);
+        }
+        "fake-rustc" => {
+            #[cfg(target_os = "linux")]
+            let _end = listen_for_end();
+            say_ready("rustc");
+            block();
+        }
         other => panic!("unknown helper {other}"),
     }
 }
