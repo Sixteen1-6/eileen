@@ -131,10 +131,11 @@ and their fakes, which spend a file time on `eileen-stdx`'s `ManualClock`, so a 
 within a deadline or passes one without sleeping. Past it, the test chooses whether the
 abandoned launch, open or sign-in write lands anyway (`LateOperation`), since section 3.4 lets
 it. `MachineProbe::facts` takes its deadline when phase B's `wp0/machine-contracts` builds the
-trait. `eileen-shell-linux`'s `set_run_at_sign_in` takes the parameter but does not enforce it
-yet; the "Still open" list in [WP10-linux.md](WP10-linux.md) tracks that, with the recent-files
-read in #66 (`LinuxRecent::recent`), until both run on a helper thread within the caller's
-deadline.
+trait. `eileen-apps-linux`'s `LinuxApps` and `LinuxRecent`, which merged from #66 meanwhile,
+read the app index and the recent-files list on a helper thread within the caller's deadline.
+`eileen-shell-linux`'s `set_run_at_sign_in` takes the parameter but does not enforce it yet; the
+"Still open" list in [WP10-linux.md](WP10-linux.md) tracks that until it writes on a helper
+thread within the caller's deadline.
 
 ## Acceptance records
 

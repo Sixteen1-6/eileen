@@ -3,9 +3,11 @@
 //! (`open`): the `OpenURI` portal and a D-Bus-activatable Text Editor. They run on a runtime of
 //! their own, whose workers serve them while the test's thread calls the trait and blocks, as its
 //! caller does. What the index lists and how each target opens is pinned by the `index` and
-//! `open` tests: these pin that the trait reaches them, and what it adds, the conversions, the
-//! kept index, the index's deadline, the portal's wait inside the bridge's deadline, and the
-//! checks of paths off the bridge's blocking threads.
+//! `open` tests: these pin that the trait reaches them, and what it adds: the conversions, the
+//! kept index, the caller's deadline for reading the index, a launch and an open, the portal's
+//! wait inside the bridge's deadline, and the checks of paths off the bridge's blocking threads.
+//! Calls that pass no deadline give [`DEFAULT_DEADLINE`], as a caller with no deadline of its
+//! own would.
 
 use std::future::Future;
 use std::path::Path;
@@ -36,6 +38,19 @@ const TAKE: &str = "taking a blocking thread";
 /// wait of half the method timeout begun after the reply would pass the bridge's 5.5 s deadline.
 const SLOW_REPLY: Duration = Duration::from_millis(3200);
 
+/// The caller's deadline in the tests that wait for one to pass while a read holds the index or
+/// the portal never answers: a second past [`DEFAULT_DEADLINE`]. The waits are checked from
+/// below only, which no slow machine can break, and a call bounded by the default instead of
+/// its caller's deadline answers a second too early for them.
+pub(crate) const PAST_THE_DEFAULT: Deadline =
+    Deadline::after(DEFAULT_DEADLINE.budget().saturating_add(Duration::from_secs(1)));
+
+/// The caller's deadline in the tests where an app holds the call: well inside the connection's
+/// 5 s method timeout, so the bridge's wait for the caller's deadline ends first and names the
+/// trait call. A call bounded by the 5.5 s default instead ends on the method timeout, which
+/// names the D-Bus call.
+const A_SECOND: Deadline = Deadline::after(Duration::from_secs(1));
+
 /// Fake services on a multi-thread runtime of their own.
 struct Fakes {
     runtime: tokio::runtime::Runtime,
@@ -61,9 +76,10 @@ impl Fakes {
         seen
     }
 
-    /// Serves the fake Text Editor, and returns the calls it sees.
-    fn editor(&mut self, bus: &PrivateBus) -> mpsc::Receiver<AppCall> {
-        let (service, seen) = self.run(app(bus, EDITOR, EDITOR_PATH, Behaviour::Answer));
+    /// Serves the fake Text Editor, which answers as `behaviour` says, and returns the calls it
+    /// sees.
+    fn editor(&mut self, bus: &PrivateBus, behaviour: Behaviour) -> mpsc::Receiver<AppCall> {
+        let (service, seen) = self.run(app(bus, EDITOR, EDITOR_PATH, behaviour));
         self.services.push(service);
         seen
     }
@@ -85,7 +101,7 @@ fn apps(bus: &PrivateBus) -> LinuxApps {
 
 /// The app the index lists as `name`.
 fn listed(apps: &LinuxApps, name: &str) -> AppEntry {
-    let mut listed = apps.index().unwrap().into_iter();
+    let mut listed = apps.index(DEFAULT_DEADLINE).unwrap().into_iter();
     listed.find(|app| app.name == name).unwrap_or_else(|| panic!("{name} is not listed"))
 }
 
@@ -102,7 +118,7 @@ fn unlisted() -> AppEntry {
 #[test]
 fn index_lists_the_menu_as_the_traits_entries() {
     let bus = PrivateBus::start();
-    let listed = apps(&bus).index().unwrap();
+    let listed = apps(&bus).index(DEFAULT_DEADLINE).unwrap();
     let names: Vec<&str> = listed.iter().map(|app| app.name.as_str()).collect();
     assert_eq!(
         names,
@@ -135,15 +151,15 @@ fn an_index_that_a_read_holds_passes_its_deadline() {
     // The index opens each entry without waiting and skips what is not a file, so no FIFO holds
     // its read, and no unprivileged test can make a read hang as a hung network mount does. The
     // adapter reads on a pool whose one thread the test holds instead, so its read waits behind
-    // it. A real wait: the deadline, the bridge's default, is real time, and the call waits all
-    // of it. The time is checked from below only, which no slow machine can break: the wait for
-    // the read's answer never ends before its deadline.
+    // it. A real wait: the caller's deadline is real time, and the call waits all of it. The
+    // time is checked from below only, which no slow machine can break: the wait for the read's
+    // answer never ends before its deadline, a second past the bridge's default.
     let pool = one_blocking_thread();
     let bus = PrivateBus::start();
     let apps = apps(&bus).reading_files_on(pool.handle().clone());
     let release = hold_the_blocking_thread(&pool);
     let started = Instant::now();
-    let held = apps.index();
+    let held = apps.index(PAST_THE_DEFAULT);
     let waited = started.elapsed();
     assert_eq!(
         held,
@@ -151,18 +167,70 @@ fn an_index_that_a_read_holds_passes_its_deadline() {
         "the read still waited for the pool's thread at the deadline, and was left to it"
     );
     assert!(
-        waited >= DEFAULT_DEADLINE.budget(),
-        "the call waited the whole default deadline, not less: {waited:?}"
+        waited >= PAST_THE_DEFAULT.budget(),
+        "the call waited the caller's whole deadline, not the default's: {waited:?}"
     );
     drop(release);
-    let listed = apps.index().map(|listed| listed.len());
+    let listed = apps.index(DEFAULT_DEADLINE).map(|listed| listed.len());
     assert_eq!(listed, Ok(7), "once the thread is free, the pool reads the whole index again");
+}
+
+#[test]
+fn a_launch_that_indexes_again_passes_its_deadline_while_a_read_holds() {
+    // As for the index: a real wait for the caller's deadline, a second past the bridge's
+    // default, checked from below only. An app missing from the kept index takes a new one, a
+    // read that waits behind the held thread with all of the deadline, which leaves the bridge
+    // call none: the app is never asked.
+    let pool = one_blocking_thread();
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
+    let editor = listed(&apps(&bus), "Text Editor");
+    let apps = apps(&bus).reading_files_on(pool.handle().clone());
+    let release = hold_the_blocking_thread(&pool);
+    let started = Instant::now();
+    let held = apps.launch(&editor, PAST_THE_DEFAULT);
+    let waited = started.elapsed();
+    assert_eq!(
+        held,
+        Err(PlatformError::DeadlineExceeded { call: "app index" }),
+        "a launch before any index: its new index passed the caller's deadline"
+    );
+    assert!(waited >= PAST_THE_DEFAULT.budget(), "the caller's whole deadline: {waited:?}");
+    drop(release);
+    // The fake records a call before it answers, so a call made would be here by now.
+    assert!(seen.try_recv().is_err(), "the Text Editor was never asked to start");
+}
+
+#[test]
+fn an_open_with_an_app_that_indexes_again_passes_its_deadline_while_a_read_holds() {
+    // As for a launch that indexes again: the read gets all of the caller's deadline.
+    let pool = one_blocking_thread();
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
+    let editor = listed(&apps(&bus), "Text Editor");
+    let apps = apps(&bus).reading_files_on(pool.handle().clone());
+    let scratch = Scratch::new();
+    let file = scratch.file("notes.txt");
+    let release = hold_the_blocking_thread(&pool);
+    let started = Instant::now();
+    let held = apps.open_path(file.to_str().unwrap(), Some(&editor), PAST_THE_DEFAULT);
+    let waited = started.elapsed();
+    assert_eq!(
+        held,
+        Err(PlatformError::DeadlineExceeded { call: "app index" }),
+        "an open before any index: its new index passed the caller's deadline"
+    );
+    assert!(waited >= PAST_THE_DEFAULT.budget(), "the caller's whole deadline: {waited:?}");
+    drop(release);
+    assert!(seen.try_recv().is_err(), "the Text Editor was never asked to open the file");
 }
 
 /// Holds the one blocking thread of `pool`, from `one_blocking_thread`, until the returned sender
 /// drops, as a read hung on a network mount would, so a read given that pool waits behind it.
 /// It returns once the thread is held; a test that panics drops the sender as it unwinds.
-fn hold_the_blocking_thread(pool: &tokio::runtime::Runtime) -> oneshot::Sender<()> {
+pub(crate) fn hold_the_blocking_thread(pool: &tokio::runtime::Runtime) -> oneshot::Sender<()> {
     let (release, released) = oneshot::channel::<()>();
     let (holding, held) = oneshot::channel();
     let _held = pool.spawn_blocking(move || {
@@ -177,32 +245,64 @@ fn hold_the_blocking_thread(pool: &tokio::runtime::Runtime) -> oneshot::Sender<(
 fn an_activatable_app_launches_over_d_bus_and_answers_its_process_id() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
-    let mut seen = fakes.editor(&bus);
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
     let indexed = apps(&bus);
     let editor = listed(&indexed, "Text Editor");
     assert_eq!(
-        indexed.launch(&editor),
+        indexed.launch(&editor, DEFAULT_DEADLINE),
         Ok(std::process::id()),
         "the process of the connection that answered: the fake's, in the test's own process"
     );
     assert_eq!(fakes.run(app_seen(&mut seen)).method, "Activate", "not its Exec line");
-    assert_eq!(apps(&bus).launch(&editor), Ok(std::process::id()), "before any index");
+    let fresh = apps(&bus).launch(&editor, DEFAULT_DEADLINE);
+    assert_eq!(fresh, Ok(std::process::id()), "before any index");
     assert_eq!(fakes.run(app_seen(&mut seen)).method, "Activate", "from the index it made");
+}
+
+#[test]
+fn a_launch_or_an_open_that_an_app_holds_passes_the_callers_deadline() {
+    // Real waits for the caller's deadline, a second each, checked from below only. Each call
+    // reaches the app, which never answers, and ends when the bridge's wait for that second
+    // does: the error names the trait call, not the app's Activate or Open call, which the
+    // connection's method timeout would end only after 5 s.
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut seen = fakes.editor(&bus, Behaviour::Hang);
+    let apps = apps(&bus);
+    let editor = listed(&apps, "Text Editor");
+    let started = Instant::now();
+    assert_eq!(
+        apps.launch(&editor, A_SECOND),
+        Err(PlatformError::DeadlineExceeded { call: "app launch" }),
+        "the launch passed the caller's deadline"
+    );
+    assert!(started.elapsed() >= A_SECOND.budget(), "the caller's whole deadline");
+    assert_eq!(fakes.run(app_seen(&mut seen)).method, "Activate", "the launch reached the app");
+    let scratch = Scratch::new();
+    let file = scratch.file("notes.txt");
+    let started = Instant::now();
+    assert_eq!(
+        apps.open_path(file.to_str().unwrap(), Some(&editor), A_SECOND),
+        Err(PlatformError::DeadlineExceeded { call: "opening a file or folder" }),
+        "the open passed the caller's deadline"
+    );
+    assert!(started.elapsed() >= A_SECOND.budget(), "the caller's whole deadline");
+    assert_eq!(fakes.run(app_seen(&mut seen)).method, "Open", "the open reached the app");
 }
 
 #[test]
 fn an_app_that_is_not_activatable_or_not_indexed_is_refused_before_any_call() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
-    let mut seen = fakes.editor(&bus);
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
     let apps = apps(&bus);
     assert_eq!(
-        apps.launch(&listed(&apps, "Htop")),
+        apps.launch(&listed(&apps, "Htop"), DEFAULT_DEADLINE),
         Err(PlatformError::Unavailable { what: "launching apps that are not D-Bus activatable" }),
         "an app started from its Exec line waits for eileen_supervisor::user_launch"
     );
     assert_eq!(
-        apps.launch(&unlisted()),
+        apps.launch(&unlisted(), DEFAULT_DEADLINE),
         Err(PlatformError::NotFound { what: "desktop entry" }),
         "in neither the kept index nor a new one"
     );
@@ -306,19 +406,47 @@ fn a_portal_slow_to_reply_still_has_its_request_closed_inside_the_deadline() {
 }
 
 #[test]
+fn a_path_the_portal_never_answers_has_its_request_closed_within_the_callers_deadline() {
+    // A real wait to the end of the request's budget, the caller's deadline less what the
+    // adapter keeps for the close, checked from below only. The deadline is a second past the
+    // bridge's default: a budget taken from the default instead would end before the wait has
+    // passed the default, and a bridge call bounded by the default would be cancelled with the
+    // request still open, naming the open rather than the portal's response.
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::start();
+    let mut seen = fakes.portal(&bus, Answer::Later);
+    let scratch = Scratch::new();
+    let file = scratch.file("notes.txt");
+    let started = Instant::now();
+    assert_eq!(
+        apps(&bus).open_path(file.to_str().unwrap(), None, PAST_THE_DEFAULT),
+        Err(PlatformError::DeadlineExceeded { call: "portal response" }),
+        "the opener's wait ended first, not the bridge's deadline for opening a file or folder"
+    );
+    let waited = started.elapsed();
+    assert!(waited >= DEFAULT_DEADLINE.budget(), "past the default, as allowed: {waited:?}");
+    let call = fakes.run(call_seen(&mut seen));
+    match fakes.run(next(&mut seen)) {
+        Event::Closed(path) => assert_eq!(path, call.handle, "closed, which dismisses its dialog"),
+        other @ Event::Call(_) => panic!("not a Close: {other:?}"),
+    }
+}
+
+#[test]
 fn a_path_opens_through_the_portal_or_with_an_activatable_app() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
     let mut opened = fakes.portal(&bus, Answer::Now(0));
-    let mut seen = fakes.editor(&bus);
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
     let apps = apps(&bus);
     let scratch = Scratch::new();
     let file = scratch.file("Quarterly report #3.odt");
     let path = file.to_str().unwrap();
-    assert_eq!(apps.open_path(path, None), Ok(()), "with its default app");
+    assert_eq!(apps.open_path(path, None, DEFAULT_DEADLINE), Ok(()), "with its default app");
     let call = fakes.run(call_seen(&mut opened));
     assert_eq!((call.method, Path::new(&call.target)), ("OpenFile", file.as_path()), "the portal");
-    assert_eq!(apps.open_path(path, Some(&listed(&apps, "Text Editor"))), Ok(()), "with an app");
+    let editor = listed(&apps, "Text Editor");
+    assert_eq!(apps.open_path(path, Some(&editor), DEFAULT_DEADLINE), Ok(()), "with an app");
     let call = fakes.run(app_seen(&mut seen));
     assert_eq!(call.method, "Open", "the app's own Open");
     let uri = format!("file://{}", path.replace(' ', "%20").replace('#', "%23"));
@@ -330,7 +458,7 @@ fn paths_are_checked_while_the_bridges_blocking_threads_are_taken() {
     let bus = PrivateBus::start();
     let mut fakes = Fakes::start();
     let mut opened = fakes.portal(&bus, Answer::Now(0));
-    let mut seen = fakes.editor(&bus);
+    let mut seen = fakes.editor(&bus, Behaviour::Answer);
     let bridge = Bridge::on_private_bus(&bus).unwrap();
     let apps = LinuxApps::new(bridge.clone(), session("en_US.UTF-8", "ubuntu:GNOME", None));
     // The session bus first: zbus connects on a blocking thread, so none could connect after.
@@ -341,9 +469,11 @@ fn paths_are_checked_while_the_bridges_blocking_threads_are_taken() {
     let scratch = Scratch::new();
     let file = scratch.file("notes.txt");
     let path = file.to_str().unwrap();
-    assert_eq!(apps.open_path(path, None), Ok(()), "checked off the bridge's blocking threads");
+    let checked = apps.open_path(path, None, DEFAULT_DEADLINE);
+    assert_eq!(checked, Ok(()), "checked off the bridge's blocking threads");
     assert_eq!(fakes.run(call_seen(&mut opened)).method, "OpenFile", "then opened by the portal");
-    assert_eq!(apps.open_path(path, Some(&editor)), Ok(()), "and checked for an app");
+    let with_app = apps.open_path(path, Some(&editor), DEFAULT_DEADLINE);
+    assert_eq!(with_app, Ok(()), "and checked for an app");
     assert_eq!(fakes.run(app_seen(&mut seen)).method, "Open", "then opened by the app");
 }
 
@@ -377,13 +507,14 @@ fn a_path_or_an_app_that_cannot_open_it_is_refused_before_any_call() {
     let scratch = Scratch::new();
     let file = scratch.file("notes.txt");
     let path = file.to_str().unwrap();
+    let open = |path: &str, app: Option<&AppEntry>| apps.open_path(path, app, DEFAULT_DEADLINE);
     assert_eq!(
-        apps.open_path(file.with_file_name("gone.txt").to_str().unwrap(), None),
+        open(file.with_file_name("gone.txt").to_str().unwrap(), None),
         Err(PlatformError::NotFound { what: "file to open" }),
         "a missing file: a FileError in an OpenError, as its PlatformError twin"
     );
     assert_eq!(
-        apps.open_path("Documents/notes.txt", None),
+        open("Documents/notes.txt", None),
         Err(PlatformError::Invalid { what: "path", detail: "not absolute".to_owned() }),
         "a relative path"
     );
@@ -391,10 +522,10 @@ fn a_path_or_an_app_that_cannot_open_it_is_refused_before_any_call() {
         what: "opening files with apps that are not D-Bus activatable",
     });
     let vlc = listed(&apps, "VLC media player");
-    assert_eq!(apps.open_path(path, Some(&vlc)), exec_only, "a Flatpak app's Exec line");
-    assert_eq!(apps.open_path(path, Some(&listed(&apps, "Htop"))), exec_only, "a classic one's");
+    assert_eq!(open(path, Some(&vlc)), exec_only, "a Flatpak app's Exec line");
+    assert_eq!(open(path, Some(&listed(&apps, "Htop"))), exec_only, "a classic one's");
     assert_eq!(
-        apps.open_path(path, Some(&unlisted())),
+        open(path, Some(&unlisted())),
         Err(PlatformError::NotFound { what: "desktop entry" }),
         "an app that no index lists"
     );

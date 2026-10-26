@@ -1,16 +1,22 @@
 //! `LinuxRecent`, the `RecentSources` trait over `recently-used.xbel`: the fixture files of
 //! `tests/fixtures/recent/` through the trait, and the app's name as it leaves `Untrusted`. What
-//! the list holds is pinned by the `recent` tests: these pin the conversions.
+//! the list holds is pinned by the `recent` tests: these pin the conversions and the caller's
+//! deadline for reading the list. Calls that pass no deadline of their own give
+//! [`DEFAULT_DEADLINE`], as a caller with none would.
 
 use std::fmt::Write as _;
 use std::fs;
+use std::time::Duration;
 
 use eileen_apps_linux::{LinuxRecent, RecentlyUsed};
 use eileen_contracts::ids::{Personal, Untrusted};
 use eileen_contracts::tools::apps::FileKind;
-use eileen_platform::{PlatformError, RecentItem, RecentSources};
+use eileen_dbus_linux::DEFAULT_DEADLINE;
+use eileen_platform::{Deadline, PlatformError, RecentItem, RecentSources};
+use tokio::time::Instant;
 
-use crate::open::Scratch;
+use crate::apps::{PAST_THE_DEFAULT, hold_the_blocking_thread};
+use crate::open::{Scratch, one_blocking_thread};
 use crate::recent::{fixtures, gtk, list, sparse};
 
 /// A bookmark file with a file for each of `names`, opened by an app of that name as XML writes
@@ -40,7 +46,7 @@ fn opened_by(names: &[&str]) -> String {
 
 #[test]
 fn recent_lists_the_files_newest_first_as_the_traits_items() {
-    let items = LinuxRecent::new(gtk()).recent(usize::MAX).unwrap();
+    let items = LinuxRecent::new(gtk()).recent(usize::MAX, DEFAULT_DEADLINE).unwrap();
     let theirs = gtk().recent(usize::MAX).unwrap();
     assert_eq!(items.len(), theirs.len(), "one item for each");
     for (item, their) in items.iter().zip(&theirs) {
@@ -56,7 +62,7 @@ fn recent_lists_the_files_newest_first_as_the_traits_items() {
     };
     assert_eq!(items.first(), Some(&newest), "the newest first");
     assert_eq!(
-        LinuxRecent::new(gtk()).recent(3).unwrap(),
+        LinuxRecent::new(gtk()).recent(3, DEFAULT_DEADLINE).unwrap(),
         items[..3],
         "the limit keeps the newest"
     );
@@ -77,7 +83,8 @@ fn an_apps_name_leaves_untrusted_sanitized() {
         "&#13;&#10;&#9; ",
     ];
     let file = scratch.write("recently-used.xbel", &opened_by(&names));
-    let items = LinuxRecent::new(RecentlyUsed::at(file)).recent(usize::MAX).unwrap();
+    let items =
+        LinuxRecent::new(RecentlyUsed::at(file)).recent(usize::MAX, DEFAULT_DEADLINE).unwrap();
     let apps: Vec<Option<&str>> = items.iter().map(|item| item.app.as_deref()).collect();
     let kept = "a".repeat(512);
     assert_eq!(
@@ -97,7 +104,7 @@ fn an_apps_name_leaves_untrusted_sanitized() {
 #[test]
 fn the_lists_errors_are_platform_errors() {
     let what = "recently-used.xbel";
-    let recent = |list: RecentlyUsed| LinuxRecent::new(list).recent(10);
+    let recent = |list: RecentlyUsed| LinuxRecent::new(list).recent(10, DEFAULT_DEADLINE);
     assert_eq!(recent(list("no-such-folder/recently-used.xbel")), Ok(Vec::new()), "missing");
     assert!(
         matches!(
@@ -128,16 +135,45 @@ fn the_lists_errors_are_platform_errors() {
 }
 
 #[test]
-fn watching_and_thumbnails_are_unavailable() {
+fn a_list_that_a_read_holds_passes_the_callers_deadline() {
+    // As for the app index (`apps`): the list is refused unread unless it is a file, so no FIFO
+    // holds its read, and the test holds the one thread of the pool the read is given instead. A
+    // real wait for the caller's deadline, a second past the bridge's default, checked from below
+    // only: a read bounded by the default instead would answer a second too early.
+    let pool = one_blocking_thread();
+    let recent = LinuxRecent::new(gtk()).reading_files_on(pool.handle().clone());
+    let release = hold_the_blocking_thread(&pool);
+    let started = Instant::now();
+    let held = recent.recent(10, PAST_THE_DEFAULT);
+    let waited = started.elapsed();
+    assert_eq!(
+        held,
+        Err(PlatformError::DeadlineExceeded { call: "recent files" }),
+        "the read still waited for the pool's thread at the deadline, and was left to it"
+    );
+    assert!(
+        waited >= PAST_THE_DEFAULT.budget(),
+        "the call waited the caller's whole deadline, not the default's: {waited:?}"
+    );
+    drop(release);
+    let listed = recent.recent(usize::MAX, DEFAULT_DEADLINE).map(|items| items.len());
+    let theirs = gtk().recent(usize::MAX).unwrap().len();
+    assert_eq!(listed, Ok(theirs), "once the thread is free, the pool reads the whole list");
+}
+
+#[test]
+fn watching_and_thumbnails_are_unavailable_whatever_their_deadline() {
+    // Neither opens a file yet, so neither waits: a deadline already passed changes nothing.
+    let none = Deadline::after(Duration::ZERO);
     let recent = LinuxRecent::new(gtk());
     assert_eq!(
-        recent.watch(&["/home/sam".to_owned()], Box::new(|_item| {})).err(),
+        recent.watch(&["/home/sam".to_owned()], Box::new(|_item| {}), none).err(),
         Some(PlatformError::Unavailable { what: "watching recent files" }),
         "until phase L2 brings inotify"
     );
-    let item = recent.recent(1).unwrap().remove(0);
+    let item = recent.recent(1, DEFAULT_DEADLINE).unwrap().remove(0);
     assert_eq!(
-        recent.thumbnail(&item, 256).err(),
+        recent.thumbnail(&item, 256, none).err(),
         Some(PlatformError::Unavailable { what: "a recent file's thumbnail" }),
         "until phase L2 reads the thumbnail cache"
     );

@@ -101,11 +101,11 @@ impl AppHost for WinAppHost {
 pub struct WinApps;
 
 impl Apps for WinApps {
-    fn index(&self) -> Result<Vec<AppEntry>, PlatformError> {
+    fn index(&self, _deadline: Deadline) -> Result<Vec<AppEntry>, PlatformError> {
         Err(NOT_BUILT)
     }
 
-    fn launch(&self, _app: &AppEntry) -> Result<u32, PlatformError> {
+    fn launch(&self, _app: &AppEntry, _deadline: Deadline) -> Result<u32, PlatformError> {
         Err(NOT_BUILT)
     }
 
@@ -125,7 +125,12 @@ impl Apps for WinApps {
         Err(NOT_BUILT)
     }
 
-    fn open_path(&self, _path: &str, _with_app: Option<&AppEntry>) -> Result<(), PlatformError> {
+    fn open_path(
+        &self,
+        _path: &str,
+        _with_app: Option<&AppEntry>,
+        _deadline: Deadline,
+    ) -> Result<(), PlatformError> {
         Err(NOT_BUILT)
     }
 }
@@ -156,7 +161,7 @@ impl MediaSessions for WinMediaSessions {
 pub struct WinRecentSources;
 
 impl RecentSources for WinRecentSources {
-    fn recent(&self, _limit: usize) -> Result<Vec<RecentItem>, PlatformError> {
+    fn recent(&self, _limit: usize, _deadline: Deadline) -> Result<Vec<RecentItem>, PlatformError> {
         Err(NOT_BUILT)
     }
 
@@ -164,6 +169,7 @@ impl RecentSources for WinRecentSources {
         &self,
         _roots: &[String],
         _sink: Box<dyn Fn(RecentItem) + Send + Sync>,
+        _deadline: Deadline,
     ) -> Result<Subscription, PlatformError> {
         Err(NOT_BUILT)
     }
@@ -172,6 +178,7 @@ impl RecentSources for WinRecentSources {
         &self,
         _item: &RecentItem,
         _edge_px: u32,
+        _deadline: Deadline,
     ) -> Result<Option<RgbaImage>, PlatformError> {
         Err(NOT_BUILT)
     }

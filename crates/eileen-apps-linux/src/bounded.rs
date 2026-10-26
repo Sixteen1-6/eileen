@@ -1,16 +1,16 @@
-//! Reads of local files for a trait call that takes no `Deadline`, bounded all the same: each
-//! runs on a thread of its own, and the call waits for its answer at most [`DEFAULT_DEADLINE`],
-//! as it would for a D-Bus call. A FUSE daemon or a network file server can hold a read for as
-//! long as it likes, and BUILD.md section 2.1 (rule 2) gives every call to another process a
-//! deadline. Past it the call answers `DeadlineExceeded` and leaves the read to its thread,
-//! which ends when the read does, if ever. No read runs on a runtime's blocking pool, which a
-//! hung read would hold for good, unless its caller gives one through
-//! [`LinuxApps::reading_files_on`](crate::LinuxApps::reading_files_on) to cap the threads that
-//! hung reads keep: there a read's wait for a free thread counts against the same deadline.
+//! Reads of local files for a trait call, bounded by the caller's `Deadline` (BUILD.md section
+//! 3.4): each runs on a thread of its own, and the call waits for its answer at most that
+//! deadline. A FUSE daemon or a network file server can hold a read for as long as it likes, and
+//! BUILD.md section 2.1 (rule 2) gives every call to another process a deadline. Past it the
+//! call answers `DeadlineExceeded` and leaves the read to its thread, which ends when the read
+//! does, if ever. No read runs on a runtime's blocking pool, which a hung read would hold for
+//! good, unless its caller gives one through
+//! [`LinuxApps::reading_files_on`](crate::LinuxApps::reading_files_on) or
+//! [`LinuxRecent::reading_files_on`](crate::LinuxRecent::reading_files_on) to cap the threads
+//! that hung reads keep: there a read's wait for a free thread counts against the same deadline.
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 
-use eileen_dbus_linux::DEFAULT_DEADLINE;
 use eileen_platform::{Deadline, PlatformError};
 use tokio::runtime::Handle;
 
@@ -21,19 +21,11 @@ const THREAD: &str = "eileen-file-rd";
 const ENDED: &str = "the read ended without answering";
 
 /// Runs `reading` on a thread of its own, or on `pool`'s blocking pool when one is given, and
-/// answers what it answers, waiting at most [`DEFAULT_DEADLINE`]: past it,
-/// [`PlatformError::DeadlineExceeded`] naming `call`.
+/// answers what it answers, waiting at most `deadline`: past it,
+/// [`PlatformError::DeadlineExceeded`] naming `call`. The answer comes through a channel of one
+/// place, so the thread never waits to send it: tokio's channels give a thread outside a runtime
+/// no timed wait.
 pub(crate) fn read<T: Send + 'static>(
-    call: &'static str,
-    pool: Option<&Handle>,
-    reading: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, PlatformError> {
-    within(call, DEFAULT_DEADLINE, pool, reading)
-}
-
-/// [`read`] with any deadline. The answer comes through a channel of one place, so the thread
-/// never waits to send it: tokio's channels give a thread outside a runtime no timed wait.
-fn within<T: Send + 'static>(
     call: &'static str,
     deadline: Deadline,
     pool: Option<&Handle>,
@@ -66,7 +58,7 @@ mod tests {
 
     use eileen_platform::{Deadline, PlatformError};
 
-    use super::{ENDED, within};
+    use super::{ENDED, read};
 
     /// A deadline no read in these tests comes near, unless it is held.
     const LONG: Deadline = Deadline::after(Duration::from_secs(30));
@@ -78,7 +70,7 @@ mod tests {
 
     #[test]
     fn a_read_answers_through_its_thread() {
-        let thread = within("a read", LONG, None, thread_name);
+        let thread = read("a read", LONG, None, thread_name);
         assert_eq!(thread, Ok(Some("eileen-file-rd".to_owned())), "on a named thread of its own");
     }
 
@@ -87,7 +79,7 @@ mod tests {
         let (release, released) = mpsc::sync_channel::<()>(0);
         let (ended, end) = mpsc::sync_channel(1);
         let deadline = Deadline::after(Duration::from_millis(20));
-        let held = within("a held read", deadline, None, move || {
+        let held = read("a held read", deadline, None, move || {
             let _released = released.recv();
             let _ignored = ended.send(());
         });
@@ -98,10 +90,9 @@ mod tests {
 
     #[test]
     fn a_read_that_panics_answers_io() {
-        let read = within("a read", LONG, None, || -> u32 {
-            panic!("a read that fails a soft assertion")
-        });
-        assert_eq!(read, Err(PlatformError::Io { what: "a read", detail: ENDED.to_owned() }));
+        let answer =
+            read("a read", LONG, None, || -> u32 { panic!("a read that fails a soft assertion") });
+        assert_eq!(answer, Err(PlatformError::Io { what: "a read", detail: ENDED.to_owned() }));
     }
 
     /// A runtime whose blocking threads are named `name`.
@@ -112,7 +103,7 @@ mod tests {
     #[test]
     fn a_read_given_a_pool_runs_on_its_blocking_threads() {
         let pool = pool("a blocking pool");
-        let thread = within("a read", LONG, Some(pool.handle()), thread_name);
+        let thread = read("a read", LONG, Some(pool.handle()), thread_name);
         assert_eq!(thread, Ok(Some("a blocking pool".to_owned())), "not a thread of its own");
     }
 
@@ -122,7 +113,7 @@ mod tests {
         let handle = pool.handle().clone();
         drop(pool);
         assert_eq!(
-            within("a read", LONG, Some(&handle), || 1),
+            read("a read", LONG, Some(&handle), || 1),
             Err(PlatformError::Io { what: "a read", detail: ENDED.to_owned() }),
             "dropped unrun by the pool, so answered before the deadline"
         );

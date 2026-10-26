@@ -64,7 +64,7 @@ use eileen_contracts::core_io::{EffectFamily, Toast};
 use eileen_contracts::jobs::MemoryPressure;
 use eileen_contracts::ports::{Component, IdleComponent};
 use eileen_platform::{
-    MachineIdentity, PlatformError, PowerRequest, SecretStore, SecretString, ShellHost,
+    Deadline, MachineIdentity, PlatformError, PowerRequest, SecretStore, SecretString, ShellHost,
     ShellInputEvent, Subscription, SystemMemory, TrayState, VirtualKey,
 };
 
@@ -96,7 +96,7 @@ impl ShellHost for WinShell {
         Err(NOT_BUILT)
     }
 
-    fn set_run_at_sign_in(&self, _on: bool) -> Result<(), PlatformError> {
+    fn set_run_at_sign_in(&self, _on: bool, _deadline: Deadline) -> Result<(), PlatformError> {
         Err(NOT_BUILT)
     }
 

@@ -348,14 +348,14 @@ const APP: &str = "org.eileen.TestApp";
 const APP_PATH: &str = "/org/eileen/TestApp";
 const APP_ID: &str = "org.eileen.TestApp.desktop";
 
-/// What a fake app does with `Activate`.
+/// What a fake app does with a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Behaviour {
     /// Answers at once.
     Answer,
-    /// Records the call, then never answers.
+    /// Records the call, `Activate` or `Open`, then never answers.
     Hang,
-    /// Fails as the bus answers for a service whose process exited as it started.
+    /// Fails `Activate` as the bus answers for a service whose process exited as it started.
     ExitAtStart,
 }
 
@@ -400,6 +400,9 @@ impl FakeApp {
     async fn open(&self, uris: Vec<String>, platform_data: HashMap<String, OwnedValue>) {
         let platform_data = platform_data.into_keys().collect();
         self.calls.send(AppCall { method: "Open", uris, platform_data }).await.unwrap();
+        if self.behaviour == Behaviour::Hang {
+            std::future::pending::<()>().await;
+        }
     }
 }
 
