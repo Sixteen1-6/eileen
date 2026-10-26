@@ -39,8 +39,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-rt` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-rt`).
+//! - Fast command: `cargo xtask test -p eileen-rt`.
 //! - Layers: unit tests for channels, messages and the runtime's thread names; integration
 //!   tests run tasks on a current-thread runtime under `eileen_trace::test_support::capture`.
 //! - A bug here starts as a log line with no turn id, or a hung job nobody can see.

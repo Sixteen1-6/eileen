@@ -1,0 +1,7 @@
+# Files check 6 (the house style, BUILD.md section 4b.3) does not scan, each with its reason. Only
+# files that quote third-party text verbatim belong here; the dated records were scrubbed instead
+# (owner answer 15).
+
+[[exempt]]
+path = "docs/research"
+reason = "the research reports quote third-party text verbatim, names and punctuation included"

@@ -23,7 +23,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt as _};
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::record::{EventRecord, JsonVisitor, SpanRecord, event_name, remote_parent, sorted};
+use crate::record::{EventRecord, JsonVisitor, Origin, SpanRecord, remote_parent, sorted};
 use crate::schema;
 
 /// What a capture saw.
@@ -127,10 +127,11 @@ where
         let span =
             ctx.event_span(event).and_then(|s| s.extensions().get::<CaptureId>().map(|c| c.0));
         let meta = event.metadata();
+        let origin = Origin::of(meta, &mut visitor.0);
         let record = EventRecord {
-            name: event_name(meta.name()).into_owned(),
+            name: origin.name().into_owned(),
             level: meta.level().as_str().to_owned(),
-            target: meta.target().to_owned(),
+            target: origin.target.into_owned(),
             span,
             at_us: clock::system().wall().0,
             fields: sorted(&visitor.0),
