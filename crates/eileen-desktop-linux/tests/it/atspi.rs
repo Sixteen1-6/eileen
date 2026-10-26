@@ -19,7 +19,7 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::fake::{
     App, DEFUNCT, FOCUSED, MANAGES_DESCENDANTS, NO_REPLY, NULL, Node, READ_ONLY, ROOT, SHOWING,
-    Session, UNKNOWN_OBJECT, count, registry, registry_root, words,
+    Session, UNKNOWN_OBJECT, count, pause_clock, registry, registry_root, words,
 };
 
 /// A budget no test reaches.
@@ -316,7 +316,7 @@ async fn a_budget_spent_during_a_listing_reads_no_child() {
     let atspi = Atspi::new(&a11y.connect().await);
     // Paused only now. The client's connection has no method timeout, so the fake's wait is the
     // one timer, and tokio fires it as soon as the runtime is idle.
-    tokio::time::pause();
+    pause_clock();
     let until = Instant::now() + BUDGET;
     let walk = atspi.walk(&app.object("/root"), TreeLimits::default(), until).await.unwrap();
     assert_eq!(shape(&walk), [("root", None, 0)], "the budget passed while the root was listed");
@@ -337,7 +337,7 @@ async fn a_budget_spent_during_index_reads_ends_them() {
     app.tree(&[("/c0", &[]), ("/c1", &[]), ("/c2", &[]), ("/c3", &[]), ("/c4", &[])]).await;
     let atspi = Atspi::new(&a11y.connect().await);
     // Paused only now, as in the test above.
-    tokio::time::pause();
+    pause_clock();
     let until = Instant::now() + BUDGET;
     let walk = atspi.walk(&app.object("/table"), TreeLimits::default(), until).await.unwrap();
     assert_eq!(count(&table.index_reads), 1, "no index read starts once the budget has passed");

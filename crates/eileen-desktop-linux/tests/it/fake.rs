@@ -73,6 +73,13 @@ pub(crate) fn words(states: &[u32]) -> Vec<u32> {
     words
 }
 
+/// Pauses tokio's clock, the one a slow listing waits on: a test with one calls this once its
+/// setup is done, so the fake's wait is the one timer, which tokio fires as soon as the runtime
+/// is idle, and no test waits in real time for it.
+pub(crate) fn pause_clock() {
+    tokio::time::pause();
+}
+
 /// How many calls `counter` counted.
 pub(crate) fn count(counter: &AtomicU32) -> u32 {
     counter.load(Ordering::SeqCst)
@@ -176,7 +183,7 @@ pub(crate) struct Node {
     /// `GetChildren` and `GetChildAtIndex` answer this error name, and every other read answers.
     pub(crate) listing_error: Option<&'static str>,
     /// `GetChildren` and `GetChildAtIndex` each wait this long on tokio's clock first, for a
-    /// test in paused time.
+    /// test that paused it with [`pause_clock`].
     pub(crate) slow_listing: Option<Duration>,
     /// `GetRole` never answers.
     pub(crate) silent: bool,
