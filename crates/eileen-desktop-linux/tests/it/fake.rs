@@ -1,7 +1,9 @@
 //! Fake AT-SPI2 services: on a session bus, the launcher's `org.a11y.Bus` and `org.a11y.Status`
 //! ([`Session`]); on an accessibility bus, a registry ([`registry`]) and apps ([`App`]), each of
 //! whose objects is a [`Node`] that serves `org.a11y.atspi.Accessible`, `org.a11y.atspi.Text`
-//! when it has text and `org.a11y.atspi.Component` when it has a box. The numbers here are
+//! when it has text (and `org.a11y.atspi.EditableText` when it is editable),
+//! `org.a11y.atspi.Component` when it has a box, `org.a11y.atspi.Action` when it has actions and
+//! `org.a11y.atspi.Value` when it has a number. The numbers here are
 //! AT-SPI2's own, written out, so the tests do not read the crate's tables to check them.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -26,6 +28,8 @@ pub(crate) const NULL: &str = "/org/a11y/atspi/null";
 pub(crate) const ACTIVE: u32 = 1;
 /// `ATSPI_STATE_DEFUNCT`.
 pub(crate) const DEFUNCT: u32 = 6;
+/// `ATSPI_STATE_EDITABLE`.
+pub(crate) const EDITABLE: u32 = 7;
 /// `ATSPI_STATE_FOCUSED`.
 pub(crate) const FOCUSED: u32 = 12;
 /// `ATSPI_STATE_ICONIFIED`.
@@ -161,6 +165,12 @@ pub(crate) struct Calls {
     /// How many calls its `Text` received, of any of its methods: `GetText`, `GetNSelections`
     /// and `GetSelection`.
     pub(crate) text_uses: Arc<AtomicU32>,
+    /// The index of each action `DoAction` was asked to run.
+    pub(crate) actions_done: Arc<Mutex<Vec<i32>>>,
+    /// How many `SetTextContents` calls its `EditableText` received.
+    pub(crate) text_writes: Arc<AtomicU32>,
+    /// How many writes of `CurrentValue` its `Value` received.
+    pub(crate) value_writes: Arc<AtomicU32>,
 }
 
 /// What a fake object answers. The default has no name, role 0, no states and no children.
@@ -205,6 +215,19 @@ pub(crate) struct Node {
     pub(crate) accessible_id: Option<String>,
     /// `AccessibleId` answers `InvalidArgs`, as a `GDBus` server does for a property it lacks.
     pub(crate) id_invalid_args: bool,
+    /// The names of its actions. It serves `Action` when it has one, or when `interfaces` names
+    /// `Action` already.
+    pub(crate) actions: Vec<String>,
+    /// `DoAction` answers false, as an app that did not run the action does.
+    pub(crate) refuses_actions: bool,
+    /// The states `GetState` answers once an action has run.
+    pub(crate) states_after_action: Option<Vec<u32>>,
+    /// It serves `EditableText` beside its `Text`, whose text `SetTextContents` replaces.
+    pub(crate) editable: bool,
+    /// `SetTextContents` answers false and keeps the text.
+    pub(crate) refuses_text: bool,
+    /// Its `Value`: the number, and the range it keeps a written one in; `None` serves none.
+    pub(crate) number: Option<(f64, f64, f64)>,
     /// The calls it receives.
     pub(crate) calls: Calls,
 }
@@ -281,7 +304,12 @@ impl Object {
     }
 
     fn get_state(&self) -> Result<Vec<u32>, Failure> {
-        self.0.read().map(|()| self.0.states.clone())
+        self.0.read()?;
+        let acted = !self.0.calls.actions_done.lock().unwrap().is_empty();
+        match &self.0.states_after_action {
+            Some(states) if acted => Ok(states.clone()),
+            _ => Ok(self.0.states.clone()),
+        }
     }
 
     fn get_interfaces(&self) -> Result<Vec<String>, Failure> {
@@ -309,7 +337,7 @@ impl Object {
 /// A fake object's `org.a11y.atspi.Text`, which counts every call it receives. It answers its
 /// whole text whatever range is asked for, so the bound a test sees is the client's own.
 struct Text {
-    content: String,
+    content: Arc<Mutex<String>>,
     selections: Vec<(i32, i32)>,
     reads: Arc<Mutex<Vec<(i32, i32)>>>,
     calls: Arc<AtomicU32>,
@@ -320,7 +348,7 @@ impl Text {
     fn get_text(&self, start_offset: i32, end_offset: i32) -> String {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.reads.lock().unwrap().push((start_offset, end_offset));
-        self.content.clone()
+        self.content.lock().unwrap().clone()
     }
 
     fn get_n_selections(&self) -> i32 {
@@ -344,6 +372,70 @@ struct Component((i32, i32, i32, i32));
 impl Component {
     fn get_extents(&self, coord_type: u32) -> Result<((i32, i32, i32, i32),), Failure> {
         if coord_type == WINDOW_COORDS { Ok((self.0,)) } else { Err(Failure(INVALID_ARGS)) }
+    }
+}
+
+/// A fake object's `org.a11y.atspi.EditableText`, which replaces the text its `Text` serves.
+struct EditableText {
+    content: Arc<Mutex<String>>,
+    refuses: bool,
+    writes: Arc<AtomicU32>,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.EditableText")]
+impl EditableText {
+    fn set_text_contents(&self, new_contents: String) -> bool {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        if !self.refuses {
+            *self.content.lock().unwrap() = new_contents;
+        }
+        !self.refuses
+    }
+}
+
+/// A fake object's `org.a11y.atspi.Action`, which records each action it is asked to run.
+struct Action {
+    names: Vec<String>,
+    refuses: bool,
+    done: Arc<Mutex<Vec<i32>>>,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.Action")]
+impl Action {
+    #[zbus(property)]
+    fn n_actions(&self) -> i32 {
+        i32::try_from(self.names.len()).unwrap()
+    }
+
+    fn get_name(&self, index: i32) -> Result<String, Failure> {
+        let name = usize::try_from(index).ok().and_then(|index| self.names.get(index));
+        name.cloned().ok_or(Failure(INVALID_ARGS))
+    }
+
+    fn do_action(&self, index: i32) -> bool {
+        self.done.lock().unwrap().push(index);
+        !self.refuses
+    }
+}
+
+/// A fake object's `org.a11y.atspi.Value`: a number it keeps within its range, as a slider does.
+struct Value {
+    number: Arc<Mutex<f64>>,
+    range: (f64, f64),
+    writes: Arc<AtomicU32>,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.Value")]
+impl Value {
+    #[zbus(property)]
+    fn current_value(&self) -> f64 {
+        *self.number.lock().unwrap()
+    }
+
+    #[zbus(property)]
+    fn set_current_value(&mut self, number: f64) {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        *self.number.lock().unwrap() = number.clamp(self.range.0, self.range.1);
     }
 }
 
@@ -396,17 +488,42 @@ impl App {
         ObjectRef { bus, path: OwnedObjectPath::try_from(path).unwrap() }
     }
 
-    /// Serves `node` at `path`, with its `Text` when it has text and its `Component` when it has
-    /// a box, each then named among its interfaces; the calls it will receive.
+    /// Serves `node` at `path`, with its `Text` when it has text (and its `EditableText` when it
+    /// is editable), its `Component` when it has a box, its `Action` when it has actions and its
+    /// `Value` when it has a number, each then named among its interfaces; the calls it will
+    /// receive.
     pub(crate) async fn add(&self, path: &str, mut node: Node) -> Calls {
         let calls = node.calls.clone();
         let server = self.conn.object_server();
         if let Some(text) = node.text.clone() {
             let (reads, text_uses) = (Arc::clone(&calls.text_reads), Arc::clone(&calls.text_uses));
             let selections = node.selections.clone();
-            let text = Text { content: text, selections, reads, calls: text_uses };
+            let content = Arc::new(Mutex::new(text));
+            let text = Text { content: Arc::clone(&content), selections, reads, calls: text_uses };
             assert!(server.at(path, text).await.unwrap(), "Text is served at {path}");
             node.interfaces.push("org.a11y.atspi.Text".to_owned());
+            if node.editable {
+                let writes = Arc::clone(&calls.text_writes);
+                let editable = EditableText { content, refuses: node.refuses_text, writes };
+                assert!(server.at(path, editable).await.unwrap(), "EditableText at {path}");
+                node.interfaces.push("org.a11y.atspi.EditableText".to_owned());
+            }
+        }
+        let named = node.interfaces.iter().any(|name| name == "org.a11y.atspi.Action");
+        if named || !node.actions.is_empty() {
+            let done = Arc::clone(&calls.actions_done);
+            let action =
+                Action { names: node.actions.clone(), refuses: node.refuses_actions, done };
+            assert!(server.at(path, action).await.unwrap(), "Action is served at {path}");
+            if !named {
+                node.interfaces.push("org.a11y.atspi.Action".to_owned());
+            }
+        }
+        if let Some((number, low, high)) = node.number {
+            let writes = Arc::clone(&calls.value_writes);
+            let value = Value { number: Arc::new(Mutex::new(number)), range: (low, high), writes };
+            assert!(server.at(path, value).await.unwrap(), "Value is served at {path}");
+            node.interfaces.push("org.a11y.atspi.Value".to_owned());
         }
         if let Some(extents) = node.extents {
             assert!(server.at(path, Component(extents)).await.unwrap(), "Component at {path}");

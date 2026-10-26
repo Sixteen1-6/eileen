@@ -40,11 +40,11 @@ const APPLICATION: u32 = 75;
 
 /// The deadline of a call that cannot answer in time, its app being silent: it passes whatever
 /// its length, and a short one keeps the test short.
-const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
+pub(crate) const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
 
 /// The fakes, on a multi-thread runtime of their own: the session bus with the launcher, and
 /// the accessibility bus with the apps and, once a desktop is made, the registry.
-struct World {
+pub(crate) struct World {
     runtime: tokio::runtime::Runtime,
     apps: Vec<App>,
     /// The roots the registry lists, in order: each app's, and those a test adds.
@@ -55,7 +55,7 @@ struct World {
 }
 
 impl World {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let runtime =
             tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build();
         let runtime = runtime.unwrap();
@@ -66,7 +66,7 @@ impl World {
 
     /// Starts an app and serves the objects `nodes` gives once the app's name is known, its
     /// root among them; the app's index.
-    fn app<'p>(&mut self, nodes: impl FnOnce(&App) -> Vec<(&'p str, Node)>) -> usize {
+    pub(crate) fn app<'p>(&mut self, nodes: impl FnOnce(&App) -> Vec<(&'p str, Node)>) -> usize {
         let app = self.runtime.block_on(async {
             let app = App::start(&self.a11y).await;
             for (path, node) in nodes(&app) {
@@ -87,7 +87,7 @@ impl World {
 
     /// Closes app `app`'s connection, as an app that quits does, and waits until the bus has
     /// seen it go. The apps after it move down one index.
-    fn close(&mut self, app: usize) {
+    pub(crate) fn close(&mut self, app: usize) {
         let app = self.apps.remove(app);
         let name = app.name();
         self.runtime.block_on(async {
@@ -99,7 +99,7 @@ impl World {
     }
 
     /// App `app`'s object at `path`.
-    fn object(&self, app: usize, path: &str) -> ObjectRef {
+    pub(crate) fn object(&self, app: usize, path: &str) -> ObjectRef {
         self.apps[app].object(path)
     }
 
@@ -110,7 +110,7 @@ impl World {
 
     /// A desktop with `settings` on a bridge to the session bus. The first one serves the
     /// registry, which lists the roots listed so far, in order.
-    fn desktop(&mut self, settings: LinuxDesktopSettings) -> LinuxDesktop {
+    pub(crate) fn desktop(&mut self, settings: LinuxDesktopSettings) -> LinuxDesktop {
         if self.registry.is_none() {
             let roots = self.roots.clone();
             self.registry = Some(self.runtime.block_on(registry(&self.a11y, roots)));
@@ -130,29 +130,30 @@ impl Drop for World {
 }
 
 /// An app's root, which lists the app's windows at `windows`.
-fn root(app: &App, windows: &[&str]) -> (&'static str, Node) {
+pub(crate) fn root(app: &App, windows: &[&str]) -> (&'static str, Node) {
     (ROOT, Node { role: APPLICATION, ..Node::showing("app", app.references(windows)) })
 }
 
 /// A showing top-level window of `role`, named `name`, in `states` too, with `children`, whose
 /// box in its own coordinates sits at (12, 7), as a window with shadows does, and is 800 by 600.
-fn window(role: u32, name: &str, states: &[u32], children: Vec<Reference>) -> Node {
+pub(crate) fn window(role: u32, name: &str, states: &[u32], children: Vec<Reference>) -> Node {
     let states = words(&[&[SHOWING], states].concat());
     Node { role, states, extents: Some((12, 7, 800, 600)), ..Node::showing(name, children) }
 }
 
 /// The settings of the product, with `eileen-hud` as Eileen's own process.
-fn settings() -> LinuxDesktopSettings {
+pub(crate) fn settings() -> LinuxDesktopSettings {
     LinuxDesktopSettings {
         deadline: DEFAULT_DEADLINE,
         call_timeout: CALL_TIMEOUT,
         own_processes: vec!["eileen-hud".to_owned()],
         focus_limits: FOCUS_LIMITS,
+        find_limits: FOCUS_LIMITS,
     }
 }
 
 /// The file name of the test binary: every fake app's process.
-fn this_process() -> String {
+pub(crate) fn this_process() -> String {
     let exe = std::env::current_exe().unwrap();
     exe.file_name().unwrap().to_str().unwrap().to_owned()
 }

@@ -346,6 +346,8 @@ dependencies = [
  "eileen-contracts",
  "eileen-dbus-linux",
  "eileen-platform",
+ "proptest",
+ "serde_json",
  "tokio",
  "zbus",
 ]
