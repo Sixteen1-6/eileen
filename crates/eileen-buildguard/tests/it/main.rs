@@ -1,6 +1,7 @@
 //! Integration tests of `eileen-buildguard` through its public API (acceptance 4 of BUILD.md
 //! section 6.2): admission with fake memory and a manual clock, the cross-process files, the
-//! stale holder and, on Windows, the kill-on-close job. Tests that need a second process run
+//! stale holder, and what a guarded cargo runs in (the kill-on-close job, or on Linux the
+//! process group a watchdog kills) and at what priority. Tests that need a second process run
 //! this test binary again as a helper (`helper::entry`). Each module is `cfg(test)`, so clippy
 //! holds it to the test rules.
 

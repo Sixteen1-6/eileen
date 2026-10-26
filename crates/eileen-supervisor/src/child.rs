@@ -1,10 +1,22 @@
 //! Supervised children: every child of the running product starts here (section 2.1 rule 1).
 //!
-//! A child is placed in a kill-on-close Job Object with no console window (process-wrap's
-//! `JobObject`, `CreationFlags(CREATE_NO_WINDOW)` and `KillOnDrop`), so killing it kills
-//! everything it started, a crash of Eileen takes every child with it, and dropping the
-//! [`Child`] kills the tree. Claude sessions also run at `BELOW_NORMAL_PRIORITY_CLASS`, so a
-//! worker's build never starves the voice loop. On Unix the child leads its own process group.
+//! On Windows a child is placed in a kill-on-close Job Object with no console window
+//! (process-wrap's `JobObject`, `CreationFlags(CREATE_NO_WINDOW)` and `KillOnDrop`), so killing
+//! it kills everything it started, a crash of Eileen takes every child with it, and dropping
+//! the [`Child`] kills the tree. Claude sessions also run at `BELOW_NORMAL_PRIORITY_CLASS`, so a
+//! worker's build never starves the voice loop.
+//!
+//! On Linux (docs/LINUX.md section 5) a child leads a session of its own: it leads its own
+//! process group and has no controlling terminal, so a prompt on `/dev/tty` fails at once
+//! instead of stopping it. Its whole group is killed when the [`Child`] drops, on
+//! [`Child::start_kill`], and when [`Child::wait`] or [`Child::try_wait`] sees it exit, each
+//! time before it is reaped, so no reused pid is ever signalled. It is forked on the
+//! supervisor's own thread, which lives as long as the process, with `SIGKILL` as its
+//! parent-death signal, so a crash of Eileen kills every child. Their descendants are not
+//! reached: one that outlives its child in a crash, or leaves the group (`setsid`, `setpgid`),
+//! is for the cgroup scope of LINUX.md section 5, which this crate does not have yet. On other
+//! Unix systems the child leads its own process group.
+//!
 //! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`.
 
 use std::ffi::OsString;
@@ -156,7 +168,8 @@ pub struct Child {
 }
 
 /// Starts `spec` supervised: in a kill-on-close Job Object, without a console window, killed
-/// when the returned [`Child`] is dropped.
+/// when the returned [`Child`] is dropped. On Linux, in a session of its own, forked on the
+/// supervisor's own thread inside the caller's tokio runtime.
 pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let mut command = tokio::process::Command::from(base_command(spec));
     if spec.piped {
@@ -168,7 +181,11 @@ pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let mut wrap = CommandWrap::from(command);
     wrap_platform(&mut wrap, spec.class);
     wrap.wrap(KillOnDrop);
-    let inner = wrap.spawn().map_err(|source| SupervisorError::Spawn {
+    #[cfg(not(target_os = "linux"))]
+    let spawned = wrap.spawn();
+    #[cfg(target_os = "linux")]
+    let spawned = crate::linux::spawn(wrap);
+    let inner = spawned.map_err(|source| SupervisorError::Spawn {
         program: spec.program.display().to_string(),
         source,
     })?;
@@ -189,9 +206,23 @@ fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
     wrap.wrap(CreationFlags(flags)).wrap(JobObject);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn wrap_platform(wrap: &mut CommandWrap, _class: ChildClass) {
+    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut());
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn wrap_platform(wrap: &mut CommandWrap, _class: ChildClass) {
     wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+}
+
+/// Kills the whole group while the child is unreaped (tokio then kills and reaps the leader);
+/// after a reap there is nothing left to signal.
+#[cfg(target_os = "linux")]
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ignored = self.inner.start_kill();
+    }
 }
 
 impl Child {
@@ -245,19 +276,24 @@ impl Child {
     }
 
     /// Starts killing the child and everything it started (its Job Object, or its process
-    /// group); [`Self::wait`] reaps it.
+    /// group); [`Self::wait`] reaps it. On Linux, once the child is reaped it does nothing:
+    /// its group was killed before the reap.
     pub fn start_kill(&mut self) -> io::Result<()> {
         self.inner.start_kill()
     }
 
-    /// Waits for the child (and, on Windows, every process in its job) to exit.
+    /// Waits for the child (and, on Windows, every process in its job) to exit. On Linux it
+    /// kills what is left of the child's process group once the child has exited, then reaps
+    /// it.
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.inner.wait().await?;
         tracing::info!(name: names::CHILD_EXITED, child = self.name, code = status.code());
         Ok(status)
     }
 
-    /// The exit status, if it has exited.
+    /// The exit status, if it has exited. On Linux the call that first sees the exit kills
+    /// what is left of the group and has tokio reap the child, so [`Self::id`] is `None` from
+    /// then on.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.inner.try_wait()
     }

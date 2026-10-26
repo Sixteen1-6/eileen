@@ -4,20 +4,20 @@
 //!
 //! # Owns
 //!
-//! - The trait implementations: `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], and
-//!   `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`.
-//! - The machine's facts and load on Linux: the processor and its core classes, memory totals,
-//!   GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors,
-//!   read under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists.
-//! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
-//!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
-//!   process outside Eileen's tree.
-//! - `ShellHost`'s clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state
-//!   over logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
+//! - The machine's facts and load on Linux: the processor and its core classes, memory totals, GPUs
+//!   and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors, read
+//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; and
+//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a
+//!   stream of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet.
+//! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
+//!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
+//!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
+//! - `ShellHost` for [`LinuxShell`], whose D-Bus calls run on `eileen-dbus-linux`'s `Bridge`, and
+//!   the trait's clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state over
+//!   logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
 //!   ([`Notifier`], with [`NotificationEvents`]), and global shortcuts from the `GlobalShortcuts`
-//!   portal ([`ShortcutsSession`], with [`ShortcutEvents`] and [`trigger_of_chord`]'s triggers).
-//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) and a
-//!   stream of their changes ([`PowerChanges`]); [`LinuxMachineProbe`] does not use them yet.
+//!   portal ([`ShortcutsSession`], with [`ShortcutEvents`] and [`trigger_of_chord`]'s triggers),
+//!   which [`LinuxShell`] does not use yet.
 //!
 //! # Does not own
 //!
