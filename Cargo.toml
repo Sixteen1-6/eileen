@@ -21,6 +21,7 @@ publish = false
 eileen-apps = { path = "crates/eileen-apps" }
 eileen-apps-win = { path = "crates/eileen-apps-win" }
 eileen-audio = { path = "crates/eileen-audio" }
+eileen-audio-linux = { path = "crates/eileen-audio-linux" }
 eileen-audio-win = { path = "crates/eileen-audio-win" }
 eileen-buildguard = { path = "crates/eileen-buildguard" }
 eileen-cli = { path = "crates/eileen-cli" }
