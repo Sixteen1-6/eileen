@@ -156,7 +156,7 @@ The owner's direction of 2026-10-20 makes keeping Eileen current a built-in loop
 | macOS in v0.1 or v0.2 | Windows first, Linux next; the platform traits keep macOS a new set of crates later |
 | A polished settings GUI | Settings are spoken, shown and clickable on the HUD, and written to commented TOML |
 | A mobile app of our own | The phone connector covers it in v0.2 |
-| Training Eileen's own models | Eileen composes models and adapts no weights of its own; running the user's own training projects on the user's Colab account is a v0.2 connector (above), which is the user's work, not Eileen training itself |
+| Training Eileen's own models | Eileen composes models and adapts no weights of its own in v0.1; a later model trained on the user's own data stays on the PC and is disabled when data it was trained on is forgotten, until it is retrained (decision D79); running the user's own training projects on the user's Colab account is a v0.2 connector (above), which is the user's work, not Eileen training itself |
 | API keys other than DeepSeek's | Subscriptions through each vendor's own signed-in tool; Gemini stays out until a permitted route exists |
 
 Also not happening: forking OpenClaw or Hermes, handling vendor credentials or running login flows, patching or replacing the Claude app, or bundling GPL or source-available code into Eileen's own binaries.

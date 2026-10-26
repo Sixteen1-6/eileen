@@ -136,6 +136,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo nextest run --workspace --locked --profile ci
+      - name: Simulator pull request seeds, twice each (WP0 acceptance 7)
+        # What `cargo xtask sim --doublecheck` runs; CI runners are not build-guarded.
+        env:
+          EILEEN_SIM_COMMIT: ${{ github.sha }} # printed with a failure's replay command
+        run: cargo run --locked -p eileen-sim --bin eileen-sim -- --doublecheck
       - name: Doc tests
         run: cargo test --workspace --doc --locked
       - name: Docs, warnings denied
@@ -166,6 +171,10 @@ jobs:
         with:
           shared-key: win-clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Fetch the pinned native libraries and check them (cargo xtask fetch-native)
+        # BUILD.md section 4.1: sherpa-onnx-sys and ort get the archive xtask checked by size and
+        # SHA-256, instead of downloading their own.
+        run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -185,6 +194,10 @@ jobs:
         with:
           shared-key: win-test
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Fetch the pinned native libraries and check them (cargo xtask fetch-native)
+        # BUILD.md section 4.1: sherpa-onnx-sys and ort get the archive xtask checked by size and
+        # SHA-256, instead of downloading their own.
+        run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9.148

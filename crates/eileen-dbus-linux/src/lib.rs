@@ -7,17 +7,17 @@
 //! # Owns
 //!
 //! - [`DbusError`], its mappings from zbus errors and D-Bus error names, and its `From` into
-//!   `PlatformError`, variant for variant.
-//! - [`session_bus`] and [`system_bus`], with [`METHOD_TIMEOUT`], and their `_within` forms.
-//! - [`name_owner`] and [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
-//! - [`Request`]: an xdg-desktop-portal request, from its token to its `Response`, and
-//!   [`close_request`], which ends one and waits for the portal's answer.
-//! - The signal streams: [`subscribe`] and its [`Signals`], and [`drain`], which keep the
-//!   conventions of `src/stream.rs` ([`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`]).
+//!   `PlatformError`, variant for variant; [`session_bus`] and [`system_bus`], with
+//!   [`METHOD_TIMEOUT`], and their `_within` forms; and who owns a name, [`name_owner`] and
+//!   [`owner_changes`]: `GetNameOwner` and `NameOwnerChanged`.
+//! - [`Request`]: an xdg-desktop-portal request, from its token to its [`Response`] (code and
+//!   results), and [`close_request`], which ends one and waits for the portal's answer; and the
+//!   signal streams: [`subscribe`] and its [`Signals`], and [`drain`], which keep the conventions
+//!   of `src/stream.rs` ([`QUEUE_SIZE`], [`DRAIN_CAP`], [`next`], [`Stream`]).
 //! - [`Bridge`]: the one thread where trait calls run their async jobs on [`Buses`] (the shared
-//!   buses, or a session connection of the job's own), within a `Deadline` ([`Bridge::call`])
-//!   or behind a `Subscription` ([`Bridge::watch`]); [`DEFAULT_DEADLINE`] for a call with none.
-//! - `testing`, behind the `private-bus` feature: the private and silent buses, and fake services.
+//!   buses, or a session connection of the job's own), within a `Deadline` ([`Bridge::call`]) or
+//!   behind a `Subscription` ([`Bridge::watch`]); [`DEFAULT_DEADLINE`] for a call with none; and,
+//!   behind the `private-bus` feature, `testing`: the private and silent buses, and fake services.
 //!
 //! # Does not own
 //!
@@ -95,5 +95,5 @@ pub use bridge::{Bridge, Buses, DEFAULT_DEADLINE};
 pub use bus::{METHOD_TIMEOUT, session_bus, session_bus_within, system_bus, system_bus_within};
 pub use error::DbusError;
 pub use names::{Names, OwnerChange, OwnerChanges, name_owner, owner_changes};
-pub use portal::{CLOSE_GRACE, Request, close_request};
+pub use portal::{CLOSE_GRACE, Request, Response, close_request};
 pub use stream::{DRAIN_CAP, QUEUE_SIZE, Signals, Stream, drain, next, subscribe};

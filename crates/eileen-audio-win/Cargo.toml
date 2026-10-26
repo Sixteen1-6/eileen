@@ -1,0 +1,22 @@
+[package]
+name = "eileen-audio-win"
+description = "Eileen's audio endpoints on Windows: capture and loopback endpoints, Communications ducking and MMCSS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, speech"
+owns = "WP4"
+unsafe = "ffi"
+
+# Windows only, as the -linux crates are Linux only: off Windows the crate is empty and has no
+# dependencies.
+[target.'cfg(windows)'.dependencies]
+eileen-platform.workspace = true
+
+[lints]
+workspace = true
