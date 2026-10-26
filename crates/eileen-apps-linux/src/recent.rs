@@ -61,8 +61,8 @@ const MAX_FILE_BYTES: u64 = 16 << 20;
 
 /// A recently used file: the `RecentSources` trait's `RecentItem` (`eileen-platform`, on the
 /// unmerged base crates) field for field, except that the app's name, which another app wrote,
-/// is [`Untrusted`] here and unwrapped by the trait's implementation. This type gives way to the
-/// trait's when that merges.
+/// is [`Untrusted`] here, and sanitized and unwrapped by [`LinuxRecent`](crate::LinuxRecent),
+/// the trait's implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentItem {
     /// Its path.

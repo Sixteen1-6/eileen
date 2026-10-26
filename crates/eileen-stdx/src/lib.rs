@@ -34,8 +34,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-stdx` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-stdx`).
+//! - Fast command: `cargo xtask test -p eileen-stdx`.
 //! - Layers: unit tests beside each module, property tests for the RNG's ranges and the casts.
 //! - A bug here starts as a replay that diverges (RNG or IDs) or a cast that silently wrapped.
 //!
