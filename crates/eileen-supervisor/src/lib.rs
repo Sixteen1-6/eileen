@@ -27,8 +27,8 @@
 //!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
 //!   spawned it, from any thread. A Claude session runs ten nice steps below its forking
 //!   thread, and `wait` forwards a stderr pipe nobody took (a test of `tests::linux` for each).
-//! - The detached spawn outlives its parent (Windows test
-//!   `tests::the_guard_spawn_outlives_its_parent`).
+//! - The detached spawn outlives its parent (on Windows) and is reaped once it exits (on Unix):
+//!   `tests::the_guard_spawn_outlives_its_parent` and `tests::linux::the_guard_spawn_is_reaped`.
 //! - A failing child restarts at most `max_restarts` times per window
 //!   (`watch::tests::restarts_back_off_and_give_up_inside_the_window`).
 //! - Unsafe code only in the private `ffi` module (on Linux `src/ffi/linux.rs`), one operation
@@ -42,7 +42,7 @@
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
 //! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `thiserror`, `tokio` and
-//!   `tracing`; `windows` on Windows; `eileen-stdx` and `rustix` on Linux.
+//!   `tracing`; `windows` on Windows; `eileen-stdx` on Unix; `rustix` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing

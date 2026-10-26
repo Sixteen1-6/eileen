@@ -4,10 +4,16 @@
 //! On Windows it is created with `CREATE_BREAKAWAY_FROM_JOB`, which matters only when Eileen
 //! itself runs inside someone else's job; when that job refuses breakaway (access denied) it
 //! falls back to a plain spawn. It gets null standard handles, so nothing ties its lifetime
-//! to the core's pipes, and no console window. On Unix it leads a new process group.
+//! to the core's pipes, and no console window. On Unix it leads a new process group, and a
+//! thread of its own, `supervisor.reap`, waits for it, so once it exits it leaves no zombie
+//! whose pid would still answer a liveness check while the core runs.
 
 use std::io;
 use std::process::Stdio;
+#[cfg(unix)]
+use std::sync::mpsc::sync_channel;
+#[cfg(unix)]
+use std::thread::JoinHandle;
 
 use crate::SupervisorError;
 use crate::child::{ChildSpec, base_command};
@@ -55,11 +61,32 @@ pub fn spawn_detached(spec: &ChildSpec) -> Result<Detached, SupervisorError> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt as _;
-
-        let mut command = base_command(spec);
-        command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
-        let child = command.spawn().map_err(error)?;
-        Ok(Detached { pid: child.id(), broke_away: false })
+        let (detached, _reaper) = spawn_reaped(spec).map_err(error)?;
+        Ok(detached)
     }
+}
+
+/// Starts `spec` leading a new process group, with null standard handles, and hands it to a
+/// thread that reaps it when it exits. Nothing else waits for it: tokio reaps only the children
+/// it spawned, and the supervised groups' waits do not reach this group. The thread starts
+/// first, so a spawn whose reaper could not start starts nothing. It returns the thread, which
+/// ends once the child is reaped.
+#[cfg(unix)]
+pub(crate) fn spawn_reaped(spec: &ChildSpec) -> io::Result<(Detached, JoinHandle<()>)> {
+    use std::os::unix::process::CommandExt as _;
+
+    let (hand_over, handed) = sync_channel::<std::process::Child>(1);
+    let reaper = eileen_stdx::thread::spawn_named("supervisor.reap", move || {
+        // A failed spawn drops the sender, and the thread ends with nothing to reap.
+        if let Ok(mut child) = handed.recv() {
+            let _ignored = child.wait();
+        }
+    })?;
+    let mut command = base_command(spec);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+    let child = command.spawn()?;
+    let pid = child.id();
+    // The thread holds the receiver until it has the child, so this cannot fail.
+    let _ignored = hand_over.send(child);
+    Ok((Detached { pid, broke_away: false }, reaper))
 }
