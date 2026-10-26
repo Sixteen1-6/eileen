@@ -10,8 +10,9 @@
 //!   enabled, visible}, [])`, with `toggle-type` `checkmark` and `toggle-state` 1 or 0 when it
 //!   has a check. A label's `_` is doubled, since dbusmenu reads one as a mnemonic's mark, and a
 //!   U+0000 is dropped, since the bus drops a connection that sends one.
+//! - Properties go in their names' order, so a host reads the same bytes for the same menu.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use eileen_platform::TrayItem;
 use zbus::zvariant::Value;
@@ -20,7 +21,7 @@ use zbus::zvariant::Value;
 pub(crate) const ROOT: i32 = 0;
 
 /// One node's properties, by name.
-pub(crate) type Properties = HashMap<String, Value<'static>>;
+pub(crate) type Properties = BTreeMap<String, Value<'static>>;
 /// A node as `GetLayout` sends it, `(ia{sv}av)`: its id, its properties and its children, each a
 /// variant that holds a node.
 pub(crate) type Layout = (i32, Properties, Vec<Value<'static>>);
@@ -29,7 +30,7 @@ pub(crate) type Layout = (i32, Properties, Vec<Value<'static>>);
 #[derive(Debug)]
 pub(crate) struct Menu {
     /// Every `TrayItem::id` the menu has held, with its dbusmenu id.
-    ids: HashMap<String, i32>,
+    ids: BTreeMap<String, i32>,
     /// The id the next new item gets.
     next: i32,
     /// The items shown, top to bottom, each with its dbusmenu id.
@@ -40,7 +41,7 @@ pub(crate) struct Menu {
 impl Menu {
     /// An empty menu, at revision 0.
     pub(crate) fn new() -> Self {
-        Self { ids: HashMap::new(), next: ROOT + 1, items: Vec::new(), revision: 0 }
+        Self { ids: BTreeMap::new(), next: ROOT + 1, items: Vec::new(), revision: 0 }
     }
 
     /// The layout's revision.
@@ -101,10 +102,12 @@ impl Menu {
         let children = if depth == 0 {
             Vec::new()
         } else {
-            let node = |(id, item): &(i32, TrayItem)| -> Layout {
-                (*id, item_properties(item, names), Vec::new())
+            // A child is a variant, whose map becomes a `Dict`, which keeps its keys in order too.
+            let node = |(id, item): &(i32, TrayItem)| {
+                let properties: HashMap<_, _> = item_properties(item, names).into_iter().collect();
+                Value::from((*id, properties, Vec::<Value<'static>>::new()))
             };
-            self.items.iter().map(|shown| Value::from(node(shown))).collect()
+            self.items.iter().map(node).collect()
         };
         Some((ROOT, root_properties(names), children))
     }
@@ -232,6 +235,10 @@ mod tests {
         assert_eq!(text(&plain, "type"), Some("standard"), "a standard item");
         assert_eq!(plain.get("enabled"), Some(&Value::Bool(true)), "enabled");
         assert_eq!(plain.get("visible"), Some(&Value::Bool(true)), "visible");
+        let names = |id: i32| menu.properties(id, &[]).unwrap().into_keys().collect::<Vec<_>>();
+        let toggle = ["enabled", "label", "toggle-state", "toggle-type", "type", "visible"];
+        assert_eq!(names(1), toggle, "every property, in their names' order");
+        assert_eq!(names(3), ["enabled", "label", "type", "visible"], "a plain item's");
     }
 
     #[test]
