@@ -1,8 +1,11 @@
 //! The JSON-lines file sink: one line per event at INFO, with the event's span and the span
 //! list, `pii.` fields reduced to length and keyed hash unless `logging.include_personal`.
 //! Every field value goes through the Redactor before the line is serialized, and the whole
-//! line again before it is written, as a backstop. The `filename` is cut by [`source_file`], so
-//! a dependency's absolute path never writes the build PC's home folder into a log.
+//! line again before it is written, as a backstop. The `filename` is cut by
+//! [`source_file`](crate::record::source_file), so a dependency's absolute path never writes the
+//! build PC's home folder into a log. A record bridged from the `log` crate keeps its own
+//! `target`, `filename` and `line_number`, from the `log.*` fields tracing-log carries them in,
+//! and those fields leave `fields`.
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -18,7 +21,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::pii::{self, Policy};
-use crate::record::{JsonVisitor, redact_values, source_file};
+use crate::record::{JsonVisitor, Origin, redact_values};
 use crate::redact::Redactor;
 
 /// A span's fields as the file layer saw them, raw (the policy applies at write time).
@@ -95,6 +98,8 @@ where
         let mut visitor = JsonVisitor::default();
         event.record(&mut visitor);
         let mut fields = visitor.0;
+        let meta = event.metadata();
+        let origin = Origin::of(meta, &mut fields);
         redact_values(&mut fields, &self.redactor);
         pii::apply(&mut fields, self.policy);
         let mut spans = Vec::new();
@@ -107,13 +112,12 @@ where
                 spans.push(Value::Object(object));
             }
         }
-        let meta = event.metadata();
         let mut line = Map::new();
         line.insert("timestamp".to_owned(), json!(rfc3339(clock::system().wall())));
         line.insert("level".to_owned(), json!(meta.level().as_str()));
-        line.insert("target".to_owned(), json!(meta.target()));
-        line.insert("filename".to_owned(), json!(meta.file().map(source_file)));
-        line.insert("line_number".to_owned(), json!(meta.line()));
+        line.insert("target".to_owned(), json!(origin.target));
+        line.insert("filename".to_owned(), json!(origin.file));
+        line.insert("line_number".to_owned(), json!(origin.line));
         line.insert("threadName".to_owned(), json!(std::thread::current().name()));
         line.insert("process".to_owned(), json!(self.process));
         line.insert("fields".to_owned(), Value::Object(fields));

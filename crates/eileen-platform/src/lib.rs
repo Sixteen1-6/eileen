@@ -33,8 +33,7 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-platform` (until `wp0/xtask` merges,
-//!   `cargo nextest run -p eileen-platform`).
+//! - Fast command: `cargo xtask test -p eileen-platform`.
 //! - Layers: unit tests for each fake, integration tests for [`machine`] with a temporary root.
 //! - A bug here starts as a fleet result whose machine hash changed between runs.
 //!

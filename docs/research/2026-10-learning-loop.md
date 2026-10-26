@@ -8,7 +8,7 @@ This report is written for contributors who will build the `eileen-learn` crate 
 
 Tags say how each claim was checked:
 
-- **[ran 10-20]**: run on the owner's PC (Windows 11 Home 26200, Core Ultra 7 155H, 16 GB RAM, claude CLI 2.1.304 signed in to the owner's plan) by an **earlier attempt at this report** on 2026-10-20, between 12:33 and 13:14 local time (16:33 to 17:14 UTC in the debug logs). That attempt finished its research and on-PC checks and was cut off before writing. Its scripts, skill folders, logs and matcher source are kept in `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\learning\`.
+- **[ran 10-20]**: run on the owner's PC (Windows 11 Home 26200, Core Ultra 7 155H, 16 GB RAM, claude CLI 2.1.304 signed in to the owner's plan) by an **earlier attempt at this report** on 2026-10-20, between 12:33 and 13:14 local time (16:33 to 17:14 UTC in the debug logs). That attempt finished its research and on-PC checks and was cut off before writing. Its scripts, skill folders, logs and matcher source are kept in `%USERPROFILE%\Projects\eileen-workfiles\2026-10-scratch\learning\`.
 - **[re-ran 10-20]**: repeated during this write-up, same day. Only two things were repeated: one run of the already-built matcher binary (it runs in under a second), and a re-read of the skills documentation page whose earlier fetch was not saved.
 - **[primary]**: the vendor's or authors' own docs, paper abstract or repository.
 - **[secondary]**: press, blogs, search-result snippets. Treat details as soft.
@@ -554,4 +554,4 @@ Docs and repositories: [claude CLI skills](https://code.claude.com/docs/en/skill
 
 Secondary: [ThaiCERT on malicious OpenClaw skills, 2026-02-04](https://www.thaicert.or.th/en/2026/02/04/researchers-discover-over-200-malicious-skills-on-openclaw-distributing-password-stealing-malware/), [codecut.ai test of Hermes skill writing, 2026-07-17](https://codecut.ai/hermes-autonomous-skills-curator/), [muscle-mem on PyPI](https://pypi.org/project/muscle-mem/), [browser-use workflow-use](https://github.com/browser-use/workflow-use), [SUGILITE development repository](https://github.com/tobyli/Sugilite_development). Search-result titles only, not fetched: the ClawHavoc analysis, the Snyk ToxicSkills report, and VirusTotal scanning on ClawHub.
 
-On-PC artifacts: `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\learning\` (drive.py, probe.py, probe_reload.py, the skill folders, logs, the matcher source). The condensed notes of the earlier attempt are in `C:\Users\shubh\Projects\eileen-workfiles\predecessor-notes\learning-loop.md`.
+On-PC artifacts: `%USERPROFILE%\Projects\eileen-workfiles\2026-10-scratch\learning\` (drive.py, probe.py, probe_reload.py, the skill folders, logs, the matcher source). The condensed notes of the earlier attempt are in `%USERPROFILE%\Projects\eileen-workfiles\predecessor-notes\learning-loop.md`.
