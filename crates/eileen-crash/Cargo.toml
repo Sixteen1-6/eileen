@@ -1,0 +1,26 @@
+[package]
+name = "eileen-crash"
+description = "Crash capture for every Eileen process: minidumps through the guard and a panic hook that cleans its message"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "all"
+owns = "WP2"
+unsafe = "ffi"
+
+# The native libraries of BUILD.md section 4.1, declared from W0 so their build failures show up
+# before WP2 uses them; the stub does not use them yet.
+[package.metadata.cargo-machete]
+ignored = ["crash-handler", "minidumper"]
+
+[target.'cfg(windows)'.dependencies]
+crash-handler.workspace = true
+minidumper.workspace = true
+
+[lints]
+workspace = true

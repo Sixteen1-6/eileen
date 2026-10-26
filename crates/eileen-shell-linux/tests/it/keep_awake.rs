@@ -44,6 +44,14 @@ const IDLE_ALONE: u32 = 8;
 /// What the errors name.
 const PORTAL_WHAT: &str = "Inhibit portal";
 const LOCK_WHAT: &str = "logind inhibitor lock";
+/// The buses, as the shell's holder names one it could not reach.
+const SYSTEM_BUS: &str = "system bus";
+const SESSION_BUS: &str = "session bus";
+/// What a caller passes for a bus that is not there: an absent holder.
+const NO_SYSTEM: Result<&zbus::Connection, DbusError> =
+    Err(DbusError::Unavailable { what: SYSTEM_BUS });
+const NO_SESSION: Result<zbus::Connection, DbusError> =
+    Err(DbusError::Unavailable { what: SESSION_BUS });
 
 /// The part of `connection`'s unique name a portal request's handle carries: no `:`, and `_`
 /// for each `.`.
@@ -189,7 +197,7 @@ pub(super) enum Answer {
 
 /// One `Inhibit` call to the fake portal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PortalCall {
+pub(super) struct PortalCall {
     window: String,
     flags: u32,
     /// The options' names, sorted.
@@ -197,7 +205,7 @@ struct PortalCall {
     reason: Option<String>,
     token: Option<String>,
     /// The request the fake made.
-    request: OwnedObjectPath,
+    pub(super) request: OwnedObjectPath,
 }
 
 /// A fake Inhibit portal. It makes each request at the handle the real portal gives it, from the
@@ -210,13 +218,21 @@ pub(super) struct FakePortal {
     on_close: mpsc::Sender<OwnedObjectPath>,
 }
 
+/// What a [`FakePortal`] that a test serves itself reports.
+pub(super) struct PortalReports {
+    /// Each call it sees.
+    pub(super) calls: mpsc::Receiver<PortalCall>,
+    /// Each request that is closed.
+    pub(super) closes: mpsc::Receiver<OwnedObjectPath>,
+}
+
 impl FakePortal {
-    /// A portal that answers as `answer` says and reports only the requests that are closed, for
-    /// a test that serves it itself.
-    pub(super) fn reporting_closes(answer: Answer) -> (Self, mpsc::Receiver<OwnedObjectPath>) {
-        let (calls, _unseen) = mpsc::channel(1);
-        let (on_close, closed) = mpsc::channel(1);
-        (Self { answer, calls, on_close }, closed)
+    /// A portal that answers as `answer` says and reports its calls and the requests that are
+    /// closed, for a test that serves it itself.
+    pub(super) fn reporting(answer: Answer) -> (Self, PortalReports) {
+        let (calls, seen) = mpsc::channel(16);
+        let (on_close, closed) = mpsc::channel(16);
+        (Self { answer, calls, on_close }, PortalReports { calls: seen, closes: closed })
     }
 }
 
@@ -332,7 +348,7 @@ impl Portal {
 
 /// Emits the portal's `Response` with `code` on `request` from `connection`, to every connection
 /// whose match rule takes it.
-async fn respond(connection: &zbus::Connection, request: &OwnedObjectPath, code: u32) {
+pub(super) async fn respond(connection: &zbus::Connection, request: &OwnedObjectPath, code: u32) {
     respond_to(connection, None, request, code).await;
 }
 
@@ -406,7 +422,7 @@ async fn logind_holds_sleep_until_the_request_drops() {
     let manager = FakeManager::default();
     let _logind = serve_logind(&bus, manager.clone()).await;
     let system = bus.connect().await;
-    let request = LinuxPowerRequest::keep_awake(Some(&system), None, WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), NO_SESSION, WHY, WAIT).await.unwrap();
     assert!(request.holds_sleep(), "logind's lock");
     assert_eq!(request.desktop(), None, "no session bus, so no desktop hold");
     assert_eq!(
@@ -432,8 +448,7 @@ async fn release_ends_loginds_lock_and_gnomes_inhibitor() {
     let _gnome = serve_gnome(&bus, gnome.clone()).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert!(request.holds_sleep(), "logind's lock");
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
     assert!(request.missed().is_empty(), "nothing missed: {:?}", request.missed());
@@ -457,8 +472,7 @@ async fn the_portal_holds_suspend_and_idle_even_while_logind_holds() {
     let system = bus.connect().await;
     let session = bus.connect().await;
     let sender = sender_part(&session);
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert!(request.holds_sleep(), "logind's lock");
     assert_eq!(request.desktop(), Some(DesktopHolder::Portal), "the portal's inhibition");
     assert!(request.missed().is_empty(), "GNOME's absence is no miss when the portal holds");
@@ -491,10 +505,10 @@ async fn a_refusal_after_the_reply_is_asked_again_for_idle_alone() {
     let session = bus.connect().await;
     // As xdg-desktop-portal-gtk does without GNOME's session manager: the portal replies first,
     // and then its backend refuses anything but idle.
-    let (request, (first, second)) = tokio::join!(
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT),
-        async { (portal.answer(2).await, portal.answer(0).await) }
-    );
+    let (request, (first, second)) =
+        tokio::join!(LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT), async {
+            (portal.answer(2).await, portal.answer(0).await)
+        });
     assert_eq!((first.flags, second.flags), (12, 8), "suspend and idle first, then idle alone");
     assert_ne!(first.request, second.request, "each request on a handle of its own");
     let request = request.unwrap();
@@ -516,7 +530,7 @@ async fn a_backend_that_refuses_after_the_reply_holds_nothing() {
     let refused = DbusError::Refused { what: PORTAL_WHAT, reason: "its backend failed" };
     let session = bus.connect().await;
     let (error, ()) =
-        tokio::join!(LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT), async {
+        tokio::join!(LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT), async {
             portal.answer(2).await;
             portal.answer(2).await;
         });
@@ -524,13 +538,11 @@ async fn a_backend_that_refuses_after_the_reply_holds_nothing() {
     let _logind = serve_logind(&bus, FakeManager::default()).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let (request, ()) = tokio::join!(
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT),
-        async {
+    let (request, ()) =
+        tokio::join!(LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT), async {
             portal.answer(2).await;
             portal.answer(2).await;
-        }
-    );
+        });
     let request = request.unwrap();
     assert!(request.holds_sleep(), "logind's lock");
     assert_eq!(request.desktop(), None, "the desktop holds nothing");
@@ -549,7 +561,7 @@ async fn a_portal_that_never_answers_holds_nothing_past_the_deadline() {
     let observer = bus.connect().await;
     let mut leaving = watch_leaving(&observer, &session).await;
     let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, DEADLINE).await.unwrap();
+        LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, DEADLINE).await.unwrap();
     assert!(request.holds_sleep(), "logind's lock");
     assert_eq!(request.desktop(), None, "an unconfirmed request is no hold");
     assert_eq!(
@@ -563,7 +575,7 @@ async fn a_portal_that_never_answers_holds_nothing_past_the_deadline() {
     assert!(left(&mut leaving).await, "and the session connection went with the missed hold");
     let session = bus.connect().await;
     let error =
-        LinuxPowerRequest::keep_awake(None, Some(session), WHY, DEADLINE).await.unwrap_err();
+        LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, DEADLINE).await.unwrap_err();
     assert_eq!(error, unconfirmed, "with nothing else holding, the deadline is the error");
 }
 
@@ -577,7 +589,7 @@ async fn the_deadline_is_one_budget_for_both_portal_requests() {
     let session = bus.connect().await;
     let start = Instant::now();
     let error =
-        LinuxPowerRequest::keep_awake(None, Some(session), WHY, DEADLINE).await.unwrap_err();
+        LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, DEADLINE).await.unwrap_err();
     assert_eq!(
         error,
         DbusError::DeadlineExceeded { call: "portal response" },
@@ -602,7 +614,7 @@ async fn only_the_portals_own_response_counts() {
     let session = bus.connect().await;
     let caller = session.unique_name().unwrap().to_string();
     let (error, ()) =
-        tokio::join!(LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT), async {
+        tokio::join!(LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT), async {
             let call = portal.call().await;
             // A broadcast, which the bus's match rule keeps from the caller, and a signal
             // addressed to the caller's connection, which the bus delivers whatever the rule
@@ -626,7 +638,7 @@ async fn the_request_path_an_older_portal_names_is_followed() {
     let mut portal = Portal::start(&bus, Answer::OldPath).await;
     let old = OwnedObjectPath::try_from(OLD_REQUEST_PATH).unwrap();
     let session = bus.connect().await;
-    let mut pending = pin!(LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT));
+    let mut pending = pin!(LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT));
     // The caller subscribes on the portal's own handle only once the reply has come, so the test
     // answers there until the caller hears it, letting it run between answers. No timer is
     // involved: the loop ends as soon as the caller has subscribed.
@@ -652,7 +664,7 @@ async fn gnomes_session_manager_comes_before_the_portal() {
     let _gnome = serve_gnome(&bus, gnome.clone()).await;
     let mut portal = Portal::start(&bus, Answer::Now(0)).await;
     let session = bus.connect().await;
-    let request = LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
     assert_eq!(gnome.calls.lock().unwrap().len(), 1, "GNOME was asked");
     assert!(portal.calls().is_empty(), "the portal was not");
@@ -668,13 +680,12 @@ async fn a_portal_without_the_inhibit_interface_counts_as_absent() {
     let _portal = serve(&bus, PORTAL, OLD_REQUEST_PATH, FakeRequest { path: old, on_close }).await;
     let nothing = DbusError::Unavailable { what: "keep-awake holder" };
     let session = bus.connect().await;
-    let error = LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT).await.unwrap_err();
+    let error = LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT).await.unwrap_err();
     assert_eq!(error, nothing, "no GNOME and no Inhibit: nothing holds, and nothing refused");
     let _logind = serve_logind(&bus, FakeManager::default()).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(
         request.missed(),
         [DbusError::NotFound { what: PORTAL_WHAT }],
@@ -690,8 +701,7 @@ async fn a_portal_the_desktop_does_not_allow_is_a_refusal() {
     let mut portal = Portal::start(&bus, Answer::NotAllowed).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), None, "the desktop holds nothing");
     assert_eq!(
         request.missed(),
@@ -710,8 +720,7 @@ async fn release_reports_a_desktop_hold_it_could_not_end_and_still_closes_the_lo
     let _portal = Portal::start(&bus, Answer::Unserved).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::Portal), "the portal's inhibition");
     let watch = watch_end(&manager);
     let error = request.release().await.unwrap_err();
@@ -728,7 +737,7 @@ async fn dropping_the_request_leaves_the_bus_so_the_desktop_ends_its_hold() {
     let caller = session.unique_name().unwrap().to_string();
     let observer = bus.connect().await;
     let mut leaving = watch_leaving(&observer, &session).await;
-    let request = LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
     let sender = gnome.calls.lock().unwrap().first().unwrap().sender.clone();
     assert_eq!(sender, caller, "the hold was taken on the connection the request keeps");
@@ -756,8 +765,7 @@ async fn a_request_dropped_on_a_plain_thread_still_releases() {
     let session = bus.connect().await;
     let observer = bus.connect().await;
     let mut leaving = watch_leaving(&observer, &session).await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
     let mut watch = watch_end(&manager);
     assert!(still_held(&mut watch), "the lock holds while the request lives");
@@ -780,11 +788,12 @@ async fn with_no_holder_there_is_nothing_to_keep_awake() {
     let nothing = DbusError::Unavailable { what: "keep-awake holder" };
     let session = bus.connect().await;
     let error =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap_err();
+        LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap_err();
     assert_eq!(error, nothing, "no logind, no GNOME, no portal");
-    let error = LinuxPowerRequest::keep_awake(None, None, WHY, WAIT).await.unwrap_err();
+    let error = LinuxPowerRequest::keep_awake(NO_SYSTEM, NO_SESSION, WHY, WAIT).await.unwrap_err();
     assert_eq!(error, nothing, "no buses");
-    let error = LinuxPowerRequest::keep_awake(Some(&system), None, " ", WAIT).await.unwrap_err();
+    let error =
+        LinuxPowerRequest::keep_awake(Ok(&system), NO_SESSION, " ", WAIT).await.unwrap_err();
     assert_eq!(
         error,
         DbusError::Invalid { what: "keep-awake reason", detail: "empty".to_owned() },
@@ -794,19 +803,42 @@ async fn with_no_holder_there_is_nothing_to_keep_awake() {
 }
 
 #[tokio::test]
+async fn a_bus_that_did_not_answer_the_connect_in_time_is_a_miss_not_an_absence() {
+    let bus = PrivateBus::start();
+    let _gnome = serve_gnome(&bus, FakeGnome::default()).await;
+    let late_system = DbusError::DeadlineExceeded { call: SYSTEM_BUS };
+    let late_session = DbusError::DeadlineExceeded { call: SESSION_BUS };
+    let session = bus.connect().await;
+    let request = LinuxPowerRequest::keep_awake(Err(late_system.clone()), Ok(session), WHY, WAIT)
+        .await
+        .unwrap();
+    assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "GNOME's inhibitor");
+    assert_eq!(request.missed(), std::slice::from_ref(&late_system), "logind's miss, as late");
+    let error = LinuxPowerRequest::keep_awake(Err(late_system.clone()), NO_SESSION, WHY, WAIT)
+        .await
+        .unwrap_err();
+    assert_eq!(error, late_system, "a late bus, unlike an absent one, is the error");
+    // A system bus that logind is not on: logind is merely absent.
+    let system = bus.connect().await;
+    let error =
+        LinuxPowerRequest::keep_awake(Ok(&system), Err(late_session.clone()), WHY, WAIT).await;
+    assert_eq!(error.unwrap_err(), late_session, "the desktop's late bus, not an absent holder");
+}
+
+#[tokio::test]
 async fn a_refusal_is_the_error_when_nothing_else_holds() {
     let bus = PrivateBus::start();
     let manager = FakeManager { refuse: true, ..FakeManager::default() };
     let _logind = serve_logind(&bus, manager.clone()).await;
     let system = bus.connect().await;
     let refused = DbusError::Refused { what: LOCK_WHAT, reason: "not authorized" };
-    let error = LinuxPowerRequest::keep_awake(Some(&system), None, WHY, WAIT).await.unwrap_err();
+    let error =
+        LinuxPowerRequest::keep_awake(Ok(&system), NO_SESSION, WHY, WAIT).await.unwrap_err();
     assert_eq!(error, refused, "polkit said no");
     assert_eq!(manager.calls.lock().unwrap().len(), 1, "logind was asked");
     let _gnome = serve_gnome(&bus, FakeGnome::default()).await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::GnomeSession), "the desktop still holds");
     assert_eq!(request.missed(), [refused], "and logind's refusal is named");
 }
@@ -820,8 +852,7 @@ async fn a_lock_reply_without_a_descriptor_is_invalid() {
     let _gnome = serve_gnome(&bus, gnome.clone()).await;
     let system = bus.connect().await;
     let session = bus.connect().await;
-    let request =
-        LinuxPowerRequest::keep_awake(Some(&system), Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(Ok(&system), Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(manager.calls.lock().unwrap().len(), 1, "logind answered once");
     assert!(!request.holds_sleep(), "no descriptor, no lock");
     assert!(
@@ -842,11 +873,11 @@ async fn the_portal_stands_in_when_gnomes_session_manager_refuses() {
         detail: "org.freedesktop.DBus.Error.Failed".to_owned(),
     };
     let session = bus.connect().await;
-    let error = LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT).await.unwrap_err();
+    let error = LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT).await.unwrap_err();
     assert_eq!(error, gnome_refused, "without the portal, GNOME's refusal is the error");
     let _portal = Portal::start(&bus, Answer::Now(0)).await;
     let session = bus.connect().await;
-    let request = LinuxPowerRequest::keep_awake(None, Some(session), WHY, WAIT).await.unwrap();
+    let request = LinuxPowerRequest::keep_awake(NO_SYSTEM, Ok(session), WHY, WAIT).await.unwrap();
     assert_eq!(request.desktop(), Some(DesktopHolder::Portal), "the portal holds instead");
 }
 
@@ -859,5 +890,5 @@ fn a_request_can_move_into_the_traits_release_closure() {
 #[test]
 fn keeping_awake_can_move_to_another_thread_with_its_deadline() {
     fn on_any_worker<F: Send>(_future: F) {}
-    on_any_worker(LinuxPowerRequest::keep_awake(None, None, WHY, WAIT));
+    on_any_worker(LinuxPowerRequest::keep_awake(NO_SYSTEM, NO_SESSION, WHY, WAIT));
 }

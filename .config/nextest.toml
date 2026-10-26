@@ -41,15 +41,10 @@ path = "junit.xml"
 [test-groups]
 desktop = { max-threads = 1 }
 
-# BUILD.md section 4b.3 also names packages in these two filters: package(eileen-desktop-win),
-# package(eileen-apps-win), package(eileen-shell-win), package(eileen-hud-win) and
-# package(eileen-e2e) in the first, package(eileen-sim) in the second. nextest refuses a package()
-# or binary_id() term that matches no workspace member, so wp0/stubs, which creates every crate,
-# adds those terms back.
 [[profile.default.overrides]]
-filter = "test(/::desktop::/) | test(/::e2e::/)"
+filter = "test(/::desktop::/) | package(eileen-desktop-win) | package(eileen-apps-win) | package(eileen-shell-win) | package(eileen-hud-win) | package(eileen-e2e) | test(/::e2e::/)"
 test-group = "desktop"
 
 [[profile.default.overrides]]
-filter = "test(/turn::exhaustive/) | test(/::e2e::/)"
+filter = "package(eileen-sim) | test(/turn::exhaustive/) | test(/::e2e::/)"
 slow-timeout = { period = "60s", terminate-after = 5 }

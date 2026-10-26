@@ -1,0 +1,31 @@
+[package]
+name = "eileen-shim"
+description = "The MCP server the claude CLI starts as `eileen`: it forwards each session's calls to the core's dispatcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "shim"
+owns = "WP2"
+unsafe = "forbid"
+
+[[bin]]
+name = "eileen-shim"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+eileen-mcp.workspace = true
+
+[dev-dependencies]
+eileen-stdx.workspace = true
+eileen-supervisor.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

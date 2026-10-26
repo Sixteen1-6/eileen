@@ -18,17 +18,17 @@ use crate::open::Scratch;
 type Row<'a> = (&'a str, Option<&'a str>, Option<FileKind>, WallTime);
 
 /// The fixtures' folder.
-fn fixtures() -> PathBuf {
+pub(crate) fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("recent")
 }
 
 /// The list in the fixture file `name`.
-fn list(name: &str) -> RecentlyUsed {
+pub(crate) fn list(name: &str) -> RecentlyUsed {
     RecentlyUsed::at(fixtures().join(name))
 }
 
 /// The fixture home folder's file, which `GLib` wrote.
-fn gtk() -> RecentlyUsed {
+pub(crate) fn gtk() -> RecentlyUsed {
     list("home/sam/.local/share/recently-used.xbel")
 }
 
@@ -340,7 +340,7 @@ fn a_fifo_or_a_device_in_the_files_place_is_refused_unread() {
 
 /// A file in `scratch`, named `name`, that holds `text` and then zeros to `len` bytes.
 /// `File::set_len` adds the zeros without writing them, so they take no disk space.
-fn sparse(scratch: &Scratch, name: &str, text: &[u8], len: u64) -> RecentlyUsed {
+pub(crate) fn sparse(scratch: &Scratch, name: &str, text: &[u8], len: u64) -> RecentlyUsed {
     let path = scratch.path().join(name);
     fs::write(&path, text).unwrap();
     fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(len).unwrap();

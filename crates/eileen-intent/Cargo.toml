@@ -1,0 +1,20 @@
+[package]
+name = "eileen-intent"
+description = "Eileen's intent resolver: the command grammar, learned templates, the semantic matcher and follow-ups"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP7"
+unsafe = "forbid"
+
+[dependencies]
+eileen-contracts.workspace = true
+
+[lints]
+workspace = true

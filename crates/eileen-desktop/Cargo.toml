@@ -1,0 +1,26 @@
+[package]
+name = "eileen-desktop"
+description = "Eileen's desktop control sidecar: the desktop tools, their safety rules, grounding and the insertion ladder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "desktop"
+owns = "WP5"
+unsafe = "forbid"
+
+[[bin]]
+name = "eileen-desktop"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+clap.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
