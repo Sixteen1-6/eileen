@@ -32,6 +32,8 @@ mod session_lock;
 #[cfg(test)]
 mod shell_host;
 #[cfg(test)]
+mod shell_shortcuts;
+#[cfg(test)]
 mod shortcuts;
 #[cfg(test)]
 mod tree;
