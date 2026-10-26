@@ -22,7 +22,9 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, system_bus};
-use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings, ShortcutNames};
+use eileen_shell_linux::{
+    LinuxShell, LinuxShellSettings, NotifierSettings, ShortcutNames, TraySettings,
+};
 use zbus::zvariant::{OwnedValue, Value};
 
 mod keep_awake;
@@ -155,5 +157,6 @@ fn settings() -> LinuxShellSettings {
         program: PathBuf::from("/usr/bin/eileen"),
         deadline: DEFAULT_DEADLINE,
         shortcut_names: ShortcutNames::default(),
+        tray: TraySettings::default(),
     }
 }

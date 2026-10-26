@@ -1,11 +1,12 @@
-//! The private bus, the silent bus, the method timeout and the round-trip barrier.
+//! The private bus, the silent bus, the method timeout (a private bus's, and a bus's at an
+//! address), the addresses a bus at an address refuses, and the round-trip barrier.
 
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{
     PrivateBus, SilentBus, next_message, nothing_ready, ready_now, round_trip, serve,
 };
-use eileen_dbus_linux::{DbusError, next};
+use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, bus_at_within, next};
 
 /// The fake service's name.
 const NAME: &str = "org.eileen.Test";
@@ -66,6 +67,69 @@ async fn a_call_past_the_method_timeout_is_a_passed_deadline() {
         DbusError::DeadlineExceeded { call: "the hanging call" },
         "the connection's method timeout is a passed deadline, not an I/O error"
     );
+}
+
+#[tokio::test]
+async fn a_bus_at_an_address_bounds_each_call_by_its_timeout() {
+    let bus = PrivateBus::start();
+    let _service = serve(&bus, NAME, PATH, Echo { prefix: "echo: " }).await;
+    let nowhere = format!("unix:path={}", bus.dir().join("no-bus-here").display());
+    assert_eq!(
+        bus_at_within(&nowhere, "the test bus", Duration::from_secs(5)).await.unwrap_err(),
+        DbusError::Unavailable { what: "the test bus" },
+        "no bus listens there, and the error names what the caller said"
+    );
+    // Not METHOD_TIMEOUT, so the test tells the caller's timeout from the default.
+    let timeout = Duration::from_secs(2);
+    let client = bus_at_within(bus.address(), "the test bus", timeout).await.unwrap();
+    let reply =
+        client.call_method(Some(NAME), PATH, Some(INTERFACE), "Echo", &("hello",)).await.unwrap();
+    let text: String = reply.body().deserialize().unwrap();
+    assert_eq!(text, "echo: hello", "the connection reached the bus at the address");
+    // Paused only now, as in the test above: from here the only timer is the method timeout.
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let error =
+        client.call_method(Some(NAME), PATH, Some(INTERFACE), "Hang", &()).await.unwrap_err();
+    assert_eq!(
+        DbusError::from_zbus("the hanging call", &error),
+        DbusError::DeadlineExceeded { call: "the hanging call" },
+        "the method timeout bounds the call"
+    );
+    // tokio rounds a timer up to its next millisecond, so the paused clock reads 2.001 s.
+    let waited = started.elapsed();
+    assert!(
+        waited >= timeout && waited < METHOD_TIMEOUT,
+        "the timeout the caller gave, not the default: {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_address_that_is_not_a_unix_socket_is_refused_and_starts_nothing() {
+    let bus = PrivateBus::start();
+    let refused = DbusError::Invalid {
+        what: "the test bus",
+        detail: "not a unix socket's address".to_owned(),
+    };
+    // zbus would run `touch` for this address, and `touch` would leave the file behind.
+    let started = bus.dir().join("started");
+    let program = format!("unixexec:path=touch,argv1={}", started.display());
+    let answer = bus_at_within(&program, "the test bus", METHOD_TIMEOUT).await;
+    assert!(!started.exists(), "the unixexec: address started no program");
+    assert_eq!(answer.unwrap_err(), refused, "unixexec: is refused");
+    for address in [
+        "ibus:",
+        "tcp:host=127.0.0.1,port=9",
+        "nonce-tcp:host=127.0.0.1,port=9,noncefile=/nonexistent",
+        "unix:dir=/tmp",
+        "not an address",
+    ] {
+        assert_eq!(
+            bus_at_within(address, "the test bus", METHOD_TIMEOUT).await.unwrap_err(),
+            refused,
+            "{address} is refused before any connect"
+        );
+    }
 }
 
 #[tokio::test]
