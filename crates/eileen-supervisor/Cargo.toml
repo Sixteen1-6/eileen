@@ -15,6 +15,9 @@ unsafe = "ffi"
 
 [dependencies]
 eileen-rt.workspace = true
+# Named threads: the detached spawn's reaper on Unix, the fork thread on Linux, and the stderr
+# reader on Windows.
+eileen-stdx.workspace = true
 eileen-trace.workspace = true
 # process-group: each child leads a process group of its own on Unix systems other than Linux.
 # Linux has its own process model in the linux module (docs/LINUX.md section 5).
@@ -25,10 +28,6 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
-
-[target.'cfg(unix)'.dependencies]
-# Named threads: the detached spawn's reaper on Unix, and the fork thread on Linux.
-eileen-stdx.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # rustix's process feature gives setsid, the parent-death signal, pidfds, waitid and killpg as

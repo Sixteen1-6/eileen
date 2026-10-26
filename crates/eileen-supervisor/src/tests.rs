@@ -22,11 +22,11 @@ mod linux;
 
 /// The longest a test waits for a helper that writes a megabyte to stderr to exit, far above
 /// what one whose stderr is drained needs.
-const EXITS_WITHIN: Duration = Duration::from_secs(10);
+pub(crate) const EXITS_WITHIN: Duration = Duration::from_secs(10);
 
 /// The first line `stderr-hostile` writes, as forwarded, and its last.
-const HOSTILE_FIRST: &str = "not utf-8: \u{fffd}\u{fffd} here";
-const HOSTILE_LAST: &str = "after the long line";
+pub(crate) const HOSTILE_FIRST: &str = "not utf-8: \u{fffd}\u{fffd} here";
+pub(crate) const HOSTILE_LAST: &str = "after the long line";
 
 struct TempDir(PathBuf);
 
@@ -69,7 +69,7 @@ fn helper(mode: &str, dir: &Path) -> ChildSpec {
         .envs([("EILEEN_SV_HELPER", mode.to_owned()), ("EILEEN_SV_DIR", dir.display().to_string())])
 }
 
-fn current_thread() -> tokio::runtime::Runtime {
+pub(crate) fn current_thread() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
 }
 
@@ -100,7 +100,7 @@ async fn read_ready(
 
 /// Stderr a hostile tool writes: bytes that are not UTF-8, then a megabyte without a newline,
 /// many times a pipe's buffer, then an ordinary line.
-fn hostile_stderr() -> Vec<u8> {
+pub(crate) fn hostile_stderr() -> Vec<u8> {
     let mut bytes = b"not utf-8: \xff\xfe here\n".to_vec();
     bytes.extend(std::iter::repeat_n(b'x', 1024 * 1024));
     bytes.extend_from_slice(b"\nafter the long line\n");
@@ -108,12 +108,21 @@ fn hostile_stderr() -> Vec<u8> {
 }
 
 /// The text of every `child.stderr` event.
-fn forwarded_lines(captured: &Captured) -> Vec<String> {
+pub(crate) fn forwarded_lines(captured: &Captured) -> Vec<String> {
     captured
         .events_named(names::CHILD_STDERR)
         .iter()
         .map(|e| e.fields["pii.line"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// Awaits a stderr forwarding's handle, which ends once the pipe has closed and every line is
+/// logged, within [`EXITS_WITHIN`].
+async fn forwarded(forwarding: tokio::task::JoinHandle<()>) {
+    timeout(EXITS_WITHIN, forwarding)
+        .await
+        .expect("the stderr forwarding ended once the pipe closed")
+        .unwrap();
 }
 
 fn write_pids(dir: &Path, text: &str) {
@@ -172,8 +181,8 @@ fn stderr_lines_become_child_stderr_events() {
         current_thread().block_on(async {
             let mut child = spawn(&helper("stderr", &dir.0)).unwrap();
             let forwarding = child.forward_stderr().unwrap();
-            let status = child.wait().await.unwrap();
-            forwarding.await.unwrap();
+            let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+            forwarded(forwarding).await;
             assert_eq!(status.code(), Some(101), "the helper's failure comes back");
         });
     });
@@ -194,8 +203,8 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
         current_thread().block_on(async {
             let mut child = spawn(&helper("stderr-hostile", &dir.0)).unwrap();
             let forwarding = child.forward_stderr().unwrap();
-            let status = child.wait().await.unwrap();
-            forwarding.await.unwrap();
+            let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+            forwarded(forwarding).await;
             assert!(status.success(), "every write reached the pipe: {status:?}");
         });
     });
@@ -209,7 +218,7 @@ fn hostile_stderr_keeps_forwarding_with_lines_cut() {
 
 /// Checks that every line of `stderr-hostile`, the first and the last, became a
 /// `child.stderr` event.
-fn assert_hostile_lines_forwarded(captured: &Captured) {
+pub(crate) fn assert_hostile_lines_forwarded(captured: &Captured) {
     let lines = forwarded_lines(captured);
     assert_eq!(lines.first().map(String::as_str), Some(HOSTILE_FIRST), "spawn forwarded it");
     assert_eq!(lines.last().map(String::as_str), Some(HOSTILE_LAST), "to its end");
@@ -228,7 +237,7 @@ fn a_chatty_child_exits_when_its_caller_waits() {
                 .unwrap();
             assert!(status.success(), "every write reached the pipe: {status:?}");
             assert!(child.take_stderr().is_none(), "spawn took the pipe for forwarding");
-            child.forward_stderr().unwrap().await.unwrap();
+            forwarded(child.forward_stderr().unwrap()).await;
         });
     });
     assert_hostile_lines_forwarded(&captured);
@@ -251,7 +260,7 @@ fn a_chatty_child_exits_when_its_caller_reads_stdout_first() {
             let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
             assert!(status.success(), "every write reached the pipe: {status:?}");
             assert_eq!(child.id(), None, "reaped");
-            child.forward_stderr().unwrap().await.unwrap();
+            forwarded(child.forward_stderr().unwrap()).await;
         });
     });
     assert_hostile_lines_forwarded(&captured);
@@ -277,7 +286,7 @@ fn a_chatty_child_exits_when_its_caller_only_polls_try_wait() {
                 .expect("try_wait never saw the child exit: it blocked on a full stderr pipe");
             assert!(status.success(), "every write reached the pipe: {status:?}");
             assert_eq!(child.id(), None, "reaped");
-            child.forward_stderr().unwrap().await.unwrap();
+            forwarded(child.forward_stderr().unwrap()).await;
         });
     });
     assert_hostile_lines_forwarded(&captured);
@@ -293,7 +302,7 @@ fn a_raw_stderr_pipe_nobody_took_is_forwarded_on_request() {
             let forwarding = child.forward_stderr().expect("the pipe was still here");
             assert!(child.take_stderr().is_none(), "forwarding took the pipe");
             let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
-            forwarding.await.unwrap();
+            forwarded(forwarding).await;
             assert_eq!(status.code(), Some(101), "the helper's failure comes back");
         });
     });
@@ -324,6 +333,61 @@ fn raw_stderr_hands_the_caller_every_byte() {
     assert_eq!(read.len(), expected.len(), "every byte the child wrote");
     assert!(read == expected, "in order and unchanged");
     assert!(captured.events_named(names::CHILD_STDERR).is_empty(), "nothing forwarded it");
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn a_quiet_child_leaves_the_blocking_pool_free() {
+    let dir = TempDir::new("stderr-quiet");
+    let block = hold_block(&dir.0);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        // No stdout to read, and a stderr that stays open and quiet while it waits for the lock.
+        let mut child = spawn(&ChildSpec { piped: false, ..helper("block", &dir.0) }).unwrap();
+        // Lets the forwarding start reading before the blocking call queues.
+        tokio::task::yield_now().await;
+        let ran = timeout(EXITS_WITHIN, eileen_rt::task::spawn_blocking("test.pool", || 7))
+            .await
+            .expect("the quiet child's stderr held the pool's only thread")
+            .unwrap();
+        assert_eq!(ran, 7, "the blocking call ran");
+        child.start_kill().unwrap();
+        timeout(EXITS_WITHIN, child.wait()).await.expect("killed").unwrap();
+        forwarded(child.forward_stderr().unwrap()).await;
+    });
+    drop(block);
+}
+
+#[test]
+fn spawning_outside_a_runtime_is_an_error() {
+    let dir = TempDir::new("no-runtime");
+    let spawned = spawn(&helper("stderr", &dir.0));
+    assert!(
+        matches!(spawned, Err(crate::SupervisorError::Spawn { .. })),
+        "an error, not a panic: {spawned:?}"
+    );
+}
+
+#[test]
+fn forwarding_outside_a_runtime_leaves_the_pipe() {
+    let dir = TempDir::new("stderr-no-runtime");
+    let runtime = current_thread();
+    let spec = ChildSpec { raw_stderr: true, ..helper("stderr", &dir.0) };
+    let mut child = runtime.block_on(async { spawn(&spec).unwrap() });
+    assert!(child.forward_stderr().is_none(), "no runtime here, so nothing forwards it");
+    let read = runtime.block_on(async {
+        let mut stderr = child.take_stderr().expect("the pipe stayed");
+        let mut read = Vec::new();
+        timeout(EXITS_WITHIN, stderr.read_to_end(&mut read)).await.expect("it ended").unwrap();
+        timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+        read
+    });
+    let read = String::from_utf8_lossy(&read);
+    assert!(read.contains("eileen helper says hello"), "every byte reached the caller: {read}");
 }
 
 #[test]
