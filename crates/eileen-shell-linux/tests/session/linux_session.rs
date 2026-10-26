@@ -16,7 +16,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, system_bus};
-use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings};
+use eileen_shell_linux::{LinuxShell, LinuxShellSettings, NotifierSettings, ShortcutNames};
 
 mod keep_awake;
 mod lock;
@@ -78,5 +78,6 @@ fn settings() -> LinuxShellSettings {
         autostart_id: "eileen".to_owned(),
         program: PathBuf::from("/usr/bin/eileen"),
         deadline: DEFAULT_DEADLINE,
+        shortcut_names: ShortcutNames::default(),
     }
 }
