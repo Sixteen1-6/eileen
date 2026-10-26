@@ -299,6 +299,12 @@ pub(super) async fn press(
     conn.emit_signal(Some(caller), PORTAL_PATH, SHORTCUTS, member, &body).await.unwrap();
 }
 
+/// Emits the session's `Closed` for `session` from `conn` to `caller`, as the portal ends one.
+pub(super) async fn end_session(conn: &zbus::Connection, caller: &str, session: &OwnedObjectPath) {
+    let no_details = (HashMap::<&str, Value<'_>>::new(),);
+    conn.emit_signal(Some(caller), session, SESSION, "Closed", &no_details).await.unwrap();
+}
+
 /// What a bind lists for `shortcuts`.
 pub(super) fn listed(shortcuts: &[(&str, Option<&str>, Option<&str>)]) -> Vec<Listed> {
     let owned = |text: Option<&str>| text.map(str::to_owned);

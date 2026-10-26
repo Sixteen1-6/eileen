@@ -1,23 +1,23 @@
 //! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
 //! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
-//! memory sample (2.5), `ShellHost`'s toasts and session calls, secrets, and power over D-Bus.
+//! memory sample (2.5), power, secrets and `ShellHost`'s toasts, session calls, shortcuts and tray.
 //!
 //! # Owns
 //!
-//! - The trait implementations: `SystemMemory` for [`LinuxSystemMemory`], `ShellHost` for
-//!   [`LinuxShell`] and `SecretStore` for [`LinuxSecretStore`], on `eileen-dbus-linux`'s `Bridge`.
-//! - The machine's facts and load on Linux: the processor and its core classes, memory totals,
-//!   GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors,
-//!   read under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists.
-//! - Sampling memory into `eileen_contracts::jobs::MemoryPressure`: available memory, commit
-//!   headroom under Linux's overcommit policy, the major-fault paging rate and the largest
-//!   process outside Eileen's tree.
-//! - `ShellHost`'s clients: the XDG autostart entry ([`set_run_at_sign_in`]), the lock state
-//!   over logind ([`SessionLock`]), keeping the session awake ([`LinuxPowerRequest`]), toasts
-//!   ([`Notifier`], with [`NotificationEvents`]), and global shortcuts from the `GlobalShortcuts`
-//!   portal ([`ShortcutsSession`], with [`ShortcutEvents`] and [`trigger_of_chord`]'s triggers).
-//! - The power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) and a
-//!   stream of their changes ([`PowerChanges`]); [`LinuxMachineProbe`] does not use them yet.
+//! - The machine's facts and load on Linux: the processor and its core classes, memory totals, GPUs
+//!   and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors, read
+//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; and
+//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a
+//!   stream of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet.
+//! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
+//!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
+//!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
+//! - `ShellHost` for [`LinuxShell`] and `SecretStore` for [`LinuxSecretStore`], whose D-Bus calls
+//!   run on `eileen-dbus-linux`'s `Bridge`, and their clients: the XDG autostart entry
+//!   ([`set_run_at_sign_in`]), the lock state over logind ([`SessionLock`]), keeping the session
+//!   awake ([`LinuxPowerRequest`]), toasts ([`Notifier`], [`NotificationEvents`]), global shortcuts
+//!   from the `GlobalShortcuts` portal ([`ShortcutsSession`], [`ShortcutEvents`],
+//!   [`trigger_of_chord`]), the tray's item and menu ([`TraySettings`]) and the Secret Service.
 //!
 //! # Does not own
 //!
@@ -35,8 +35,9 @@
 //! - It changes nothing it is not asked to: it writes only Eileen's autostart entry, asks the
 //!   session to lock only in [`SessionLock::lock_workstation`], keeps it awake no longer than a
 //!   [`LinuxPowerRequest`] and the connections it was given, shows a toast only in
-//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`] and changes secrets
-//!   only in `LinuxSecretStore`'s `set` and `delete`. It starts no process and needs no elevation.
+//!   [`Notifier::notify`], binds shortcuts only in [`ShortcutsSession::bind`], shows the tray only
+//!   from `set_tray` and changes secrets only in `LinuxSecretStore`'s `set` and `delete`. It starts
+//!   no process itself (a call may let the bus start a service) and never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
 //! - It never reads a serial-number file, the machine's name, user names or accounts, and never
@@ -48,7 +49,7 @@
 //!
 //! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
-//!   `tokio` (deadlines, the keep-awake holder), `rustix` (`statvfs`), `secrecy` and `thiserror`.
+//!   `tokio` (deadlines, the holder tasks), `rustix` (`statvfs`), `secrecy` and `thiserror`.
 //!   Only the composition root on Linux may depend on it. Wire types: none of its own.
 //!
 //! # Testing
@@ -57,17 +58,16 @@
 //! - Layers: unit tests for each parser over the kernel's text formats, and property tests for the
 //!   CPU lists, the busy share, the MB conversion, the `os-release` quotes and the hotkey chords;
 //!   the fuzz targets of `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in
-//!   `tests/fixtures/` (one recorded under WSL2, five synthetic), one live test of this machine,
-//!   and the autostart entry in folders a guard removes. D-Bus clients run against fakes on
-//!   `eileen-dbus-linux`'s private bus (its `private-bus` feature, tests only), their deadlines in
-//!   tokio's paused time, [`LinuxShell`] and [`LinuxSecretStore`] through `Bridge::on_private_bus`.
+//!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
+//!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (`private-bus`,
+//!   tests only), their deadlines in tokio's paused time; [`LinuxShell`] and [`LinuxSecretStore`]
+//!   on them over `Bridge::on_private_bus`, the first also on real buses (`tests/session/`).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
 //! # Traps
 //!
-//! - In each source's own doc: `pci`, `disk`, `adapters`, `cpu`, `autostart`, `host`, `upower`,
-//!   `session_lock`, `keep_awake`, `notifications`, `shortcuts`, `secrets`; D-Bus's in its crate.
+//! - Each module's doc keeps its traps, `host`'s for the trait calls; D-Bus's are in its crate.
 //!
 //! # Logs and tracing
 //!
@@ -106,13 +106,17 @@ mod secret_store;
 mod secrets;
 mod session_lock;
 mod shortcuts;
+mod tray;
 mod upower;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};
 pub use eileen_dbus_linux::DbusError;
 pub use error::{AutostartError, ReadError};
-pub use host::{LinuxShell, LinuxShellSettings, RELEASE_WAIT};
+pub use host::{
+    BoundHotkey, CONSENT_WAIT, LinuxShell, LinuxShellEvent, LinuxShellSettings, RELEASE_WAIT,
+    SETTLE, ShortcutId, ShortcutNames,
+};
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
 pub use notifications::{
     NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,
@@ -127,4 +131,5 @@ pub use shortcuts::{
     BoundShortcut, Shortcut, ShortcutEvent, ShortcutEvents, ShortcutsSession, trigger_of_chord,
     trigger_of_key,
 };
+pub use tray::TraySettings;
 pub use upower::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};

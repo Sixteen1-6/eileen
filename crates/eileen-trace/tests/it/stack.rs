@@ -1,5 +1,7 @@
-//! The whole stack: the file's line shape, the slow-span event, the reload handle, the stage
-//! stats, which daily files a process keeps, and `init` with soft assertions reporting.
+//! The whole stack: the file's line shape, a span trace in a line with personal logs off and
+//! on, the slow-span event, the reload handle, the stage stats, which daily files a process
+//! keeps, and `init` with soft assertions reporting, a `log` logger set before it and a scoped
+//! default held across it included.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -9,6 +11,9 @@ use eileen_stdx::clock::{self, Clock as _};
 use eileen_stdx::soft_assert::{self, Mode};
 use eileen_trace::{Console, ProcessKind, TraceConfig, TraceError, names, test_support};
 use serde_json::Value;
+use tracing::dispatcher::DefaultGuard;
+use tracing_error::SpanTrace;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 struct TempDir(PathBuf);
 
@@ -37,6 +42,11 @@ fn names_in(dir: &Path) -> BTreeSet<String> {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect()
+}
+
+/// The text of every file in `dir`, in name order.
+fn files_text(dir: &Path) -> String {
+    names_in(dir).iter().map(|name| std::fs::read_to_string(dir.join(name)).unwrap()).collect()
 }
 
 /// The core's daily file name `back` days before `today`.
@@ -176,6 +186,62 @@ fn file_lines_carry_their_span_and_reduce_pii() {
     assert_eq!(stats.get(names::ADDRESSEE).map(|s| s.count), Some(1), "stage stats");
 }
 
+/// Logs a span trace through `build`, with `logging.include_personal` as given: captured inside
+/// a turn span with a `pii.transcript`, as an internal error logs one (observability report
+/// section 2.4 rule 6) and the panic hook records one (section 4.5). Returns the files' text
+/// and the line, after checking that the trace, as text and as `Debug`, names its turn and
+/// gives the transcript's length alone.
+fn log_a_span_trace(name: &str, include_personal: bool) -> (String, Value) {
+    let dir = TempDir::new(name);
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    config.include_personal = include_personal;
+    let (subscriber, guard) = eileen_trace::build(ProcessKind::Core, &config).unwrap();
+    tracing::subscriber::with_default(subscriber, || {
+        let turn = tracing::info_span!(target: "eileen_core", names::TURN, turn_id = "t", "pii.transcript" = "my diary entry");
+        let _entered = turn.enter();
+        let trace = SpanTrace::capture();
+        tracing::error!(target: "eileen_core", trace = %trace, debug = ?trace, "failed");
+    });
+    drop(guard);
+    let text = files_text(&dir.0);
+    let failed = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|l| l["fields"]["message"] == "failed")
+        .unwrap();
+    let shown = failed["fields"]["trace"].as_str().unwrap();
+    assert!(
+        shown.contains(r#"with turn_id="t" pii.transcript={"len":14}"#)
+            && !shown.contains("my diary entry"),
+        "the trace names its turn and gives the transcript's length alone:\n{shown}"
+    );
+    let debug = failed["fields"]["debug"].as_str().unwrap();
+    assert!(
+        debug.contains(r#"turn_id=\"t\" pii.transcript={\"len\":14}"#)
+            && !debug.contains("my diary entry"),
+        "Debug too:\n{debug}"
+    );
+    (text, failed)
+}
+
+#[test]
+fn a_logged_span_trace_shows_pii_fields_as_their_length() {
+    let (text, failed) = log_a_span_trace("span-trace", false);
+    assert!(!text.contains("my diary entry"), "the transcript reached the file:\n{text}");
+    assert_eq!(failed["spans"][0]["pii.transcript"], serde_json::json!({ "len": 14 }), "span list");
+}
+
+#[test]
+fn a_logged_span_trace_shows_pii_lengths_with_personal_logs_on() {
+    // The user's opt-in keeps the files' own `pii.` fields, not the values in a trace's text.
+    let (_text, failed) = log_a_span_trace("span-trace-personal", true);
+    assert_eq!(
+        failed["spans"][0]["pii.transcript"], "my diary entry",
+        "the opt-in reached the span list"
+    );
+}
+
 #[test]
 fn capture_checks_the_schema() {
     let ((), captured) = test_support::capture(|| {
@@ -216,4 +282,55 @@ fn init_installs_once_and_soft_assertions_report() {
     let parsed = guard.ring().records(guard.redactor());
     assert_eq!(parsed.skipped, 0, "every ring line read back as a record");
     assert!(parsed.events.iter().any(|e| e.name == names::SOFT_ASSERT_FAILED), "logged");
+}
+
+/// `init` with a log folder once tracing-log's `log` logger is set: the stack starts all the
+/// same. `scoped`, when given, is this thread's default while `init` runs, and it ends before
+/// this thread logs to the stack.
+fn init_starts_after_a_log_logger(name: &str, scoped: Option<DefaultGuard>) {
+    let dir = TempDir::new(name);
+    let mut config = TraceConfig::new(Some(dir.0.clone()));
+    config.console = Console::Never;
+    let guard = eileen_trace::init(ProcessKind::Cli, &config).unwrap();
+    assert!(
+        matches!(
+            eileen_trace::init(ProcessKind::Cli, &config),
+            Err(TraceError::AlreadyInitialised)
+        ),
+        "a second init is still refused"
+    );
+    assert_eq!(soft_assert::mode(), Mode::Report, "soft assertions report");
+    assert!(eileen_stdx::never!(true, "a canary soft assertion"), "the condition comes back");
+    assert!(guard.ring().take_dump_request(), "the hook found the ring");
+    drop(scoped);
+    tracing::info!(target: "eileen_core", "after init");
+    let parsed = guard.ring().records(guard.redactor());
+    let warned = parsed.events.iter().filter(|e| e.name == names::LOG_BRIDGE_FAILED).count();
+    assert_eq!(warned, 1, "one warning says that `log` records stay with the other logger");
+    drop(guard);
+    let text = files_text(&dir.0);
+    let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(lines.iter().any(|l| l["fields"]["message"] == "after init"), "still writing:\n{text}");
+    assert!(
+        lines.iter().any(|l| l["level"] == "WARN"
+            && l["target"] == "eileen_trace"
+            && l["fields"]["error"].as_str().is_some_and(|e| e.contains("logger"))),
+        "the warning reached the file too:\n{text}"
+    );
+}
+
+#[test]
+fn init_starts_the_stack_when_a_log_logger_came_first() {
+    // `set_default` sets tracing-log's `log` logger and no global default, as a library's
+    // `env_logger::init()` before `init` would.
+    drop(tracing_subscriber::registry().set_default());
+    init_starts_after_a_log_logger("log-first", None);
+}
+
+#[test]
+fn init_starts_the_stack_while_a_scoped_default_is_held() {
+    // The guard, held across `init` as a test harness or a library may hold one, sets
+    // tracing-log's `log` logger and keeps this thread's default its own.
+    let scoped = tracing_subscriber::registry().set_default();
+    init_starts_after_a_log_logger("log-first-scoped", Some(scoped));
 }

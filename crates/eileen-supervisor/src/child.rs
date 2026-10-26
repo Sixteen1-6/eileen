@@ -1,11 +1,31 @@
 //! Supervised children: every child of the running product starts here (section 2.1 rule 1).
 //!
-//! A child is placed in a kill-on-close Job Object with no console window (process-wrap's
-//! `JobObject`, `CreationFlags(CREATE_NO_WINDOW)` and `KillOnDrop`), so killing it kills
-//! everything it started, a crash of Eileen takes every child with it, and dropping the
-//! [`Child`] kills the tree. Claude sessions also run at `BELOW_NORMAL_PRIORITY_CLASS`, so a
-//! worker's build never starves the voice loop. On Unix the child leads its own process group.
-//! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`.
+//! On Windows a child is placed in a kill-on-close Job Object with no console window
+//! (process-wrap's `JobObject`, `CreationFlags(CREATE_NO_WINDOW)` and `KillOnDrop`), so killing
+//! it kills everything it started, a crash of Eileen takes every child with it, and dropping
+//! the [`Child`] kills the tree. Claude sessions also run at `BELOW_NORMAL_PRIORITY_CLASS`, so a
+//! worker's build never starves the voice loop.
+//!
+//! On Linux (docs/LINUX.md section 5) a child leads a session of its own: it leads its own
+//! process group and has no controlling terminal, so a prompt on `/dev/tty` fails at once
+//! instead of stopping it. Its whole group is killed when the [`Child`] drops, on
+//! [`Child::start_kill`], and when [`Child::wait`] or [`Child::try_wait`] sees it exit, each
+//! time before it is reaped, so no reused pid is ever signalled. It is forked on the
+//! supervisor's own thread, which lives as long as the process, with `SIGKILL` as its
+//! parent-death signal, so a crash of Eileen kills every child. Their descendants are not
+//! reached: one that outlives its child in a crash, or leaves the group (`setsid`, `setpgid`),
+//! is for the cgroup scope of LINUX.md section 5, which this crate does not have yet. A Claude
+//! session runs ten nice steps below the thread that forks it, which its builds inherit. A nice
+//! value orders tasks only within one CPU cgroup, or, where the kernel's autogroup applies (it
+//! is on by default on Ubuntu, and only for tasks in the root CPU cgroup), within one session's
+//! autogroup; the child's `setsid` starts a new one, so there its builds still get an equal
+//! share against the core's. That share is the cgroup scope's to set too. On other Unix systems
+//! the child leads its own process group.
+//!
+//! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`, and
+//! on Linux an awaited [`Child::wait`] does so for a pipe nobody took. A caller that reads
+//! stdout to its end before it waits, or polls [`Child::try_wait`], still has to take or
+//! forward stderr itself, or a child that fills the pipe blocks and never exits.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -29,7 +49,9 @@ pub const MAX_STDERR_LINE: usize = 4 * 1024;
 pub enum ChildClass {
     /// A sidecar (`eileen-speech`, `eileen-desktop`, `eileen-apps`, `eileen-hud`): normal priority.
     Sidecar,
-    /// A Claude session (brain, spare, pooled or job worker, librarian): below normal.
+    /// A Claude session (brain, spare, pooled or job worker, librarian): below normal on
+    /// Windows, ten nice steps below the core on Linux, which orders it only within its CPU
+    /// cgroup or autogroup (see the module doc); other Unix systems keep the core's.
     ClaudeSession,
     /// A short tool run (`fuscript`, a probe): normal priority.
     Tool,
@@ -156,7 +178,13 @@ pub struct Child {
 }
 
 /// Starts `spec` supervised: in a kill-on-close Job Object, without a console window, killed
-/// when the returned [`Child`] is dropped.
+/// when the returned [`Child`] is dropped. On Linux, in a session of its own, forked on the
+/// supervisor's own thread inside the caller's tokio runtime.
+///
+/// Stderr is always a pipe, and a child that fills it blocks until it is read: take it or
+/// forward it before reading stdout to its end or polling [`Child::try_wait`]. On Linux an
+/// awaited [`Child::wait`] forwards a pipe that nobody took; on Windows nothing reads it unless
+/// the caller does.
 pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let mut command = tokio::process::Command::from(base_command(spec));
     if spec.piped {
@@ -168,7 +196,11 @@ pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let mut wrap = CommandWrap::from(command);
     wrap_platform(&mut wrap, spec.class);
     wrap.wrap(KillOnDrop);
-    let inner = wrap.spawn().map_err(|source| SupervisorError::Spawn {
+    #[cfg(not(target_os = "linux"))]
+    let spawned = wrap.spawn();
+    #[cfg(target_os = "linux")]
+    let spawned = crate::linux::spawn(wrap);
+    let inner = spawned.map_err(|source| SupervisorError::Spawn {
         program: spec.program.display().to_string(),
         source,
     })?;
@@ -189,9 +221,33 @@ fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
     wrap.wrap(CreationFlags(flags)).wrap(JobObject);
 }
 
-#[cfg(unix)]
+/// On Linux a Claude session runs this many nice steps below the core (at most at 19), the
+/// counterpart of Windows' `BELOW_NORMAL_PRIORITY_CLASS`. Its builds yield to the voice loop
+/// only where both share a CPU cgroup and no autogroup splits them (see the module doc).
+#[cfg(target_os = "linux")]
+pub(crate) const CLAUDE_SESSION_NICER_BY: i32 = 10;
+
+#[cfg(target_os = "linux")]
+fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
+    let nicer_by = match class {
+        ChildClass::ClaudeSession => CLAUDE_SESSION_NICER_BY,
+        ChildClass::Sidecar | ChildClass::Tool => 0,
+    };
+    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut(), nicer_by);
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn wrap_platform(wrap: &mut CommandWrap, _class: ChildClass) {
     wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+}
+
+/// Kills the whole group while the child is unreaped (tokio then kills and reaps the leader);
+/// after a reap there is nothing left to signal.
+#[cfg(target_os = "linux")]
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ignored = self.inner.start_kill();
+    }
 }
 
 impl Child {
@@ -211,7 +267,8 @@ impl Child {
         self.inner.stdout().take()
     }
 
-    /// Its stderr, the first time it is asked for (unless [`Self::forward_stderr`] took it).
+    /// Its stderr, the first time it is asked for (unless [`Self::forward_stderr`] took it,
+    /// or, on Linux, [`Self::wait`] did).
     pub fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.inner.stderr().take()
     }
@@ -245,19 +302,30 @@ impl Child {
     }
 
     /// Starts killing the child and everything it started (its Job Object, or its process
-    /// group); [`Self::wait`] reaps it.
+    /// group); [`Self::wait`] reaps it. On Linux, once the child is reaped it does nothing:
+    /// its group was killed before the reap.
     pub fn start_kill(&mut self) -> io::Result<()> {
         self.inner.start_kill()
     }
 
-    /// Waits for the child (and, on Windows, every process in its job) to exit.
+    /// Waits for the child (and, on Windows, every process in its job) to exit. On Linux it
+    /// first forwards stderr into tracing unless [`Self::take_stderr`] or
+    /// [`Self::forward_stderr`] took it, so a chatty child cannot block on a full pipe, and it
+    /// kills what is left of the child's process group once the child has exited, then reaps
+    /// it.
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+        // A child that fills the stderr pipe blocks in write(2) and never exits, so on Linux a
+        // pipe nobody took is forwarded from here; the task outlives this future.
+        #[cfg(target_os = "linux")]
+        let _ignored = self.forward_stderr();
         let status = self.inner.wait().await?;
         tracing::info!(name: names::CHILD_EXITED, child = self.name, code = status.code());
         Ok(status)
     }
 
-    /// The exit status, if it has exited.
+    /// The exit status, if it has exited. On Linux the call that first sees the exit kills
+    /// what is left of the group and has tokio reap the child, so [`Self::id`] is `None` from
+    /// then on.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.inner.try_wait()
     }

@@ -6,6 +6,7 @@
 //! | Flight recorder (memory) | kept; secrets scanned at dump time |
 //! | JSON log files | length and keyed hash, unless `logging.include_personal` |
 //! | Console | kept (a terminal the owner is watching); secrets redacted |
+//! | A span trace, text in another field that any sink can carry | length alone, always |
 //!
 //! The hash's key is per install: the runtime derives it at setup and passes it to every
 //! process it starts. With no key the files keep the length alone, so a process started
@@ -14,6 +15,9 @@
 use std::fmt;
 
 use serde_json::{Map, Value, json};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::field::{MakeVisitor, VisitFmt, VisitOutput};
+use tracing_subscriber::fmt::format::{DefaultVisitor, Writer};
 
 /// The prefix that marks a field as user content.
 pub const PREFIX: &str = "pii.";
@@ -89,11 +93,139 @@ pub fn apply(fields: &mut Map<String, Value>, policy: Policy) {
     }
 }
 
+/// How the error layer writes a span's fields for a `tracing_error::SpanTrace`: as
+/// tracing-subscriber's `DefaultFields` does, except that a `pii.` field shows as its reduced
+/// form without a key, `{"len":N}`. A span trace travels as text in another field (`error =
+/// %e`, the panic hook's record), where no sink's policy can find the `pii.` values, so it
+/// never holds them, whatever `logging.include_personal` says.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SpanTraceFields;
+
+impl<'a> MakeVisitor<Writer<'a>> for SpanTraceFields {
+    type Visitor = SpanTraceVisitor<'a>;
+
+    fn make_visitor(&self, target: Writer<'a>) -> Self::Visitor {
+        SpanTraceVisitor(DefaultVisitor::new(target, true))
+    }
+}
+
+/// The visitor [`SpanTraceFields`] makes.
+#[derive(Debug)]
+pub(crate) struct SpanTraceVisitor<'a>(DefaultVisitor<'a>);
+
+impl SpanTraceVisitor<'_> {
+    /// Writes `field` as `value` reduced, with the length the files would give it.
+    fn reduced(&mut self, field: &Field, value: &Value) {
+        let reduced = reduce(value, None);
+        self.0.record_debug(field, &format_args!("{reduced}"));
+    }
+}
+
+impl Visit for SpanTraceVisitor<'_> {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if is_pii(field.name()) {
+            self.reduced(field, &Value::from(value));
+        } else {
+            self.0.record_str(field, value);
+        }
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        if is_pii(field.name()) {
+            self.reduced(field, &Value::from(value.to_string()));
+        } else {
+            self.0.record_error(field, value);
+        }
+    }
+
+    // Numbers, booleans and bytes come here too, through `Visit`'s own defaults.
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if is_pii(field.name()) {
+            self.reduced(field, &Value::from(format!("{value:?}")));
+        } else {
+            self.0.record_debug(field, value);
+        }
+    }
+}
+
+impl VisitOutput<fmt::Result> for SpanTraceVisitor<'_> {
+    fn finish(self) -> fmt::Result {
+        self.0.finish()
+    }
+}
+
+impl VisitFmt for SpanTraceVisitor<'_> {
+    fn writer(&mut self) -> &mut dyn fmt::Write {
+        self.0.writer()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Map, Value, json};
+    use tracing_error::{ErrorLayer, SpanTrace};
+    use tracing_subscriber::Registry;
+    use tracing_subscriber::fmt::FormatFields;
+    use tracing_subscriber::fmt::format::DefaultFields;
+    use tracing_subscriber::layer::SubscriberExt as _;
 
-    use super::{PiiKey, Policy, apply, is_pii, reduce};
+    use super::{PiiKey, Policy, SpanTraceFields, apply, is_pii, reduce};
+
+    /// An error with a source, which `DefaultFields` lists after it.
+    #[derive(Debug, thiserror::Error)]
+    #[error("refused")]
+    struct Refused(#[source] std::io::Error);
+
+    /// The span trace inside the span `make` opens, under an error layer that writes span
+    /// fields with `fields`.
+    fn trace_of<F>(fields: F, make: fn() -> tracing::Span) -> String
+    where
+        F: for<'w> FormatFields<'w> + Send + Sync + 'static,
+    {
+        let subscriber =
+            tracing_subscriber::registry().with(ErrorLayer::<Registry, F>::new(fields));
+        tracing::subscriber::with_default(subscriber, || {
+            make().in_scope(|| SpanTrace::capture().to_string())
+        })
+    }
+
+    #[test]
+    fn a_span_trace_shows_pii_fields_as_their_length() {
+        fn personal() -> tracing::Span {
+            let error: &(dyn std::error::Error + 'static) =
+                &Refused(std::io::Error::other("the bus is gone"));
+            tracing::info_span!(
+                "turn",
+                turn_id = "t",
+                "pii.transcript" = "my diary entry",
+                "pii.title" = ?"Holiday photos",
+                "pii.path" = %"/home/someone/notes.txt",
+                "pii.count" = 12_345,
+                "pii.error" = error,
+            )
+        }
+        let trace = trace_of(SpanTraceFields, personal);
+        // The lengths the files give the same values: `Debug` keeps its quotes, an error is
+        // its `Display`, a number its digits.
+        let expected = r#"with turn_id="t" pii.transcript={"len":14} pii.title={"len":16} pii.path={"len":23} pii.count={"len":5} pii.error={"len":7}"#;
+        assert!(trace.contains(expected), "each as its length alone:\n{trace}");
+        for value in ["my diary", "Holiday", "/home/someone", "12345", "refused", "the bus"] {
+            assert!(!trace.contains(value), "{value} reached the span trace:\n{trace}");
+        }
+    }
+
+    #[test]
+    fn a_span_trace_shows_other_fields_as_default_fields_does() {
+        fn ordinary() -> tracing::Span {
+            let error: &(dyn std::error::Error + 'static) =
+                &Refused(std::io::Error::other("the bus is gone"));
+            tracing::info_span!("job", job_id = "job_1", count = 3, ok = true, shown = %"a b", debug = ?"c", error)
+        }
+        let trace = trace_of(SpanTraceFields, ordinary);
+        let expected = r#"with job_id="job_1" count=3 ok=true shown=a b debug="c" error=refused error.sources=[the bus is gone]"#;
+        assert!(trace.contains(expected), "every field shown:\n{trace}");
+        assert_eq!(trace, trace_of(DefaultFields::new(), ordinary), "as tracing-error's default");
+    }
 
     #[test]
     fn reduce_keeps_the_length_and_a_keyed_hash() {
