@@ -9,6 +9,7 @@
 /crates/eileen-apps-linux/ @Sixteen1-6 @ayhamyousef
 /crates/eileen-dbus-linux/ @Sixteen1-6 @ayhamyousef
 /crates/eileen-audio-linux/ @Sixteen1-6 @ayhamyousef
+/crates/eileen-desktop-linux/ @Sixteen1-6 @ayhamyousef
 /fuzz/corpus/linux_mountinfo/ @Sixteen1-6 @ayhamyousef
 /fuzz/corpus/linux_proc_status/ @Sixteen1-6 @ayhamyousef
 /fuzz/corpus/desktop_entry/ @Sixteen1-6 @ayhamyousef

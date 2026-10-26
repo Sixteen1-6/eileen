@@ -1,11 +1,18 @@
-//! The machine-wide files across processes, a stale holder, and the kill-on-close job.
+//! The machine-wide files across processes, a stale holder, and what a guarded cargo runs in:
+//! the kill-on-close job, or on Unix the process group its watchdog kills, and the priority.
 
 use std::time::Duration;
 
 use eileen_buildguard::clock::{Clock, RealClock};
+#[cfg(windows)]
+use eileen_buildguard::procs::Watched;
+#[cfg(any(windows, target_os = "linux"))]
+use eileen_buildguard::procs::process_alive;
 use eileen_buildguard::samples::{PAGING_FILE, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
 
+#[cfg(target_os = "linux")]
+use crate::support::Watched;
 use crate::support::{TempRoot, helper, read_ready, ready_helper, wait_until_free};
 
 /// Holds `block.lock`, which keeps the blocking helpers alive until it is dropped.
@@ -74,28 +81,104 @@ fn kill_stale_frees_a_dead_holders_slot() {
     drop(block);
 }
 
-#[cfg(windows)]
+/// How long a test waits for a stand-in the guard should have killed; only a failing test
+/// waits this out.
+#[cfg(any(windows, target_os = "linux"))]
+const END_WITHIN: Duration = Duration::from_secs(10);
+
+/// The process ids on a stand-in cargo's ready line: its own, then its stand-in rustc's.
+#[cfg(any(windows, target_os = "linux"))]
+fn cargo_and_rustc(stdout: &mut impl std::io::BufRead) -> (u32, u32) {
+    let pids: Vec<u32> =
+        read_ready(stdout).split_whitespace().map(|p| p.parse().unwrap()).collect();
+    assert_eq!(pids.len(), 2, "cargo and rustc: {pids:?}");
+    (pids[0], pids[1])
+}
+
+/// Opens each running process, so its end is waited on rather than polled for.
+#[cfg(any(windows, target_os = "linux"))]
+fn watch(pids: &[u32]) -> Vec<(u32, Watched)> {
+    assert!(pids.iter().all(|pid| process_alive(*pid)), "{pids:?} run");
+    pids.iter().map(|pid| (*pid, Watched::open(*pid).unwrap())).collect()
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn assert_all_end(watched: &[(u32, Watched)]) {
+    for (pid, process) in watched {
+        assert!(process.wait_exit(END_WITHIN).unwrap(), "{pid} was left running");
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn killing_xtask_mid_build_leaves_no_rustc_running() {
-    use eileen_buildguard::procs::{Watched, process_alive};
-
     let root = TempRoot::new("kill-xtask");
     let block = hold_block(&root);
     let (mut xtask, mut stdout) = ready_helper("fake-xtask", &root);
-    // The stand-in cargo is in xtask's job; its stand-in rustc is a plain child of cargo's,
-    // with no job of its own, as real cargo starts rustc.
-    let pids: Vec<u32> =
-        read_ready(&mut stdout).split_whitespace().map(|p| p.parse().unwrap()).collect();
-    assert_eq!(pids.len(), 2, "cargo and rustc: {pids:?}");
-    assert!(pids.iter().all(|pid| process_alive(*pid)), "cargo and rustc run");
-    // Opened while they run, so their ends are waited on rather than polled for.
-    let watched: Vec<Watched> = pids.iter().map(|pid| Watched::open(*pid).unwrap()).collect();
-    // Kill only the xtask process, as a crash or an agent's kill would; its job takes the rest.
+    // The stand-in cargo is in xtask's job (on Unix, its process group); its stand-in rustc is
+    // a plain child of cargo's, with no job or group of its own, as real cargo starts rustc.
+    let (cargo, rustc) = cargo_and_rustc(&mut stdout);
+    let watched = watch(&[cargo, rustc]);
+    // Kill only the xtask process, as a crash or an agent's kill would; its job (on Unix, its
+    // watchdog) takes the rest.
     xtask.kill_root().unwrap();
     xtask.wait().unwrap();
-    for (pid, process) in pids.iter().zip(&watched) {
-        assert!(process.wait_exit(Duration::from_secs(10)).unwrap(), "{pid} was left running");
-    }
+    assert_all_end(&watched);
+    drop(stdout);
+    drop(block);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn killing_a_guarded_cargo_takes_what_it_started() {
+    let root = TempRoot::new("kill-cargo");
+    let block = hold_block(&root);
+    let (mut cargo, mut stdout) = ready_helper("fake-cargo", &root);
+    let (cargo_pid, rustc) = cargo_and_rustc(&mut stdout);
+    assert_eq!(cargo_pid, cargo.id(), "the guard's child is the stand-in cargo");
+    let watched = watch(&[cargo_pid, rustc]);
+    cargo.kill().unwrap();
+    cargo.wait().unwrap();
+    assert_all_end(&watched);
+    drop(stdout);
+    drop(block);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn dropping_a_guarded_cargo_takes_what_it_left_running() {
+    let root = TempRoot::new("drop-cargo");
+    let block = hold_block(&root);
+    let (mut cargo, mut stdout) = ready_helper("fake-cargo-leaves", &root);
+    let (_cargo, rustc) = cargo_and_rustc(&mut stdout);
+    let watched = watch(&[rustc]);
+    assert!(cargo.wait().unwrap().success(), "the stand-in cargo exited, leaving its rustc");
+    drop(cargo);
+    assert_all_end(&watched);
+    drop(stdout);
+    drop(block);
+}
+
+/// The nice value of `pid`, the 19th field of `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+fn nice_of(pid: u32) -> i32 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    // The fields after the parenthesised command name start with the 3rd, the state.
+    let (_, rest) = stat.rsplit_once(')').unwrap();
+    rest.split_whitespace().nth(19 - 3).unwrap().parse().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_guarded_cargo_and_what_it_starts_run_ten_nice_levels_down() {
+    let root = TempRoot::new("nice");
+    let block = hold_block(&root);
+    let (cargo, mut stdout) = ready_helper("fake-cargo", &root);
+    let (cargo_pid, rustc) = cargo_and_rustc(&mut stdout);
+    let expected = (nice_of(std::process::id()) + 10).min(19);
+    assert_eq!(nice_of(cargo_pid), expected, "the stand-in cargo");
+    assert_eq!(nice_of(rustc), expected, "its stand-in rustc, which inherits it");
+    drop(cargo);
     drop(stdout);
     drop(block);
 }
