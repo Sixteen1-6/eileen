@@ -25,6 +25,8 @@
 //!   `unbounded_channel`).
 //! - A panic message reaches the log files only as length and hash, in `pii.message` (test
 //!   `it::tasks::a_panic_message_reaches_the_log_files_only_as_its_length`).
+//! - On Linux the kernel keeps the whole name of every thread a runtime starts, worker and
+//!   blocking (test `runtime::tests::every_thread_keeps_its_whole_name_on_linux`).
 //!
 //! # Boundaries
 //!
@@ -36,8 +38,8 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-rt`.
-//! - Layers: unit tests for channels and messages; integration tests run tasks on a
-//!   current-thread runtime under `eileen_trace::test_support::capture`.
+//! - Layers: unit tests for channels, messages and the runtime's thread names; integration
+//!   tests run tasks on a current-thread runtime under `eileen_trace::test_support::capture`.
 //! - A bug here starts as a log line with no turn id, or a hung job nobody can see.
 //!
 //! # Traps
@@ -45,6 +47,10 @@
 //! - Task names are `&'static str` constants: put IDs in span fields, not in the name.
 //! - A panic still reaches the join handle as a `JoinError`; logging it does not swallow it.
 //! - `await-tree` overhead is unmeasured; section 12 of the observability report asks for it.
+//! - Linux keeps 15 bytes of a thread name, and std cuts the rest without a word. There
+//!   [`runtime::build`] names its threads `<name>-rt`, and a `name` over 12 bytes fails a soft
+//!   assertion and keeps its first 12 (so `eileen-speech` and `eileen-desktop` need a shorter
+//!   one); elsewhere they are `<name>-worker`.
 //!
 //! # Logs and tracing
 //!
