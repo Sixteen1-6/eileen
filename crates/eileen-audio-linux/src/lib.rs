@@ -14,7 +14,7 @@
 //! # Does not own
 //!
 //! - Streaming (cpal, in `eileen-audio`, WP4), and the audio-server client the endpoints need.
-//! - `SystemVolume`, which the desktop process serves (`eileen-desktop-linux`, planned).
+//! - `SystemVolume`, which the desktop process serves (`eileen-desktop-linux`, not built yet).
 //! - The bridge, the buses and [`DbusError`] (re-exported) are `eileen-dbus-linux`'s; the trait,
 //!   `ThreadTicket` and `PlatformError` are `eileen-platform`'s (WP0).
 //!
