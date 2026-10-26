@@ -759,6 +759,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "eileen-audio-linux"
+version = "0.0.0"
+dependencies = [
+ "eileen-dbus-linux",
+ "eileen-platform",
+ "proptest",
+ "rustix",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "eileen-audio-win"
 version = "0.0.0"
 dependencies = [
