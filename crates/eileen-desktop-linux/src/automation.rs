@@ -208,9 +208,14 @@ impl Automation for LinuxDesktop {
             let mut candidates = Vec::new();
             for (index, score) in rank(&walk, &ids, &selector) {
                 let Some(node) = walk.nodes.get(index) else { continue };
-                let rect = rect_of(&atspi, &node.accessible).await.unwrap_or_default();
-                let id = ids.get(index).cloned().flatten();
-                let info = info_of(&node.accessible, rect, id, at);
+                let element = &node.accessible;
+                let (rect, read) = tokio::join!(rect_of(&atspi, element), async {
+                    match ids.get(index) {
+                        Some(id) => Ok(id.clone()),
+                        None => atspi.accessible_id(&element.object).await,
+                    }
+                });
+                let info = info_of(element, rect.unwrap_or_default(), read.ok().flatten(), at);
                 let handle = handle_of(hwnd, &node.accessible.object);
                 candidates.push(ElementCandidate { handle, info, score });
             }

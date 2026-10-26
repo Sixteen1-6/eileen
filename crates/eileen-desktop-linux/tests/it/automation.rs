@@ -211,6 +211,8 @@ fn find_ranks_the_matches_best_first() {
     );
     assert_eq!(found[0].handle, handle(hwnd, &world.object(app, "/save")), "the tree's handle");
     assert_eq!(found[0].info.rect, Rect { x: 10, y: 20, w: 80, h: 24 }, "with its box");
+    let id = Some(Untrusted::new("save".to_owned()));
+    assert_eq!(found[0].info.automation_id, id, "and its id, which the selector did not name");
     let toolbar = SelectorStep {
         control_type: Some("panel".to_owned()),
         name: Some(Untrusted::new("Toolbar".to_owned())),
