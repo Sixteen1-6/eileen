@@ -210,9 +210,12 @@ pub struct Child {
 /// [`Child::take_stderr`] and must read it, or a child that fills it blocks.
 ///
 /// Needs a tokio runtime with I/O: tokio's process driver, the forwarding task, and on Linux
-/// the child's pidfd. Outside one it returns [`SupervisorError::Spawn`] before the child
-/// starts. When the forwarding cannot start (on Windows, no thread for it) it returns that
-/// error too, and the child it started is killed.
+/// the child's pidfd. With no runtime entered it returns [`SupervisorError::Spawn`] before the
+/// child starts. In a runtime without I/O, tokio's Unix spawn panics registering the child's
+/// pipes after the child has started, and the child is not killed: on Linux the fork thread
+/// catches the panic and this returns that error, elsewhere the panic reaches the caller. When
+/// the forwarding cannot start (on Windows, no thread for it) it returns that error too, and
+/// the child it started is killed.
 pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let error =
         |source| SupervisorError::Spawn { program: spec.program.display().to_string(), source };

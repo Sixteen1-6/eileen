@@ -20,8 +20,8 @@
 //!
 //! - Killing a child's Job Object kills its grandchildren (Windows test
 //!   `tests::killing_the_job_kills_the_grandchild`).
-//! - [`spawn`] forwards stderr at once, on no runtime thread, so a full pipe never blocks a child
-//!   (`tests::a_chatty_child_exits_*`, `tests::a_quiet_child_leaves_the_blocking_pool_free`);
+//! - [`spawn`] forwards stderr at once, holding no runtime thread, so a full pipe never blocks a
+//!   child (`tests::a_chatty_child_exits_*`, `tests::a_quiet_child_leaves_the_blocking_pool_free`);
 //!   it survives bytes that are not UTF-8 and keeps at most [`MAX_STDERR_LINE`] bytes of a line
 //!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
 //! - On Linux a child leads its own session, and its whole group dies before the reap: on drop,
@@ -60,8 +60,10 @@
 //!   which a descendant can leave, or outlive in a crash): keep it while the child should live.
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
-//! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd), or it
-//!   fails before the child starts. A [`ChildSpec::raw_stderr`] caller must read stderr.
+//! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd). With
+//!   no runtime entered it fails before the child starts; in one without I/O tokio panics once
+//!   the child has started (on Linux the fork thread makes that an error). A
+//!   [`ChildSpec::raw_stderr`] caller must read stderr.
 //! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
