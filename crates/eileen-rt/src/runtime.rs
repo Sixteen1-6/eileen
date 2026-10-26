@@ -32,8 +32,8 @@ const LINUX_NAME_MAX: usize = LINUX_THREAD_NAME_MAX - THREAD_SUFFIX.len();
 /// `<name>-worker`, and on Linux `<name>-rt`. Linux keeps 15 bytes of a thread name, so there
 /// `name` is at most 12 bytes (`eileen-apps` fits, `eileen-desktop` does not). A longer one fails
 /// a soft assertion ([`eileen_stdx::never!`]: a panic under tests, a logged `soft_assert.failed`
-/// in a running Eileen), and its threads take its first 12 bytes (`eileen-deskt-rt`), so the
-/// runtime still starts and the kernel keeps the whole thread name.
+/// in a running Eileen), and its threads are named after its first 12 bytes (`eileen-deskt-rt`),
+/// so the runtime still starts and the kernel keeps the whole thread name.
 pub fn build(
     name: &str,
     workers: Option<usize>,

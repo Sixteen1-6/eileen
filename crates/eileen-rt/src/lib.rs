@@ -8,8 +8,6 @@
 //!   `await-tree`, a panic logged as `task.panicked` before it fails the join handle.
 //! - [`task::dump`]: every live task's await tree, for `eileen debug tasks` and incidents.
 //! - Bounded channels that name themselves and log `channel.full`.
-//! - [`runtime::build`]: a process's runtime, with a bounded blocking pool and one name for
-//!   all its threads, worker and blocking.
 //!
 //! # Does not own
 //!
