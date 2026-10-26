@@ -28,8 +28,8 @@
 //!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
 //!   spawned it, from any thread; a Claude session runs ten nice steps below its forking thread
 //!   (a test of `tests::linux` for each).
-//! - The detached spawn outlives its parent (Windows test
-//!   `tests::the_guard_spawn_outlives_its_parent`).
+//! - The detached spawn outlives its parent (on Windows) and is reaped once it exits (on Unix):
+//!   `tests::the_guard_spawn_outlives_its_parent` and `tests::linux::the_guard_spawn_is_reaped`.
 //! - A failing child restarts at most `max_restarts` times per window
 //!   (`watch::tests::restarts_back_off_and_give_up_inside_the_window`).
 //! - Unsafe code only in the private `ffi` module (on Linux `src/ffi/linux.rs`), one operation
@@ -43,7 +43,7 @@
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
 //! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `thiserror`, `tokio` and
-//!   `tracing`; `windows` on Windows; `eileen-stdx` and `rustix` on Linux.
+//!   `tracing`; `windows` on Windows; `eileen-stdx` on Unix; `rustix` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -60,8 +60,8 @@
 //!   which a descendant can leave, or outlive in a crash): keep it while the child should live.
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
-//! - [`spawn`] needs a tokio runtime with I/O (its process driver, the stderr task, on Linux the
-//!   pidfd). With [`ChildSpec::raw_stderr`] the caller reads stderr, or a full pipe blocks it.
+//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime with I/O (process driver, stderr
+//!   task, Linux pidfd). With [`ChildSpec::raw_stderr`] read stderr, or a full pipe blocks it.
 //! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.

@@ -1,6 +1,7 @@
 //! The shortcuts holder behind `register_hotkey` and `watch_input`: one task on the bridge's
 //! thread that keeps Eileen's shortcuts in a `GlobalShortcuts` portal session ([`super`]'s doc,
-//! "Hotkeys and the dictation key"), with what the shell's events and settings name them by.
+//! "Hotkeys and the dictation key"), with what the settings name them by, and the shell's events,
+//! the tray's choices among them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -70,6 +71,14 @@ pub enum LinuxShellEvent {
     /// again, which GNOME answers from what it stored, without a dialog, and the new shortcut
     /// waits for the next call.
     ShortcutsRefused(DbusError),
+    /// The user chose the tray menu's item with this `TrayItem::id` (dbusmenu's `clicked`).
+    ///
+    /// Nothing says that a person chose it. Any program on the session bus may send the menu the
+    /// same event, and the item cannot tell a device's click from it, so a choice cannot meet the
+    /// rule that the shell emits `Approve`, `Deny` and an unmuting `SetMute` or `ToggleMute` from
+    /// the tray only when the click came from a device (BUILD.md section 3.3, beside
+    /// `UserInput`): a root must not map one to them until the owner decides how Linux meets it.
+    TrayChoice(String),
 }
 
 /// One of Eileen's shortcuts, as the desktop bound it.

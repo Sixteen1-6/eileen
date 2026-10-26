@@ -1,14 +1,16 @@
 //! Linux process tests: a child leads a session of its own, its whole process group dies when
 //! it is dropped, when it exits and when the process that spawned it dies, `try_wait` reaps
-//! through tokio, children are forked on the supervisor's own thread, and a Claude session runs
-//! nicer than a sidecar. Processes the test did not start itself are watched through pidfds,
-//! which name one process for good, and killed by a guard when the test ends, however it ends.
+//! through tokio, children are forked on the supervisor's own thread, a Claude session runs
+//! nicer than a sidecar, and the detached spawn is reaped once it exits. Processes the test did
+//! not start itself are watched through pidfds, which name one process for good, and killed by
+//! a guard when the test ends, however it ends.
 
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd as _, OwnedFd};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use rustix::io::Errno;
 use rustix::process::{
     Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, getpgrp, getpriority_process, getsid,
     pidfd_open, pidfd_send_signal, waitid,
@@ -226,6 +228,32 @@ fn a_claude_session_runs_nicer_than_a_sidecar() {
             session,
             (sidecar + CLAUDE_SESSION_NICER_BY).min(19),
             "a Claude session runs ten nice steps below a sidecar, at most at 19"
+        );
+    });
+}
+
+/// Covers `spawn_reaped`, not `spawn_detached` itself: the reap is asynchronous, and only the
+/// reaper's join handle lets the test wait for it without polling. On Unix `spawn_detached` is
+/// `spawn_reaped` with the handle dropped, and nothing else calls `spawn_reaped`, so a
+/// `spawn_detached` that bypassed it would leave it unused, which the `dead_code` lint (an
+/// error under clippy's `-D warnings`) reports.
+#[test]
+fn the_guard_spawn_is_reaped() {
+    let dir = TempDir::new("detached-reap");
+    current_thread().block_on(async {
+        let block = hold_block(&dir.0);
+        let (detached, reaper) = crate::detached::spawn_reaped(&helper("block", &dir.0)).unwrap();
+        let guard = Watched::open(detached.pid);
+        let pending = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        let left = || waitid(WaitId::PidFd(guard.0.as_fd()), pending);
+        assert!(left().unwrap().is_none(), "this process's child, running, blocked on the lock");
+        drop(block);
+        assert!(guard.ends().await, "it exited once released");
+        // The reaper's wait returns as soon as the child has exited, and its thread ends then.
+        reaper.join().unwrap();
+        assert!(
+            matches!(left(), Err(Errno::CHILD)),
+            "nothing is left to reap: no zombie keeps its pid looking alive"
         );
     });
 }
