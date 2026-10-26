@@ -51,7 +51,7 @@ pub enum AppKind {
 }
 
 /// One app in the index, field for field the `Apps` trait's `AppEntry` (`eileen-platform`, on
-/// the unmerged base crates); this module's type gives way to it when that merges.
+/// the unmerged base crates), which [`LinuxApps`](crate::LinuxApps) converts it into and back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppEntry {
     /// The desktop file ID.

@@ -1,0 +1,20 @@
+[package]
+name = "eileen-skills"
+description = "The pure half of Eileen's learning loop: the ladder, verdicts, shadow checks, route lines and replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core"
+owns = "WP7"
+unsafe = "forbid"
+
+[dependencies]
+eileen-contracts.workspace = true
+
+[lints]
+workspace = true

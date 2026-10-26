@@ -1,0 +1,10 @@
+# Check 6's denylist (BUILD.md section 4b.3): the earlier working names and the film and trademark
+# names the repository must never use, stored as salted SHA-256 hashes so the names themselves never
+# appear here. Each entry hashes the salt, a newline and the name's words, lowercased and joined by
+# single spaces (tokens and two- and three-word phrases). The owner seeds the real entries in WP0
+# phase B with `cargo xtask tidy denylist-add`, which reads each name from standard input; until
+# then the list is empty and only the character rules run. A failure quotes the scanned file's text,
+# never this list.
+
+salt = "c09b9cd3f2c432394f3496f9e03ed094"
+entries = []

@@ -2,7 +2,7 @@
 
 This report picks the v0.1 voice pipeline for Eileen's Rust core: capture, echo cancellation, mute, voice activity, streaming speech recognition, end of turn, addressee detection, speech synthesis and barge-in, all local, open and free.
 
-**Where the numbers come from.** Almost every measurement here was made by two earlier research attempts on the owner's PC whose sessions ended before they could write up: attempt `af0133077ffea93d8` on **2026-10-11** (stopped by a usage limit) and attempt `a4973575530370a19` on **2026-10-20** (stopped when the PC ran out of memory). Their commands and results are condensed in `C:\Users\shubh\Projects\eileen-workfiles\predecessor-notes\voice-stack.md`, and their scripts and result files are in `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\voice\`. This write-up (2026-10-20) added one light measurement, the idle cost of listening, and re-ran the read-only Windows effects probe. Each number below carries the date it was measured.
+**Where the numbers come from.** Almost every measurement here was made by two earlier research attempts on the owner's PC whose sessions ended before they could write up: attempt `af0133077ffea93d8` on **2026-10-11** (stopped by a usage limit) and attempt `a4973575530370a19` on **2026-10-20** (stopped when the PC ran out of memory). Their commands and results are condensed in `%USERPROFILE%\Projects\eileen-workfiles\predecessor-notes\voice-stack.md`, and their scripts and result files are in `%USERPROFILE%\Projects\eileen-workfiles\2026-10-scratch\voice\`. This write-up (2026-10-20) added one light measurement, the idle cost of listening, and re-ran the read-only Windows effects probe. Each number below carries the date it was measured.
 
 **Read every number as pessimistic.** The PC is a Core Ultra 7 155H (6 P-cores, 8 E-cores, 2 LP E-cores, 22 logical processors), 16 GB RAM, Arc iGPU, Intel AI Boost NPU, no NVIDIA GPU, on the Balanced power plan. During nearly every run, other research agents and Rust builds held the CPU at 55 to 75 percent and left 0.5 to 2 GB of RAM free; one run saw 9,000 pages per second of paging and the CPU clock at 1.4 GHz of 3.8 GHz. Latencies on a quiet machine will be lower, and some results (TTS especially) moved by a factor of two between runs.
 
@@ -39,7 +39,7 @@ What changed from ROADMAP M3: M3 planned a Pipecat spike and a Python loop on Re
 
 ## 2. What was run
 
-All scripts are in `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\voice\scripts\` and the Rust spike in `...\voice\rust-bench\` and `...\voice\aecprobe\`. Python ran in uv venvs in the scratch directory (`.venv313` with sherpa-onnx 1.13.8 and onnxruntime 1.31.0, `.venv-ov` with OpenVINO 2026.4.1, `.venv-dml` with onnxruntime-directml 1.24.4). Models live in `%LOCALAPPDATA%\eileen\models\{vad,stt,tts,turn}`.
+All scripts are in `%USERPROFILE%\Projects\eileen-workfiles\2026-10-scratch\voice\scripts\` and the Rust spike in `...\voice\rust-bench\` and `...\voice\aecprobe\`. Python ran in uv venvs in the scratch directory (`.venv313` with sherpa-onnx 1.13.8 and onnxruntime 1.31.0, `.venv-ov` with OpenVINO 2026.4.1, `.venv-dml` with onnxruntime-directml 1.24.4). Models live in `%LOCALAPPDATA%\eileen\models\{vad,stt,tts,turn}`.
 
 | Script | What it measures | Date |
 |---|---|---|
@@ -55,7 +55,7 @@ All scripts are in `C:\Users\shubh\Projects\eileen-workfiles\2026-10-scratch\voi
 | `rust-bench` (`stt`, `tts`, `aec`, `audio`, `mel-check`, `turn`) | The same pipeline from Rust: sherpa-onnx crate, sonora, cpal, ort | 2026-10-20 |
 | `aecprobe` | Which capture effects Windows applies to the default communications mic in the Other and Communications categories; initializes but never starts capture, so nothing is recorded | 2026-10-20, re-run in this write-up |
 
-Result files are in `...\voice\wavs\*.json`. The `downloads\` folder with the archives and `manifest.txt` exists only in the original scratch directory (`C:\Users\shubh\AppData\Local\Temp\claude\C--Users-shubh-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\voice\`).
+Result files are in `...\voice\wavs\*.json`. The `downloads\` folder with the archives and `manifest.txt` exists only in the original scratch directory (`%USERPROFILE%\AppData\Local\Temp\claude\C--Users-USER-Projects--claude\8b2a7b12-9d74-4cce-a7ac-9d5f3ba7299c\scratchpad\voice\`).
 
 ## 3. Audio I/O, echo cancellation and barge-in
 

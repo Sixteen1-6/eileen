@@ -1,0 +1,22 @@
+[package]
+name = "eileen-scenarios"
+description = "Eileen's scenarios from real use: save, check, share, submit, bless, mark stale, and the real-desktop runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[package.metadata.eileen]
+process = "core, tools"
+owns = "WP2"
+unsafe = "forbid"
+
+[dependencies]
+clap.workspace = true
+eileen-replay.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
