@@ -16,7 +16,8 @@ unsafe = "ffi"
 [dependencies]
 eileen-rt.workspace = true
 eileen-trace.workspace = true
-# process-group gives the Unix side the same kill-the-whole-tree behaviour as the Job Object.
+# process-group: each child leads a process group of its own on Unix systems other than Linux.
+# Linux has its own process model in the linux module (docs/LINUX.md section 5).
 process-wrap = { workspace = true, features = ["process-group"] }
 thiserror.workspace = true
 tokio.workspace = true
@@ -24,6 +25,12 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The fork thread is a named thread. rustix's process feature gives setsid, the parent-death
+# signal, pidfds, waitid and killpg as safe calls.
+eileen-stdx.workspace = true
+rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 eileen-trace = { workspace = true, features = ["testing"] }
