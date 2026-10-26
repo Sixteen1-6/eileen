@@ -2,7 +2,8 @@
 //! (`tests::helper_entry --exact`, with `EILEEN_SV_HELPER` naming what to do; without it the
 //! entry returns at once). Helpers that must stay alive block on `block.lock`, which the test
 //! holds, instead of sleeping. A supervised helper says `ready ...` on its stdout, which the
-//! test reads, and the test waits on process handles for exits, so nothing polls.
+//! test reads, and the test waits on process handles for exits, so nothing polls but the
+//! `try_wait` test, which yields to the runtime between polls and never sleeps.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -280,6 +281,24 @@ fn a_chatty_child_exits_when_its_caller_only_polls_try_wait() {
         });
     });
     assert_hostile_lines_forwarded(&captured);
+}
+
+#[test]
+fn a_raw_stderr_pipe_nobody_took_is_forwarded_on_request() {
+    let dir = TempDir::new("stderr-raw-forwarded");
+    let ((), captured) = test_support::capture(|| {
+        current_thread().block_on(async {
+            let spec = ChildSpec { raw_stderr: true, ..helper("stderr", &dir.0) };
+            let mut child = spawn(&spec).unwrap();
+            let forwarding = child.forward_stderr().expect("the pipe was still here");
+            assert!(child.take_stderr().is_none(), "forwarding took the pipe");
+            let status = timeout(EXITS_WITHIN, child.wait()).await.expect("it exited").unwrap();
+            forwarding.await.unwrap();
+            assert_eq!(status.code(), Some(101), "the helper's failure comes back");
+        });
+    });
+    let lines = forwarded_lines(&captured);
+    assert!(lines.iter().any(|l| l == "eileen helper says hello"), "forwarded: {lines:?}");
 }
 
 #[test]

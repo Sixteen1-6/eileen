@@ -61,7 +61,7 @@
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
 //! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime with I/O (process driver, stderr
-//!   task, Linux pidfd). With [`ChildSpec::raw_stderr`] read stderr, or a full pipe blocks it.
+//!   task, Linux pidfd). A [`ChildSpec::raw_stderr`] caller must read stderr or the child blocks.
 //! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
