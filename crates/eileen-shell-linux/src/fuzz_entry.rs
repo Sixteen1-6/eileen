@@ -7,9 +7,8 @@
 //! the cargo-fuzz targets turn an `Err` into a failure.
 //!
 //! Bytes are decoded lossily, as `uia_text` decodes them, so every input reaches the parser.
-//! The cargo-fuzz targets themselves (`fuzz/fuzz_targets/<target>.rs`) wait for WP0's
-//! `fuzz/Cargo.toml`. This crate builds only on Linux, so its corpora replay only there, which
-//! is where fuzzing runs.
+//! The cargo-fuzz targets themselves are `fuzz/fuzz_targets/<target>.rs`. This crate builds only
+//! on Linux, so its corpora replay only there, which is where fuzzing runs.
 
 use crate::disk::{Mount, parse_mountinfo, unescape};
 use crate::pressure::{Status, parse_status};
