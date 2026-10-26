@@ -14,6 +14,8 @@
 //! - `set_run_at_sign_in`: [`set_run_at_sign_in`] in the settings' autostart folder, with std
 //!   file I/O on the caller's thread; with no folder it is `Unavailable`.
 //! - `register_hotkey`, `set_tray` and `watch_input`: `Unavailable` until phase L2.
+//!   `register_hotkey` and `watch_input` are the first of it, on the `GlobalShortcuts` portal, as
+//!   the section after next says; `set_tray` still waits.
 //!
 //! # The power request
 //!
@@ -28,6 +30,16 @@
 //! on the bridge's thread once `release` has run: should `Uninhibit` or the portal's `Close`
 //! fail, the desktop still ends its hold when that connection closes.
 //!
+//! The task connects the system bus and that session connection at once, within half the
+//! deadline counted from the call's start, and gives the portal's answers half of what is then
+//! left of it, which leaves the other half to the calls around the portal's wait, logind's
+//! included. A bus not connected by the end of that first half is a holder that missed. Such a
+//! bus is there and has hung, so it misses by `DeadlineExceeded` naming it, not as the absent
+//! holder a bus that fails to connect is, and when nothing holds the call fails as
+//! [`LinuxPowerRequest::keep_awake`] ranks the misses, never as `Unavailable`. So a bus that
+//! accepts and never answers costs half the deadline, and logind's lock, or the desktop's hold,
+//! the portal's included, still answers within it.
+//!
 //! Dropping the `PowerRequest` asks the task to release and waits at most [`RELEASE_WAIT`] for
 //! it; past that, the task finishes on its own. Dropped on the bridge's thread, in a job or a
 //! sink, it neither asks nor waits, since the bridge refuses a call made there: the task then
@@ -36,11 +48,50 @@
 //! last, the bridge ends after the wait and drops the task with it: logind's descriptor and the
 //! task's own session connection close, which ends both holds.
 //!
+//! # Hotkeys and the dictation key
+//!
+//! A second holder task on the bridge's thread keeps Eileen's shortcuts in a session of the
+//! `GlobalShortcuts` portal ([`ShortcutsSession`](crate::ShortcutsSession)), on a session
+//! connection of its own, whose first portal call registers the settings' desktop entry as the
+//! app's ID. The first `register_hotkey` or `watch_input` starts it, and each call returns once
+//! the holder has a session that will bind its shortcut: `Ok` means the desktop has the
+//! request, not that the user has agreed.
+//!
+//! - The holder binds the whole set [`SETTLE`] after its last change: `hotkey-<id>` for each
+//!   hotkey, and `dictation` once `watch_input` has asked, described as the settings'
+//!   [`ShortcutNames`] say. A session takes one bind, so a set that changes once it has had
+//!   one is bound again in a new session, after the bind under way is answered. The session
+//!   before closes first, so the shortcuts it bound are off until the new bind is answered, for
+//!   as long as its dialog waits. If the desktop refuses the changed set, the holder binds the
+//!   set it had again in another session, which GNOME answers without a dialog, and the new
+//!   shortcut waits for the next call, which shows the dialog again.
+//! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog, which GNOME leaves up past it: a
+//!   late accept binds at the next call. Its answer and each hotkey's press reach the sink of
+//!   [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the user makes later in the
+//!   desktop's settings does not yet. The dictation key's press and release reach each
+//!   `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`; `PhysicalActivity` never
+//!   does, since no source of it is chosen yet. Each press counts once, though GNOME repeats
+//!   `Activated` while a key is held, and a dictation key still down when its session ends is
+//!   released then.
+//! - `register_hotkey` never fails because another app owns the chord: the desktop resolves
+//!   that in its dialog. A chord no trigger can name is `Invalid`, before any call. Without the
+//!   portal's `GlobalShortcuts`, as on Ubuntu 24.04's GNOME 46, both calls are `Unavailable`:
+//!   docs/LINUX.md section 3's fallback there, GNOME custom shortcuts that run `eileen ctl`, is
+//!   a follow-up.
+//! - GNOME keeps the trigger the user chose for an ID over a changed chord, and shows its
+//!   dialog only for shortcuts it has not stored.
+//! - The holder ends when the [`LinuxShell`] drops, which closes the session and the
+//!   connection and ends each `watch_input`'s events, or when the portal closes the session;
+//!   the next call then starts a new holder.
+//!
 //! # Traps
 //!
-//! - The task's own session connection costs one more connect per `keep_awake`: a handshake
-//!   and a `Hello` call, which zbus bounds by no timeout. A session bus that accepts and never
-//!   answers delays only the task, never the call, which still answers within its deadline.
+//! - zbus bounds no connect, neither its handshake nor its `Hello` call, and the task's own
+//!   session connection costs one more connect per `keep_awake`. The task bounds both of its
+//!   connects from the call's start, not from the job's, and the portal's budget from what is
+//!   left once they are done, not from their half: a system bus that hangs spends the whole
+//!   half, which would leave the portal no time for its `Response` on a desktop without GNOME's
+//!   session manager.
 //! - `keep_awake` fails only when nothing holds. A holder that missed
 //!   ([`LinuxPowerRequest::missed`]), such as the desktop's on a desktop with neither GNOME's
 //!   session manager nor the portal, goes unreported: the trait's `PowerRequest` has no place
@@ -48,10 +99,25 @@
 //! - Dropped off the bridge's thread as the bridge's last handle, a `PowerRequest` joins that
 //!   thread, as a [`Subscription`] does ([`Bridge::watch`]). The join first ends a sink under
 //!   way, so a sink must not lock what the dropping thread holds.
+//! - The events sink and each `watch_input` sink run on the bridge's thread: one that blocks
+//!   stalls every call, and one that calls the shell is refused.
+//! - A hotkey's press names no device, and injected input (libei through the `RemoteDesktop`
+//!   portal) fires it as a keyboard does, so it cannot meet the rule that the approve, deny and
+//!   unmute hotkeys count only when a keyboard sent them (BUILD.md sections 2.5 and 2.9):
+//!   [`LinuxShellEvent::Hotkey`] says what a root must not map it to, until the owner decides.
+//! - A portal that restarts loses the session without a word, so the shortcuts stay dead until
+//!   a changed set is bound in a new session, and a dictation key held then never reports its
+//!   release; one that closes the session ends the holder, and the next call starts one that
+//!   binds that call's shortcut alone. Either way `watch_input` hears nothing more, which
+//!   nothing reports yet. Following the portal is a follow-up.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 
+mod shortcuts;
+
+use std::future::Future;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use eileen_contracts::core_io::Toast;
@@ -60,10 +126,17 @@ use eileen_platform::{
     Deadline, PlatformError, PowerRequest, ShellHost, ShellInputEvent, Subscription, TrayState,
     VirtualKey,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use crate::{
     DbusError, LinuxPowerRequest, Notifier, NotifierSettings, SessionLock, set_run_at_sign_in,
+    trigger_of_chord, trigger_of_key,
+};
+use shortcuts::{ASKS, Ask, EDGES, Edges, EventSink, Holder, put};
+
+pub use shortcuts::{
+    BoundHotkey, CONSENT_WAIT, LinuxShellEvent, SETTLE, ShortcutId, ShortcutNames,
 };
 
 /// How long dropping a `PowerRequest` waits for its holds to end, at most. A desktop that answers
@@ -85,6 +158,9 @@ const AUTOSTART: &str = "autostart folder";
 const HOTKEY: &str = "global hotkey";
 const TRAY: &str = "tray";
 const INPUT: &str = "input watch";
+/// The buses, as a holder's miss names one the holder task could not reach.
+const SYSTEM_BUS: &str = "system bus";
+const SESSION_BUS: &str = "session bus";
 
 /// The detail of a keep-awake call whose holder task ended without answering: it panicked, or
 /// the bridge stopped.
@@ -111,6 +187,10 @@ pub struct LinuxShellSettings {
     /// How long each D-Bus call may take: `eileen_dbus_linux::DEFAULT_DEADLINE`, as for any trait
     /// method that takes none, unless a caller, such as a test, sets a shorter one.
     pub deadline: Deadline,
+    /// What the desktop's dialog shows beside each of Eileen's shortcuts. The portal knows
+    /// Eileen by `notifier`'s desktop entry, whose desktop file the portal's host registry asks
+    /// for.
+    pub shortcut_names: ShortcutNames,
 }
 
 /// `ShellHost` on Linux, over a [`Bridge`]; the module's doc says what each method uses.
@@ -118,6 +198,10 @@ pub struct LinuxShellSettings {
 pub struct LinuxShell {
     bridge: Bridge,
     settings: LinuxShellSettings,
+    /// The shortcuts holder's asks, once a call has started one.
+    shortcuts: Mutex<Option<mpsc::Sender<Ask>>>,
+    /// Where the shell's own events go; with none, they are dropped.
+    events: Option<EventSink>,
 }
 
 impl LinuxShell {
@@ -125,14 +209,47 @@ impl LinuxShell {
     /// nothing yet.
     #[must_use]
     pub const fn new(bridge: Bridge, settings: LinuxShellSettings) -> Self {
-        Self { bridge, settings }
+        Self { bridge, settings, shortcuts: Mutex::new(None), events: None }
+    }
+
+    /// The shell, with `sink` for what no `ShellHost` method returns: each hotkey's press and
+    /// the desktop's answer to the shortcuts ([`LinuxShellEvent`]). The sink runs on the
+    /// bridge's thread, so it must not block, nor call the shell, which the bridge refuses there.
+    #[must_use]
+    pub fn with_events(mut self, sink: Arc<dyn Fn(LinuxShellEvent) + Send + Sync>) -> Self {
+        self.events = Some(EventSink(sink));
+        self
+    }
+
+    /// The shortcuts holder's asks, and, when there is no holder yet or the last has ended, a
+    /// new one to start on them.
+    fn holder(&self) -> (mpsc::Sender<Ask>, Option<Holder>) {
+        let mut held = self.shortcuts.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(asks) = held.as_ref().filter(|asks| !asks.is_closed()) {
+            return (asks.clone(), None);
+        }
+        let (asks, taken) = mpsc::channel(ASKS);
+        *held = Some(asks.clone());
+        drop(held);
+        let LinuxShellSettings { notifier, deadline, .. } = &self.settings;
+        let entry = &notifier.desktop_entry;
+        let app_id = entry.strip_suffix(".desktop").unwrap_or(entry).to_owned();
+        let sink = self.events.clone();
+        (asks, Some(Holder { asks: taken, deadline: *deadline, app_id, sink }))
     }
 }
 
 impl ShellHost for LinuxShell {
-    /// `Unavailable` until phase L2 brings global shortcuts through the `GlobalShortcuts` portal.
-    fn register_hotkey(&self, _chord: &str, _id: u32) -> Result<(), PlatformError> {
-        Err(PlatformError::Unavailable { what: HOTKEY })
+    /// A global shortcut from the `GlobalShortcuts` portal, through the shortcuts holder; the
+    /// module's doc says how. `Ok` once the desktop has the request: it never fails because
+    /// another app owns the chord, and the user may still refuse it, or choose another trigger.
+    fn register_hotkey(&self, chord: &str, id: u32) -> Result<(), PlatformError> {
+        let trigger = trigger_of_chord(chord)?;
+        let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Hotkey(id), Some(trigger));
+        let (asks, holder) = self.holder();
+        self.bridge.call(HOTKEY, self.settings.deadline, move |buses| async move {
+            put(buses, asks, holder, shortcut, None).await.map_err(unavailable(HOTKEY))
+        })
     }
 
     /// `Unavailable` until phase L2 brings the tray as a `StatusNotifierItem`.
@@ -152,14 +269,24 @@ impl ShellHost for LinuxShell {
         })
     }
 
-    /// `Unavailable` until phase L2, for which docs/LINUX.md section 4 plans the dictation key
-    /// through the `GlobalShortcuts` portal; the source of physical activity is not chosen yet.
+    /// The dictation key's press and release, from the `GlobalShortcuts` portal's `dictation`
+    /// shortcut, offered with `dictation_key`'s trigger, through the shortcuts holder; the
+    /// module's doc says how. It never reports `PhysicalActivity`: no source of it is chosen yet.
     fn watch_input(
         &self,
-        _dictation_key: VirtualKey,
-        _sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>,
+        dictation_key: VirtualKey,
+        sink: Box<dyn Fn(ShellInputEvent) + Send + Sync>,
     ) -> Result<Subscription, PlatformError> {
-        Err(PlatformError::Unavailable { what: INPUT })
+        let trigger = trigger_of_key(dictation_key);
+        let shortcut = self.settings.shortcut_names.shortcut(ShortcutId::Dictation, trigger);
+        let (asks, holder) = self.holder();
+        let open = move |buses| async move {
+            let (edges, taken) = mpsc::channel(EDGES);
+            put(buses, asks, holder, shortcut, Some(edges)).await.map_err(unavailable(INPUT))?;
+            Ok(Edges(taken))
+        };
+        let each = move |edge| sink(ShellInputEvent::DictationKey(edge));
+        self.bridge.watch(INPUT, self.settings.deadline, open, each)
     }
 
     /// [`set_run_at_sign_in`] with the settings' folder, ID and program.
@@ -172,16 +299,19 @@ impl ShellHost for LinuxShell {
     /// [`LinuxPowerRequest::keep_awake`], held by a task on the bridge's thread until the
     /// returned request drops; the module's doc says how.
     fn keep_awake(&self) -> Result<PowerRequest, PlatformError> {
-        let portal = portal_budget(self.settings.deadline);
+        // The call starts here, on the caller's thread: the holder's bounds count from now, not
+        // from when the bridge's thread takes the job.
+        let start = Instant::now();
+        let deadline = self.settings.deadline;
         let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
-            drop(tokio::task::spawn_local(hold(buses, portal, answer)));
+            drop(tokio::task::spawn_local(hold(buses, start, deadline, answer)));
             // Cancelled, the job drops `answered`, which makes the holder release what it took.
             answered.await.unwrap_or_else(|_gone| {
                 Err(PlatformError::Io { what: KEEP_AWAKE, detail: HOLDER_GONE.to_owned() })
             })
         };
-        let release = self.bridge.call(KEEP_AWAKE, self.settings.deadline, job)?;
+        let release = self.bridge.call(KEEP_AWAKE, deadline, job)?;
         Ok(released_on_drop(self.bridge.clone(), release))
     }
 
@@ -200,30 +330,46 @@ impl ShellHost for LinuxShell {
     }
 }
 
-/// How long the portal's answers may take, which no method timeout bounds: half the call's
-/// deadline, so that a portal that never answers is a missed holder and the call still answers
-/// in time with logind's lock.
-fn portal_budget(deadline: Deadline) -> Duration {
+/// How long the holder's connects may take, which zbus bounds by no timeout: half the call's
+/// deadline, counted from its start, so that a bus that never finishes connecting is a missed
+/// holder and the call still answers in time with the other holder.
+fn connect_budget(deadline: Deadline) -> Duration {
     deadline.budget() / 2
 }
 
-/// The holder task: takes the request on `buses`, with `portal` for the portal's answers, and
-/// answers with a channel to release it through. It releases the request once asked through that
-/// channel, or once the channel or the wait for the answer is gone without asking.
+/// How long the portal's answers may take, which no method timeout bounds, in a call that ends
+/// at `end` (`None` for never): half of what is left of the call once the connects are done, so
+/// that a portal that never answers is a missed holder, and the other half leaves the calls
+/// around the portal's wait, logind's included, time to answer within the deadline.
+fn portal_budget(end: Option<Instant>) -> Duration {
+    end.map_or(Duration::MAX, |end| end.saturating_duration_since(Instant::now()) / 2)
+}
+
+/// The holder task: takes the request on `buses` within `deadline`, counted from `start`, the
+/// call's start, and answers with a channel to release it through. It releases the request once
+/// asked through that channel, or once the channel or the wait for the answer is gone without
+/// asking.
 async fn hold(
     buses: Buses,
-    portal: Duration,
+    start: Instant,
+    deadline: Deadline,
     answer: oneshot::Sender<Result<Release, PlatformError>>,
 ) {
-    // A bus that cannot be reached is `None`, a holder that `keep_awake` names as missed. The
-    // session connection is the holder's own: the request keeps it, and it closes here once
-    // `release` has run, or with the task when the bridge ends first, which ends the desktop's
-    // hold even when `release` failed.
-    let system = buses.system().await.ok();
-    let session = buses.unshared_session().await.ok();
+    // A bus not reached by `until` is a holder that `keep_awake` names as missed: absent when its
+    // connect failed, late when the connect had not answered by then. The two connect at once,
+    // so a bus that hangs costs no more than the bound. `None`, past what an instant holds, is no
+    // bound. The session connection is the holder's own: the request keeps it, and it closes
+    // here once `release` has run, or with the task when the bridge ends first, which ends the
+    // desktop's hold even when `release` failed.
+    let until = start.checked_add(connect_budget(deadline));
+    let (system, session) = tokio::join!(
+        within(until, SYSTEM_BUS, buses.system()),
+        within(until, SESSION_BUS, buses.unshared_session()),
+    );
     drop(buses);
-    let taken =
-        LinuxPowerRequest::keep_awake(system.as_ref(), session, KEEP_AWAKE_REASON, portal).await;
+    let portal = portal_budget(start.checked_add(deadline.budget()));
+    let system = system.as_ref().map_err(Clone::clone);
+    let taken = LinuxPowerRequest::keep_awake(system, session, KEEP_AWAKE_REASON, portal).await;
     let request = match taken {
         Ok(request) => request,
         Err(error) => {
@@ -240,6 +386,25 @@ async fn hold(
     }
 }
 
+/// What `connect` answers by `until` (`None` for no bound), its errors naming `bus` as
+/// [`LinuxPowerRequest::keep_awake`] takes them: [`DbusError::Unavailable`] when it fails, as for
+/// a bus that is not there, and [`DbusError::DeadlineExceeded`] when it has not answered by
+/// then, as for a bus that is there and has hung. A connect cut short drops here, on the
+/// bridge's thread and inside its runtime, which closes its socket.
+async fn within<T>(
+    until: Option<Instant>,
+    bus: &'static str,
+    connect: impl Future<Output = Result<T, DbusError>>,
+) -> Result<T, DbusError> {
+    let connected = match until {
+        Some(until) => tokio::time::timeout_at(until, connect)
+            .await
+            .map_err(|_late| DbusError::DeadlineExceeded { call: bus })?,
+        None => connect.await,
+    };
+    connected.map_err(|_failed| DbusError::Unavailable { what: bus })
+}
+
 /// The `PowerRequest` of a hold. Dropped, it asks the holder task to release through `release`
 /// and waits at most [`RELEASE_WAIT`] for the holds to end; it keeps `bridge` until then.
 fn released_on_drop(bridge: Bridge, release: Release) -> PowerRequest {
@@ -253,4 +418,16 @@ fn released_on_drop(bridge: Bridge, release: Release) -> PowerRequest {
             Ok(())
         });
     })
+}
+
+/// What a shortcut call to `what` answers for `error`: `Unavailable` naming the call for a
+/// desktop without the portal or its `GlobalShortcuts`, else the error's platform twin.
+fn unavailable(what: &'static str) -> impl Fn(DbusError) -> PlatformError {
+    move |error| {
+        if matches!(error, DbusError::Unavailable { .. } | DbusError::NotFound { .. }) {
+            PlatformError::Unavailable { what }
+        } else {
+            error.into()
+        }
+    }
 }

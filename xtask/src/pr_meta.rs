@@ -614,7 +614,7 @@ fn render(
         writeln!(out, "pr-meta: passed")
     } else {
         writeln!(out, "reproduce: {reproduce}")?;
-        writeln!(out, "pr-meta: {} problems", outcome.findings.len())
+        writeln!(out, "pr-meta: {}", crate::count(outcome.findings.len(), "problem", "problems"))
     }
 }
 

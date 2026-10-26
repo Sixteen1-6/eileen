@@ -5,12 +5,8 @@
 //! one is a connection of the test's own process, so its windows' process is the test binary;
 //! `a_window_names_its_apps_own_process` serves that one from a copy of this binary under
 //! another name, which runs the same test in a process of its own: there, [`OTHER_BUS`] makes
-//! the test serve the app instead of checking it.
+//! the test serve the app instead of checking it (`processes`).
 
-use std::convert::Infallible;
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use eileen_contracts::desktop::{ElementInfo, Point, Rect, SelectionSource, WindowInfo, WindowRef};
@@ -28,6 +24,10 @@ use crate::fake::{
     ACCESS_DENIED, ACTIVE, App, Calls, DEFUNCT, FOCUSED, ICONIFIED, NO_REPLY, Node, ROOT,
     Reference, SHOWING, Session, count, registry, words,
 };
+
+mod processes;
+pub(crate) use processes::this_process;
+use processes::{OTHER_BUS, OTHER_EXE, OtherProcess, serve_until_killed};
 
 /// AT-SPI2's role numbers the tests use, written out.
 const DIALOG: u32 = 16;
@@ -150,110 +150,6 @@ pub(crate) fn settings() -> LinuxDesktopSettings {
         focus_limits: FOCUS_LIMITS,
         find_limits: FOCUS_LIMITS,
     }
-}
-
-/// The file name of the test binary: every fake app's process.
-pub(crate) fn this_process() -> String {
-    let exe = std::env::current_exe().unwrap();
-    exe.file_name().unwrap().to_str().unwrap().to_owned()
-}
-
-/// Where a copy of this binary in another process finds the bus to serve its app on. Set, it
-/// makes [`OTHER_TEST`] serve that app rather than check it.
-const OTHER_BUS: &str = "EILEEN_TEST_OTHER_BUS";
-/// That copy's file name, which names its process.
-const OTHER_EXE: &str = "eileen-fake-app";
-/// The test the copy runs, as the test harness names it: the one that starts the copy.
-const OTHER_TEST: &str = "grounding::a_window_names_its_apps_own_process";
-/// What the copy prints before its app's unique name, after the test harness's own words on the
-/// same line.
-const OTHER_SAYS: &str = "fake app at ";
-
-/// A copy of this test binary, named [`OTHER_EXE`], running [`OTHER_TEST`] in a process of its
-/// own, where [`OTHER_BUS`] makes the test serve its app until it is killed
-/// ([`serve_until_killed`]). Its fields drop in order, a panicking test's included: the process
-/// is killed and reaped, then its folder removed.
-struct OtherProcess {
-    child: Running,
-    _folder: Folder,
-    /// The unique name of its app's connection.
-    name: String,
-}
-
-/// A child process, killed and reaped when it drops.
-struct Running(Child);
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        let _ignored = self.0.kill();
-        let _ignored = self.0.wait();
-    }
-}
-
-/// A folder of the test's own, removed when it drops.
-struct Folder(PathBuf);
-
-impl Drop for Folder {
-    fn drop(&mut self) {
-        let _ignored = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-impl OtherProcess {
-    /// Starts the copy, its app on `bus`, once it has said its app's name. The copy is a hard
-    /// link where the target folder allows one, else a copy of the file.
-    fn start(bus: &PrivateBus) -> Self {
-        let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
-        let folder = Folder(tmp.join(format!("other-process-{}", std::process::id())));
-        let _ignored = std::fs::remove_dir_all(&folder.0);
-        std::fs::create_dir_all(&folder.0).unwrap();
-        let (this, exe) = (std::env::current_exe().unwrap(), folder.0.join(OTHER_EXE));
-        if std::fs::hard_link(&this, &exe).is_err() {
-            std::fs::copy(&this, &exe).unwrap();
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "a test starts a copy of itself; the supervisor rule is for product code"
-        )]
-        let mut command = Command::new(&exe);
-        let spawned = command
-            .args(["--exact", OTHER_TEST, "--nocapture", "--test-threads=1"])
-            .env(OTHER_BUS, bus.address())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn();
-        let mut child = Running(spawned.unwrap());
-        let said = BufReader::new(child.0.stdout.take().unwrap())
-            .lines()
-            .map_while(Result::ok)
-            .find_map(|line| line.split_once(OTHER_SAYS).map(|(_, name)| name.to_owned()));
-        let name = said.expect("the copy said its app's name");
-        Self { child, _folder: folder, name }
-    }
-
-    /// The copy's process id.
-    fn pid(&self) -> u32 {
-        self.child.0.id()
-    }
-}
-
-/// What [`OTHER_TEST`] does in [`OtherProcess`]'s copy: serves an app with one window,
-/// `Elsewhere`, on the bus at `address`, says the app's name, and serves it until the process is
-/// killed, so the copy's test never ends, let alone passes.
-fn serve_until_killed(address: &str) -> ! {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    let serve = async {
-        let app = App::at(address).await;
-        let nodes =
-            [root(&app, &["/elsewhere"]), ("/elsewhere", window(FRAME, "Elsewhere", &[], vec![]))];
-        for (path, node) in nodes {
-            app.add(path, node).await;
-        }
-        println!("{OTHER_SAYS}{}", app.name());
-        std::future::pending::<Infallible>().await
-    };
-    match runtime.block_on(serve) {}
 }
 
 /// Each window as its id, class, z-order, foreground flag and frame.

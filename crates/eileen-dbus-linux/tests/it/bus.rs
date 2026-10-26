@@ -1,10 +1,10 @@
-//! The private bus, the method timeout (a private bus's, and a bus's at an address), the
-//! addresses a bus at an address refuses, and the round-trip barrier.
+//! The private bus, the silent bus, the method timeout (a private bus's, and a bus's at an
+//! address), the addresses a bus at an address refuses, and the round-trip barrier.
 
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{
-    PrivateBus, next_message, nothing_ready, ready_now, round_trip, serve,
+    PrivateBus, SilentBus, next_message, nothing_ready, ready_now, round_trip, serve,
 };
 use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, bus_at_within, next};
 
@@ -141,6 +141,26 @@ async fn dropping_the_bus_stops_its_daemon_and_removes_its_folder() {
     drop(bus);
     assert!(!proc.exists(), "the daemon is killed and reaped");
     assert!(!dir.exists(), "its folder is removed");
+}
+
+#[test]
+fn a_silent_bus_removes_its_folder_when_it_drops() {
+    let silent = SilentBus::start();
+    let dir = silent.dir().to_owned();
+    assert!(dir.join("silent").exists(), "its socket is in its folder");
+    drop(silent);
+    assert!(!dir.exists(), "its folder is removed");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connect_to_a_silent_bus_never_finishes() {
+    let silent = SilentBus::start();
+    let builder = zbus::connection::Builder::address(silent.address()).unwrap();
+    // Paused time stands still while zbus connects the socket on a blocking thread. The
+    // handshake then waits for an answer that never comes, and with nothing else to run, tokio
+    // fires the timer at once.
+    let connect = tokio::time::timeout(Duration::from_secs(60), builder.build()).await;
+    assert!(connect.is_err(), "the handshake is still waiting a minute on: {connect:?}");
 }
 
 #[tokio::test]

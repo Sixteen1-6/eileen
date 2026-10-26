@@ -1,0 +1,33 @@
+# Check 2 (BUILD.md section 4b.3): the folders whose rules genuinely differ, so they may hold a
+# nested AGENTS.md beside a CLAUDE.md that is `@AGENTS.md` (section 4b.4's list). Adding a folder
+# needs a line in the pull request saying why its rules differ.
+
+[[nested]]
+dir = "crates/eileen-desktop-win"
+reason = "COM apartments, deadlines, the desktop test group, owned fixtures only"
+
+[[nested]]
+dir = "crates/eileen-apps-win"
+reason = "COM apartments, deadlines, the desktop test group, owned fixtures only"
+
+[[nested]]
+dir = "crates/eileen-speech"
+reason = "native libraries, model files, the exclusive build slot for model tests"
+
+[[nested]]
+dir = "fuzz"
+reason = "the nightly toolchain, Linux only, the regression rule"
+
+[[nested]]
+dir = "scenarios"
+reason = "the public corpus: privacy rules, no personal data, the schema"
+
+[[nested]]
+dir = "integrations/claude-plugin"
+reason = "TypeScript, the never-gating rule, plugin validation"
+
+# Folders whose AGENTS.md and CLAUDE.md are copies for other projects (section 4b.6), not
+# guidance for this one; checks 2 and 4 skip them.
+[[ignore]]
+dir = "templates"
+reason = "reusable templates for other projects, with {{project}} placeholders"

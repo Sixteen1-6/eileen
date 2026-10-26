@@ -1,16 +1,31 @@
-//! `spawn_cargo`: cargo inside the guard's own kill-on-close Job Object, at below-normal
-//! priority, so a killed `cargo xtask` leaves no compiler running and the Claude app and the
+//! `spawn_cargo`: cargo inside a container the guard kills it with, at a lower priority, so a
+//! stopped build or a killed `cargo xtask` leaves no compiler running and the Claude app and the
 //! voice loop stay responsive (section 6.1 rule 1).
 //!
 //! On Windows the child is created suspended, put into a fresh Job Object with
 //! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, then resumed, so nothing it starts can escape the job.
 //! The guard's process holds the only handle to the job, so when it ends, however it ends,
-//! Windows closes the handle and terminates everything in the job. Off Windows (CI and
-//! contributors) cargo is an ordinary child.
+//! Windows closes the handle and terminates everything in the job.
+//!
+//! On Unix std has no job, no process-group kill and no `setpriority`, and the guard depends on
+//! nothing but std, so it uses two programs every Unix has. A watchdog, `/bin/sh` running
+//! `read _ignored; kill -s KILL 0`, starts first as the leader of a new process group, reading
+//! a pipe whose only write end the guard keeps (close-on-exec, so cargo never holds it). Cargo
+//! then joins that group through `nice -n 10`, so it and everything it starts run 10 nice
+//! levels below the guard. When the write end closes, because the [`CargoChild`] is killed or
+//! dropped or the guard's process ends however it ends, the watchdog's `read` returns and it
+//! SIGKILLs the group: cargo, rustc, build scripts, test binaries and itself. The limits:
+//!
+//! - A process that makes a group or session of its own leaves cargo's: `cargo nextest` runs
+//!   each test so, and a test that is running when the build stops runs to its end.
+//! - The group is not the terminal's foreground group. Ctrl-C ends xtask, whose end stops the
+//!   build (by SIGKILL, not SIGINT); Ctrl-Z pauses xtask and not the build; and under
+//!   `stty tostop` the build stops at its first line to the terminal until xtask ends.
 //!
 //! [`CargoInvocation::in_caller_job`] starts an ordinary child instead, which stays in the
-//! caller's own job the way real cargo's rustc does; only a process already inside a guard's
-//! job uses it (the guard's tests, for their stand-in rustc).
+//! caller's own job (on Unix, its process group and nice value) the way real cargo's rustc
+//! does; only a process already inside a guard's job uses it (the guard's tests, for their
+//! stand-in rustc).
 
 use std::ffi::OsString;
 use std::io;
@@ -22,6 +37,15 @@ use crate::clock::{Clock, millis};
 
 /// How often [`CargoChild::wait_ticking`] polls for the exit.
 const POLL: Duration = Duration::from_millis(100);
+
+/// The watchdog's script: wait for the guard's pipe to close, then SIGKILL its own process
+/// group, which cargo joined. Nothing ever writes to the pipe, so `read` returns only then.
+#[cfg(unix)]
+const WATCHDOG: &str = "read _ignored; kill -s KILL 0";
+
+/// The nice levels a guarded cargo runs below the guard (LINUX.md section 5).
+#[cfg(unix)]
+const NICE_INCREMENT: &str = "10";
 
 /// One cargo run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,8 +63,8 @@ pub struct CargoInvocation {
     pub quiet: bool,
     /// A pipe for stdout ([`CargoChild::take_stdout`]), with null stdin and stderr.
     pub piped_stdout: bool,
-    /// On Windows, an ordinary child that stays in the caller's Job Object instead of one in a
-    /// fresh kill-on-close job of its own (see [`Self::in_caller_job`]).
+    /// An ordinary child that stays in the caller's Job Object (on Unix, its process group and
+    /// nice value) instead of one in a fresh container of its own (see [`Self::in_caller_job`]).
     pub in_caller_job: bool,
 }
 
@@ -97,11 +121,13 @@ impl CargoInvocation {
         self
     }
 
-    /// Starts the program as an ordinary child at below-normal priority, the way real cargo
-    /// starts rustc: on Windows it stays in the caller's own Job Object and gets none of its
-    /// own, so the caller's kill-on-close job is what takes it. Only for a process that already
-    /// runs inside a guard's job (the build guard's tests use it for their stand-in rustc, to
-    /// prove the guard's job takes cargo's plain children); a guard never starts cargo this way.
+    /// Starts the program as an ordinary child, the way real cargo starts rustc: on Windows at
+    /// below-normal priority in the caller's own Job Object, with none of its own, so the
+    /// caller's kill-on-close job is what takes it; on Unix in the caller's process group at
+    /// the caller's nice value, with no watchdog, so the caller's watchdog is what takes it.
+    /// Only for a process that already runs inside a guard's job (the build guard's tests use
+    /// it for their stand-in rustc, to prove the guard takes cargo's plain children); a guard
+    /// never starts cargo this way.
     #[must_use]
     pub const fn in_caller_job(mut self) -> Self {
         self.in_caller_job = true;
@@ -109,21 +135,40 @@ impl CargoInvocation {
     }
 }
 
-/// A running cargo (or stand-in), killed with everything it started when dropped.
+/// A running cargo (or stand-in), killed with everything it started when dropped (on Unix,
+/// everything still in its process group; see the module doc).
 #[derive(Debug)]
 pub struct CargoChild {
     child: Child,
     /// Its own kill-on-close job; `None` for a child started in the caller's job.
     #[cfg(windows)]
     job: Option<crate::ffi::Job>,
+    /// The watchdog of its own process group, which kills the group when it is fired or
+    /// dropped; `None` for a child started in the caller's group.
+    #[cfg(unix)]
+    watchdog: Option<Watchdog>,
 }
 
-/// Starts `invocation` in a kill-on-close Job Object at below-normal priority.
+/// Starts `invocation` in a kill-on-close Job Object at below-normal priority; on Unix, in a
+/// process group of its own that a watchdog kills when the [`CargoChild`] or the guard's
+/// process ends, through `nice -n 10` (see the module doc). On Unix a program `nice` cannot
+/// start is not an error here: the child exits with 127 (126 when it is not executable).
 #[expect(
     clippy::disallowed_methods,
     reason = "spawn_cargo: cargo inside the build guard's own kill-on-close Job Object (section 4b.2)"
 )]
 pub fn spawn_cargo(invocation: &CargoInvocation) -> io::Result<CargoChild> {
+    #[cfg(unix)]
+    let own_group = !invocation.in_caller_job;
+    #[cfg(unix)]
+    let mut command = if own_group {
+        let mut nice = Command::new("nice");
+        nice.args(["-n", NICE_INCREMENT, "--"]).arg(&invocation.program);
+        nice
+    } else {
+        Command::new(&invocation.program)
+    };
+    #[cfg(not(unix))]
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args);
     command.envs(invocation.env.iter().map(|(k, v)| (k.as_os_str(), v.as_os_str())));
@@ -138,9 +183,13 @@ pub fn spawn_cargo(invocation: &CargoInvocation) -> io::Result<CargoChild> {
     {
         start(command, !invocation.in_caller_job)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        start(command)
+        start(command, own_group.then(|| Command::new("/bin/sh")))
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        Ok(CargoChild { child: command.spawn()? })
     }
 }
 
@@ -168,9 +217,53 @@ fn start(mut command: Command, own_job: bool) -> io::Result<CargoChild> {
     Ok(CargoChild { child, job: Some(job) })
 }
 
-#[cfg(not(windows))]
-fn start(mut command: Command) -> io::Result<CargoChild> {
-    Ok(CargoChild { child: command.spawn()? })
+/// Starts `command` as it is when there is no `watchdog`. Otherwise starts the watchdog first,
+/// as the leader of a new process group reading a pipe only this process writes to, then
+/// `command` in that group.
+#[cfg(unix)]
+fn start(mut command: Command, watchdog: Option<Command>) -> io::Result<CargoChild> {
+    use std::os::unix::process::CommandExt as _;
+
+    let Some(mut sh) = watchdog else {
+        return Ok(CargoChild { child: command.spawn()?, watchdog: None });
+    };
+    let (reader, writer) = io::pipe()?;
+    sh.args(["-c", WATCHDOG]).stdin(reader).stdout(Stdio::null()).stderr(Stdio::null());
+    sh.process_group(0);
+    let child = sh.spawn()?;
+    // Closes this process's copy of the read end, which `sh` held; the watchdog has its own,
+    // and the write end stays this process's alone.
+    drop(sh);
+    // Dropped, and so fired, if anything below fails: the group dies and the watchdog is reaped.
+    let watchdog = Watchdog { child, writer: Some(writer) };
+    let group = i32::try_from(watchdog.child.id()).map_err(io::Error::other)?;
+    command.process_group(group);
+    Ok(CargoChild { child: command.spawn()?, watchdog: Some(watchdog) })
+}
+
+/// A started watchdog and the write end of the pipe it reads.
+#[cfg(unix)]
+#[derive(Debug)]
+struct Watchdog {
+    child: Child,
+    writer: Option<io::PipeWriter>,
+}
+
+#[cfg(unix)]
+impl Watchdog {
+    /// Closes the pipe and waits for the watchdog, which has killed its group, itself
+    /// included, by the time it ends. Firing it again only reads the status back.
+    fn fire(&mut self) -> io::Result<()> {
+        drop(self.writer.take());
+        self.child.wait().map(|_status| ())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        let _fired: io::Result<()> = self.fire();
+    }
 }
 
 impl CargoChild {
@@ -217,8 +310,8 @@ impl CargoChild {
         }
     }
 
-    /// Kills the child and everything it started (its job, or for a child in the caller's job
-    /// the child alone).
+    /// Kills the child and everything it started (its job, or on Unix its process group, and
+    /// for a child in the caller's job or group the child alone).
     pub fn kill(&mut self) -> io::Result<()> {
         #[cfg(windows)]
         {
@@ -229,12 +322,17 @@ impl CargoChild {
         }
         #[cfg(not(windows))]
         {
+            #[cfg(unix)]
+            if let Some(watchdog) = &mut self.watchdog {
+                watchdog.fire()?;
+            }
             self.child.kill()
         }
     }
 
     /// Kills only the child itself, as a crash of it would; on Windows its own Job Objects
-    /// then close and take what it started with them.
+    /// then close, and on Unix its watchdogs see their pipes close, and take what it started
+    /// with them.
     pub fn kill_root(&mut self) -> io::Result<()> {
         self.child.kill()
     }
@@ -246,6 +344,20 @@ impl Drop for CargoChild {
             let _killed: io::Result<()> = self.kill();
             let _reaped: io::Result<ExitStatus> = self.child.wait();
         }
-        // On Windows the job's handle closes after this, which terminates anything left.
+        // After this, on Windows the job's handle closes, and on Unix the watchdog is dropped
+        // and so fired; either terminates anything left.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_program_that_cannot_start_exits_127_through_nice() {
+        use super::{CargoInvocation, spawn_cargo};
+
+        let missing = CargoInvocation::program("/nonexistent/eileen-buildguard-test", [""; 0]);
+        let mut child = spawn_cargo(&missing.quiet()).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(127), "nice could not start it");
     }
 }

@@ -25,4 +25,4 @@ A debug log of a single `-p` call showed where cold start goes: about 2 s loadin
 3. A warm turn starts speaking in roughly 1 to 2 s when the PC is not overloaded. Streaming text into TTS at the first clause keeps voice to voice inside the budget.
 4. Common commands (mute, pause, open an app, move a window) go through a deterministic fast path with no model call, so they are instant regardless of model latency.
 
-The measurement script is kept in `C:\Users\shubh\Projects\eileen-workfiles\` on the owner's PC.
+The measurement script is kept in `%USERPROFILE%\Projects\eileen-workfiles\` on the owner's PC.
