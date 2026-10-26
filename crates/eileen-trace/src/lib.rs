@@ -52,8 +52,7 @@
 //!
 //! - Fast command: `cargo xtask test -p eileen-trace`.
 //! - Layers: unit tests per module; integration tests for the canary and the whole stack.
-//! - A bug here starts as a log line without its turn id, a span under the wrong parent, or
-//!   a secret on disk.
+//! - A bug here starts as a log line with no turn id, a wrongly parented span, or a secret on disk.
 //!
 //! # Traps
 //!
