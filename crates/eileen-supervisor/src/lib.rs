@@ -5,10 +5,10 @@
 //!
 //! # Owns
 //!
-//! - The one `Command::new` for every child of the running product, and how it is wrapped.
+//! - The one `Command::new` for every child of the running product, and how it is wrapped (on
+//!   Linux, LINUX.md section 5: own session, parent-death signal, group kills).
 //! - [`spawn_detached`] for `eileen-guard.exe`: `CREATE_BREAKAWAY_FROM_JOB`, null handles.
 //! - [`watch`] (deadlines, heartbeats, restart backoff) and [`qos`] (`EcoQoS`, MMCSS).
-//! - The Linux process model (LINUX.md section 5): own session, parent-death signal, group kills.
 //!
 //! # Does not own
 //!
@@ -30,8 +30,9 @@
 //!   `tests::the_guard_spawn_outlives_its_parent`).
 //! - A failing child restarts at most `max_restarts` times per window
 //!   (`watch::tests::restarts_back_off_and_give_up_inside_the_window`).
-//! - Unsafe code only in the private `ffi` module, one operation per block (the
-//!   `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block` lints, and check 10).
+//! - Unsafe code only in the private `ffi` module (on Linux `src/ffi/linux.rs`), one operation
+//!   per block (the `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block` lints, and
+//!   check 10).
 //! - A child's stderr reaches the log files only as length and hash, in `pii.line` (test
 //!   `tests::stderr_lines_become_child_stderr_events`), and a [`ChildSpec`]'s `Debug` names its
 //!   environment without the values (`tests::a_spec_never_shows_its_environment_values_in_debug`).
@@ -82,7 +83,7 @@ mod detached;
 mod ffi;
 #[cfg(target_os = "linux")]
 #[expect(unsafe_code, reason = "a Linux child's setup between fork and exec, and its pidfd")]
-#[path = "ffi_linux.rs"]
+#[path = "ffi/linux.rs"]
 mod ffi;
 #[cfg(target_os = "linux")]
 mod linux;
