@@ -1,5 +1,5 @@
 //! [`LinuxDesktop`]: the desktop process's platform traits on Linux over `eileen-dbus-linux`'s
-//! [`Bridge`], so far `Grounding` (`src/grounding.rs`).
+//! [`Bridge`]: `Grounding` (`src/grounding.rs`) and `Automation` (`src/automation.rs`).
 //!
 //! Each call is one job on the bridge's thread. The job takes the session bus there, asks
 //! `org.a11y.Bus` for the accessibility bus, connects to it for itself alone with the settings'
@@ -40,6 +40,9 @@ pub struct LinuxDesktopSettings {
     /// How much of the foreground window's tree a focus search reads: [`FOCUS_LIMITS`] in the
     /// product.
     pub focus_limits: TreeLimits,
+    /// How much of a window's tree `Automation::find` searches: [`FOCUS_LIMITS`] in the product,
+    /// since a selector's element can sit as deep as the focus.
+    pub find_limits: TreeLimits,
 }
 
 /// The desktop process's traits on Linux, over a [`Bridge`]; the module's doc says how each call
@@ -92,14 +95,17 @@ impl LinuxDesktop {
         })
     }
 
-    /// Every window the registry's apps list, front to back, minimized ones included, within the
-    /// settings' deadline, and whether an app was left unread; errors name `call`. The listing
+    /// Every window the registry's apps list, front to back, minimized ones included, within
+    /// `deadline`, and whether an app was left unread; errors name `call`. The listing
     /// replaces the windows [`Self::known_window`] knows. The processes are named here, on the
     /// caller's thread, so the bridge's thread reads no file.
-    pub(crate) fn list(&self, call: &'static str) -> Result<Found<WindowInfo>, PlatformError> {
-        let found = self.on_bus(call, self.settings.deadline, |atspi| async move {
-            Ok(toplevels(&atspi).await?)
-        })?;
+    pub(crate) fn list(
+        &self,
+        call: &'static str,
+        deadline: Deadline,
+    ) -> Result<Found<WindowInfo>, PlatformError> {
+        let found =
+            self.on_bus(call, deadline, |atspi| async move { Ok(toplevels(&atspi).await?) })?;
         let listed = window_infos(found.windows, !found.unread, &self.settings.own_processes);
         *self.known() = listed.iter().map(|(info, known)| (info.hwnd, known.clone())).collect();
         let windows = listed.into_iter().map(|(info, _known)| info).collect();

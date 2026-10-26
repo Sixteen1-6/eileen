@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use eileen_contracts::desktop::{ElementInfo, Rect, WindowRef};
+use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::DbusError;
 use eileen_platform::TreeLimits;
 use tokio::time::Instant;
@@ -47,28 +48,44 @@ pub(crate) fn role_name(role: Role) -> &'static str {
 }
 
 /// `element` as `Grounding` gives it, in `window`: its role's name, its name, its automation id,
-/// its box in its window (all zero without `Component`) and its interfaces' short names. Any
-/// failure to read the automation id leaves it out: an app that predates `AccessibleId` answers
-/// `UnknownProperty` (libdbus) or `InvalidArgs` (`GDBus`), and the id is only a hint.
+/// its box in its window (all zero without `Component`) and its interfaces' short names, the box
+/// and the id read at once. Any failure to read the automation id leaves it out: an app that
+/// predates `AccessibleId` answers `UnknownProperty` (libdbus) or `InvalidArgs` (`GDBus`), and
+/// the id is only a hint. A failure to read the box is the answer's.
 pub(crate) async fn element_info(
     atspi: &Atspi,
     element: &Accessible,
     window: WindowRef,
 ) -> Result<ElementInfo, DbusError> {
-    let rect = if element.interfaces.contains(Interfaces::COMPONENT) {
-        atspi.extents(&element.object).await?
+    let (rect, id) = tokio::join!(rect_of(atspi, element), atspi.accessible_id(&element.object));
+    Ok(info_of(element, rect?, id.ok().flatten(), window))
+}
+
+/// Where `element` is in its window: [`Atspi::extents`], all zero without `Component`.
+pub(crate) async fn rect_of(atspi: &Atspi, element: &Accessible) -> Result<Rect, DbusError> {
+    if element.interfaces.contains(Interfaces::COMPONENT) {
+        atspi.extents(&element.object).await
     } else {
-        Rect::default()
-    };
-    Ok(ElementInfo {
+        Ok(Rect::default())
+    }
+}
+
+/// `element` as [`element_info`] gives it, from its box and automation id read already.
+pub(crate) fn info_of(
+    element: &Accessible,
+    rect: Rect,
+    automation_id: Option<Untrusted<String>>,
+    window: WindowRef,
+) -> ElementInfo {
+    ElementInfo {
         control_type: role_name(element.role).to_owned(),
         name: element.name.clone(),
-        automation_id: atspi.accessible_id(&element.object).await.ok().flatten(),
+        automation_id,
         rect,
         patterns: element.interfaces.short_names().map(str::to_owned).collect(),
         is_password: element.role == Role::PASSWORD_TEXT,
         window,
-    })
+    }
 }
 
 /// The focused element of the foreground window, with that window: the walk of the window's
@@ -100,7 +117,7 @@ pub(crate) async fn focus(
 /// How long a focus search within a call's `budget` reads: four fifths of it, which leaves the
 /// rest for the read under way when it ends, at most one call timeout, and the element's own
 /// reads; at most [`LONGEST_SEARCH`].
-fn search_budget(budget: Duration) -> Duration {
+pub(crate) fn search_budget(budget: Duration) -> Duration {
     (budget.saturating_mul(4) / 5).min(LONGEST_SEARCH)
 }
 

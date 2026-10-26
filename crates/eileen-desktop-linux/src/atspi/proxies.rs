@@ -1,9 +1,11 @@
 //! The D-Bus interfaces the client calls, as zbus proxies, with the members it uses and no
 //! others: the session bus's `org.a11y.Bus` and `org.a11y.Status`, which at-spi-bus-launcher
 //! serves at `/org/a11y/bus`, and each accessible object's `org.a11y.atspi.Accessible`,
-//! `org.a11y.atspi.Text` and `org.a11y.atspi.Component` (at-spi2-core 2.52's introspection). The
-//! bus daemon's own `GetConnectionUnixProcessID` goes through zbus's `fdo::DBusProxy`. No
-//! property has a setter, so `IsEnabled` cannot be written through them.
+//! `org.a11y.atspi.Text`, `org.a11y.atspi.Component`, `org.a11y.atspi.Action`,
+//! `org.a11y.atspi.EditableText` and `org.a11y.atspi.Value` (at-spi2-core 2.52's
+//! introspection). The bus daemon's own `GetConnectionUnixProcessID` goes through zbus's
+//! `fdo::DBusProxy`. Only `Value.CurrentValue` has a setter, so `IsEnabled` cannot be written
+//! through them.
 //!
 //! Every proxy is built with `CacheProperties::No`, so building one makes no call and none
 //! subscribes to a property's changes or its service's owner (test
@@ -84,6 +86,36 @@ pub(super) trait Text {
 pub(super) trait Component {
     /// Its box, `(x, y, width, height)`, in the coordinates `coord_type` names.
     fn get_extents(&self, coord_type: u32) -> zbus::Result<(i32, i32, i32, i32)>;
+}
+
+/// An object's `org.a11y.atspi.Action`.
+#[zbus::proxy(interface = "org.a11y.atspi.Action", gen_blocking = false)]
+pub(super) trait Action {
+    /// How many actions it has.
+    #[zbus(property)]
+    fn n_actions(&self) -> zbus::Result<i32>;
+    /// The name of its action at `index`, such as `click`.
+    fn get_name(&self, index: i32) -> zbus::Result<String>;
+    /// Runs its action at `index`: whether the app ran it.
+    fn do_action(&self, index: i32) -> zbus::Result<bool>;
+}
+
+/// An object's `org.a11y.atspi.EditableText`.
+#[zbus::proxy(interface = "org.a11y.atspi.EditableText", gen_blocking = false)]
+pub(super) trait EditableText {
+    /// Replaces its whole text with `new_contents`: whether the app took it.
+    fn set_text_contents(&self, new_contents: &str) -> zbus::Result<bool>;
+}
+
+/// An object's `org.a11y.atspi.Value`.
+#[zbus::proxy(interface = "org.a11y.atspi.Value", gen_blocking = false)]
+pub(super) trait Value {
+    /// Its number.
+    #[zbus(property)]
+    fn current_value(&self) -> zbus::Result<f64>;
+    /// Sets its number, through `org.freedesktop.DBus.Properties.Set`.
+    #[zbus(property)]
+    fn set_current_value(&self, value: f64) -> zbus::Result<()>;
 }
 
 /// The proxy `P` of `object`, at its app's unique name and its path.

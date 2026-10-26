@@ -11,12 +11,16 @@
 //!   and selected text ([`Atspi::text`], [`Atspi::selection`]), its box in its window
 //!   ([`Atspi::extents`]), its automation id ([`Atspi::accessible_id`]) and a bounded walk of its
 //!   tree ([`Atspi::walk`]).
+//! - What an object lets an app's user change: its actions ([`Atspi::actions`],
+//!   [`Atspi::do_action`]), its text ([`Atspi::set_text`]) and its number ([`Atspi::number`],
+//!   [`Atspi::set_number`]).
 //! - Each app's process, as the bus's daemon knows it ([`Atspi::pid`]).
 //!
 //! An app's text is untrusted: it is sanitized and bounded before it leaves this module, and
 //! errors never carry it, not even an error name the app chose. Every call waits at most the
 //! connection's call timeout; past it, the call is [`DbusError::DeadlineExceeded`].
 
+mod act;
 mod bus;
 mod kinds;
 mod proxies;

@@ -1,31 +1,31 @@
 //! The desktop process's platform implementations on Linux, as `eileen-desktop-win`'s on Windows
-//! (BUILD.md sections 2.6 and 3.4; docs/LINUX.md sections 3 and 4): so far `Grounding`.
+//! (BUILD.md sections 2.6 and 3.4; docs/LINUX.md sections 3 and 4): `Grounding` and `Automation`.
 //!
 //! # Owns
 //!
-//! - [`LinuxDesktop`], with [`LinuxDesktopSettings`]: `Grounding` on the bridge, from each app's
-//!   windows ([`window_id`] is their `hwnd`), the focus and its selection; the rest `Unavailable`.
-//! - [`Atspi`], Eileen's own client of the accessibility bus on zbus (no `atspi` crate is pinned):
-//!   the registry's apps and their processes, each object's name, role, states and interfaces
-//!   ([`Accessible`]), children, text, selection, box and automation id, and a bounded walk
-//!   ([`Walk`]); [`accessibility_bus`] with [`CALL_TIMEOUT`], and [`toolkit_accessibility`].
+//! - [`LinuxDesktop`], with [`LinuxDesktopSettings`], on the bridge: `Grounding` (windows, whose
+//!   `hwnd` is [`window_id`], the focus, its selection) and `Automation` (trees, finds, actions,
+//!   writes, through handles that pack an element's object); the rest `Unavailable`.
+//! - [`Atspi`], Eileen's own AT-SPI2 client on zbus: apps, their processes, each object's name,
+//!   role, states, interfaces ([`Accessible`]), children, text, selection, box, automation id,
+//!   actions, number and a bounded walk ([`Walk`]); [`accessibility_bus`], [`CALL_TIMEOUT`].
 //! - Tables of AT-SPI's numbers and names: [`Role`], [`State`], [`StateSet`], [`Interfaces`].
 //!
 //! # Does not own
 //!
-//! - The traits (`eileen-platform`, WP0). `Automation`, `TextInsertion`, `Input`, `Capture`,
-//!   `SystemVolume` and `Grounding::subscribe`, on AT-SPI's events, come next.
+//! - The traits (`eileen-platform`, WP0). `TextInsertion`, `Input`, `Capture`, `SystemVolume`
+//!   and `Grounding::subscribe`, on AT-SPI's events, come next.
 //! - D-Bus plumbing ([`DbusError`], re-exported, the buses, the bridge): `eileen-dbus-linux`'s.
-//! - The desktop server's tools and safety rules (`eileen-desktop`, WP5).
+//! - The desktop server's tools, safety rules and selector identity (`eileen-desktop`, WP5).
 //!
 //! # Invariants
 //!
 //! - Linux only: `cfg(target_os = "linux")`, an empty library elsewhere.
-//! - It never reads a password field's text: [`Atspi::text`] and [`Atspi::selection`] refuse the
-//!   `password text` role before any `Text` call, as Windows refuses `IsPassword` (BUILD.md 2.6;
-//!   the tests whose names hold `password`, which count every `Text` call the field receives).
-//! - It writes nothing: not `IsEnabled`, which would turn on every Qt, Chromium and Firefox tree
-//!   (2.6), nor any app's state (test `toolkit_accessibility_is_read_and_never_written`).
+//! - A password field is never read or written: [`Atspi::text`] and [`Atspi::selection`] refuse
+//!   its role before any `Text` call, as Windows refuses `IsPassword`, and `set_value` refuses it
+//!   and a read-only field before any write (BUILD.md 2.6; the tests whose names hold `password`).
+//! - It writes only what `Automation` is asked to, to an element of its window's app, and never
+//!   `IsEnabled` (2.6; test `toolkit_accessibility_is_read_and_never_written`).
 //! - Every app text is sanitized and bounded, and no error carries it or an error name an app
 //!   chose. Roles, states and interfaces mean what this crate's tables say; a class is a role name.
 //! - A window's pid is the one the bus's daemon gives for its app's connection. Its process name
@@ -39,16 +39,16 @@
 //! # Boundaries
 //!
 //! - Called by the desktop composition root. May depend on `eileen-platform`, `eileen-contracts`,
-//!   `eileen-dbus-linux`, `zbus`, `tokio` (3.1 adds `eileen-stdx`, `eileen-trace`); no wire types.
+//!   `eileen-dbus-linux`, `zbus`, `tokio`, `serde_json` (3.1 adds `eileen-stdx`, `eileen-trace`).
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-desktop-linux`.
-//! - Layers: unit tests of the tables, the window id and process names; integration tests in
-//!   `tests/it/` of the client and of `Grounding` through `Bridge::on_private_bus`, on fakes on
-//!   two private buses, one app in a process of its own. The client's walk tests run in paused
-//!   time; in real time, 100 ms deadlines and call timeouts, and one 250 ms call timeout under a
-//!   300 ms deadline, each kept by the code under test.
+//! - Layers: unit tests of the tables, the window id, process names, handles (by property) and
+//!   `find`'s scores; integration tests in `tests/it/` of the client, `Grounding` and `Automation`
+//!   through `Bridge::on_private_bus`, on fakes on two private buses, one app in a process of its
+//!   own. Walk tests run in paused time; in real time, 100 ms deadlines and call timeouts, and one
+//!   250 ms call timeout under a 300 ms deadline, each kept by the code under test.
 //! - A bug starts as a list or tree that misses what is on screen, a slow call or a forbidden read.
 //!
 //! # Traps
@@ -72,7 +72,7 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet: neither the client nor `Grounding` logs. A span should first mark an app left out.
+//! - None yet: nothing here logs. A span should first mark an app left out.
 //!
 //! # Do not change without a decision record
 //!
@@ -84,8 +84,11 @@
 
 mod adapter;
 mod atspi;
+mod automation;
 mod element;
+mod find;
 mod grounding;
+mod handle;
 mod toplevel;
 
 pub use adapter::{FOCUS_LIMITS, LinuxDesktop, LinuxDesktopSettings};

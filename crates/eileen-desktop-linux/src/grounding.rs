@@ -69,7 +69,7 @@ impl Grounding for LinuxDesktop {
     /// those two marks alone. Nor does a class name a terminal, as section 2.6's terminal tier
     /// reads it on Windows: here that needs the `terminal` role or the terminal's process.
     fn windows(&self, include_minimized: bool) -> Result<Vec<WindowInfo>, PlatformError> {
-        let mut windows = self.list(WINDOWS)?.windows;
+        let mut windows = self.list(WINDOWS, self.settings().deadline)?.windows;
         windows.retain(|window| include_minimized || !window.is_minimized);
         Ok(windows)
     }
@@ -80,7 +80,7 @@ impl Grounding for LinuxDesktop {
     /// read), the front window is unknown, `DeadlineExceeded`: it may be that app's, and another
     /// app's window that still says it is active would otherwise take its place.
     fn foreground(&self) -> Result<Option<WindowRef>, PlatformError> {
-        let listed = self.list(FOREGROUND)?;
+        let listed = self.list(FOREGROUND, self.settings().deadline)?;
         if listed.unread {
             return Err(PlatformError::DeadlineExceeded { call: FOREGROUND });
         }

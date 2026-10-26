@@ -1,6 +1,6 @@
-//! The processes the fake apps of `grounding` run in: the test binary's own, and a copy of it
-//! under another name, [`OtherProcess`], which serves one app from a process of its own for
-//! `a_window_names_its_apps_own_process`.
+//! The processes the fake apps of `grounding` and `automation` run in: the test binary's own,
+//! and a copy of it under another name, [`OtherProcess`], which serves one app from a process of
+//! its own for `a_window_names_its_apps_own_process`.
 
 use std::convert::Infallible;
 use std::io::{BufRead, BufReader};
@@ -13,7 +13,7 @@ use super::{FRAME, root, window};
 use crate::fake::App;
 
 /// The file name of the test binary: every fake app's process.
-pub(super) fn this_process() -> String {
+pub(crate) fn this_process() -> String {
     let exe = std::env::current_exe().unwrap();
     exe.file_name().unwrap().to_str().unwrap().to_owned()
 }
