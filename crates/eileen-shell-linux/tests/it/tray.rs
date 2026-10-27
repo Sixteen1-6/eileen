@@ -1,10 +1,10 @@
 //! The tray through `LinuxShell::set_tray` on a bridge to a private bus: the item and its menu as
 //! a host reads them, with a connection of the test's playing the host, and their registration
 //! with fake watchers that report each one, and take the item, refuse it, answer that it got no
-//! reply or never answer. The rig's items are `pub(super)` for the shell's tests. The test's thread calls the shell as the
-//! core does, blocking; the fakes and the host run on a runtime of their own. The bridge's caller
-//! waits on a condition variable, not a tokio timer, so a deadline that passes passes in real
-//! time.
+//! reply or never answer. The rig's items are `pub(super)` for the shell's tests. The test's
+//! thread calls the shell as the core does, blocking; the fakes and the host run on a runtime of
+//! their own. The bridge's caller waits on a condition variable, not a tokio timer, so a deadline
+//! that passes passes in real time.
 
 use std::collections::HashMap;
 use std::sync::Arc;
