@@ -9,7 +9,7 @@ use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::PrivateBus;
 use tokio::sync::Notify;
-use zbus::object_server::{InterfaceRef, SignalEmitter};
+use zbus::object_server::{Interface, InterfaceRef, SignalEmitter};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 /// The object every player serves.
@@ -61,6 +61,22 @@ impl Root {
     #[zbus(property)]
     fn desktop_entry(&self) -> zbus::fdo::Result<String> {
         missing(self.desktop_entry.map(str::to_owned))
+    }
+}
+
+/// A root interface whose reads wait at `gate`, which no test opens: a player that never names
+/// itself.
+pub(super) struct SilentRoot {
+    pub(super) gate: Gate,
+}
+
+#[zbus::interface(name = "org.mpris.MediaPlayer2")]
+impl SilentRoot {
+    #[zbus(property)]
+    async fn identity(&self) -> String {
+        self.gate.entered.notify_one();
+        self.gate.open.notified().await;
+        "Silent Player".to_owned()
     }
 }
 
@@ -302,11 +318,12 @@ pub(super) fn float_state() -> MediaState {
     }
 }
 
-/// Serves a fake player called `name`; it stays on the bus while the connection lives.
+/// Serves a fake player called `name`, with `root` as its root interface, usually a [`Root`]; it
+/// stays on the bus while the connection lives.
 pub(super) async fn serve(
     bus: &PrivateBus,
     name: &'static str,
-    root: Root,
+    root: impl Interface,
     player: Player,
 ) -> zbus::Connection {
     serve_with(bus, name, root, player, |builder| builder).await
@@ -316,7 +333,7 @@ pub(super) async fn serve(
 pub(super) async fn serve_with(
     bus: &PrivateBus,
     name: &'static str,
-    root: Root,
+    root: impl Interface,
     player: Player,
     name_flags: fn(zbus::connection::Builder<'static>) -> zbus::connection::Builder<'static>,
 ) -> zbus::Connection {
