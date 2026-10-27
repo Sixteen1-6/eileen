@@ -466,7 +466,8 @@ async fn a_player_that_changes_while_it_is_read_waits_behind_the_others() {
         event = watch.next() => panic!("nothing to report while the first player is read again: {event:?}"),
     }
     let call = next_message(&mut reads_of_busy).await;
-    assert_eq!(call.header().member().map(|member| member.as_str()), Some("GetAll"), "read again");
+    let member = call.header().member().map(ToString::to_string);
+    assert_eq!(member.as_deref(), Some("GetAll"), "the player is read again only now");
 }
 
 #[tokio::test]
