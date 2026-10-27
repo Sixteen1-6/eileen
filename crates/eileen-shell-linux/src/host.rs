@@ -92,12 +92,19 @@
 //! call's state before it registers the item with the watcher, so that a host's first read has
 //! it, and registers whenever the watcher's name has an owner: at once, and again each time the
 //! name gets a new one, as when the watcher restarts. Each later `set_tray` asks the holder to
-//! show its state, and every call waits for the holder's answer within the settings' deadline.
-//! The mute state picks [`TraySettings`]' icon, the tooltip fills the item's, and the menu
-//! becomes the dbusmenu items. The answer is `Ok` while a watcher has the item, and `Unavailable`
-//! while none does, as on GNOME without its `AppIndicator` extension; the item stays on the bus
-//! and registers once a watcher comes. A menu item the user
-//! chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
+//! show its state. The mute state picks [`TraySettings`]' icon, the tooltip fills the item's, and
+//! the menu becomes the dbusmenu items. The answer is `Ok` while a watcher has the item, and
+//! `Unavailable` while none does, as on GNOME without its `AppIndicator` extension; the item
+//! stays on the bus and registers once a watcher comes.
+//!
+//! The holder registers beside its other work, so a call never waits for a registration in
+//! turn: once its state is shown, it waits for a registration under way until half the settings'
+//! deadline from its start, and past that answers `Unavailable`, the registration going on. When
+//! the watcher answers with an error, there but saying no, the holder registers again on each of
+//! the next three calls, after it has shown that call's state; past those, or once the watcher
+//! has not answered, it waits for the name's next owner. Meanwhile the item is on the bus with
+//! each call's state, which no host shows, and the calls answer `Unavailable`. A menu item the
+//! user chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
 //! with its `TrayItem::id`. When the shell drops, the holder ends and drops its connection, so
 //! the item leaves the bus and the watcher forgets it. A holder whose connection closed has ended
 //! too, and the next `set_tray` starts another, under a new name.
@@ -129,9 +136,9 @@
 //!   binds that call's shortcut alone. Either way `watch_input` hears nothing more, which
 //!   nothing reports yet. Following the portal is a follow-up.
 //! - A tray choice may not come from a person, as [`LinuxShellEvent::TrayChoice`] says.
-//! - The tray holder registers in turn with its other work, so a watcher that never answers
-//!   holds it for its connection's method timeout, and a `set_tray` made meanwhile can pass its
-//!   deadline. A watcher that answers with an error leaves the item unregistered, as none would.
+//! - A watcher that never answers keeps its registration under way for the holder connection's
+//!   method timeout, and each `set_tray` meanwhile spends half its deadline before it answers
+//!   `Unavailable`. Such a watcher is not asked again until its name gets a new owner.
 //!
 //! [`DEFAULT_DEADLINE`]: eileen_dbus_linux::DEFAULT_DEADLINE
 
@@ -298,9 +305,12 @@ impl ShellHost for LinuxShell {
     /// Shows `state` as Eileen's `StatusNotifierItem`, through the tray holder; the module's doc
     /// says how. `Unavailable` while no watcher has the item.
     fn set_tray(&self, state: TrayState) -> Result<(), PlatformError> {
+        // The call starts here, on the caller's thread, as `keep_awake`'s does.
+        let by = tray::answer_by(Instant::now(), self.settings.deadline);
         let (asks, holder) = self.tray();
-        self.bridge
-            .call(TRAY, self.settings.deadline, move |buses| tray::show(buses, asks, holder, state))
+        self.bridge.call(TRAY, self.settings.deadline, move |buses| {
+            tray::show(buses, asks, holder, state, by)
+        })
     }
 
     /// [`Notifier::notify`] on the session bus. The notification's id is dropped: no trait

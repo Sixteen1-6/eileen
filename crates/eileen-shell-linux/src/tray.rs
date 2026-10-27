@@ -33,11 +33,13 @@
 //! - The choice channel is bounded and a full one drops the click, so that the object server,
 //!   which serves the whole connection, never waits on the caller.
 //! - The watcher keeps the item only while the name has its owner, and a watcher that restarts
-//!   forgets it: the caller follows the watcher's owner and registers again ([`super::host`]).
+//!   forgets it: the caller follows the watcher's owner and registers again, as it does a few
+//!   times after an error answer ([`super::host`]).
 //! - A watcher may have no host (KDE's without a panel): the item is registered, and unseen.
 
 mod menu;
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use eileen_platform::{TrayItem, TrayState};
@@ -144,20 +146,23 @@ impl StatusNotifier {
         }
     }
 
-    /// Gives the watcher the item's name (`RegisterStatusNotifierItem`).
-    pub(crate) async fn register(&self) -> Result<(), DbusError> {
-        let name = (self.name.as_str(),);
-        self.conn
-            .call_method(
+    /// Gives the watcher the item's name (`RegisterStatusNotifierItem`), within the
+    /// connection's method timeout. The call borrows nothing of the item, so its caller can run
+    /// it beside the item's other work.
+    pub(crate) fn register(&self) -> impl Future<Output = Result<(), DbusError>> + 'static {
+        let (conn, name) = (self.conn.clone(), self.name.clone());
+        async move {
+            conn.call_method(
                 Some(WATCHER),
                 WATCHER_PATH,
                 Some(WATCHER),
                 "RegisterStatusNotifierItem",
-                &name,
+                &(name.as_str(),),
             )
             .await
             .map(drop)
             .map_err(|error| DbusError::from_zbus(REGISTER_WHAT, &error))
+        }
     }
 }
 
