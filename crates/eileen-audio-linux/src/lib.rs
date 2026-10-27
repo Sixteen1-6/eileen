@@ -24,11 +24,12 @@
 //!   elsewhere, as the `-win` crates do off Windows.
 //! - It never raises a limit (the `RLIMIT_RTTIME` bound only lowers), and never asks for more than
 //!   `RealtimeKit` grants: a priority capped at `MaxRealtimePriority`, a nice level floored at
-//!   `MinNiceLevel`, the revert's included.
+//!   `MinNiceLevel`, the revert's included. The fallback never lowers a thread's priority.
 //! - Real-time comes only through `RealtimeKit`. It starts no process (a call may let the bus
 //!   start `rtkit-daemon`), needs no elevation, and changes only the threads that register.
 //! - A request that rtkit may still grant after its call gave up, past the bridge's deadline or
-//!   the method timeout, is reverted behind it, and a ticket reverts its thread when it drops.
+//!   the method timeout, or over a failed connection, is reverted behind it (after a failed
+//!   connection, over a new one), and a ticket reverts its thread when it drops.
 //!   The promoter keeps the bridge until it has reverted, so no handle's drop cuts that short.
 //!
 //! # Boundaries
@@ -60,8 +61,6 @@
 //!   thread real-time again. So does a suspend that starts between a revert's two calls, and any
 //!   suspend once a thread whose nice level was negative is reverted to it. A thread that ends
 //!   with its ticket escapes all three: rtkit checks a thread's start time before it acts.
-//! - A request whose system-bus connection fails before rtkit answers may still be granted, and
-//!   its revert, which goes over that connection, fails with it.
 //! - rtkit's canary demotes every real-time thread when the system starves, which no ticket sees.
 //! - Under Flatpak the Realtime portal replaces `RealtimeKit` (phase L3).
 //!

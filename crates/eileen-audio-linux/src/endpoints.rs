@@ -18,7 +18,10 @@
 //! channel and waits. When the ticket drops, or at once when no ask can come (the call had given
 //! up, its answer arrived too late, or the ticket's ask was dropped unsent), the task reverts the
 //! thread with [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
-//! ([`Promoted::restore`]).
+//! ([`Promoted::restore`]), unless the promotion changed nothing ([`Promotion::reverts`]). A
+//! request whose system-bus connection failed is reverted over the bridge's next one: the
+//! promoter waits for zbus to mark the failed connection closed, which the socket's reader
+//! does right after it fails the calls pending on it, so that `Buses::system` connects again.
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
 //! that, the task finishes on its own. The ticket keeps a handle to the bridge, so a registration
@@ -31,7 +34,7 @@
 
 use std::time::Duration;
 
-use eileen_dbus_linux::{Bridge, Buses, DEFAULT_DEADLINE};
+use eileen_dbus_linux::{Bridge, Buses, DEFAULT_DEADLINE, METHOD_TIMEOUT};
 use eileen_platform::{
     AudioEndpoints, Deadline, EndpointInfo, PlatformError, StreamCategory, ThreadTicket,
 };
@@ -137,8 +140,9 @@ impl AudioEndpoints for LinuxAudioEndpoints {
 }
 
 /// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, hands the
-/// promotion over ([`hand_over`]), then reverts `thread` and answers the ask, if one came. It
-/// keeps `bridge` until it has reverted, so the bridge's thread, which runs it, lives as long.
+/// promotion over ([`hand_over`]), then reverts `thread`, unless nothing changed, and answers the
+/// ask, if one came. It keeps `bridge` until it has reverted, so the bridge's thread, which runs
+/// it, lives as long.
 async fn promoter(
     bridge: Bridge,
     buses: Buses,
@@ -148,7 +152,10 @@ async fn promoter(
     answer: oneshot::Sender<Answer>,
 ) {
     let promoted = match buses.system().await {
-        Ok(system) => RealtimeKit::new(&system).promote(thread, nice, policy).await,
+        Ok(system) => {
+            let fresh = || reconnect(&buses, &system);
+            RealtimeKit::new(&system).promote(thread, nice, policy, fresh).await
+        }
         Err(error) => Err(error),
     };
     let Promoted { promotion, restore } = match promoted {
@@ -160,9 +167,13 @@ async fn promoter(
     };
     let asked = hand_over(answer, promotion).await;
     // The system bus of the moment: the bridge connects it again if it has closed since.
-    let outcome = match buses.system().await {
-        Ok(system) => RealtimeKit::new(&system).revert(thread, restore).await,
-        Err(error) => Err(error),
+    let outcome = if promotion.reverts() {
+        match buses.system().await {
+            Ok(system) => RealtimeKit::new(&system).revert(thread, restore).await,
+            Err(error) => Err(error),
+        }
+    } else {
+        Ok(())
     };
     // Before the outcome goes out, so a ticket still waiting for it holds the last handle, if
     // this was the other one, and its drop ends the bridge's thread and waits for it.
@@ -170,6 +181,18 @@ async fn promoter(
     if let Some(reverted) = asked {
         let _ignored = reverted.send(outcome);
     }
+}
+
+/// The system bus again, for the revert of a request whose connection, `failed`, failed. It waits
+/// for zbus to mark `failed` closed, at most [`METHOD_TIMEOUT`] (an error from a write alone may
+/// leave it open, and then usable), so that [`Buses::system`] makes a new connection rather
+/// than answer the failed one.
+async fn reconnect(
+    buses: &Buses,
+    failed: &zbus::Connection,
+) -> Result<zbus::Connection, DbusError> {
+    let _closed_or_open = tokio::time::timeout(METHOD_TIMEOUT, failed.closed()).await;
+    buses.system().await
 }
 
 /// Answers the registration with `promotion` and a channel to ask for the revert through, then

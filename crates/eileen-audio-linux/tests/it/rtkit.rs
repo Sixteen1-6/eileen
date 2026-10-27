@@ -258,6 +258,11 @@ async fn client(bus: &PrivateBus) -> RealtimeKit {
     RealtimeKit::new(&bus.connect().await)
 }
 
+/// A fresh connection to `bus`, as `promote` asks for one after its connection failed.
+async fn fresh(bus: &PrivateBus) -> Result<zbus::Connection, DbusError> {
+    Ok(bus.connect().await)
+}
+
 #[tokio::test]
 async fn the_limits_come_from_the_three_properties() {
     let bus = PrivateBus::start();
@@ -278,7 +283,8 @@ async fn every_property_is_read_alone_since_rtkit_0_13_answers_no_get_all() {
     let client = client(&bus).await;
     let thread = ThreadId::current();
     client.limits().await.unwrap();
-    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await.unwrap();
+    let promoted =
+        client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await.unwrap();
     client.revert(thread, promoted.restore).await.unwrap();
     assert_eq!(
         fake.get_alls(),
@@ -325,7 +331,8 @@ async fn a_thread_is_made_real_time_within_the_maximum_after_the_rttime_bound() 
     let (fake, mut calls) = FakeRtkit::new(limits, None);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let promoted =
+        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::Realtime { priority: 8 }, restore: NICE }),
@@ -349,7 +356,8 @@ async fn a_refused_real_time_request_falls_back_to_high_priority() {
     fake.refuse_realtime.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let promoted =
+        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::HighPriority { nice: -8 }, restore: NICE }),
@@ -361,13 +369,40 @@ async fn a_refused_real_time_request_falls_back_to_high_priority() {
 }
 
 #[tokio::test]
+async fn a_refused_request_never_lowers_a_thread_that_already_runs_higher() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    fake.refuse_realtime.store(true, Ordering::SeqCst);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
+    let client = client(&bus).await;
+    let thread = this_thread();
+    // Below rtkit's minimum, -15; between it and the fallback, -11; and the fallback itself.
+    for (nice, restore) in [(-16, -15), (-13, -13), (-11, -11)] {
+        let policy = RealtimePolicy::default();
+        let promoted = client.promote(ThreadId::current(), nice, policy, || fresh(&bus)).await;
+        assert_eq!(
+            promoted,
+            Ok(Promoted { promotion: Promotion::Unchanged { nice }, restore }),
+            "nice {nice} is already the fallback's level or higher"
+        );
+        assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time asked: {nice}");
+        assert_eq!(
+            calls.try_recv(),
+            Err(TryRecvError::Empty),
+            "and no fallback, which would lower nice {nice} to -11 (or to the minimum)"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_real_time_request_that_fails_otherwise_answers_its_error_with_no_fallback() {
     let bus = PrivateBus::start();
     let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
     fake.fail_realtime.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let promoted =
+        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Err(DbusError::Invalid {
@@ -392,7 +427,8 @@ async fn refusing_both_is_refused_not_authorized() {
     fake.refuse_high_priority.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let promoted =
+        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Err(DbusError::Refused {
@@ -407,7 +443,8 @@ async fn refusing_both_is_refused_not_authorized() {
 async fn no_realtimekit_on_the_bus_is_unavailable() {
     let bus = PrivateBus::start();
     let client = client(&bus).await;
-    let promoted = client.promote(ThreadId::current(), NICE, RealtimePolicy::default()).await;
+    let promoted =
+        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Err(DbusError::Unavailable { what: "org.freedesktop.RealtimeKit1.RTTimeUSecMax" }),
@@ -422,7 +459,8 @@ async fn a_reverted_thread_is_forgotten_so_a_resume_leaves_it_alone() {
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = client(&bus).await;
     let thread = ThreadId::current();
-    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await.unwrap();
+    let promoted =
+        client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await.unwrap();
     assert_eq!(
         fake.resume(),
         [(this_thread(), 10)],
@@ -441,7 +479,7 @@ async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimu
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = client(&bus).await;
     let thread = ThreadId::current();
-    let promoted = client.promote(thread, NICE, RealtimePolicy::default()).await;
+    let promoted = client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::Realtime { priority: 10 }, restore: NICE + 2 }),
@@ -463,7 +501,8 @@ async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     let (fake, mut calls) = FakeRtkit::new(limits, Some(Gate::Realtime(Arc::clone(&gate))));
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = RealtimeKit::new(&bus.connect_within(METHOD_TIMEOUT).await);
-    let mut promoted = pin!(client.promote(ThreadId::current(), NICE, RealtimePolicy::default()));
+    let mut promoted =
+        pin!(client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)));
     // In real time until the fake holds the request, so the three limit reads before it have the
     // default 5 s method timeout, not a short one they must beat. From then on the fake answers
     // nothing until its gate opens, so only method timeouts are left to fire (the request's, the
@@ -494,6 +533,44 @@ async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
         calls.recv().await,
         Some(Call::Read("RTTimeUSecMax")),
         "and the read after it, sent although the revert's own answer never came"
+    );
+    assert_eq!(fake.resume(), [], "so the thread is off real-time and forgotten");
+}
+
+#[tokio::test]
+async fn a_request_whose_connection_failed_is_reverted_over_a_fresh_one() {
+    let bus = PrivateBus::start();
+    let gate = Arc::new(Notify::new());
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
+    let connection = bus.connect().await;
+    let rtkit = RealtimeKit::new(&connection);
+    let policy = RealtimePolicy::default();
+    let mut promoted = pin!(rtkit.promote(ThreadId::current(), NICE, policy, || fresh(&bus)));
+    tokio::select! {
+        held = calls.recv() => {
+            assert_eq!(held, Some(Call::Realtime(this_thread(), 10)), "the request it holds");
+        }
+        early = &mut promoted => panic!("promote answered before its request was held: {early:?}"),
+    }
+    // The connection fails under the request, which the fake already has and grants once its
+    // gate opens, as rtkit may once polkit agrees.
+    connection.close().await.unwrap();
+    gate.notify_one();
+    let promoted = promoted.await;
+    assert!(
+        matches!(
+            &promoted,
+            Err(DbusError::Io { what: "org.freedesktop.RealtimeKit1.MakeThreadRealtime", .. })
+        ),
+        "the failed connection's error: {promoted:?}"
+    );
+    // The fake serves its calls in order, so these reads come after anything promote sent.
+    client(&bus).await.limits().await.unwrap();
+    assert_eq!(
+        calls.try_recv(),
+        Ok(Call::HighPriority(this_thread(), NICE)),
+        "the revert, after the grant, over a connection other than the failed one"
     );
     assert_eq!(fake.resume(), [], "so the thread is off real-time and forgotten");
 }

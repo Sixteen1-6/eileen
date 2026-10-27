@@ -11,7 +11,9 @@
 //! (`SCHED_RR`) at the policy's priority capped at `MaxRealtimePriority`, after bounding the
 //! process's `RLIMIT_RTTIME` to `RTTimeUSecMax`, which rtkit checks before and after it changes
 //! the thread. A refusal falls back to high priority (`SCHED_OTHER` at a negative nice level,
-//! floored at `MinNiceLevel`), and so does a bound that failed. rtkit refuses with
+//! floored at `MinNiceLevel`), and so does a bound that failed, unless the thread already runs
+//! at that level or higher: then nothing is asked, since the fallback would only lower it
+//! ([`Promotion::Unchanged`]). rtkit refuses with
 //! `org.freedesktop.DBus.Error.AccessDenied` for every reason it has: a priority past its
 //! maximum, an unbounded `RLIMIT_RTTIME`, polkit (whose actions refuse a session that is not
 //! local, as over SSH), its rate limit (25 calls in 20 s per user, across all of that user's
@@ -21,8 +23,11 @@
 //! rtkit asks polkit inside the call, with libdbus's default reply timeout, and acts once polkit
 //! agrees, so a request whose call passed the connection's method timeout, or whose connection
 //! failed, may still be granted. `promote` then reverts the thread before it answers the error:
-//! rtkit serves its calls one at a time, in order, so the revert comes after the request. After
-//! a failed connection the revert fails as well, since it goes over the same connection.
+//! rtkit serves its calls one at a time, in order, so the revert comes after the request. Past
+//! the method timeout the connection still works, and the revert goes over it. A failed one
+//! fails every later call too, so that revert goes over a fresh connection, which the caller
+//! makes (the system bus once more, bounded as every connect is), and which reaches rtkit after
+//! the request, if the request reached it at all.
 //!
 //! # Reverting
 //!
@@ -111,6 +116,13 @@ pub enum Promotion {
         /// Its nice level.
         nice: i32,
     },
+    /// Nothing: real-time was refused or could not be asked for, and the thread already ran at
+    /// the fallback's nice level or higher, which the fallback would only have lowered. There is
+    /// nothing to revert.
+    Unchanged {
+        /// The nice level it keeps.
+        nice: i32,
+    },
 }
 
 impl Promotion {
@@ -120,7 +132,14 @@ impl Promotion {
         match self {
             Self::Realtime { .. } => "RealtimeKit real-time",
             Self::HighPriority { .. } => "RealtimeKit high priority",
+            Self::Unchanged { .. } => "RealtimeKit unchanged",
         }
+    }
+
+    /// Whether the thread needs a revert: it does unless nothing changed.
+    #[must_use]
+    pub const fn reverts(self) -> bool {
+        !matches!(self, Self::Unchanged { .. })
     }
 }
 
@@ -131,7 +150,7 @@ pub struct Promoted {
     pub promotion: Promotion,
     /// The nice level [`RealtimeKit::revert`] asks for: the one the thread had, floored at
     /// `MinNiceLevel`, below which rtkit refuses any level, so the revert asks for a level rtkit
-    /// accepts.
+    /// accepts. A thread whose promotion [does not revert](Promotion::reverts) is left alone.
     pub restore: i32,
 }
 
@@ -243,23 +262,35 @@ impl RealtimeKit {
     }
 
     /// Makes `thread`, whose nice level is `nice`, real-time as `policy` asks, or high priority
-    /// when rtkit refuses or the bound fails; the module's doc says how. A request whose answer
-    /// never came is reverted before the error returns, since rtkit may still grant it; any
-    /// other error leaves the thread as it was.
-    pub async fn promote(
+    /// when rtkit refuses or the bound fails, never lower than `nice`; the module's doc says
+    /// how. A request whose answer never came is reverted before the error returns, since rtkit
+    /// may still grant it: over this client's connection after a method timeout, and after a
+    /// failed connection over the one `fresh` makes, a new connection to the same bus. Any other
+    /// error leaves the thread as it was.
+    pub async fn promote<F>(
         &self,
         thread: ThreadId,
         nice: i32,
         policy: RealtimePolicy,
-    ) -> Result<Promoted, DbusError> {
+        fresh: F,
+    ) -> Result<Promoted, DbusError>
+    where
+        F: AsyncFnOnce() -> Result<zbus::Connection, DbusError>,
+    {
         let limits = self.limits().await?;
         let restore = limits.nice_level(nice);
-        let requested = self.request(thread, policy, limits).await;
-        if let Err(error) = &requested
-            && unsettled(error)
-        {
-            // The request's error is the one to answer, whatever the revert's.
-            let _ignored = self.revert(thread, restore).await;
+        let requested = self.request(thread, nice, policy, limits).await;
+        // The request's error is the one to answer, whatever the revert's.
+        match requested.as_ref().err().and_then(unsettled) {
+            Some(Unsettled::Late) => {
+                let _ignored = self.revert(thread, restore).await;
+            }
+            Some(Unsettled::Lost) => {
+                if let Ok(fresh) = fresh().await {
+                    let _ignored = Self::new(&fresh).revert(thread, restore).await;
+                }
+            }
+            None => {}
         }
         Ok(Promoted { promotion: requested?, restore })
     }
@@ -282,11 +313,13 @@ impl RealtimeKit {
         rtkit.rttime_usec_max().await.map_err(|error| failed(RTTIME_USEC_MAX, &error))
     }
 
-    /// Real-time for `thread` as `policy` asks within `limits`, or high priority when rtkit
-    /// refuses or the bound fails: the requests of [`Self::promote`].
+    /// Real-time for `thread`, whose nice level is `nice`, as `policy` asks within `limits`, or
+    /// high priority when rtkit refuses or the bound fails, unless `nice` is already that level
+    /// or higher: the requests of [`Self::promote`].
     async fn request(
         &self,
         thread: ThreadId,
+        nice: i32,
         policy: RealtimePolicy,
         limits: RtLimits,
     ) -> Result<Promotion, DbusError> {
@@ -299,9 +332,12 @@ impl RealtimeKit {
                 Err(error) => return Err(error),
             }
         }
-        let nice = limits.nice_level(policy.fallback_nice);
-        self.make_high_priority(thread, nice).await?;
-        Ok(Promotion::HighPriority { nice })
+        let fallback = limits.nice_level(policy.fallback_nice);
+        if nice <= fallback {
+            return Ok(Promotion::Unchanged { nice });
+        }
+        self.make_high_priority(thread, fallback).await?;
+        Ok(Promotion::HighPriority { nice: fallback })
     }
 
     /// rtkit's object on the system bus, with no property cache.
@@ -319,32 +355,47 @@ fn failed(what: &'static str, error: &zbus::Error) -> DbusError {
     DbusError::from_zbus(what, error)
 }
 
-/// Whether rtkit may still act on a request that failed with `error`: its answer never came,
-/// since its call passed the connection's method timeout (or the bus's), or the connection
-/// failed.
-const fn unsettled(error: &DbusError) -> bool {
-    matches!(error, DbusError::DeadlineExceeded { .. } | DbusError::Io { .. })
+/// A request that rtkit may still act on, since its answer never came, by where its revert goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unsettled {
+    /// Its call passed the connection's method timeout (or the bus's): over the same connection,
+    /// which still works.
+    Late,
+    /// The connection failed, and fails every later call: over a fresh one.
+    Lost,
+}
+
+/// Whether rtkit may still act on a request that failed with `error`, and how so.
+const fn unsettled(error: &DbusError) -> Option<Unsettled> {
+    match error {
+        DbusError::DeadlineExceeded { .. } => Some(Unsettled::Late),
+        DbusError::Io { .. } => Some(Unsettled::Lost),
+        DbusError::Unavailable { .. }
+        | DbusError::Refused { .. }
+        | DbusError::NotFound { .. }
+        | DbusError::Invalid { .. } => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
 
-    use super::{NICE_LEVELS, RtLimits, unsettled};
+    use super::{NICE_LEVELS, RtLimits, Unsettled, unsettled};
     use crate::DbusError;
 
     #[test]
     fn only_a_request_whose_answer_never_came_is_unsettled() {
         let what = "the call";
         let cases = [
-            (DbusError::DeadlineExceeded { call: what }, true),
-            (DbusError::Io { what, detail: "connection reset".to_owned() }, true),
-            (DbusError::Refused { what, reason: "not authorized" }, false),
-            (DbusError::Unavailable { what }, false),
-            (DbusError::NotFound { what }, false),
+            (DbusError::DeadlineExceeded { call: what }, Some(Unsettled::Late)),
+            (DbusError::Io { what, detail: "connection reset".to_owned() }, Some(Unsettled::Lost)),
+            (DbusError::Refused { what, reason: "not authorized" }, None),
+            (DbusError::Unavailable { what }, None),
+            (DbusError::NotFound { what }, None),
             (
                 DbusError::Invalid { what, detail: "org.freedesktop.DBus.Error.Failed".to_owned() },
-                false,
+                None,
             ),
         ];
         for (error, may_still_act) in cases {
