@@ -27,12 +27,11 @@ const SUBSCRIBE: &str = "media subscription";
 ///   [`DEFAULT_DEADLINE`], the connection's method timeout and half a second, unless
 ///   [`Self::new_within`] gives another; past it the call is `DeadlineExceeded`, naming
 ///   "media sessions" or "media control".
-/// - The listing reads the players at the same time, so players that never answer cost it one
-///   method timeout together: within [`DEFAULT_DEADLINE`], it answers without them with about
-///   half a second to spare. It can still pass its deadline, as one player's reads come one
-///   after the other, its `Player` properties and then its root interface, each within the
-///   method timeout: a player that answers the first late and never answers the second holds
-///   the listing for up to two timeouts. So can the bus itself: connecting has no timeout, and
+/// - The listing reads the players at the same time, each player's read, its `Player`
+///   properties and then its root interface, within one method timeout as a whole, so players
+///   that never answer, or answer late and never name themselves, cost it one method timeout
+///   together: within [`DEFAULT_DEADLINE`], it answers without them with about half a second to
+///   spare. The bus itself can still hold it past its deadline: connecting has no timeout, and
 ///   the listing asks for the players' names and owners one call at a time before it reads them.
 /// - `subscribe` runs a [`MprisWatch`](crate::MprisWatch) on the bridge, and calls the sink
 ///   with each player's state when it opens, then with each change. A player that arrives is

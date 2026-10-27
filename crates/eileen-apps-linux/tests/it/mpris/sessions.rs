@@ -6,6 +6,7 @@ use std::pin::pin;
 use std::time::Duration;
 
 use eileen_apps_linux::{DbusError, MprisSessions};
+use eileen_contracts::desktop::MediaState;
 use eileen_contracts::tools::apps::MediaAction;
 use eileen_dbus_linux::testing::{PrivateBus, next_message};
 use eileen_dbus_linux::{METHOD_TIMEOUT, next};
@@ -15,9 +16,9 @@ use zbus::message::Type;
 use zbus::zvariant::OwnedObjectPath;
 
 use super::fake::{
-    Call, FLOAT, FULL, Gate, OBJECT, ODD, Player, TRACK, calls, float_player, float_root,
-    float_state, full_player, full_root, full_state, interface, named, odd_player, odd_root,
-    odd_state, serve,
+    Call, FLOAT, FULL, Gate, OBJECT, ODD, Player, SilentRoot, TRACK, calls, float_player,
+    float_root, float_state, full_player, full_root, full_state, interface, named, odd_player,
+    odd_root, odd_state, serve,
 };
 
 /// What a caller's deadline adds to one method timeout, for the calls that answer.
@@ -209,6 +210,79 @@ async fn the_listing_waits_one_method_timeout_however_many_players_never_answer(
     assert!(
         waited <= METHOD_TIMEOUT + MARGIN,
         "the players that never answer cost one method timeout together, not one each: {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_player_that_answers_late_and_never_names_itself_costs_one_method_timeout() {
+    let bus = PrivateBus::start();
+    let rootless = "org.mpris.MediaPlayer2.rootless";
+    let (late, silent) = (Gate::default(), Gate::default());
+    let player = Player { gate: Some(late.clone()), ..full_player() };
+    let _rootless = serve(&bus, rootless, SilentRoot { gate: silent.clone() }, player).await;
+    let conn = bus.connect_within(METHOD_TIMEOUT).await;
+    let mpris = MprisSessions::new(&conn);
+
+    // In real time until the player is asked for its Player properties.
+    let mut sessions = pin!(mpris.sessions());
+    tokio::select! {
+        () = late.entered.notified() => {}
+        early = &mut sessions => panic!("the listing ended before it asked the player: {early:?}"),
+    }
+    // Half a method timeout passes on tokio's clock alone, then the player answers, and in real
+    // time again the listing asks for its root interface, which never answers.
+    tokio::time::pause();
+    let paused = Instant::now();
+    tokio::time::advance(METHOD_TIMEOUT / 2).await;
+    tokio::time::resume();
+    late.open.notify_one();
+    tokio::select! {
+        () = silent.entered.notified() => {}
+        early = &mut sessions => panic!("the listing ended before it asked for the name: {early:?}"),
+    }
+    // Only timeouts are left to fire, and tokio's paused clock reaches each as soon as the
+    // runtime is idle.
+    tokio::time::pause();
+    let listed = sessions.await;
+    let waited = paused.elapsed();
+    let named_by_its_bus_name =
+        MediaState { session: rootless.to_owned(), app: "rootless".to_owned(), ..full_state() };
+    assert_eq!(listed.unwrap(), [named_by_its_bus_name], "its state, named by its bus name");
+    assert!(
+        waited <= METHOD_TIMEOUT + MARGIN,
+        "the player's two reads end within one method timeout together, not one each: {waited:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_read_is_bounded_on_a_connection_without_a_method_timeout() {
+    let bus = PrivateBus::start();
+    let full = serve(&bus, FULL, full_root(), full_player()).await;
+    let hung = "org.mpris.MediaPlayer2.hung";
+    let gate = Gate::default();
+    let _hung =
+        serve(&bus, hung, full_root(), Player { gate: Some(gate.clone()), ..full_player() }).await;
+    // No method timeout bounds this connection's calls: only the read's own deadline does.
+    let conn = bus.connect().await;
+    let mut replies = MessageStream::from(&conn);
+    let mpris = MprisSessions::new(&conn);
+
+    // In real time until the full player has answered and the hung player is asked; then only
+    // the read's deadline is left to fire, and tokio's paused clock reaches it as soon as the
+    // runtime is idle. Without that deadline, the listing would wait for good, and the test's
+    // own bound ends it.
+    let mut sessions = pin!(mpris.sessions());
+    tokio::select! {
+        () = answered_and_stalled(&mut replies, &full, &gate) => {}
+        early = &mut sessions => panic!("the listing ended before it asked the hung player: {early:?}"),
+    }
+    drop(replies);
+    tokio::time::pause();
+    let listed = tokio::time::timeout(METHOD_TIMEOUT + MARGIN, sessions).await;
+    assert_eq!(
+        listed.expect("the read of the hung player ends within one method timeout").unwrap(),
+        [full_state()],
+        "the player that never answers is left out"
     );
 }
 

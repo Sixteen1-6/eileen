@@ -12,7 +12,9 @@ use std::time::Duration;
 use eileen_apps_linux::{MprisEvent, MprisSessions, MprisWatch};
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
-use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip};
+use eileen_dbus_linux::METHOD_TIMEOUT;
+use eileen_dbus_linux::testing::{PrivateBus, next_message, nothing_ready, round_trip};
+use tokio::time::Instant;
 use zbus::message::Type;
 use zbus::zvariant::Value;
 use zbus::{MatchRule, MessageStream};
@@ -28,6 +30,12 @@ const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 /// The interface `PropertiesChanged` belongs to.
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
+/// What tokio's paused clock may add to a timeout: it fires timers on whole milliseconds.
+const ROUNDING: Duration = Duration::from_millis(10);
+
+/// A player whose reads never answer; first by name, ahead of the full and the odd players.
+const ASLEEP: &str = "org.mpris.MediaPlayer2.asleep";
+
 /// The watch's next change; the watch stays open.
 async fn next(watch: &mut MprisWatch) -> MprisEvent {
     watch.next().await.expect("the watch stays open")
@@ -39,6 +47,40 @@ async fn next(watch: &mut MprisWatch) -> MprisEvent {
 async fn delivered(sender: &zbus::Connection, conn: &zbus::Connection) {
     round_trip(sender, None).await;
     round_trip(conn, None).await;
+}
+
+/// Every `GetAll` that the player `service` serves receives from now on: its reads.
+async fn player_reads(service: &zbus::Connection) -> MessageStream {
+    let rule = MatchRule::builder()
+        .msg_type(Type::MethodCall)
+        .interface(PROPERTIES)
+        .unwrap()
+        .member("GetAll")
+        .unwrap()
+        .path(OBJECT)
+        .unwrap()
+        .build();
+    MessageStream::for_match_rule(rule, service, None).await.unwrap()
+}
+
+/// Returns once each of `players` has answered both reads of its first state, its `Player`
+/// properties and its root interface (`replies` is every message the watch's connection
+/// receives). A connection hands each reply to the call that waits for it before any stream sees
+/// it, so from then on those reads need nothing more from the bus.
+async fn first_reads_answered(replies: &mut MessageStream, players: &[&zbus::Connection]) {
+    let mut left: Vec<(String, usize)> =
+        players.iter().map(|player| (player.unique_name().unwrap().to_string(), 2)).collect();
+    while left.iter().any(|(_, answers)| *answers > 0) {
+        let message = next_message(replies).await;
+        let header = message.header();
+        let Some(sender) = header.sender().filter(|_| message.message_type() == Type::MethodReturn)
+        else {
+            continue;
+        };
+        if let Some((_, answers)) = left.iter_mut().find(|(name, _)| name == sender.as_str()) {
+            *answers = answers.saturating_sub(1);
+        }
+    }
 }
 
 #[tokio::test]
@@ -73,6 +115,41 @@ async fn the_watch_reports_each_player_then_each_change() {
         ..sought
     };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(second), "the next track");
+}
+
+#[tokio::test]
+async fn a_player_that_never_answers_holds_back_no_other_players_read() {
+    let bus = PrivateBus::start();
+    let gate = Gate::default();
+    let asleep = Player { gate: Some(gate.clone()), ..full_player() };
+    let _asleep = serve(&bus, ASLEEP, full_root(), asleep).await;
+    let full = serve(&bus, FULL, full_root(), full_player()).await;
+    let odd = serve(&bus, ODD, odd_root(), odd_player()).await;
+    let conn = bus.connect_within(METHOD_TIMEOUT).await;
+    let mut replies = MessageStream::from(&conn);
+    let mut watch = MprisSessions::new(&conn).subscribe().await.unwrap();
+
+    // In real time, the two other players answer while the first one has not: read one after
+    // the other, they would be asked only once its read had passed the method timeout, and the
+    // first of them would be reported before the second was asked.
+    let others = [&full, &odd];
+    tokio::select! {
+        () = first_reads_answered(&mut replies, &others) => {}
+        event = watch.next() => panic!("a player was reported before the others were read: {event:?}"),
+    }
+    // Unpolled, the stream would hold up the connection once its queue is full.
+    drop(replies);
+    // Only the stalled read's timeouts are left to fire, and tokio's paused clock reaches them as
+    // soon as the runtime is idle.
+    tokio::time::pause();
+    let paused = Instant::now();
+    assert_eq!(next(&mut watch).await, MprisEvent::Changed(full_state()), "the full player");
+    assert_eq!(next(&mut watch).await, MprisEvent::Changed(odd_state()), "then the odd one");
+    let waited = paused.elapsed();
+    assert!(
+        waited <= METHOD_TIMEOUT + ROUNDING,
+        "in bus name order, once the stalled read has passed its one method timeout: {waited:?}"
+    );
 }
 
 #[tokio::test]
@@ -353,27 +430,44 @@ async fn a_player_that_changes_while_it_is_read_waits_behind_the_others() {
         event = watch.next() => panic!("nothing to report while the read waits: {event:?}"),
     }
 
-    // Meanwhile the second player starts playing, and then the first changes again.
+    // Meanwhile the second player starts playing, and then the first changes again. One poll
+    // takes both signals and starts what is due: the second player's read, and no second read of
+    // the first, which still waits at the gate. Had it started, the poll would have sent its call,
+    // and the round trips would have brought that call to the first player before their answers.
+    let mut reads_of_busy = player_reads(&full).await;
     let other = interface(&odd).await;
     other.get_mut().await.status = "Playing";
     other.get().await.playback_status_changed(other.signal_emitter()).await.unwrap();
     delivered(&odd, &conn).await;
     busy.get().await.volume_changed(busy.signal_emitter()).await.unwrap();
     delivered(&full, &conn).await;
+    assert!(nothing_ready(&mut watch), "nothing to report while the first read waits");
+    round_trip(&conn, None).await;
+    round_trip(&full, None).await;
+    assert!(
+        nothing_ready(&mut reads_of_busy),
+        "a player has one read at a time: the one marked again is not read beside its read"
+    );
     gate.open.notify_one();
     let paused = MediaState { playing: false, ..full_state() };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(paused), "the read at the gate");
 
-    // The first player's next read would wait at the gate for good: the second goes first.
+    // The first player is read again only now, behind the second, whose read started while the
+    // first one waited at the gate: the second's change is reported first, though the first
+    // player's new read may already wait at the gate, for good.
     let playing = MediaState { playing: true, ..odd_state() };
+    assert_eq!(
+        next(&mut watch).await,
+        MprisEvent::Changed(playing),
+        "the player that changed first is reported first"
+    );
     tokio::select! {
-        event = watch.next() => assert_eq!(
-            event,
-            Some(MprisEvent::Changed(playing)),
-            "the player that changed first is read first"
-        ),
-        () = gate.entered.notified() => panic!("the player marked again was read first"),
+        () = gate.entered.notified() => {}
+        event = watch.next() => panic!("nothing to report while the first player is read again: {event:?}"),
     }
+    let call = next_message(&mut reads_of_busy).await;
+    let member = call.header().member().map(ToString::to_string);
+    assert_eq!(member.as_deref(), Some("GetAll"), "the player is read again only now");
 }
 
 #[tokio::test]

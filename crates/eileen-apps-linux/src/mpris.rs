@@ -36,11 +36,13 @@ mod watch;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 use eileen_contracts::desktop::MediaState;
 use eileen_contracts::ids::Untrusted;
 use eileen_contracts::tools::apps::MediaAction;
-use eileen_dbus_linux::{DbusError, name_owner};
+use eileen_dbus_linux::{DbusError, METHOD_TIMEOUT, name_owner};
+use tokio::time::{Instant, timeout_at};
 use zbus::Connection;
 use zbus::names::{OwnedUniqueName, WellKnownName};
 use zbus::proxy::CacheProperties;
@@ -66,6 +68,11 @@ const BUS: &str = "org.freedesktop.DBus";
 
 /// The bus's object.
 const BUS_PATH: &str = "/org/freedesktop/DBus";
+
+/// How long one player's read may take as a whole, its `Player` properties and its root
+/// interface together: the method timeout of the buses `eileen_dbus_linux` opens, so that a
+/// listing within `DEFAULT_DEADLINE` ends without a player that never answers.
+const READ_BOUND: Duration = METHOD_TIMEOUT;
 
 /// What the errors of a player's calls name.
 const PLAYER_CALL: &str = "media player";
@@ -134,8 +141,10 @@ enum Call {
 ///
 /// Every call waits at most the connection's method timeout: a player that never answers holds
 /// a call until then, which fails as [`DbusError::DeadlineExceeded`]. The buses
-/// `eileen_dbus_linux` opens have one (`METHOD_TIMEOUT`, 5 s); on a connection made without
-/// one, such a player holds the call for good.
+/// `eileen_dbus_linux` opens have one ([`METHOD_TIMEOUT`], 5 s); on a connection made without
+/// one, such a player holds a `control` call for good. A read of one player's state, in a
+/// listing or a [`MprisWatch`], is bounded as a whole as well, by one [`METHOD_TIMEOUT`] on any
+/// connection.
 #[derive(Debug, Clone)]
 pub struct MprisSessions {
     conn: Connection,
@@ -169,8 +178,11 @@ impl MprisSessions {
     /// A player that does not answer, has no `Player` interface or sends something other than
     /// a property map is left out, so one broken player never hides the others; only a failure
     /// of the bus itself is an error. The players are read at the same time, so the listing
-    /// waits as long as its slowest read: players that never answer cost one method timeout
-    /// together, not one each.
+    /// waits as long as its slowest read, and each player's read, its `Player` properties and
+    /// then its root interface, ends within one [`METHOD_TIMEOUT`] as a whole: players that never
+    /// answer cost one method timeout together, not one each, and a player whose `Player`
+    /// properties come late and whose root interface never does costs no more, named by its bus
+    /// name.
     pub async fn sessions(&self) -> Result<Vec<MediaState>, DbusError> {
         let reads = players(&self.conn)
             .await?
@@ -352,20 +364,27 @@ async fn properties(
     reply.body().deserialize().map_err(failed)
 }
 
-/// The player `name`, read from its owner: its app's name and its state from its `Player`
-/// properties. The app's name is `app` when the caller knows it already, and is read from the
-/// root interface only when it does not; a root interface that cannot be read leaves the bus
-/// name to name the app. It owns its arguments, so the watch can keep it while it waits.
+/// The player `name`, read from its owner within [`READ_BOUND`] as a whole: its app's name and
+/// its state from its `Player` properties. The app's name is `app` when the caller knows it
+/// already, and is read from the root interface only when it does not; a root interface that
+/// cannot be read by the bound leaves the bus name to name the app. `Player` properties that
+/// have not come by then are [`DbusError::DeadlineExceeded`]. It owns its arguments, so the
+/// watch can keep it while it waits.
 async fn read(
     conn: Connection,
     name: String,
     owner: OwnedUniqueName,
     app: Option<Untrusted<String>>,
 ) -> Result<(Untrusted<String>, MediaState), DbusError> {
-    let player = properties(&conn, &owner, PLAYER).await?;
-    let app = match app {
-        Some(app) => app,
-        None => app_name(&name, &properties(&conn, &owner, ROOT).await.unwrap_or_default()),
+    let deadline = Instant::now() + READ_BOUND;
+    let player = timeout_at(deadline, properties(&conn, &owner, PLAYER))
+        .await
+        .map_err(|_late| DbusError::DeadlineExceeded { call: PLAYER_CALL })??;
+    let app = if let Some(app) = app {
+        app
+    } else {
+        let root = timeout_at(deadline, properties(&conn, &owner, ROOT)).await;
+        app_name(&name, &root.ok().and_then(Result::ok).unwrap_or_default())
     };
     let state = media_state(&name, app.clone(), &player);
     Ok((app, state))
