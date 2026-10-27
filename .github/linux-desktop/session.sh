@@ -14,12 +14,22 @@
 #             fresh ones (the user's systemd instance has its own sockets in /run/user), writes
 #             the PipeWire and portal configuration, and starts dbus-run-session, whose bus is the
 #             session bus of every service below and of the tests.
-#   services  On that bus: starts the compositor and the services, waits up to 20 s for each to
-#             answer, prints what the session is, runs the command, and stops what it started.
+#   services  On that bus: checks that bwrap starts glycin's sandbox, starts the compositor and
+#             the services, waits up to 20 s for each to answer, prints what the session is, runs
+#             the command, and stops what it started.
 # The exit status is the command's, or 1 naming what did not come up.
 #
 # weston's headless backend offers no seat (no keyboard or pointer), which GTK warns about and
 # notification-daemon, an X11 program, crashes on: it runs on an Xvfb display of its own.
+#
+# gdk-pixbuf loads every image through glycin, GTK's icons among them, and glycin runs each
+# loader in a sandbox that bwrap makes. bwrap refuses to start in a process that holds any
+# capability, and pam_systemd gives a regular user who logs in on a seat CAP_WAKE_ALARM in its
+# ambient set, which systemd keeps for a unit with a PAM stack, so every program of the session
+# would hold it. Then each loader exits at once, and GTK 3 aborts when an icon and then its
+# fallback fail to load: notification-daemon did, on its first notification. So the session's
+# unit leaves CAP_WAKE_ALARM out of its bounding set, and systemd raises no ambient capability
+# that the bounding set leaves out. The services step checks that bwrap starts, before anything.
 set -euo pipefail
 
 script="$(realpath "${BASH_SOURCE[0]}")"
@@ -48,6 +58,13 @@ session_is_active() {
   [ "$(loginctl show-session "$XDG_SESSION_ID" --property=Active --value)" = yes ]
 }
 
+# A sandbox as glycin makes one for an image loader: every namespace bwrap can unshare, /usr
+# read-only and a merged /usr's links, in which /usr/bin/true runs. bwrap says on stderr why not.
+sandbox() {
+  bwrap --unshare-all --die-with-parent --ro-bind /usr /usr --symlink usr/lib /lib \
+    --symlink usr/lib64 /lib64 --dev /dev /usr/bin/true
+}
+
 login() {
   local n=1 vt=()
   while [ -e "$root/logs/session-$n" ]; do n=$((n + 1)); done
@@ -57,10 +74,12 @@ login() {
   if [ "$(loginctl show-seat seat0 --property=CanTTY --value)" = yes ]; then
     vt=(--setenv=XDG_VTNR=$((7 + n)))
   fi
-  # PATH goes by another name, since pam_env sets PATH from /etc/environment.
+  # PATH goes by another name, since pam_env sets PATH from /etc/environment. The bounding set
+  # leaves out CAP_WAKE_ALARM, which pam_systemd would give the session (the header says why).
   exec sudo -n systemd-run --pipe --wait --collect --quiet --same-dir --expand-environment=no \
     --uid="$(id -u)" --gid="$(id -g)" \
     --property=PAMName=login --property=RuntimeMaxSec=1500 \
+    --property=CapabilityBoundingSet=~CAP_WAKE_ALARM \
     --setenv=EILEEN_SESSION_STEP=bus --setenv=EILEEN_SESSION_LOGS="$root/logs/session-$n" \
     --setenv=EILEEN_RUNNER_PATH="$PATH" \
     --setenv=CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" \
@@ -193,15 +212,22 @@ inventory() {
   row "power profile" "$(system_get org.freedesktop.UPower.PowerProfiles \
     /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile 2>&1)"
   for package in systemd libpam-systemd polkitd dbus-daemon weston xvfb pipewire wireplumber \
-    at-spi2-core xdg-desktop-portal xdg-desktop-portal-gtk notification-daemon gnome-keyring \
-    mpv mpv-mpris upower power-profiles-daemon; do
+    at-spi2-core xdg-desktop-portal xdg-desktop-portal-gtk notification-daemon bubblewrap \
+    glycin-loaders gnome-keyring mpv mpv-mpris upower power-profiles-daemon; do
     row "$package" "$(dpkg-query --show --showformat="\${Version}" "$package" 2>&1)"
   done
   echo
 }
 
 services() {
+  local said ambient
   trap stop EXIT
+  if ! said="$(sandbox 2>&1)"; then
+    ambient="$(sed -n 's/^CapAmb:[[:space:]]*//p' /proc/self/status)"
+    echo "session.sh: bwrap cannot make glycin's sandbox, in which GTK loads its icons: $said" \
+      "(the session's ambient capabilities: $ambient)" >&2
+    exit 1
+  fi
   start weston weston --backend=headless --shell=kiosk --socket="$wayland" --idle-time=0 \
     --no-config
   await "the compositor (weston)" test -S "$XDG_RUNTIME_DIR/$wayland"
