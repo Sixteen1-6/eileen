@@ -68,9 +68,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/apt-archives
           key: ${{ steps.apt-cache-key.outputs.key }}
-      # On a hit the cached packages install without the mirror: the key names the runner image,
-      # so the installed base and the set the cold run downloaded match. A miss, or a hit that
-      # fails to install, downloads from the mirror. There apt gives up on a connection that
+      # On a hit the cached packages go into apt's archive folder and install with downloads
+      # forbidden: apt takes a package from a trusted index over a local .deb of the same
+      # version, so passing the files alone would fetch them again. The key names the runner
+      # image, so the installed base and the set the cold run downloaded match. A miss, or a hit
+      # that fails to install, downloads from the mirror. There apt gives up on a connection that
       # sends nothing for 20 s and retries, and can move on to the next mirror the image's list
       # names; a slow but moving download is not a stall, so the step's own limit ends it.
       - name: Install the session's compositor and services
@@ -84,7 +86,8 @@ jobs:
           apt=(sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20
             -o Acquire::https::Timeout=20)
           if [ "$CACHE_HIT" = true ] &&
-            "${apt[@]}" install --yes --no-install-recommends "$cache"/*.deb; then
+            sudo cp -t /var/cache/apt/archives "$cache"/*.deb &&
+            "${apt[@]}" install --yes --no-install-recommends --no-download "$cache"/*.deb; then
             echo "Installed from the cache, without the mirror."
             exit 0
           fi
