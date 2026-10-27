@@ -98,10 +98,13 @@ jobs:
           rm -rf "$cache"
           mkdir -p "$cache"
           find /var/cache/apt/archives -maxdepth 1 -name '*.deb' -exec cp -t "$cache" {} +
+          count="$(find "$cache" -maxdepth 1 -name '*.deb' | wc -l)"
+          echo "packages=$count" >> "$GITHUB_OUTPUT"
           "${apt[@]}" install --yes --no-install-recommends "${packages[@]}"
       - name: Save the session's packages
         if: >-
           ${{ steps.apt-cache.outputs.cache-hit != 'true'
+          && steps.install.outputs.packages != '0'
           && github.event_name != 'pull_request' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
