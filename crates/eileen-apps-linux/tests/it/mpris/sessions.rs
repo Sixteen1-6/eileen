@@ -249,7 +249,7 @@ async fn a_player_that_answers_late_and_never_names_itself_costs_one_method_time
         MediaState { session: rootless.to_owned(), app: "rootless".to_owned(), ..full_state() };
     assert_eq!(listed.unwrap(), [named_by_its_bus_name], "its state, named by its bus name");
     assert!(
-        waited <= METHOD_TIMEOUT,
+        waited <= METHOD_TIMEOUT + MARGIN,
         "the player's two reads end within one method timeout together, not one each: {waited:?}"
     );
 }

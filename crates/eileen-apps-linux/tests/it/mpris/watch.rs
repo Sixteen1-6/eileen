@@ -30,6 +30,9 @@ const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 /// The interface `PropertiesChanged` belongs to.
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
+/// What tokio's paused clock may add to a timeout: it fires timers on whole milliseconds.
+const ROUNDING: Duration = Duration::from_millis(10);
+
 /// A player whose reads never answer; first by name, ahead of the full and the odd players.
 const ASLEEP: &str = "org.mpris.MediaPlayer2.asleep";
 
@@ -130,7 +133,7 @@ async fn a_player_that_never_answers_holds_back_no_other_players_read() {
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(odd_state()), "then the odd one");
     let waited = paused.elapsed();
     assert!(
-        waited <= METHOD_TIMEOUT,
+        waited <= METHOD_TIMEOUT + ROUNDING,
         "in bus name order, once the stalled read has passed its one method timeout: {waited:?}"
     );
 }
@@ -424,15 +427,18 @@ async fn a_player_that_changes_while_it_is_read_waits_behind_the_others() {
     let paused = MediaState { playing: false, ..full_state() };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(paused), "the read at the gate");
 
-    // The first player's next read would wait at the gate for good: the second goes first.
+    // The first player is read again only now, behind the second, whose read started while the
+    // first one waited at the gate: the second's change is reported first, though the first
+    // player's new read may already wait at the gate, for good.
     let playing = MediaState { playing: true, ..odd_state() };
+    assert_eq!(
+        next(&mut watch).await,
+        MprisEvent::Changed(playing),
+        "the player that changed first is reported first"
+    );
     tokio::select! {
-        event = watch.next() => assert_eq!(
-            event,
-            Some(MprisEvent::Changed(playing)),
-            "the player that changed first is read first"
-        ),
-        () = gate.entered.notified() => panic!("the player marked again was read first"),
+        () = gate.entered.notified() => {}
+        event = watch.next() => panic!("nothing to report while the first player is read again: {event:?}"),
     }
 }
 

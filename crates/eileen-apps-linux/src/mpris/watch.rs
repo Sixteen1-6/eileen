@@ -27,7 +27,7 @@ use super::{OBJECT, PLAYER, PREFIX, players, read};
 /// The namespace of every player's bus name.
 const NAMESPACE: &str = "org.mpris.MediaPlayer2";
 
-/// How many reads one poll starts or finishes before it yields.
+/// How many listings or reads one poll finishes before it yields.
 const MAX_STEPS: usize = 16;
 
 /// What the errors of opening the watch name.
@@ -67,19 +67,20 @@ struct Tracked {
     last: Option<MediaState>,
 }
 
-/// What the watch waits for.
-enum Op {
-    /// The players on the bus: each player's bus name and the unique name that owns it.
-    List(Waiting<Vec<(String, OwnedUniqueName)>>),
-    /// One player's state, read from `owner`.
-    Read {
-        /// The player's bus name.
-        name: String,
-        /// The owner the read went to.
-        owner: OwnedUniqueName,
-        /// The reply: the app's name and the state.
-        reply: Waiting<(Untrusted<String>, MediaState)>,
-    },
+/// The players on the bus, as a listing finds them: each player's bus name and the unique name
+/// that owns it.
+type Listing = Waiting<Vec<(String, OwnedUniqueName)>>;
+
+/// One player's read, from the time it starts until its change is reported.
+struct Reading {
+    /// The player's bus name.
+    name: String,
+    /// The owner the read went to.
+    owner: OwnedUniqueName,
+    /// The reply: the app's name and the state.
+    reply: Waiting<(Untrusted<String>, MediaState)>,
+    /// The reply once it came, kept until the reads that started before it have been reported.
+    result: Option<Result<(Untrusted<String>, MediaState), DbusError>>,
 }
 
 /// When the watch lists the players again.
@@ -90,13 +91,13 @@ enum Relist {
     No,
     /// At the next signal: the last listing failed.
     OnSignal,
-    /// As soon as no read runs.
+    /// As soon as no read runs; no read starts meanwhile.
     Due,
 }
 
 /// How one step of a poll ended.
 enum Step {
-    /// The pending read or listing has not answered yet.
+    /// The listing, or the first read to start, has not answered yet, or nothing runs.
     Waiting,
     /// A change to report.
     Event(MprisEvent),
@@ -215,19 +216,24 @@ impl Players {
 /// - Then a [`MprisEvent::Changed`] for each player that arrives, and each time a player's
 ///   state changes: `PropertiesChanged` on its `Player` interface and `Seeked` mark it to be
 ///   read again. A read that finds the state as last reported reports nothing, and signals
-///   faster than the reads fold into one read per player. Players are read in the order they
-///   were marked, so one marked again while it is read waits behind the others. A signal from
-///   a sender that owns no player's name is ignored, and so is a `NameOwnerChanged` that the
-///   bus did not send.
+///   faster than the reads fold into one read per player. Reads start in the order the players
+///   were marked, and a player has one read at a time: one marked again while it is read is
+///   read again once that read ends, so its change comes behind the others marked meanwhile. A
+///   signal from a sender that owns no player's name is ignored, and so is a `NameOwnerChanged`
+///   that the bus did not send.
 /// - A [`MprisEvent::Gone`] when a player leaves the bus or another connection takes its name.
 /// - `None` once the bus connection has ended, and only then: a stream's read error is passed
 ///   over, and the stream's end follows it.
 ///
-/// A player that cannot be read is skipped until its next signal, and a listing that fails, as
-/// one past the connection's method timeout does, is made again after the next signal. Reads
-/// run one at a time, so a player that never answers holds back the others until the method
-/// timeout. `Position` sends no signal as it advances: a player's position is the one read
-/// with its last change.
+/// The players are read at the same time, each read within one method timeout as a whole (as
+/// [`MprisSessions::sessions`](super::MprisSessions::sessions) reads them), and the changes are
+/// reported in the order their reads started, so the first states keep bus name order. A
+/// player that never answers holds back the changes behind its read until that one bound, while
+/// their reads go on: players that stall cost the others one method timeout together, not one
+/// each. A player that cannot be read is skipped until its next signal, and a listing that
+/// fails, as one past the connection's method timeout does, is made again after the next
+/// signal; no read runs beside a listing. `Position` sends no signal as it advances: a
+/// player's position is the one read with its last change.
 ///
 /// # Polling and dropping
 ///
@@ -247,8 +253,11 @@ pub struct MprisWatch {
     seeked: Signals,
     /// What the watch knows of the players.
     players: Players,
-    /// The listing or read the watch waits for.
-    op: Option<Op>,
+    /// The listing the watch waits for.
+    listing: Option<Listing>,
+    /// The reads that run or wait to be reported, in the order they started, which is the order
+    /// their changes are reported in; at most one per player.
+    reads: VecDeque<Reading>,
     /// The connection has ended.
     ended: bool,
 }
@@ -278,7 +287,8 @@ impl MprisWatch {
             properties_changed,
             seeked,
             players: Players::default(),
-            op: None,
+            listing: None,
+            reads: VecDeque::new(),
             ended: false,
         };
         watch.list();
@@ -315,57 +325,65 @@ impl MprisWatch {
     fn list(&mut self) {
         self.players.reported = Some(BTreeSet::new());
         let conn = self.conn.clone();
-        self.op = Some(Op::List(Box::pin(async move { players(&conn).await })));
+        self.listing = Some(Box::pin(async move { players(&conn).await }));
     }
 
-    /// Starts the next listing or read: a listing when one is due, else the read of the player
-    /// marked first, which every marked player is tracked for. False when there is nothing to
-    /// start.
-    fn start_next(&mut self) -> bool {
+    /// Starts what is due, unless a listing runs: a listing when one is due and no read runs
+    /// any more, else a read of every marked player that has none running, in the order they
+    /// were marked. Every marked player is tracked; one still being read stays marked.
+    fn start(&mut self) {
+        if self.listing.is_some() {
+            return;
+        }
         if self.players.relist == Relist::Due {
-            self.players.relist = Relist::No;
-            self.list();
-            return true;
+            if self.reads.is_empty() {
+                self.players.relist = Relist::No;
+                self.list();
+            }
+            return;
         }
-        let Some(name) = self.players.to_read.pop_front() else {
-            return false;
-        };
-        if let Some(player) = self.players.tracked.get(&name) {
-            let (owner, app) = (player.owner.clone(), player.app.clone());
-            let reply = Box::pin(read(self.conn.clone(), name.clone(), owner.clone(), app));
-            self.op = Some(Op::Read { name, owner, reply });
+        let mut still_read = VecDeque::new();
+        while let Some(name) = self.players.to_read.pop_front() {
+            if self.reads.iter().any(|reading| reading.name == name) {
+                still_read.push_back(name);
+            } else if let Some(player) = self.players.tracked.get(&name) {
+                let (owner, app) = (player.owner.clone(), player.app.clone());
+                let reply = Box::pin(read(self.conn.clone(), name.clone(), owner.clone(), app));
+                self.reads.push_back(Reading { name, owner, reply, result: None });
+            }
         }
-        true
+        self.players.to_read = still_read;
     }
 
-    /// Polls the listing or read the watch waits for.
-    fn poll_op(&mut self, cx: &mut Context<'_>) -> Step {
-        match self.op.as_mut() {
-            None => Step::Done,
-            Some(Op::List(reply)) => {
-                let Poll::Ready(listed) = reply.as_mut().poll(cx) else {
-                    return Step::Waiting;
-                };
-                self.op = None;
-                let reported = self.players.reported.take().unwrap_or_default();
-                match listed {
-                    Ok(listed) => self.players.listed(listed, &reported),
-                    // The connection may be fine, as when a call ran past its method timeout:
-                    // its end shows in the signal streams instead.
-                    Err(_) => self.players.relist = Relist::OnSignal,
-                }
-                Step::Done
+    /// Polls the listing when one runs, else every read that runs, and takes the first read
+    /// to start once it has answered.
+    fn poll_work(&mut self, cx: &mut Context<'_>) -> Step {
+        if let Some(listing) = self.listing.as_mut() {
+            let Poll::Ready(listed) = listing.as_mut().poll(cx) else {
+                return Step::Waiting;
+            };
+            self.listing = None;
+            let reported = self.players.reported.take().unwrap_or_default();
+            match listed {
+                Ok(listed) => self.players.listed(listed, &reported),
+                // The connection may be fine, as when a call ran past its method timeout:
+                // its end shows in the signal streams instead.
+                Err(_) => self.players.relist = Relist::OnSignal,
             }
-            Some(Op::Read { reply, .. }) => {
-                let Poll::Ready(result) = reply.as_mut().poll(cx) else {
-                    return Step::Waiting;
-                };
-                let Some(Op::Read { name, owner, .. }) = self.op.take() else {
-                    return Step::Done;
-                };
-                self.players.read_done(&name, &owner, result).map_or(Step::Done, Step::Event)
+            return Step::Done;
+        }
+        for reading in self.reads.iter_mut().filter(|reading| reading.result.is_none()) {
+            if let Poll::Ready(result) = reading.reply.as_mut().poll(cx) {
+                reading.result = Some(result);
             }
         }
+        if self.reads.front().is_none_or(|first| first.result.is_none()) {
+            return Step::Waiting;
+        }
+        let Some(Reading { name, owner, result: Some(result), .. }) = self.reads.pop_front() else {
+            return Step::Done;
+        };
+        self.players.read_done(&name, &owner, result).map_or(Step::Done, Step::Event)
     }
 }
 
@@ -382,13 +400,8 @@ impl Stream for MprisWatch {
             if this.ended {
                 return Poll::Ready(None);
             }
-            if this.op.is_none() {
-                if !this.start_next() {
-                    return Poll::Pending;
-                }
-                continue;
-            }
-            match this.poll_op(cx) {
+            this.start();
+            match this.poll_work(cx) {
                 Step::Waiting => return Poll::Pending,
                 Step::Event(event) => return Poll::Ready(Some(event)),
                 Step::Done => {}
@@ -406,7 +419,8 @@ impl fmt::Debug for MprisWatch {
             .field("players", &self.players.tracked.len())
             .field("to_read", &self.players.to_read.len())
             .field("gone", &self.players.gone.len())
-            .field("waiting", &self.op.is_some())
+            .field("listing", &self.listing.is_some())
+            .field("reads", &self.reads.len())
             .field("relist", &self.players.relist)
             .field("ended", &self.ended)
             .finish_non_exhaustive()
