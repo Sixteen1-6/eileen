@@ -49,6 +49,20 @@ async fn delivered(sender: &zbus::Connection, conn: &zbus::Connection) {
     round_trip(conn, None).await;
 }
 
+/// Every `GetAll` that the player `service` serves receives from now on: its reads.
+async fn player_reads(service: &zbus::Connection) -> MessageStream {
+    let rule = MatchRule::builder()
+        .msg_type(Type::MethodCall)
+        .interface(PROPERTIES)
+        .unwrap()
+        .member("GetAll")
+        .unwrap()
+        .path(OBJECT)
+        .unwrap()
+        .build();
+    MessageStream::for_match_rule(rule, service, None).await.unwrap()
+}
+
 /// Returns once each of `players` has answered both reads of its first state, its `Player`
 /// properties and its root interface (`replies` is every message the watch's connection
 /// receives). A connection hands each reply to the call that waits for it before any stream sees
@@ -416,13 +430,24 @@ async fn a_player_that_changes_while_it_is_read_waits_behind_the_others() {
         event = watch.next() => panic!("nothing to report while the read waits: {event:?}"),
     }
 
-    // Meanwhile the second player starts playing, and then the first changes again.
+    // Meanwhile the second player starts playing, and then the first changes again. One poll
+    // takes both signals and starts what is due: the second player's read, and no second read of
+    // the first, which still waits at the gate. Had it started, the poll would have sent its call,
+    // and the round trips would have brought that call to the first player before their answers.
+    let mut reads_of_busy = player_reads(&full).await;
     let other = interface(&odd).await;
     other.get_mut().await.status = "Playing";
     other.get().await.playback_status_changed(other.signal_emitter()).await.unwrap();
     delivered(&odd, &conn).await;
     busy.get().await.volume_changed(busy.signal_emitter()).await.unwrap();
     delivered(&full, &conn).await;
+    assert!(nothing_ready(&mut watch), "nothing to report while the first read waits");
+    round_trip(&conn, None).await;
+    round_trip(&full, None).await;
+    assert!(
+        nothing_ready(&mut reads_of_busy),
+        "a player has one read at a time: the one marked again is not read beside its read"
+    );
     gate.open.notify_one();
     let paused = MediaState { playing: false, ..full_state() };
     assert_eq!(next(&mut watch).await, MprisEvent::Changed(paused), "the read at the gate");
@@ -440,6 +465,8 @@ async fn a_player_that_changes_while_it_is_read_waits_behind_the_others() {
         () = gate.entered.notified() => {}
         event = watch.next() => panic!("nothing to report while the first player is read again: {event:?}"),
     }
+    let call = next_message(&mut reads_of_busy).await;
+    assert_eq!(call.header().member().map(|member| member.as_str()), Some("GetAll"), "read again");
 }
 
 #[tokio::test]
