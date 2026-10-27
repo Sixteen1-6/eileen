@@ -1,21 +1,26 @@
 //! The tray through `LinuxShell::set_tray` on a bridge to a private bus: the item and its menu as
 //! a host reads them, with a connection of the test's playing the host, and their registration
-//! with a fake watcher that reports each one. The rig's items are `pub(super)` for the shell's
-//! tests. The test's thread calls the shell as the core does, blocking; the fakes and the host run
-//! on a runtime of their own.
+//! with fake watchers that report each one, and take the item, refuse it or never answer. The
+//! rig's items are `pub(super)` for the shell's tests. The test's thread calls the shell as the
+//! core does, blocking; the fakes and the host run on a runtime of their own. The bridge's caller
+//! waits on a condition variable, not a tokio timer, so a deadline that passes passes in real
+//! time.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip, serve};
 use eileen_dbus_linux::{
     Bridge, DEFAULT_DEADLINE, Names, Signals, name_owner, owner_changes, subscribe,
 };
-use eileen_platform::ShellHost;
+use eileen_platform::{Deadline, PlatformError, ShellHost};
 use eileen_platform::{TrayItem, TrayState};
 use eileen_shell_linux::{LinuxShell, LinuxShellEvent, LinuxShellSettings, TraySettings};
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use zbus::fdo;
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::{MatchRule, Message};
@@ -35,6 +40,12 @@ pub(super) const INVALID_ARGS: &str = "org.freedesktop.DBus.Error.InvalidArgs";
 
 /// The interface every object's properties are read through.
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
+/// How many times the tray holder registers again with a watcher that refused the item, one per
+/// later `set_tray`, as `host::tray`'s `RETRIES` says.
+const RETRIES: u32 = 3;
+/// A deadline shorter than the holder's method timeout (5 s), as a caller may set: a call waits
+/// for a registration under way for half of it, in real time.
+const SHORT_DEADLINE: Deadline = Deadline::after(Duration::from_secs(1));
 
 /// An icon as pixels, `a(iiay)`.
 type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
@@ -53,9 +64,27 @@ pub(super) struct Registration {
     pub(super) icon: Option<String>,
 }
 
-/// A watcher that reports each `RegisterStatusNotifierItem`.
+/// How a fake watcher answers `RegisterStatusNotifierItem`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Takes {
+    /// It takes the item.
+    Always,
+    /// It answers `org.freedesktop.DBus.Error.Failed` this many times, then takes the item.
+    After(u32),
+    /// It never answers, until the rig takes it off the bus.
+    Never,
+}
+
+/// A watcher that reports each `RegisterStatusNotifierItem`, then answers as `takes` says.
 #[derive(Debug, Clone)]
-struct FakeWatcher(mpsc::Sender<Registration>);
+struct FakeWatcher {
+    reports: mpsc::Sender<Registration>,
+    takes: Takes,
+    /// How many registrations it has refused.
+    refused: Arc<AtomicU32>,
+    /// Closed when the rig takes the watcher off the bus, which ends a call it never answers.
+    gate: watch::Receiver<()>,
+}
 
 #[zbus::interface(name = "org.kde.StatusNotifierWatcher")]
 impl FakeWatcher {
@@ -64,11 +93,26 @@ impl FakeWatcher {
         service: &str,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
-    ) {
+    ) -> fdo::Result<()> {
         let sender = header.sender().unwrap().to_string();
         let icon = icon_of(conn, service).await;
         let registration = Registration { service: service.to_owned(), sender, icon };
-        let _ignored = self.0.send(registration).await;
+        let _ignored = self.reports.send(registration).await;
+        match self.takes {
+            Takes::Always => Ok(()),
+            Takes::After(refusals) => {
+                if self.refused.fetch_add(1, Ordering::SeqCst) < refusals {
+                    Err(fdo::Error::Failed("not now".to_owned()))
+                } else {
+                    Ok(())
+                }
+            }
+            Takes::Never => {
+                // A call under way holds its connection open: the gate lets the watcher leave.
+                let _closed = self.gate.clone().changed().await;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -120,6 +164,8 @@ pub(super) struct Rig {
     pub(super) runtime: Runtime,
     host: Option<zbus::Connection>,
     watchers: Vec<zbus::Connection>,
+    /// The gates of the watchers being served.
+    gates: Vec<watch::Sender<()>>,
     pub(super) bus: PrivateBus,
 }
 
@@ -127,6 +173,7 @@ impl Drop for Rig {
     fn drop(&mut self) {
         // The connections end inside their runtime's context, a panicking test's included.
         let _context = self.runtime.enter();
+        self.gates.clear();
         self.watchers.clear();
         self.host = None;
     }
@@ -139,7 +186,7 @@ impl Rig {
         let runtime = runtime.worker_threads(2).enable_all().build().unwrap();
         let bus = PrivateBus::start();
         let host = runtime.block_on(bus.connect());
-        Self { runtime, host: Some(host), watchers: Vec::new(), bus }
+        Self { runtime, host: Some(host), watchers: Vec::new(), gates: Vec::new(), bus }
     }
 
     /// The host's connection.
@@ -147,17 +194,26 @@ impl Rig {
         self.host.as_ref().unwrap()
     }
 
-    /// Starts a watcher, and answers what it reports.
+    /// Starts a watcher that takes the item, and answers what it reports.
     pub(super) fn watcher(&mut self) -> mpsc::Receiver<Registration> {
-        let (registrations, reported) = mpsc::channel(8);
-        let watcher = FakeWatcher(registrations);
+        self.watcher_that(Takes::Always)
+    }
+
+    /// Starts a watcher that answers as `takes` says, and answers what it reports.
+    pub(super) fn watcher_that(&mut self, takes: Takes) -> mpsc::Receiver<Registration> {
+        let (reports, reported) = mpsc::channel(8);
+        let (gate, closed) = watch::channel(());
+        let refused = Arc::new(AtomicU32::new(0));
+        let watcher = FakeWatcher { reports, takes, refused, gate: closed };
         self.watchers.push(self.runtime.block_on(serve(&self.bus, WATCHER, WATCHER_PATH, watcher)));
+        self.gates.push(gate);
         reported
     }
 
     /// Takes every watcher off the bus.
     pub(super) fn stop_watchers(&mut self) {
         let _context = self.runtime.enter();
+        self.gates.clear();
         self.watchers.clear();
     }
 
@@ -468,6 +524,53 @@ fn a_watcher_that_restarts_registers_the_item_again() {
     let mut second = rig.watcher();
     let again = rig.registered(&mut second);
     assert_eq!((again.service, again.sender), (item, sender), "the same item, registered again");
+    assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it");
+}
+
+#[test]
+fn a_watcher_that_never_answers_leaves_set_tray_within_its_deadline() {
+    let mut rig = Rig::new();
+    let mut silent = rig.watcher_that(Takes::Never);
+    let (shell, _events) = rig.shell_with(settings(SHORT_DEADLINE, None));
+    let unavailable = Err(PlatformError::Unavailable { what: "tray" });
+    assert_eq!(shell.set_tray(state()), unavailable, "no watcher has it yet, said in time");
+    let Registration { service: item, .. } = rig.registered(&mut silent);
+    let muted = TrayState { muted: true, ..state() };
+    assert_eq!(shell.set_tray(muted), unavailable, "a call made meanwhile, in time too");
+    let (_icon, muted_icon) = icons();
+    let icon = String::try_from(rig.property(&item, ITEM_PATH, ITEM, "IconName")).unwrap();
+    assert_eq!(icon, muted_icon, "and its state is shown");
+    rig.stop_watchers();
+    let mut next = rig.watcher();
+    let again = rig.registered(&mut next);
+    assert_eq!(again.service, item, "the holder still follows the watcher's name");
+    assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it");
+}
+
+#[test]
+fn a_watcher_that_refuses_is_asked_again_by_the_next_calls_and_a_new_one_takes_the_item() {
+    let mut rig = Rig::new();
+    // One refusal more than the retries, so that a retry past them would be taken.
+    let mut refusing = rig.watcher_that(Takes::After(RETRIES + 1));
+    let (shell, _events) = rig.shell();
+    let unavailable = Err(PlatformError::Unavailable { what: "tray" });
+    assert_eq!(shell.set_tray(state()), unavailable, "refused");
+    let Registration { service: item, .. } = rig.registered(&mut refusing);
+    let (icon, muted_icon) = icons();
+    for retry in 1..=RETRIES {
+        let muted = retry % 2 == 1;
+        assert_eq!(shell.set_tray(TrayState { muted, ..state() }), unavailable, "retry {retry}");
+        // The watcher reports a call before it answers it, and the call waits for the answer.
+        let again = refusing.try_recv().unwrap_or_else(|_| panic!("retry {retry} was made"));
+        assert_eq!(again.service, item, "the same item, retry {retry}");
+        let shown = if muted { &muted_icon } else { &icon };
+        assert_eq!(again.icon.as_ref(), Some(shown), "the call's state, shown first");
+    }
+    assert_eq!(shell.set_tray(state()), unavailable, "no retry left, though this one would pass");
+    rig.stop_watchers();
+    let mut next = rig.watcher();
+    let taken = rig.registered(&mut next);
+    assert_eq!(taken.service, item, "registered with the name's new owner");
     assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it");
 }
 
