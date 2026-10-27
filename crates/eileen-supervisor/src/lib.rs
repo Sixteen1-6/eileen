@@ -12,21 +12,21 @@
 //!
 //! # Does not own
 //!
-//! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`),
-//!   cargo under the build guard (`eileen-buildguard::spawn_cargo`), worker flags
-//!   (`eileen-harness`).
+//! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`), cargo
+//!   under the build guard (`eileen-buildguard::spawn_cargo`), worker flags (`eileen-harness`).
 //!
 //! # Invariants
 //!
 //! - Killing a child's Job Object kills its grandchildren (Windows test
 //!   `tests::killing_the_job_kills_the_grandchild`).
-//! - Stderr forwarding survives bytes that are not UTF-8 and keeps at most
-//!   [`MAX_STDERR_LINE`] bytes of a line in memory
+//! - [`spawn`] forwards stderr at once, holding no runtime thread, so a full pipe never blocks a
+//!   child (`tests::a_chatty_child_exits_*`, `tests::a_quiet_child_leaves_the_blocking_pool_free`);
+//!   it survives bytes that are not UTF-8 and keeps at most [`MAX_STDERR_LINE`] bytes of a line
 //!   (`tests::hostile_stderr_keeps_forwarding_with_lines_cut`).
 //! - On Linux a child leads its own session, and its whole group dies before the reap: on drop,
 //!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
-//!   spawned it, from any thread. A Claude session runs ten nice steps below its forking
-//!   thread, and `wait` forwards a stderr pipe nobody took (a test of `tests::linux` for each).
+//!   spawned it, from any thread; a Claude session runs ten nice steps below its forking thread
+//!   (a test of `tests::linux` for each).
 //! - The detached spawn outlives its parent (on Windows) and is reaped once it exits (on Unix):
 //!   `tests::the_guard_spawn_outlives_its_parent` and `tests::linux::the_guard_spawn_is_reaped`.
 //! - A failing child restarts at most `max_restarts` times per window
@@ -41,8 +41,8 @@
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
-//! - May depend on `eileen-rt`, `eileen-trace`, `process-wrap`, `thiserror`, `tokio` and
-//!   `tracing`; `windows` on Windows; `eileen-stdx` on Unix; `rustix` on Linux.
+//! - May depend on `eileen-rt`, `eileen-stdx`, `eileen-trace`, `process-wrap`, `thiserror`,
+//!   `tokio` and `tracing`; `windows` on Windows; `rustix` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -59,9 +59,9 @@
 //!   which a descendant can leave, or outlive in a crash): keep it while the child should live.
 //! - On Linux [`Child::wait`] kills what is left of the group once the child exits, where
 //!   Windows waits for the whole job; a set-user-ID program loses its parent-death signal.
-//! - [`spawn`] and [`Child::forward_stderr`] need a tokio runtime with I/O (tokio's process
-//!   driver, and on Linux the child's pidfd). A child blocks on a full stderr pipe: take or
-//!   forward it before reading stdout to its end or polling `try_wait` (Linux's `wait` takes it).
+//! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd): with
+//!   none it fails before the child starts, without I/O it panics or fails after (see [`spawn`]).
+//!   A [`ChildSpec::raw_stderr`] caller must read stderr.
 //! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.

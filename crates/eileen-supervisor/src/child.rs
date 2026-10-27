@@ -22,10 +22,14 @@
 //! share against the core's. That share is the cgroup scope's to set too. On other Unix systems
 //! the child leads its own process group.
 //!
-//! Stdout carries the protocol; [`Child::forward_stderr`] turns stderr into `child.stderr`, and
-//! on Linux an awaited [`Child::wait`] does so for a pipe nobody took. A caller that reads
-//! stdout to its end before it waits, or polls [`Child::try_wait`], still has to take or
-//! forward stderr itself, or a child that fills the pipe blocks and never exits.
+//! Stdout carries the protocol; stderr carries logs, which [`spawn`] forwards into
+//! `child.stderr` events from the start, on every OS, so no caller can leave the pipe
+//! undrained: a child that writes megabytes there still exits whether its caller waits, polls
+//! [`Child::try_wait`] or reads stdout to its end first. An async task reads the pipe on Unix
+//! and a named thread of its own on Windows, where tokio would hold a blocking-pool thread on
+//! it for the child's whole life (the `stderr` module). A spec with [`ChildSpec::raw_stderr`]
+//! gets the raw pipe from [`Child::take_stderr`] instead, and nothing forwards it, so its
+//! caller has to read it.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -35,11 +39,12 @@ use std::process::{ExitStatus, Stdio};
 
 use eileen_trace::names;
 use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 use tokio::task::JoinHandle;
 
 use crate::SupervisorError;
+
+mod stderr;
 
 /// The longest stderr line forwarded; longer lines are cut.
 pub const MAX_STDERR_LINE: usize = 4 * 1024;
@@ -87,10 +92,14 @@ pub struct ChildSpec {
     pub class: ChildClass,
     /// Pipe stdin and stdout (the protocol); otherwise they are null.
     pub piped: bool,
+    /// Hand stderr to the caller as a raw pipe ([`Child::take_stderr`]) instead of forwarding
+    /// it into tracing. The caller must then read it, or a child that fills it blocks.
+    pub raw_stderr: bool,
 }
 
 impl ChildSpec {
-    /// A sidecar-class child with piped stdio and the inherited environment.
+    /// A sidecar-class child with piped stdio, stderr forwarded into tracing and the inherited
+    /// environment.
     pub fn new(name: &'static str, program: impl Into<PathBuf>) -> Self {
         Self {
             name,
@@ -101,6 +110,7 @@ impl ChildSpec {
             cwd: None,
             class: ChildClass::Sidecar,
             piped: true,
+            raw_stderr: false,
         }
     }
 
@@ -147,6 +157,7 @@ impl fmt::Debug for ChildSpec {
             .field("cwd", &self.cwd)
             .field("class", &self.class)
             .field("piped", &self.piped)
+            .field("raw_stderr", &self.raw_stderr)
             .finish_non_exhaustive()
     }
 }
@@ -171,21 +182,44 @@ pub(crate) fn base_command(spec: &ChildSpec) -> std::process::Command {
 }
 
 /// A running supervised child.
+///
+/// Unless its spec asked for [`ChildSpec::raw_stderr`], its stderr is forwarded into tracing
+/// until the pipe closes: once the child and the rest of its job or process group have exited,
+/// or when the [`Child`] is dropped and kills them. On Linux a descendant that left the group
+/// keeps the pipe, and so the forwarding, open until it exits. On Unix an async task reads the
+/// pipe; on Windows, where tokio would hold a blocking-pool thread on it, a named thread of its
+/// own does, so a quiet child holds no runtime thread on any OS.
 #[derive(Debug)]
 pub struct Child {
     name: &'static str,
     inner: Box<dyn ChildWrapper>,
+    /// The task that forwards stderr, until [`Child::forward_stderr`] hands it over.
+    stderr_forwarding: Option<JoinHandle<()>>,
 }
 
 /// Starts `spec` supervised: in a kill-on-close Job Object, without a console window, killed
 /// when the returned [`Child`] is dropped. On Linux, in a session of its own, forked on the
 /// supervisor's own thread inside the caller's tokio runtime.
 ///
-/// Stderr is always a pipe, and a child that fills it blocks until it is read: take it or
-/// forward it before reading stdout to its end or polling [`Child::try_wait`]. On Linux an
-/// awaited [`Child::wait`] forwards a pipe that nobody took; on Windows nothing reads it unless
-/// the caller does.
+/// Stderr is always a pipe, and on every OS this starts forwarding it into tracing at once
+/// ([`Child::forward_stderr`] hands over a task that ends with the forwarding), so a child
+/// that writes megabytes there still exits whether its caller waits, polls
+/// [`Child::try_wait`] or reads stdout to its end first. The forwarding holds no runtime
+/// thread: an async task on Unix, a named thread of its own on Windows. With
+/// [`ChildSpec::raw_stderr`] nothing forwards it: the caller takes it with
+/// [`Child::take_stderr`] and must read it, or a child that fills it blocks.
+///
+/// Needs a tokio runtime with I/O: tokio's process driver, the forwarding task, and on Linux
+/// the child's pidfd. With no runtime entered it returns [`SupervisorError::Spawn`] before the
+/// child starts. In a runtime without I/O, tokio's Unix spawn panics registering the child's
+/// pipes after the child has started, and the child is not killed: on Linux the fork thread
+/// catches the panic and this returns that error, elsewhere the panic reaches the caller. When
+/// the forwarding cannot start (on Windows, no thread for it) it returns that error too, and
+/// the child it started is killed.
 pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
+    let error =
+        |source| SupervisorError::Spawn { program: spec.program.display().to_string(), source };
+    runtime_here().map_err(error)?;
     let mut command = tokio::process::Command::from(base_command(spec));
     if spec.piped {
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -200,13 +234,21 @@ pub fn spawn(spec: &ChildSpec) -> Result<Child, SupervisorError> {
     let spawned = wrap.spawn();
     #[cfg(target_os = "linux")]
     let spawned = crate::linux::spawn(wrap);
-    let inner = spawned.map_err(|source| SupervisorError::Spawn {
-        program: spec.program.display().to_string(),
-        source,
-    })?;
-    let child = Child { name: spec.name, inner };
+    let inner = spawned.map_err(error)?;
+    let mut child = Child { name: spec.name, inner, stderr_forwarding: None };
     tracing::info!(name: names::CHILD_SPAWNED, child = spec.name, pid = child.id(), class = spec.class.as_str());
+    // A child that fills the stderr pipe blocks in write(2) and never exits, so the pipe is
+    // drained from the start, whatever the caller does next.
+    if !spec.raw_stderr {
+        child.stderr_forwarding = child.start_forwarding().map_err(error)?;
+    }
     Ok(child)
+}
+
+/// An error unless a tokio runtime is entered here: without one, tokio's spawn of the
+/// forwarding task would panic, on Windows after the child had started.
+fn runtime_here() -> io::Result<()> {
+    tokio::runtime::Handle::try_current().map(drop).map_err(io::Error::other)
 }
 
 #[cfg(windows)]
@@ -267,13 +309,20 @@ impl Child {
         self.inner.stdout().take()
     }
 
-    /// Its stderr, the first time it is asked for (unless [`Self::forward_stderr`] took it,
-    /// or, on Linux, [`Self::wait`] did).
+    /// Its stderr as a raw pipe, the first time it is asked for, when the spec asked for
+    /// [`ChildSpec::raw_stderr`] and [`Self::forward_stderr`] has not forwarded it since.
+    /// Otherwise `None`: [`spawn`] forwards it. The caller must read the pipe to its end, or a
+    /// child that fills it blocks.
     pub fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.inner.stderr().take()
     }
 
-    /// Forwards stderr into tracing, one `child.stderr` event per line, until it closes.
+    /// The task that forwards stderr into tracing, one `child.stderr` event per line, until the
+    /// pipe closes, the first time it is asked for: await it to know every line was logged.
+    /// [`spawn`] starts it; for a [`ChildSpec::raw_stderr`] child whose pipe nobody took, this
+    /// starts it. `None` once the task or the pipe has been handed over, outside a tokio
+    /// runtime (the pipe stays), or on Windows when no thread could start to read the pipe
+    /// (which is then closed); dropping the handle leaves the forwarding running.
     ///
     /// The line goes in the `pii.line` field: a Claude session's stderr can quote paths, file
     /// names and prompt text, and a sidecar's panic message can quote anything, so the log
@@ -286,19 +335,16 @@ impl Child {
     /// without a newline costs no more memory than one line. Only the end of the stream or a
     /// read error ends it.
     pub fn forward_stderr(&mut self) -> Option<JoinHandle<()>> {
-        let stderr = self.take_stderr()?;
-        let child = self.name;
-        Some(eileen_rt::task::spawn("supervisor.stderr", async move {
-            let mut reader = BufReader::new(stderr);
-            let mut line = Vec::with_capacity(256);
-            while matches!(
-                read_line_capped(&mut reader, &mut line, MAX_STDERR_LINE).await,
-                Ok(true)
-            ) {
-                let text = decode_line(&line);
-                tracing::info!(name: names::CHILD_STDERR, child, "pii.line" = %text);
-            }
-        }))
+        self.stderr_forwarding.take().or_else(|| self.start_forwarding().ok().flatten())
+    }
+
+    /// Takes the stderr pipe, if it is still here, and starts forwarding it (`stderr`).
+    fn start_forwarding(&mut self) -> io::Result<Option<JoinHandle<()>>> {
+        runtime_here()?;
+        let Some(pipe) = self.inner.stderr().take() else {
+            return Ok(None);
+        };
+        stderr::forward(self.name, pipe).map(Some)
     }
 
     /// Starts killing the child and everything it started (its Job Object, or its process
@@ -309,15 +355,10 @@ impl Child {
     }
 
     /// Waits for the child (and, on Windows, every process in its job) to exit. On Linux it
-    /// first forwards stderr into tracing unless [`Self::take_stderr`] or
-    /// [`Self::forward_stderr`] took it, so a chatty child cannot block on a full pipe, and it
     /// kills what is left of the child's process group once the child has exited, then reaps
-    /// it.
+    /// it. The stderr task can still be logging the last lines: await the task
+    /// [`Self::forward_stderr`] hands over to know they are in.
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
-        // A child that fills the stderr pipe blocks in write(2) and never exits, so on Linux a
-        // pipe nobody took is forwarded from here; the task outlives this future.
-        #[cfg(target_os = "linux")]
-        let _ignored = self.forward_stderr();
         let status = self.inner.wait().await?;
         tracing::info!(name: names::CHILD_EXITED, child = self.name, code = status.code());
         Ok(status)
@@ -329,46 +370,4 @@ impl Child {
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.inner.try_wait()
     }
-}
-
-/// Reads one line into `line` (cleared first), keeping at most `cap` bytes of it and
-/// discarding the rest up to the newline. False at the end of the stream with nothing read.
-async fn read_line_capped<R>(reader: &mut R, line: &mut Vec<u8>, cap: usize) -> io::Result<bool>
-where
-    R: AsyncBufRead + Unpin,
-{
-    line.clear();
-    let mut read_any = false;
-    loop {
-        let buffer = match reader.fill_buf().await {
-            Ok(buffer) => buffer,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
-        };
-        if buffer.is_empty() {
-            return Ok(read_any);
-        }
-        read_any = true;
-        let (chunk, used, ended) = match buffer.iter().position(|b| *b == b'\n') {
-            Some(at) => (buffer.get(..at).unwrap_or_default(), at + 1, true),
-            None => (buffer, buffer.len(), false),
-        };
-        let room = cap.saturating_sub(line.len());
-        line.extend_from_slice(chunk.get(..room.min(chunk.len())).unwrap_or_default());
-        reader.consume(used);
-        if ended {
-            return Ok(true);
-        }
-    }
-}
-
-/// A forwarded line as text: invalid UTF-8 replaced, a trailing `\r` dropped, and cut to
-/// [`MAX_STDERR_LINE`] bytes at a character boundary.
-fn decode_line(bytes: &[u8]) -> String {
-    let mut text = String::from_utf8_lossy(bytes.strip_suffix(b"\r").unwrap_or(bytes)).into_owned();
-    if text.len() > MAX_STDERR_LINE {
-        let cut = (0..=MAX_STDERR_LINE).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
-        text.truncate(cut);
-    }
-    text
 }

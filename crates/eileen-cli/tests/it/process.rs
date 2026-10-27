@@ -9,10 +9,15 @@ use tokio::time::timeout;
 /// A guard against a hung binary, far above anything a working one needs.
 const HANG: Duration = Duration::from_secs(20);
 
-/// Runs `eileen` with `args` and returns its exit success, stdout and stderr. Both pipes are
-/// read at once, so a child that fills one while the test waits on the other cannot deadlock.
+/// Runs `eileen` with `args` and returns its exit success, stdout and stderr. Stderr comes as
+/// the raw pipe (`raw_stderr`), which the supervisor would otherwise forward into tracing. Both
+/// pipes are read at once, so a child that fills one while the test waits on the other cannot
+/// deadlock.
 async fn eileen(args: &[&str]) -> (bool, String, String) {
-    let spec = ChildSpec::new("eileen", env!("CARGO_BIN_EXE_eileen")).args(args.iter().copied());
+    let spec = ChildSpec {
+        raw_stderr: true,
+        ..ChildSpec::new("eileen", env!("CARGO_BIN_EXE_eileen")).args(args.iter().copied())
+    };
     let mut child = spawn(&spec).unwrap();
     let mut stdout_pipe = child.take_stdout().unwrap();
     let mut stderr_pipe = child.take_stderr().unwrap();
