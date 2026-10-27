@@ -94,7 +94,7 @@ jobs:
           "${apt[@]}" install --yes --no-install-recommends --download-only "${packages[@]}"
           rm -rf "$cache"
           mkdir -p "$cache"
-          cp /var/cache/apt/archives/*.deb "$cache"/
+          find /var/cache/apt/archives -maxdepth 1 -name '*.deb' -exec cp -t "$cache" {} +
           "${apt[@]}" install --yes --no-install-recommends "${packages[@]}"
       - name: Save the session's packages
         if: >-
