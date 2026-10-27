@@ -255,6 +255,38 @@ async fn a_player_that_answers_late_and_never_names_itself_costs_one_method_time
 }
 
 #[tokio::test]
+async fn a_read_is_bounded_on_a_connection_without_a_method_timeout() {
+    let bus = PrivateBus::start();
+    let full = serve(&bus, FULL, full_root(), full_player()).await;
+    let hung = "org.mpris.MediaPlayer2.hung";
+    let gate = Gate::default();
+    let _hung =
+        serve(&bus, hung, full_root(), Player { gate: Some(gate.clone()), ..full_player() }).await;
+    // No method timeout bounds this connection's calls: only the read's own deadline does.
+    let conn = bus.connect().await;
+    let mut replies = MessageStream::from(&conn);
+    let mpris = MprisSessions::new(&conn);
+
+    // In real time until the full player has answered and the hung player is asked; then only
+    // the read's deadline is left to fire, and tokio's paused clock reaches it as soon as the
+    // runtime is idle. Without that deadline, the listing would wait for good, and the test's
+    // own bound ends it.
+    let mut sessions = pin!(mpris.sessions());
+    tokio::select! {
+        () = answered_and_stalled(&mut replies, &full, &gate) => {}
+        early = &mut sessions => panic!("the listing ended before it asked the hung player: {early:?}"),
+    }
+    drop(replies);
+    tokio::time::pause();
+    let listed = tokio::time::timeout(METHOD_TIMEOUT + MARGIN, sessions).await;
+    assert_eq!(
+        listed.expect("the read of the hung player ends within one method timeout").unwrap(),
+        [full_state()],
+        "the player that never answers is left out"
+    );
+}
+
+#[tokio::test]
 async fn control_sends_each_action_to_the_player() {
     let bus = PrivateBus::start();
     let service = serve(&bus, FULL, full_root(), full_player()).await;
