@@ -1,7 +1,7 @@
 //! The tray through `LinuxShell::set_tray` on a bridge to a private bus: the item and its menu as
 //! a host reads them, with a connection of the test's playing the host, and their registration
-//! with fake watchers that report each one, and take the item, refuse it or never answer. The
-//! rig's items are `pub(super)` for the shell's tests. The test's thread calls the shell as the
+//! with fake watchers that report each one, and take the item, refuse it, answer that it got no
+//! reply or never answer. The rig's items are `pub(super)` for the shell's tests. The test's thread calls the shell as the
 //! core does, blocking; the fakes and the host run on a runtime of their own. The bridge's caller
 //! waits on a condition variable, not a tokio timer, so a deadline that passes passes in real
 //! time.
@@ -71,6 +71,9 @@ pub(super) enum Takes {
     Always,
     /// It answers `org.freedesktop.DBus.Error.Failed` this many times, then takes the item.
     After(u32),
+    /// It answers `Failed` this many times, then once `org.freedesktop.DBus.Error.NoReply`, as
+    /// the bus answers a call that got no reply in time, then takes the item.
+    NoReplyAfter(u32),
     /// It never answers, until the rig takes it off the bus.
     Never,
 }
@@ -80,8 +83,8 @@ pub(super) enum Takes {
 struct FakeWatcher {
     reports: mpsc::Sender<Registration>,
     takes: Takes,
-    /// How many registrations it has refused.
-    refused: Arc<AtomicU32>,
+    /// How many registrations it has been asked for.
+    asked: Arc<AtomicU32>,
     /// Closed when the rig takes the watcher off the bus, which ends a call it never answers.
     gate: watch::Receiver<()>,
 }
@@ -98,15 +101,15 @@ impl FakeWatcher {
         let icon = icon_of(conn, service).await;
         let registration = Registration { service: service.to_owned(), sender, icon };
         let _ignored = self.reports.send(registration).await;
+        let asked = self.asked.fetch_add(1, Ordering::SeqCst);
         match self.takes {
-            Takes::Always => Ok(()),
-            Takes::After(refusals) => {
-                if self.refused.fetch_add(1, Ordering::SeqCst) < refusals {
-                    Err(fdo::Error::Failed("not now".to_owned()))
-                } else {
-                    Ok(())
-                }
+            Takes::After(refusals) | Takes::NoReplyAfter(refusals) if asked < refusals => {
+                Err(fdo::Error::Failed("not now".to_owned()))
             }
+            Takes::NoReplyAfter(refusals) if asked == refusals => {
+                Err(fdo::Error::NoReply("no reply in time".to_owned()))
+            }
+            Takes::Always | Takes::After(_) | Takes::NoReplyAfter(_) => Ok(()),
             Takes::Never => {
                 // A call under way holds its connection open: the gate lets the watcher leave.
                 let _closed = self.gate.clone().changed().await;
@@ -203,8 +206,8 @@ impl Rig {
     pub(super) fn watcher_that(&mut self, takes: Takes) -> mpsc::Receiver<Registration> {
         let (reports, reported) = mpsc::channel(8);
         let (gate, closed) = watch::channel(());
-        let refused = Arc::new(AtomicU32::new(0));
-        let watcher = FakeWatcher { reports, takes, refused, gate: closed };
+        let asked = Arc::new(AtomicU32::new(0));
+        let watcher = FakeWatcher { reports, takes, asked, gate: closed };
         self.watchers.push(self.runtime.block_on(serve(&self.bus, WATCHER, WATCHER_PATH, watcher)));
         self.gates.push(gate);
         reported
@@ -568,10 +571,64 @@ fn a_watcher_that_refuses_is_asked_again_by_the_next_calls_and_a_new_one_takes_t
     }
     assert_eq!(shell.set_tray(state()), unavailable, "no retry left, though this one would pass");
     rig.stop_watchers();
+    // The name's new owner refuses once too, and gets retries of its own.
+    let mut next = rig.watcher_that(Takes::After(1));
+    let refused = rig.registered(&mut next);
+    assert_eq!(refused.service, item, "registered with the name's new owner");
+    // The first call retries if the refusal came before it, or else waits for the refusal and
+    // leaves the retry to the second: either way the second answers once one was made.
+    let first = shell.set_tray(state());
+    assert!(matches!(first, Ok(()) | Err(PlatformError::Unavailable { .. })), "{first:?}");
+    assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it, from a retry");
+    let retry = next.try_recv().unwrap_or_else(|_| panic!("a retry was made to the new owner"));
+    assert_eq!(retry.service, item, "the same item, retried");
+    assert!(next.try_recv().is_err(), "one retry");
+}
+
+#[test]
+fn a_registration_that_gets_no_reply_ends_the_retries_until_a_new_owner() {
+    let mut rig = Rig::new();
+    // `NoReply` is what the holder also gets, as `DeadlineExceeded`, when its own method timeout
+    // passes, which this crate cannot shorten.
+    let mut stalling = rig.watcher_that(Takes::NoReplyAfter(1));
+    let (shell, _events) = rig.shell();
+    let unavailable = Err(PlatformError::Unavailable { what: "tray" });
+    assert_eq!(shell.set_tray(state()), unavailable, "refused");
+    let Registration { service: item, .. } = rig.registered(&mut stalling);
+    assert_eq!(shell.set_tray(state()), unavailable, "the retry got no reply");
+    assert!(stalling.try_recv().is_ok(), "the retry was made");
+    assert_eq!(shell.set_tray(state()), unavailable, "no retry, though this one would pass");
+    assert!(stalling.try_recv().is_err(), "no registration");
+    rig.stop_watchers();
     let mut next = rig.watcher();
-    let taken = rig.registered(&mut next);
-    assert_eq!(taken.service, item, "registered with the name's new owner");
+    assert_eq!(rig.registered(&mut next).service, item, "registered with the new owner");
     assert_eq!(shell.set_tray(state()), Ok(()), "a watcher has it");
+}
+
+#[test]
+fn a_watcher_that_leaves_without_a_new_one_makes_set_tray_unavailable() {
+    let mut rig = Rig::new();
+    // The test's streams drop inside the runtime's context, a panicking test's included.
+    let runtime = rig.runtime.handle().clone();
+    let _context = runtime.enter();
+    let mut registrations = rig.watcher();
+    let (shell, mut events) = rig.shell();
+    shell.set_tray(state()).unwrap();
+    let Registration { service: item, .. } = rig.registered(&mut registrations);
+    let (_revision, root) = rig.layout(&item, 0, -1);
+    let watchers = owner_changes(rig.host(), Names::Name(WATCHER));
+    let mut watchers = rig.runtime.block_on(watchers).unwrap();
+    rig.stop_watchers();
+    let change = rig.runtime.block_on(watchers.next()).unwrap();
+    assert_eq!(change.new, None, "the watcher's name has no owner");
+    // A barrier: the bus sent the holder's connection the owner change before this click, which
+    // the holder passes on from the same loop, and it takes every change and choice that is
+    // ready before the bridge's thread runs the next call's job.
+    rig.menu_event(&item, root.children[1].id, "clicked").unwrap();
+    let chosen = LinuxShellEvent::TrayChoice("quit".to_owned());
+    assert_eq!(rig.event(&mut events), chosen, "the holder has taken what came before");
+    let unavailable = Err(PlatformError::Unavailable { what: "tray" });
+    assert_eq!(shell.set_tray(state()), unavailable, "no watcher has it any more");
 }
 
 #[test]
