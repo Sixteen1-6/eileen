@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use eileen_audio_linux::{LinuxAudioEndpoints, LinuxAudioSettings};
+use eileen_audio_linux::{LinuxAudioEndpoints, LinuxAudioSettings, RealtimePolicy};
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{AudioEndpoints, Deadline, PlatformError, StreamCategory};
 use tokio::sync::Notify;
+use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::rtkit::{
     Call, DEFAULTS, FakeRtkit, Gate, Limits, RTKIT, RTKIT_PATH, this_nice, this_thread,
@@ -103,6 +104,29 @@ fn a_refused_registration_falls_back_to_high_priority_and_its_ticket_reverts_it(
 }
 
 #[test]
+fn a_refused_registration_leaves_a_thread_that_already_runs_higher_alone() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    fake.refuse_realtime.store(true, Ordering::SeqCst);
+    let _fakes = Fakes::serve(&bus, fake);
+    // Nice 19, the lowest priority there is, is to this thread what -11 is to a thread at -16,
+    // which a test cannot make without privilege.
+    let policy = RealtimePolicy { fallback_nice: 19, ..RealtimePolicy::default() };
+    let settings = LinuxAudioSettings { policy, ..LinuxAudioSettings::default() };
+    let endpoints = LinuxAudioEndpoints::new(Bridge::on_private_bus(&bus).unwrap(), settings);
+    let thread = this_thread();
+    let ticket = endpoints.register_audio_thread().unwrap();
+    assert_eq!(ticket.task(), "RealtimeKit unchanged", "real-time refused, and nothing else asked");
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "real-time asked");
+    drop(ticket);
+    assert_eq!(
+        calls.try_recv(),
+        Err(TryRecvError::Empty),
+        "neither the fallback, which would lower the thread, nor a revert, with nothing to revert"
+    );
+}
+
+#[test]
 fn register_audio_thread_on_an_empty_bus_is_unavailable() {
     let bus = PrivateBus::start();
     assert_eq!(
@@ -175,6 +199,39 @@ fn a_late_promotion_is_reverted_after_the_endpoints_drop() {
         Some(Call::HighPriority(thread, nice)),
         "the promotion rtkit granted after the call gave up is reverted all the same"
     );
+}
+
+#[test]
+fn a_promotion_whose_connection_failed_is_reverted_over_the_bridges_next_one() {
+    let bus = PrivateBus::start();
+    let gate = Arc::new(Notify::new());
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, Some(Gate::Realtime(Arc::clone(&gate))));
+    let _fakes = Fakes::serve(&bus, fake.clone());
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let settings = LinuxAudioSettings { deadline: SHORT, ..LinuxAudioSettings::default() };
+    let endpoints = LinuxAudioEndpoints::new(bridge.clone(), settings);
+    let (thread, nice) = (this_thread(), lower_priority());
+    assert_eq!(
+        endpoints.register_audio_thread().unwrap_err(),
+        PlatformError::DeadlineExceeded { call: "audio thread registration" },
+        "rtkit has not answered"
+    );
+    assert_eq!(calls.blocking_recv(), Some(Call::Realtime(thread, 10)), "the request it holds");
+    // The bridge's system-bus connection fails under the request.
+    let closed = bridge.call("closing the system bus", DEFAULT_DEADLINE, |buses| async move {
+        let _ignored = buses.system().await?.close().await;
+        Ok(())
+    });
+    assert_eq!(closed, Ok(()), "the promoter's connection, which the bridge shares");
+    fake.report_reads.store(true, Ordering::SeqCst);
+    gate.notify_one();
+    assert_eq!(
+        calls.blocking_recv(),
+        Some(Call::HighPriority(thread, nice)),
+        "the grant that came after the connection failed is reverted over a new one"
+    );
+    assert_eq!(calls.blocking_recv(), Some(Call::Read("RTTimeUSecMax")), "and the read after it");
+    assert_eq!(fake.resume(), [], "so the thread is off real-time and forgotten");
 }
 
 #[test]
