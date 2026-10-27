@@ -20,8 +20,11 @@
 //! thread with [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
 //! ([`Promoted::restore`]), unless the promotion changed nothing ([`Promotion::reverts`]). A
 //! request whose system-bus connection failed is reverted over the bridge's next one: the
-//! promoter waits for zbus to mark the failed connection closed, which the socket's reader
-//! does right after it fails the calls pending on it, so that `Buses::system` connects again.
+//! promoter waits for zbus to mark the failed connection closed, which the socket's reader does
+//! only once it has failed the calls pending on it and handed the error to the connection's
+//! streams, so that `Buses::system` connects again. On the bridge's one thread the promoter runs
+//! between the two when a stream on the connection is full: the socket's reader then waits for
+//! that stream's consumer.
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
 //! that, the task finishes on its own. The ticket keeps a handle to the bridge, so a registration
@@ -186,7 +189,7 @@ async fn promoter(
 /// The system bus again, for the revert of a request whose connection, `failed`, failed. It waits
 /// for zbus to mark `failed` closed, at most [`METHOD_TIMEOUT`] (an error from a write alone may
 /// leave it open, and then usable), so that [`Buses::system`] makes a new connection rather
-/// than answer the failed one.
+/// than answer the failed one, which the socket's reader may not have marked yet.
 async fn reconnect(
     buses: &Buses,
     failed: &zbus::Connection,
@@ -228,9 +231,11 @@ mod tests {
     use std::pin::{Pin, pin};
     use std::task::{Context, Poll, Waker};
 
+    use eileen_dbus_linux::testing::PrivateBus;
+    use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
     use tokio::sync::oneshot;
 
-    use super::hand_over;
+    use super::{hand_over, reconnect};
     use crate::Promotion;
 
     const PROMOTION: Promotion = Promotion::Realtime { priority: 10 };
@@ -273,5 +278,28 @@ mod tests {
         };
         reverted.send(Ok(())).unwrap();
         assert_eq!(outcome.try_recv(), Ok(Ok(())), "the ticket hears how the revert went");
+    }
+
+    #[test]
+    fn a_reconnect_waits_for_zbus_to_mark_the_failed_connection_closed() {
+        let bus = PrivateBus::start();
+        let bridge = Bridge::on_private_bus(&bus).unwrap();
+        let seen = bridge.call("reconnecting", DEFAULT_DEADLINE, move |buses| async move {
+            let failed = buses.system().await.unwrap();
+            // The bus goes, which fails the connection from the far side. Its socket's reader
+            // runs on this thread, which the job holds until it awaits, so zbus has not marked
+            // the connection closed yet, as when the promoter runs before the reader is done.
+            drop(bus);
+            let marked_before = failed.is_closed();
+            let again = reconnect(&buses, &failed).await;
+            Ok((marked_before, failed.is_closed(), again.is_err()))
+        });
+        let (marked_before, marked_after, connected_again) = seen.unwrap();
+        assert!(!marked_before, "the failure is not marked yet");
+        assert!(marked_after, "reconnect waited for the mark");
+        assert!(
+            connected_again,
+            "then connected anew, which fails with the bus gone, not answered the failed one"
+        );
     }
 }
