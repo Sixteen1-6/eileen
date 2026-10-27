@@ -61,7 +61,7 @@
 //!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
 //!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (feature
 //!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] on them
-//!   over `Bridge::on_private_bus` and on the Linux desktop lane's real buses (`tests/session/`).
+//!   over `Bridge::on_private_bus`, and both on the desktop lane's real buses (`tests/session/`).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
