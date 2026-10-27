@@ -98,13 +98,13 @@
 //! stays on the bus and registers once a watcher comes.
 //!
 //! The holder registers beside its other work, so a call never waits for a registration in
-//! turn: once its state is shown, it waits for a registration under way until half the
-//! settings' deadline from its start, and past that answers `Unavailable`, the registration going
-//! on. When the watcher answers with an error, there but saying no, the holder registers again on
-//! each of the next three calls, after it has shown that call's state; past those, or once the
-//! watcher has not answered, it waits for the name's next owner. Meanwhile the item is on the bus with each call's state, which no host
-//! shows, and the calls answer `Unavailable`. A menu item the user
-//! chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
+//! turn: once its state is shown, it waits for a registration under way until half the settings'
+//! deadline from its start, and past that answers `Unavailable`, the registration going on. When
+//! the watcher answers with an error, there but saying no, the holder registers again on each of
+//! the next three calls, after it has shown that call's state; past those, or once the watcher
+//! has not answered, it waits for the name's next owner. Meanwhile the item is on the bus with
+//! each call's state, which no host shows, and the calls answer `Unavailable`. A menu item the
+//! user chooses reaches the sink of [`LinuxShell::with_events`] as [`LinuxShellEvent::TrayChoice`],
 //! with its `TrayItem::id`. When the shell drops, the holder ends and drops its connection, so
 //! the item leaves the bus and the watcher forgets it. A holder whose connection closed has ended
 //! too, and the next `set_tray` starts another, under a new name.
