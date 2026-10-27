@@ -1,8 +1,8 @@
 # Gaze: eye tracking for Eileen
 
-A proposal with a build brief, written 2026-10-26. It is for the owner, who decides what it changes in [BUILD.md](BUILD.md), and for the coding agent that builds it, the way [LINUX.md](LINUX.md) proposed WP10. Part A is the brief for the agent. Part B is the design. Statements marked [to confirm] are reasoning or vendor facts that the P0 spike (section 17) must verify before code depends on them. Sources are linked where they are used.
+A proposal with a build brief, written 2026-10-26; the webcam route (section 18) was added on 2026-10-27. It is for the owner, who decides what it changes in [BUILD.md](BUILD.md), and for the coding agent that builds it, the way [LINUX.md](LINUX.md) proposed WP10. Part A is the brief for the agent. Part B is the design. Statements marked [to confirm] are reasoning or vendor facts that the P0 spike (section 17) must verify before code depends on them. Sources are linked where they are used.
 
-Scope. This plan uses a hardware eye tracker: a consumer device such as the Tobii Eye Tracker 5, read through the gaze input API Windows provides for such devices, or through the vendor's own runtime. A webcam estimator is not part of it (section 18). Section 7 adds an experimental mode in which the eyes scroll a page from a set point.
+Scope. This plan reads gaze from a hardware eye tracker: a consumer device such as the Tobii Eye Tracker 5, read through the gaze input API Windows provides for such devices, or through the vendor's own runtime. It also has a webcam route (section 18), for a PC with no tracker and for Linux, where no consumer tracker has a supported runtime. The webcam serves the scroll mode only; the tracker stays the route for everything finer. Section 7 adds an experimental mode in which the eyes scroll a page from a set point.
 
 In one sentence: an eye tracker tells Eileen where the user is looking, and a spoken word acts on it. "Enhance" fills the screen with the dashboard card under the user's eyes. "Close this", "scroll down here", "what's this?" and "that one" stop needing a mouse. Gaze is a slot, never a trigger: it only resolves "this" and "there", and it never starts, approves or changes anything on its own. The one exception is the experimental scroll mode. Only a spoken word or a hotkey opens it, it can do nothing but scroll one pane, and it stops when the reader's eyes come back to the set point.
 
@@ -21,7 +21,7 @@ You are working in the Eileen repository, a Rust workspace with a sans-IO core (
 
 ### What you are building
 
-Part B, in full. The short version: a new sidecar `eileen-gaze.exe` serving a room-sensing connector `pc.gaze` over a hardware tracker; fixation events into the core through the existing `Input::Sidecar` path; a `Gaze` slot in the intent resolver; one new desktop tool, `desktop_hit_test`; an "enhance" view drawn by the HUD from a clipped DWM thumbnail; the grammar entries of section 5; and, behind an experimental setting, the set-point scroll mode of section 7. No new top-level `Input`, `Effect` or `BusEvent` variant is needed. The contract modules this touches are provisional today, but by the time WP11 runs most will have been pinned by their packages, so those changes come as an amendment (pull request 4).
+Part B, in full. The short version: a new sidecar `eileen-gaze.exe` serving a room-sensing connector `pc.gaze` over a hardware tracker or, for the scroll mode, a webcam (section 18); fixation events into the core through the existing `Input::Sidecar` path; a `Gaze` slot in the intent resolver; one new desktop tool, `desktop_hit_test`; an "enhance" view drawn by the HUD from a clipped DWM thumbnail; the grammar entries of section 5; and, behind an experimental setting, the set-point scroll mode of section 7. No new top-level `Input`, `Effect` or `BusEvent` variant is needed. The contract modules this touches are provisional today, but by the time WP11 runs most will have been pinned by their packages, so those changes come as an amendment (pull request 4).
 
 ### Context you cannot see
 
@@ -34,7 +34,7 @@ Every pull request is small (logic changes under about 500 lines), a draft from 
 | Order | Branch | Type | What it holds | Phase | Stop after? |
 |---|---|---|---|---|---|
 | 1 | `wp11/gaze-proposal` | docs | This file as `docs/GAZE.md`, nothing else | P0 | Yes. Wait for the owner's answers to section 16 |
-| 2 | `wp11/p0-spike` | docs | `docs/research/2026-11-gaze.md` with the measurements of section 17; `docs/wp/WP11-gaze.md`, the living plan, kept current from here on. Spike code stays in `docs/research/fixtures/gaze/`, never in a crate | P0 | Yes. The owner picks the tracker and the route |
+| 2 | `wp11/p0-spike` | docs | `docs/research/2026-11-gaze.md` with the measurements of section 17, the webcam route's of item 11 included; `docs/wp/WP11-gaze.md`, the living plan, kept current from here on. Spike code stays in `docs/research/fixtures/gaze/`, never in a crate | P0 | Yes. The owner picks the tracker, the route, and whether the webcam route goes ahead |
 | 3 | `amend/gaze-build` | amendment | The document changes of section 14; the `windows` crate's gaze feature in the root manifest's feature list | P1 | No |
 | 4 | `amend/gaze-contracts` | amendment | `crates/eileen-contracts/src/gaze.rs` (a new module, `pinned_by = "WP11"`), the additions to the `connectors`, `desktop`, `hud`, `intent`, `config`, `learn`, `scenario`, `tools/brain` and `tools/desktop` modules (section 8), one insta snapshot, `text-allowlist.toml` entries with reasons | P1 | No |
 | 5 | `wp11/gaze-crate` | feature | `crates/eileen-gaze`: the fixation and track filters, the recorded-sample parser with its `fuzz_entry` and fuzz target `gaze_samples`, the sidecar's server logic against a fake `GazeSource`, the rate limiter, the nine-point check; platform-neutral, tested on Linux. Its root-manifest member line, `[package.metadata.eileen]` (check 22) and its `ARCHITECTURE.md` code-map row (check 3) | P1 | No |
@@ -50,18 +50,23 @@ Every pull request is small (logic changes under about 500 lines), a draft from 
 | 15 | `amend/scroll-glide` | amendment | In `eileen-desktop` and `eileen-desktop-win` (WP5): the background scroll routes, `Glide` with its clamps and server-side stops | P4 | No |
 | 16 | `amend/scroll-session` | amendment | The session end to end behind `gaze.scroll.enabled`: the track request, the dispatcher's `Glide` rule, the scroll band on the HUD, the toggle hotkey, invariant 17 part (b) | P4 | No |
 | 17 | `wp11/scroll-scenarios` | scenario | `scenarios/gaze/<id>/` for the scroll mode, run in the desktop lane with the closed-loop injector | P4 | No |
+| 18 | `wp11/webcam-signals` | feature | In `eileen-gaze`: the webcam pipeline after the face model (section 18.3): the five signals, the ridge fit with its leave-one-out penalty, the ten-target calibration, the height-only track; tested on Linux over recorded landmark files, with fuzz target `gaze_landmarks` | P4 | No |
+| 19 | `wp11/webcam-model` | feature | In `eileen-gaze`: the face landmark model through `ort`, behind P0's licence finding (18.7); the rule that the camera and the model live only while a session or the calibration runs, with its state test | P4 | No |
+| 20 | `wp11/source-webcam-win` | feature | `eileen-gaze-win`: camera frames through Media Foundation, as a `GazeSource` of kind `Webcam` | P4 | No |
+| 21 | `wp10/gaze-webcam-linux` | feature | `crates/eileen-gaze-linux`, built by WP10: camera frames through Video4Linux2, as a `GazeSource` of kind `Webcam`; its manifest and code-map rows | P4 | No |
+| 22 | `wp11/webcam-scenarios` | scenario | The `test-gaze` injector's webcam profile (height only, with a webcam's noise and offset) and the scroll scenarios run with it, on Windows and on Linux | P4 | No |
 
 ### Rules that do not bend here
 
 - Gaze never approves, never starts, never changes. No approval, mute change, job start, setting change, first-run choice or consent is ever built from a gaze event or a `GazeOver` line. The scroll mode is the only place gaze moves anything, and it moves only the one pane its session opened on, after a spoken start or a hotkey. Simulator invariant 17 (section 10) enforces this; a pull request that weakens it is closed. Approvals come only from physical or spoken `UserInput` (ARCHITECTURE.md, `eileen-core` invariants).
-- Eileen never receives an image of the user's eyes. A hardware tracker's route gives points; no code path in Eileen asks for camera frames, and none writes an image of the user to disk, calibration and incidents included. A new repository check (section 14) greps `eileen-gaze` and `eileen-gaze-win` for image encoders and fails on one.
+- No image of the user leaves the gaze sidecar. A hardware tracker's route gives points. The webcam route (section 18) reads camera frames into `eileen-gaze.exe`'s memory only while a scroll session or its calibration runs, turns each into landmarks and drops it. No frame, crop or image of the user ever crosses a process boundary or reaches disk, calibration and incidents included. A new repository check (section 14) greps `eileen-gaze`, `eileen-gaze-win` and `eileen-gaze-linux` for image encoders and fails on one.
 - Every gaze point is `Personal<Point>`, so the `pii.` policy applies to it in the flight recorder, incidents and the scenario redactor.
 - No new top-level `Input`, `Effect` or `BusEvent` variant. Gaze rides `Input::Sidecar(SidecarId::Gaze, ...)`, `Effect::Hud` and ordinary tool calls. If you believe one is needed, stop and write an amendment instead.
 - Only `eileen-contracts` types cross a process, pipe or file. The test injector's samples and the recorded-sample files use the contract type `GazeSample`.
 - Text from the screen is `Untrusted`. A section's label, an element's name, a window title: through `desktop::sanitize`, wrapped, fenced in the brain's context, never spoken beyond the bounded template of section 5.
 - Build only through `cargo xtask` with the build guard (BUILD.md 6.1). Never `cargo build` directly, never `cargo install` from source, never a long build at the end of a session. Desktop tests take `desktop.lock` and drive only windows the test created.
-- The owner's PC is memory-tight (1 to 2 GB free). The gaze sidecar is an optional resident the machine profile fills by value (BUILD.md 2.16). The vendor's tracker service runs outside Eileen but on the same PC, so P0 measures it too.
-- Licences. Nothing under a licence that conflicts with MIT is bundled (CONTRIBUTING.md hard rule 4). How a vendor runtime may be used is open question 8.
+- The owner's PC is memory-tight (1 to 2 GB free). The gaze sidecar is an optional resident the machine profile fills by value (BUILD.md 2.16). The vendor's tracker service runs outside Eileen but on the same PC, so P0 measures it too. The webcam route opens the camera and loads its model only while a scroll session or its calibration runs (18.8).
+- Licences. Nothing under a licence that conflicts with MIT is bundled (CONTRIBUTING.md hard rule 4). How a vendor runtime may be used is open question 8. The webcam route's face model has its terms read in P0 (18.7).
 - Writing style. Plain, short sentences, tables where they beat prose, no em or en dashes, no emoji, no marketing words. Relative links must resolve.
 - Evidence first. Each pull request leads with the tests, scenarios, numbers or replay that show it is right, in the form `pr-meta` checks.
 
@@ -74,7 +79,7 @@ Every pull request is small (logic changes under about 500 lines), a draft from 
 - What exists. `DesktopState` already answers "what is the user looking at" from the foreground window, the focused element and the selection (BUILD.md 2.6). The desktop server already has `window_from_point` and `element_from_point` (3.4, `Grounding`), physical-input detection through Raw Input, and a visible-intent outline before every click. The HUD already draws a live DWM thumbnail of a window a job works in (2.9). The intent resolver already has typed slots and an `Ambiguous` path (2.4, 3.3.10). Connectors already have a `senses_room` flag with an opt-in rule (2.14, 3.3.12). Gaze makes "what the user is looking at" literal and plugs into each of those.
 - What is new. A tracker behind a platform trait; a sidecar that turns its samples into fixations; a ring of recent fixations in the core; a rule that picks the fixation at speech onset; a `Gaze` slot that resolves "this", "that", "here" and "there"; a hit test that turns a point into a window, an element and a section; an enhance view; the grammar of section 5; and an experimental scroll mode that moves a page by how far the eyes sit above or below a set point.
 - What it is for. The owner's "enhance" (section 4), hands-free control of what the eyes already point at (section 5), reading long pages with no hands (section 7), better grounding for the brain, and a step toward the accessibility goal that no task requires a mouse (OWNER-DIRECTION.md, "Accessibility as a first-class goal").
-- What it costs. One more supervised process, about one percent of a core and tens of MB [to confirm], plus the vendor's service, and a tracker on the owner's desk.
+- What it costs. One more supervised process, about one percent of a core and tens of MB [to confirm], plus the vendor's service, and a tracker on the owner's desk. The webcam route needs no new hardware; its camera and model cost memory and CPU only while a scroll session is open (18.8).
 - When. Proposed for v0.2, as WP11 (section 12), after W6, so it never shares the desktop with WP9. v0.1 needs no change for it. The owner may pull P0 (the measurement spike) forward at any time, since it compiles nothing on the owner's PC.
 
 ## 2. Where gaze stands in the plan today
@@ -151,7 +156,7 @@ A new supervised sidecar, `eileen-gaze.exe`, joins the processes table of 2.1:
 
 | Process | Contains | What a failure costs | Transport to the core |
 |---|---|---|---|
-| `eileen-gaze.exe` | The tracker route (the Windows gaze input API or the vendor's runtime), the fixation filter, the smoothed track, the nine-point check, the rate limiter | Gaze stops; every command of section 5 falls back; an open scroll session ends; the HUD says "eyes off" on the indicator | MCP over stdio, like the desktop and apps sidecars: a `connector_manifest` answer, then `ConnectorEvent::Gaze` events, and its two tools |
+| `eileen-gaze.exe` | The tracker route (the Windows gaze input API or the vendor's runtime) or the webcam route (section 18), the fixation filter, the smoothed track, the nine-point check, the rate limiter | Gaze stops; every command of section 5 falls back; an open scroll session ends; the HUD says "eyes off" on the indicator | MCP over stdio, like the desktop and apps sidecars: a `connector_manifest` answer, then `ConnectorEvent::Gaze` events, and its two tools |
 
 It is connector `pc.gaze`, the third PC connector beside `pc.desktop` and `pc.apps`: `RunsIn::Sidecar { binary: "eileen-gaze.exe" }`, `senses_room: true`, `requires_opt_in: true`, events `["gaze.fixation", "gaze.track", "gaze.lost", "gaze.found", "gaze.check", "gaze.health"]`, no checks (nothing of it is a recipe check), and two tools: `gaze_status` (tier 0, in the brain's toolset) and `gaze_control` (core-only). The registry refuses to start it without the recorded opt-in (2.14), which `gaze.enabled` writes through the settings flow as a Safety key. It is one of the optional residents of the machine profile's plan (2.16): kept when it fits, dropped under pressure with the usual hold, and the reason shown on the machine panel. If D79's general `Input::Connector` lands before WP11, gaze moves to it with the other connectors; until then it is a sidecar like desktop and apps.
 
@@ -159,12 +164,13 @@ The core never links it: the 2.1 process table keeps everything that can hang ou
 
 ### 6.2 Sources
 
-Two routes to a hardware tracker sit behind one trait, `GazeSource` (section 6.12). The P0 spike measures both on the owner's PC with the tracker the owner picks, and the owner picks the first route to build.
+Two routes to a hardware tracker sit behind one trait, `GazeSource` (section 6.12), beside the webcam route of section 18. The P0 spike measures the tracker routes on the owner's PC with the tracker the owner picks, and the owner picks the first route to build.
 
 | Route | How | Accuracy [to confirm] | Licence and consent questions |
 |---|---|---|---|
 | Windows gaze input (`Windows.Devices.Input.Preview`: `GazeInputSourcePreview`, `GazeDeviceWatcherPreview`) | The OS-level API behind Windows Eye Control, which supported trackers feed. Vendor-neutral, samples in screen coordinates. Microsoft's reference for [`GetForCurrentView`](https://learn.microsoft.com/en-us/uwp/api/windows.devices.input.preview.gazeinputsourcepreview.getforcurrentview) says it must be called on the UI thread and that the first call shows a one-time privacy prompt; it says nothing about desktop apps. Whether a Win32 process receives samples, and whether it needs a view or a package identity, is the spike's first question | About 0.5 to 1 degree, roughly 30 to 60 px on the owner's display at arm's length | The OS ships it; the user grants consent once in Windows' own prompt. What the tracker vendor's terms say about apps reading its device through Windows is read in P0 |
 | The vendor's runtime (for Tobii consumer trackers, its game-integration or stream API) | The vendor's library at run time, from the user's own install, never bundled | As above | Tobii's [developer licence page](https://developer.tobii.com/license-agreement) limits its consumer SDK to interactive applications and sends analytical uses, such as processing gaze data after the fact or across users, to its Pro line. That page describes the older EyeX SDK, so the current runtime's terms are read in P0. Eileen's live use is interaction; the dwell ledger (G12) is analytical, so such a route reports `stores_nothing: true` and the ledger stays off. Whether loading it inside `eileen-gaze.exe` is acceptable under hard rule 4 is open question 8 |
+| The webcam (section 18) | Frames from the PC's own camera through a face landmark model, fitted to the user by a ten-target calibration; height only in the first version | 2 to 4 degrees [to confirm]; a prototype missed held-out targets by 18.5 percent of the screen height (18.4) | No vendor. The face model's terms are read in P0 (18.7); the camera follows the operating system's own consent |
 
 The tracker. Tobii's [specifications for the Eye Tracker 5](https://help.tobii.com/hc/en-us/articles/360012483818-Specifications-for-Eye-Tracker-5) list a 133 Hz gaze sampling rate, Windows 10 and 11, USB, and screens from 15 to 27 inches at 16:9. They state no latency or accuracy, which is why P0 measures both here. Other trackers that feed Windows gaze input work through the first route with no Eileen change.
 
@@ -269,7 +275,7 @@ A new `[gaze]` section of `Config` (3.3.11), every key reachable by voice and on
 ```toml
 [gaze]
 enabled = false            # Safety (NeedsUserApproval): starts the tracker; the recorded opt-in of 2.14
-source = "auto"            # auto | windows | vendor; Low
+source = "auto"            # auto | windows | vendor | webcam; auto prefers a tracker; Low
 show_reticle = false       # Low, Live
 fixation_ms = 120          # Low
 dispersion = "auto"        # px, or auto from the check's precision; Low
@@ -279,6 +285,7 @@ max_accuracy_px = 60       # above this check result, gaze targets are not offer
 addressee_feature = true   # G10; Safety, so the brain cannot propose it
 ledger = false             # G12; Safety, and refused while the source reports stores_nothing
 # [gaze.scroll], experimental: section 7.8
+# [gaze.webcam]: section 18.3
 ```
 
 The Safety keys are listed one by one in 2.11's Safety list (`gaze.enabled`, `gaze.addressee_feature`, `gaze.ledger`, `gaze.scroll.enabled`), not as a `gaze.*` prefix, because a prefix would make every key under it Safety. "Calibrate my eyes", "check my eyes" and "stop watching my eyes" are grammar entries, not settings; "hide the ring" and "show the ring" are the `show_reticle` phrases.
@@ -287,7 +294,7 @@ The Safety keys are listed one by one in 2.11's Safety list (`gaze.enabled`, `ga
 
 | Rule | How it is kept |
 |---|---|
-| Eileen never sees an image of the user's eyes | The routes it uses give points only; no image encoder is linked into `eileen-gaze` or `eileen-gaze-win`, and a new repository check fails on one; the check stores only error figures and the offset in `%LOCALAPPDATA%\eileen\gaze\check.toml` |
+| No image of the user leaves the gaze sidecar | The tracker routes give points only; the webcam route keeps frames in the sidecar's memory and drops each after its landmarks (18.5); no image encoder is linked into `eileen-gaze`, `eileen-gaze-win` or `eileen-gaze-linux`, and a new repository check fails on one; the check stores only error figures and the offset in `%LOCALAPPDATA%\eileen\gaze\check.toml`, and the webcam calibration only its fitted numbers |
 | Points are personal data | Every gaze point in the contracts is `Personal<Point>`, so the `pii.` policy applies: an incident bundle holds them only with `logging.include_personal` on, and the scenario redactor drops them from a shared scenario unless its steps need them, in which case they are the synthetic points of its gaze steps |
 | At most ten point events a second reach the core | The rate limiter in `eileen-gaze`; a property test |
 | Gaze is never an answer or an approval | `GazeEvent` arrives as `Input::Sidecar`. `GazeOver` reaches the core as a HUD line (`UserInput::Hud`), so the core treats it as non-physical whatever the line says and never as an answer, an approval or a yes or no. Simulator invariant 17 (section 10) |
@@ -308,10 +315,10 @@ The Safety keys are listed one by one in 2.11's Safety list (`gaze.enabled`, `ga
 
 ### 6.12 Platform
 
-A new trait in `eileen-platform`, implemented in `eileen-gaze-win`. A Linux implementation waits for a tracker with a Linux runtime; the neutral crate stays green on Linux either way.
+A new trait in `eileen-platform`, implemented in `eileen-gaze-win` for the tracker routes and the webcam, and in `eileen-gaze-linux` for the webcam (section 18.6). A Linux tracker route waits for a tracker with a supported Linux runtime; the neutral crate stays green on Linux either way.
 
 ```rust
-pub trait GazeSource: Send + Sync {        // eileen-gaze-win: Windows gaze input, or the vendor's runtime
+pub trait GazeSource: Send + Sync {        // Windows gaze input, the vendor's runtime, or the webcam (section 18)
     fn info(&self) -> Result<GazeSourceInfo, PlatformError>;
     /// Starts the tracker; samples go to the sink until the subscription drops. Raw samples never leave the sidecar.
     fn start(&self, sink: Box<dyn Fn(GazeSample) + Send + Sync>) -> Result<Subscription, PlatformError>;
@@ -493,15 +500,17 @@ On the reading fixture of section 10 and two real apps (a long article in Edge a
 | C | A steeper curve: speed grows with the 1.5th power of the offset, with its steepest point held to the same bound |
 | D | One-shot: `end_on_settle = true` |
 | E | Baselines: the mouse wheel, and "scroll down" by voice (G4) |
+| F | The webcam route (section 18) with arms A and D, on Windows and on Linux |
 
 Measured: time until the target sits in the band; overshoot reversals; false starts, counted over two minutes of plain reading with a session open; ends by stop word against ends by touch; and a one-to-five comfort rating. Proposed bar to drop "experimental" [to confirm with the owner]: no reversal in 95 percent of trials, fewer than one false start per two minutes of reading, a median under 3 s for a target one pane away, and the owner's yes. The results go in `docs/wp/WP11-gaze.md` and B11.
 
 ### 7.10 Prior art, and what is new here
 
+- Aaron's "Gaze Zone Scroller" (shown to the owner and to WP10 on 2026-10-26) scrolls a page by gaze from an ordinary webcam. The user locks a band of the screen where reading feels comfortable, and nothing moves while the eyes stay inside it, because a single line "works badly": the eyes are almost never exactly on it. When the eyes leave the band, the page brings the text being read back into it, faster the farther they look. Two small margins keep it calm: the gaze has to go a few percent of the screen height past an edge and stay out for a fifth of a second. Its calibration fits five signals from a face landmark model by ridge regression (section 18.3). The band, the dwell and the proportional speed of this section are the same idea, and section 18's webcam route is built on the prototype's design and numbers.
 - Kumar, Winograd and Paepcke at Stanford proposed [gaze-enhanced scrolling techniques](https://hci.stanford.edu/publications/paper.php?id=75) in 2007, manual and automatic, with gaze as the main or an added input. As a later study describes them, they used fixed screen regions that scroll when looked at, turned automatic scrolling on and off with a dedicated key, and some assumed people read in the central third of the view.
 - A [2015 study presented at the PETMEI workshop](https://microsoft.com/en-us/research/wp-content/uploads/2016/07/PETMEI2015scrolling_petmei_15_final.pdf) watched 18 people scroll by hand. People read in a preferred region that varied by person (about half of scroll events came while they looked at the middle third), and they scrolled in chunks of a few lines (a median of about 3.5 lines while reading) rather than smoothly. The study also summarises an auto-scroll by Sharmin and colleagues that starts when the gaze crosses the lower edge of the user's usual reading range and speeds up beyond it.
 - What that means here: the anchor is set by the user's own gaze, not fixed at the centre; the stop band is a few lines tall; and the trials include a one-shot arm and a steeper arm, so the chunked habit is tested rather than assumed away.
-- What is new: speed proportional to the offset from a user-set point, with the gain capped by the loop delay measured on this PC; the stop as the closed loop's own settling point, with hysteresis; and the safety envelope of 7.7 (a spoken or hotkey start, one pane, a server-side dead man's switch, and hands that always win).
+- What this plan adds to the prototype: the gain capped by the loop delay measured on this PC; the stop as the closed loop's own settling point, with hysteresis; and the safety envelope of 7.7 (a spoken or hotkey start, one pane, a server-side dead man's switch, and hands that always win).
 
 ## 8. Contracts
 
@@ -511,8 +520,10 @@ Sketches in the style of 3.3; the amendment writes them in full. New module `gaz
 // eileen_contracts::gaze (new, pinned by WP11). Every gaze point is Personal<Point>.
 pub struct GazeSample { pub at_us: u64, pub point: Option<Personal<Point>>, pub confidence_pct: u8 }
     // the injector's pipe and the recorded-sample files; never written to disk by a shipped binary
-pub struct GazeSourceInfo { pub kind: GazeSourceKind, pub accuracy_px: u16, pub precision_px: u16, pub rate_hz: u16,
-    pub monitors: Vec<u8>, pub stores_nothing: bool, pub checked: Option<WallTime> }   // kind: WindowsGazeInput | Vendor { name }
+pub struct GazeSourceInfo { pub kind: GazeSourceKind, pub axes: GazeAxes, pub accuracy_px: u16, pub precision_px: u16,
+    pub rate_hz: u16, pub monitors: Vec<u8>, pub stores_nothing: bool, pub checked: Option<WallTime> }
+    // kind: WindowsGazeInput | Vendor { name } | Webcam; axes: Both | Vertical (the webcam route at first:
+    // the x of its points means nothing and is never hit-tested, section 18.2)
 pub enum GazeEvent {
     Ready(GazeSourceInfo),
     Fixation(Fixation),                   // Started, then Updated, then Ended; point events, at most ten a second with Track
@@ -607,6 +618,7 @@ Wire: `GazeEvent` travels as `Input::Sidecar(SidecarId::Gaze, SidecarEvent::Even
 | Scroll stop on physical input | within one input event, in the desktop server | desktop lane with `test-physical` |
 | A glide with no renewal | ends within its `ms`, at most 250 ms | unit test on the server's glide timer |
 | Scroll settling, target one pane away | under 3 s median (the trial bar of 7.9) | the owner's trials |
+| Webcam route while a session runs | the budgets of 18.8; nothing while no session runs | P0 item 11; `measure-idle` |
 
 ## 10. Testing
 
@@ -620,6 +632,7 @@ Wire: `GazeEvent` travels as `Input::Sidecar(SidecarId::Gaze, SidecarEvent::Even
 - The fixture pages, templates under `scenarios/gaze/_fixtures/`, loaded in the isolated Edge profile WP5 already uses. `dashboard/`: three cards laid out as the owner's screenshots (a line chart, the "Activity by time" heatmap with `role="grid"` and each cell named like "Thursday 4 pm, 93", recent transactions), with `section` landmarks and `aria-label`s so the section rule and the cell names are deterministic. `reading/`: a long article of numbered, labelled paragraphs in one scroll container, so a test can read each paragraph's rect.
 - The closed-loop injector. For the scroll scenarios in the desktop lane, the `test-gaze` injector acts as a model eye: every 30 ms it reads the target paragraph's rect over UIA and injects its centre, delayed and with noise. The scenario then checks that the paragraph ends inside the band with no reversal, and that no glide follows the session's end.
 - The owner's measurements, recorded in `docs/wp/WP11-gaze.md`: the check's accuracy and precision per route; thirty "enhance" trials on the fixture and on three real apps with the share that picked the intended section; thirty "click that" trials with the share that outlined the intended element on the first try; the scroll trials of 7.9; idle cost of the sidecar and of the vendor's service; the hit test's p95 on Edge, Notepad and Resolve.
+- The webcam route. The five signals and the ridge fit over recorded landmark files (JSON lines of a contract type, never images), with fuzz target `gaze_landmarks`; a property test that the leave-one-out penalty is the one the error curve picks; a recorded calibration that replays to the same numbers; a state test that the camera is closed and the model unloaded whenever no session or calibration runs; and the `test-gaze` injector's webcam profile, height only, with a webcam's noise and offset, so the scroll scenarios run on the hosted lanes of both platforms.
 - A benchmark, B11, beside B1 to B10: the enhance, click and scroll trials as timed A/B scenarios, on the `devhub` results page.
 
 ## 11. Phases and acceptance
@@ -628,7 +641,7 @@ Wire: `GazeEvent` travels as `Input::Sidecar(SidecarId::Gaze, SidecarEvent::Even
 2. P1, the foundation (pull requests 3 to 7). Acceptance: the `gaze` module snapshot; `eileen-gaze` passes its filter, limiter, parser and fuzz tests on Linux; invariant 17 parts (a) and (c) hold on the PR seeds; the resolver golden file has every case of 6.5; the four Safety keys need a `UserInput` approval; the registry refuses to start `pc.gaze` without the opt-in; the machine plan lists the sidecar with its reason; the tray shows the indicator.
 3. P2, enhance and the controls (pull requests 8 to 11; G1 and G14). Acceptance: on the owner's PC with the chosen route, `enhance-section` passes thirty times out of thirty on the dashboard fixture within the budget of section 9; `enhance-cell-through-view` names the Thursday 4 pm cell; a minimized, cloaked, private or Eileen window is refused with one sentence; "back", the arrow and a physical click close the view, and the source window never gained focus or input (checked by the fixture's own state); the view never appears in `desktop_screenshot`; "stop watching my eyes" turns the indicator off within one HUD update; "check my eyes" writes `check.toml` and "forget my gaze check" removes it; the reticle, panel and indicator draw-list snapshots exist; the `test-gaze` injector drives the same scenarios on the hosted lane with no tracker.
 4. P3, the commands (pull requests 12 and 13; G2 to G13). Acceptance: the P3 scenarios pass; a gazed Send button still asks; "click that" on the HUD is refused; "that one" never answers a Confirm panel or a route proposal; the addressee feature's scenario shows at least nine of ten unnamed requests to the screen passing with a look at the HUD, and room talk with a look at the screen still greyed; the accessibility test's gaze column is complete; the ledger's dwell rows exist only with `gaze.ledger` on and never for a route that `stores_nothing`.
-5. P4, scrolling by gaze, experimental (pull requests 14 to 17; G15; after P2's hit test, beside P3). Acceptance: the law's table and closed-loop tests pass; invariant 17 part (b) holds on the PR seeds; every `scroll-mode-` scenario passes in simulation and, with the closed-loop injector, in the desktop lane; physical input ends a session within one event, and a glide with no renewal ends within 250 ms; workers, replays and the brain are refused a `glide`; the owner has run the trials of 7.9 and recorded them. Dropping "experimental" is a separate owner decision on those results.
+5. P4, scrolling by gaze, experimental (pull requests 14 to 17; G15; after P2's hit test, beside P3). Acceptance: the law's table and closed-loop tests pass; invariant 17 part (b) holds on the PR seeds; every `scroll-mode-` scenario passes in simulation and, with the closed-loop injector, in the desktop lane; physical input ends a session within one event, and a glide with no renewal ends within 250 ms; workers, replays and the brain are refused a `glide`; the owner has run the trials of 7.9 and recorded them. Dropping "experimental" is a separate owner decision on those results. The webcam route (pull requests 18 to 22) runs beside P4 and is accepted by 18.9.
 
 ## 12. Proposed work package: WP11, Gaze
 
@@ -636,11 +649,11 @@ For BUILD.md as section 6.13, in the form of 6.2 to 6.12.
 
 - Branch `wp11/<topic>` for WP11's own files and `amend/<topic>` for amendments.
 - Depends on WP0 phase A (the traits), WP1 (the core and the simulator), WP2 (the dispatcher and the sidecar client), WP5 (`desktop_hit_test`, the background scroll routes and `Glide` land in its crate), WP7 (the `Gaze` slot in the resolver, the `[gaze]` settings), WP8 (the panel, the reticle, the band, `GazeOver`). P0 depends on nothing.
-- Desktop yes: the owner's PC with the chosen tracker for P2 and later; the hosted lane through the `test-gaze` injector.
+- Desktop yes: the owner's PC with the chosen tracker for P2 and later; the hosted lane through the `test-gaze` injector; a Linux desktop with a webcam for `eileen-gaze-linux`.
 - Wave after W6, as v0.2's first package, so it never shares the desktop with another package; P0 at any time, since it compiles nothing. One slot; its builds are small.
-- Owns `crates/eileen-gaze`, `crates/eileen-gaze-win`, the `gaze` contracts module, `scenarios/gaze/` (its `_fixtures/` included), the `fuzz` target `gaze_samples` with its corpus, `docs/GAZE.md`, `docs/wp/WP11-gaze.md`, `docs/research/2026-11-gaze.md`.
+- Owns `crates/eileen-gaze`, `crates/eileen-gaze-win`, the `gaze` contracts module, `scenarios/gaze/` (its `_fixtures/` included), the `fuzz` target `gaze_samples` with its corpus, `docs/GAZE.md`, `docs/wp/WP11-gaze.md`, `docs/research/2026-11-gaze.md`. WP10 builds `crates/eileen-gaze-linux` (section 18.6) under this plan, as it builds every `-linux` crate.
 - Does not own the platform traits, the other contract modules, `eileen-desktop` (WP5), `eileen-hud` (WP8), `eileen-intent`, `eileen-config` and `eileen-learn` (WP7), `eileen-core` (WP1), or the runtime and the tray (WP2). Every change to them is an amendment that package reviews.
-- Builds sections 6, 7 and 8 of `docs/GAZE.md`: the sidecar and connector, the routes behind `GazeSource`, the fixation and track filters and the rate limiter, the nine-point check, the core's gaze ring and onset rule, the `Gaze` slot, `desktop_hit_test` and its rules, the enhance view and the reticle, the grammar entries of section 5, the `[desktop]` gaze line and `LookTarget::Gaze`, the `[gaze]` settings, invariant 17, the experimental scroll mode with its law, routes, glide and band, the scenarios, the fixture pages, B11.
+- Builds sections 6, 7, 8 and 18 of `docs/GAZE.md`: the sidecar and connector, the routes behind `GazeSource`, the fixation and track filters and the rate limiter, the nine-point check, the core's gaze ring and onset rule, the `Gaze` slot, `desktop_hit_test` and its rules, the enhance view and the reticle, the grammar entries of section 5, the `[desktop]` gaze line and `LookTarget::Gaze`, the `[gaze]` settings, invariant 17, the experimental scroll mode with its law, routes, glide and band, the scenarios, the fixture pages, B11.
 - Acceptance the phase lists of section 11.
 
 ## 13. Proposed decision record
@@ -650,9 +663,9 @@ For `docs/DECISIONS.md`, at the next free number. That was D81 on 2026-10-26, bu
 - Date: 2026-10-26
 - Status: proposed (not yet confirmed by the owner)
 - Amends: D41 (its rule that clicks and typing stay with workers: the fast path may click and focus a gazed element, as an `Act` job with that tool's own tier)
-- Decision: Eye tracking enters Eileen through a hardware tracker, as a slot, never a trigger. A room-sensing connector, `pc.gaze`, runs in a supervised sidecar behind the `GazeSource` platform trait. It turns the tracker's samples into fixations and sends only those to the core, at most ten a second. Eileen never receives an image of the user, and every gaze point is personal data. The core snapshots the fixation current at speech onset for each addressed turn, and resolves "this", "that", "here" and "there" through a `Gaze` slot and one hit test in the desktop server, which D21's server gains. A gaze-resolved action is dispatched like any other, with its tool's tier, taint and journal. The "enhance" view is a clipped DWM thumbnail the HUD draws, touching no app. No approval, answer, mute change, job, setting, consent or first-run choice is ever built from gaze, and gaze alone never addresses a turn; simulator invariant 17 checks both. An experimental scroll mode, off by default, is the one continuous use. Only an addressed turn or a hotkey opens it, and it scrolls only the pane it opened on. Its speed is proportional to the gaze's distance from a set point, with the gain capped by the loop delay measured on the PC. It stops when the gaze returns to a band around the point, and ends at a stop word, physical input or when the eyes leave the pane. The connector is opt-in through a Safety key, local only, and visible on the HUD and the tray whenever the tracker is live. A route whose terms allow live use only keeps every stored use off.
-- Why: The owner's "enhance": look at a part of a dashboard, say the word, and it fills the screen, with the eyes still tracked inside the view. The same slot removes the mouse from the commands that only needed a target, and the scroll mode removes it from reading, which serves the accessibility goal of OWNER-DIRECTION.md. Deterministic first keeps it on the fast path. "A slot, never a trigger" keeps the approval invariant intact and avoids the Midas touch problem. A hardware tracker gives the accuracy the use cases need without a model, a camera stream or a memory budget the owner's PC cannot spare.
-- Consequences: WP11 (BUILD.md 6.13) builds it after W6, with the P0 spike first. The contracts gain a `gaze` module and additions to nine other modules, none at the top level. `eileen-desktop` gains `desktop_hit_test`, background scroll routes and `Glide`. A new dispatcher rule lets the fast path issue `desktop_click_element` and `desktop_scroll` for gaze commands. The machine profile treats the sidecar as an optional resident. A new repository check forbids image encoders in the gaze crates. ROADMAP's v0.2 table gains a row. The webcam route stays out until a later proposal.
+- Decision: Eye tracking enters Eileen through a hardware tracker or, for the scroll mode, a webcam, as a slot, never a trigger. A room-sensing connector, `pc.gaze`, runs in a supervised sidecar behind the `GazeSource` platform trait. It turns the tracker's samples into fixations and sends only those to the core, at most ten a second. No image of the user leaves the sidecar, and every gaze point is personal data. The core snapshots the fixation current at speech onset for each addressed turn, and resolves "this", "that", "here" and "there" through a `Gaze` slot and one hit test in the desktop server, which D21's server gains. A gaze-resolved action is dispatched like any other, with its tool's tier, taint and journal. The "enhance" view is a clipped DWM thumbnail the HUD draws, touching no app. No approval, answer, mute change, job, setting, consent or first-run choice is ever built from gaze, and gaze alone never addresses a turn; simulator invariant 17 checks both. An experimental scroll mode, off by default, is the one continuous use. Only an addressed turn or a hotkey opens it, and it scrolls only the pane it opened on. Its speed is proportional to the gaze's distance from a set point, with the gain capped by the loop delay measured on the PC. It stops when the gaze returns to a band around the point, and ends at a stop word, physical input or when the eyes leave the pane. The connector is opt-in through a Safety key, local only, and visible on the HUD and the tray whenever the tracker is live. A route whose terms allow live use only keeps every stored use off.
+- Why: The owner's "enhance": look at a part of a dashboard, say the word, and it fills the screen, with the eyes still tracked inside the view. The same slot removes the mouse from the commands that only needed a target, and the scroll mode removes it from reading, which serves the accessibility goal of OWNER-DIRECTION.md. Deterministic first keeps it on the fast path. "A slot, never a trigger" keeps the approval invariant intact and avoids the Midas touch problem. A hardware tracker gives the accuracy the targeting use cases need. The webcam route needs no new hardware and is the only route on Linux; it serves the scroll mode because that loop needs precision more than accuracy (7.4).
+- Consequences: WP11 (BUILD.md 6.13) builds it after W6, with the P0 spike first. The contracts gain a `gaze` module and additions to nine other modules, none at the top level. `eileen-desktop` gains `desktop_hit_test`, background scroll routes and `Glide`. A new dispatcher rule lets the fast path issue `desktop_click_element` and `desktop_scroll` for gaze commands. The machine profile treats the sidecar as an optional resident. A new repository check forbids image encoders in the gaze crates. ROADMAP's v0.2 table gains a row. The webcam route serves the scroll mode on Windows and Linux, with its camera and model alive only while a session runs, and WP10 builds its Linux crate.
 - Source: `docs/GAZE.md`; `docs/research/2026-11-gaze.md` once P0 has run; BUILD.md 2.6, 2.8, 2.9, 2.12, 2.14, 3.3.9, 3.3.10, 3.4; OWNER-DIRECTION.md, "Accessibility as a first-class goal".
 
 ## 14. Amendments this needs
@@ -674,20 +687,20 @@ Pull request 3 makes the document changes; pull request 4 makes the contract cha
 | BUILD.md | 2.14 | `pc.gaze` as a room-sensing connector; `stores_nothing` |
 | BUILD.md | 2.15 | `gaze\check.toml` in the data directory |
 | BUILD.md | 2.16 | The gaze sidecar as an optional resident |
-| BUILD.md | 3.1 | `eileen-gaze`, `eileen-gaze-win` in the crate list; `scenarios/gaze/` in the directory table |
+| BUILD.md | 3.1 | `eileen-gaze`, `eileen-gaze-win` and `eileen-gaze-linux` in the crate list; `scenarios/gaze/` in the directory table |
 | BUILD.md | 3.3 | A new 3.3.18 with section 8's types; the additions to 3.3.5, 3.3.6, 3.3.9, 3.3.10, 3.3.11, 3.3.12, 3.3.13, 3.3.14 |
 | BUILD.md | 3.4 | `GazeSource`; `Automation::ancestors`; `HudSurface::set_enhance` and the clip |
-| BUILD.md | 4.1 | The `windows` crate's feature for `Windows.Devices.Input.Preview`, if P0 picks that route |
+| BUILD.md | 4.1 | The `windows` crate's feature for `Windows.Devices.Input.Preview`, if P0 picks that route; its Media Foundation features for the webcam route; the face landmark model's pin with its terms (18.7) |
 | BUILD.md | 4.3, 4.4, 4.5 | The rows of section 9: latency, the sidecar's memory, its idle cost |
 | BUILD.md | 4.7 | Invariant 17 in three parts; the gaze scenario steps and the simulated page; the `gaze_samples` row of the fuzz table; B11 |
-| BUILD.md | 4b.3 | A new check: no image encoder in `eileen-gaze` or `eileen-gaze-win`. The check count becomes thirty-one (AGENTS.md and CONTRIBUTING.md say "thirty"; their text follows as a guidance change) |
+| BUILD.md | 4b.3 | A new check: no image encoder in `eileen-gaze`, `eileen-gaze-win` or `eileen-gaze-linux`. The check count becomes thirty-one (AGENTS.md and CONTRIBUTING.md say "thirty"; their text follows as a guidance change) |
 | BUILD.md | 6.13 | Section 12 |
 | BUILD.md | 7 | The risks of section 15 under open risks |
 | BUILD.md | 8 | A revision-log line |
 | DECISIONS.md | end | The record of section 13, at the next free number |
 | PLAYBOOK.md | as needed | What the record changes, or the reason it changes nothing, under the pull request's "Playbook" heading |
 | OWNER-DIRECTION.md | Proposed 2026-10-26 | The proposal in one entry, with the owner's answers to section 16 |
-| ROADMAP.md | v0.2 | "Gaze: a hardware eye tracker as a slot for 'this', 'that' and 'enhance', and an experimental scroll by gaze; WP11" |
+| ROADMAP.md | v0.2 | "Gaze: a hardware eye tracker as a slot for 'this', 'that' and 'enhance', and an experimental scroll by gaze, also from a webcam on Windows and Linux; WP11" |
 | ARCHITECTURE.md | Processes, Connectors | The sidecar row; a sentence under "Connectors" |
 | `Cargo.toml` | the `windows` feature list | The gaze feature, if P0 picks the Windows route |
 
@@ -706,6 +719,10 @@ Pull request 3 makes the document changes; pull request 4 makes the contract cha
 - Motion discomfort. Continuous scrolling can tire the eyes. The speed cap, the speed-up limit and the session limit bound it, and the comfort rating in the trials watches it.
 - Privacy perception. A device watching the user's eyes worries people more than a microphone. The indicator that cannot be hidden, "stop watching my eyes", the no-image rule with its repository check, and the opt-in Safety key are the answer; the reticle shows the user what Eileen knows and nothing more.
 - Multi-monitor and mixed DPI are untested on the owner's single monitor, as for the desktop server; the fleet covers them.
+- The webcam route's accuracy depends on the light, glasses, the camera's height and the user's eyes; the prototype's author noted it may work less well for narrower eyes. The calibration's held-out error says how it does on each PC, and above the 15 percent rule of 7.3 Eileen offers "scroll down" instead.
+- The webcam route's CPU cost on the owner's PC. The model runs on every frame of a session. If P0 measures too much, the route runs at 15 frames a second, or the machine profile keeps it off on that PC.
+- A camera that another app holds (a call) may be unavailable. The session then refuses with one line.
+- A camera worries people more than a tracker does. The rules of 18.5 are the answer: frames never leave the sidecar, the camera is open only during a session or the calibration, and the indicator shows whenever it is.
 
 ## 16. Open questions for the owner
 
@@ -717,8 +734,10 @@ Pull request 3 makes the document changes; pull request 4 makes the contract cha
 6. The scroll mode's start: by voice ("scroll with my eyes"), by the hotkey, or both?
 7. After the text settles: keep following as the user reads on (read-along), or end the session (one-shot)?
 8. The vendor route loads the vendor's library inside `eileen-gaze.exe`. Hard rule 4 says to talk to tools under conflicting licences over IPC or to spawn them. Is a separate sidecar process enough, or should WP11 use the Windows gaze input route only?
+9. The webcam route (section 18): build it, so the scroll mode works without a tracker and on Linux, or leave it out?
+10. If it is built: on Windows and Linux, or on Linux only?
 
-Per the standing rule of BUILD.md section 7, the recommendation applies unless the owner says otherwise: a Tobii Eye Tracker 5; v0.2 after W6; keep the ledger as an opt-in; the reticle on for a week; "enhance"; the scroll mode by voice, with the hotkey as an option; read-along, with the one-shot as a trial arm; and the Windows gaze input route first, asking again only if P0 shows it cannot reach a Win32 process.
+Per the standing rule of BUILD.md section 7, the recommendation applies unless the owner says otherwise: a Tobii Eye Tracker 5; v0.2 after W6; keep the ledger as an opt-in; the reticle on for a week; "enhance"; the scroll mode by voice, with the hotkey as an option; read-along, with the one-shot as a trial arm; the Windows gaze input route first, asking again only if P0 shows it cannot reach a Win32 process; and the webcam route on both platforms, for the scroll mode only.
 
 ## 17. The P0 spike: what to confirm
 
@@ -734,7 +753,80 @@ A research report, `docs/research/2026-11-gaze.md`, in the form of the October r
 8. The scroll loop delay tau. The software part exactly, from trace spans (sample received, track sent, glide issued, glide applied); the tracker's latency from its own timestamps where the route gives them, else from a step test on a jumping target; the eye's lag following text that moves at 300, 600 and 900 px/s. The sum sets the default gain.
 9. The scroll routes. Which panes in Edge (web content and a PDF), Notepad, Explorer and VS Code expose a vertically scrollable Scroll pattern; how smoothly each repaints at 30 and 60 pattern calls a second; which take posted wheel messages at a point without the cursor there; how each treats fractional wheel deltas; and how smooth a glide renewed every 100 ms looks under load.
 10. Idle cost, Eileen's sidecar and the vendor's service separately, against the machine profile's usual free memory.
+11. The webcam route, on the owner's PC and on a Linux laptop: the face landmark model's terms and an ONNX export of it; its CPU and memory through `ort` at 15 and 30 frames a second; the camera's frame time; the calibration's held-out error and the jitter before smoothing, in daylight and lamp light, with and without glasses, against the prototype's 18.5 and 6.2 percent of the screen height; and arm F of the scroll trials.
 
-## 18. Not in this plan: the webcam route
+## 18. The webcam route
 
-The other way to get gaze is a webcam estimator: face and iris landmarks from an ONNX model and a per-monitor regression fitted at a nine-point calibration. It is not part of this plan, for four reasons. Its accuracy of 2 to 4 degrees [to confirm] reaches sections but not elements, and it is too noisy for the scroll mode's band. The model and frames would cost 100 to 250 MB and several percent of a core on a PC with 1 to 2 GB free [to confirm]. The best open gaze models were trained on datasets whose licences often allow research only. And it would put a camera stream inside an Eileen process, where this plan keeps none. The `GazeSource` trait leaves room for it, and a later proposal can bring it back with its own spike, model licence checks and memory budget.
+### 18.1 Why
+
+Most PCs have a webcam and no eye tracker. On Linux no consumer tracker has a supported runtime for interactive use: Tobii lists its consumer trackers (the 4C, 5 and 5L) as never supported by its [Pro SDK](https://developer.tobiipro.com/tobiiprosdk/eyetrackercompatibility.html), the one Tobii SDK that names Linux, and that SDK is meant for analysis. A community driver for the Eye Tracker 5, [tobiifree](https://github.com/Aetherall/tobiifree), works on Linux and Wayland, but it calls itself experimental. A webcam is therefore the only gaze source Eileen can count on for Linux, and the only one on a Windows PC without a tracker.
+
+The route follows a working prototype. Aaron's "Gaze Zone Scroller" (7.10) scrolls a page by gaze from an ordinary 640p webcam: a face landmark model, a ten-target calibration fitted by ridge regression, and a band the user sets, inside which nothing moves. This section builds the route on the prototype's design and numbers.
+
+### 18.2 What it serves, and what it does not
+
+A webcam estimate is coarse. The prototype's calibration missed its held-out targets by 18.5 percent of the screen height (about 168 px), against the 60 px a section needs (principle 6). So the route offers no gaze targets: "enhance", "click that", "close this" and the other commands of section 5 fall back exactly as with no tracker (principle 5). It serves the scroll mode (G15) and the calibration and pause commands of G14, because the scroll loop needs precision more than accuracy (7.4): the anchor is set by the same estimate, so a constant error moves the anchor and the gaze together, and the text still settles where the eyes were.
+
+The first version estimates height only, as the prototype does. Its `GazeSourceInfo.axes` is `Vertical`; the x of its points means nothing and is never hit-tested. A session therefore opens on the scroll container under the mouse pointer when the pointer is over the foreground window, and otherwise at the centre of the foreground window's client area (`desktop_hit_test { want: ScrollContainer }` at that point), never by gaze. If a later check measures a webcam route under `gaze.max_accuracy_px` on both axes, principle 6 offers its targets as it does any tracker's.
+
+### 18.3 How it works
+
+| Stage | What happens |
+|---|---|
+| Camera | Frames from the PC's camera at 30 a second, 640 by 480 or the nearest mode the camera offers, uncompressed where it can (YUYV or NV12), so nothing is decoded or encoded |
+| Face | A face landmark model gives the eye and iris landmarks and each eye's look-up and look-down scores. Faces are found by YuNet, which Eileen already ships (BUILD.md 2.7), or by the landmark model's own detector [to confirm in P0] |
+| Signals | Five per frame, from the prototype: the iris height between the eyelids, the eyelid opening, the look-down and look-up scores, the head's pitch, and the face's height in the frame |
+| Estimate | The user's own fit of the five signals to the screen height (18.4) |
+| Track | The estimate through the track filter of 6.3, sent as `Track` ten times a second while a session runs |
+
+```toml
+[gaze.webcam]                 # Low unless noted
+camera = "auto"               # auto (the system's default camera) or a device name
+fps = 30                      # 15 to 30
+```
+
+### 18.4 Calibration
+
+With the webcam route, "calibrate my eyes" runs Eileen's own calibration, since there is no vendor app. A dot visits ten places at five heights, about twelve seconds in all. At each, the route waits about half a second for the eyes to settle, then records the signals for about two thirds of a second. A ridge regression maps the signals to the screen height; the penalty matters because several of the signals rise and fall together, and plain least squares would balance large positive and negative weights between them. The penalty is chosen by leaving one target out at a time and fitting the other nine, and the error on the left-out targets is the accuracy the check reports, so it says how well the fit predicts places it has not seen.
+
+The prototype reported 18.5 percent of the screen height on held-out targets and 6.2 percent frame-to-frame jitter before smoothing, which the track filter reduces. The fit is stored as numbers only (the weights, the penalty and the held-out error) in `gaze\webcam.toml`; "forget my gaze check" deletes it.
+
+The fit holds while the head stays roughly where it was. A lean or a slouch shifts the estimate, mostly by an offset. Inside a session, "set the line here" re-anchors (7.5), which removes the offset, as the prototype's re-align key does.
+
+### 18.5 Privacy
+
+- Frames live only in `eileen-gaze.exe`'s memory. Each becomes landmarks and is dropped. No frame or crop is sent to another process, written to disk or encoded, calibration and incidents included, and the image-encoder check of section 14 covers the webcam code.
+- The camera is open only while a scroll session or the calibration runs, and closes when it ends. Outside those, the route holds no camera and no model. A state test on the sidecar checks it.
+- The camera's own light and the `gaze_live` indicator show whenever the camera is open. The operating system's camera privacy setting and consent apply: Windows' camera access setting, and on Linux the camera portal's permission when Eileen runs sandboxed.
+- Landmarks are personal data, like points, so the `pii.` policy covers any that a recorded test file holds; shipped binaries never write them.
+
+### 18.6 Platforms
+
+| Platform | Camera | Crate |
+|---|---|---|
+| Windows | Media Foundation's source reader through the `windows` crate [to confirm the features] | `eileen-gaze-win` |
+| Linux | Video4Linux2 through `rustix`, already pinned for Linux, on a desktop session, where the logged-in user may open the camera device. When Eileen runs sandboxed (L3), the camera portal instead: `org.freedesktop.portal.Camera`'s `AccessCamera`, then `OpenPipeWireRemote` and a PipeWire stream, which needs a PipeWire client and its pin [to confirm] | `eileen-gaze-linux`, built by WP10 as every `-linux` crate is |
+
+The landmark model, the signals, the fit and the filter are platform-neutral, in `eileen-gaze`, tested on Linux over recorded landmark files. On Linux the scroll mode's other half, moving the pane, is WP10's desktop backend: AT-SPI2's scroll actions, or wheel events through the RemoteDesktop portal's input that LINUX.md section 4 plans [to confirm in P0]. LINUX.md gains a gaze row through WP10's own docs pull request.
+
+### 18.7 The model
+
+The prototype uses MediaPipe's Face Landmarker: 478 landmarks with the irises, and 52 blendshape scores that include each eye's look-down and look-up. MediaPipe's code is Apache-2.0; the model files' own terms are read from their model cards in P0 [to confirm]. The route runs the model through `ort` on the ONNX Runtime Eileen already ships (1.28.2, BUILD.md 2.8), as YuNet already runs in `eileen-apps.exe` (2.7), from an ONNX export whose making P0 records [to confirm, and how the Linux build ships ONNX Runtime]. If the terms or the export fail, another landmark model with permissive terms takes its place, and the five signals stay.
+
+This route trains nothing on other people's gaze. The only fit is the user's own calibration, so the worry about gaze models trained on datasets whose terms allow research only does not apply to it.
+
+### 18.8 Budgets
+
+| Stage | Budget [to confirm in P0] |
+|---|---|
+| Memory while a session or the calibration runs | under 80 MB for the camera buffers, the model and its runtime |
+| Memory and CPU while no session runs | none: no camera, no model |
+| CPU while a session runs | the landmark model once per frame, on the CPU. P0 measures it at 15 and 30 frames a second on the owner's PC and on a Linux laptop; the prototype ran at 57 frames a second on a browser's GPU path |
+| Frame to `Track` | one frame period (33 ms at 30 a second) plus the model's time. It adds to tau, so the gain cap of 7.4 follows it with no change |
+| Calibration | about 12 s |
+
+### 18.9 Acceptance
+
+- Arm F of the trials of 7.9 meets the same bar as the tracker arms, or the route stays experimental with the mode.
+- On Windows and on Linux, the scroll scenarios of P4 pass with the `test-gaze` injector's webcam profile, and the state test shows the camera closed whenever no session or calibration runs.
+- The image-encoder check covers `eileen-gaze-linux` and the webcam code in `eileen-gaze-win`.
