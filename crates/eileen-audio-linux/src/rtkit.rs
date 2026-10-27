@@ -11,9 +11,10 @@
 //! (`SCHED_RR`) at the policy's priority capped at `MaxRealtimePriority`, after bounding the
 //! process's `RLIMIT_RTTIME` to `RTTimeUSecMax`, which rtkit checks before and after it changes
 //! the thread. A refusal falls back to high priority (`SCHED_OTHER` at a negative nice level,
-//! floored at `MinNiceLevel`), and so does a bound that failed, unless the thread already runs
-//! at that level or higher: then nothing is asked, since the fallback would only lower it
-//! ([`Promotion::Unchanged`]). rtkit refuses with
+//! floored at `MinNiceLevel`), and so does a bound that failed, unless the thread's nice level
+//! is already that level or lower: then nothing is asked, since the fallback would only lower
+//! its priority ([`Promotion::Unchanged`]). Only nice levels count: a thread already real-time
+//! falls back as any other (the crate doc's Traps). rtkit refuses with
 //! `org.freedesktop.DBus.Error.AccessDenied` for every reason it has: a priority past its
 //! maximum, an unbounded `RLIMIT_RTTIME`, polkit (whose actions refuse a session that is not
 //! local, as over SSH), its rate limit (25 calls in 20 s per user, across all of that user's
@@ -117,8 +118,8 @@ pub enum Promotion {
         nice: i32,
     },
     /// Nothing: real-time was refused or could not be asked for, and the thread already ran at
-    /// the fallback's nice level or higher, which the fallback would only have lowered. There is
-    /// nothing to revert.
+    /// the fallback's nice level or a lower one (a higher priority), which the fallback would
+    /// only have raised. There is nothing to revert.
     Unchanged {
         /// The nice level it keeps.
         nice: i32,
@@ -262,8 +263,8 @@ impl RealtimeKit {
     }
 
     /// Makes `thread`, whose nice level is `nice`, real-time as `policy` asks, or high priority
-    /// when rtkit refuses or the bound fails, never lower than `nice`; the module's doc says
-    /// how. A request whose answer never came is reverted before the error returns, since rtkit
+    /// when rtkit refuses or the bound fails, never at a nice level above `nice`; the module's
+    /// doc says how. A request whose answer never came is reverted before the error returns, since rtkit
     /// may still grant it: over this client's connection after a method timeout, and after a
     /// failed connection over the one `fresh` makes, a new connection to the same bus. Any other
     /// error leaves the thread as it was.
