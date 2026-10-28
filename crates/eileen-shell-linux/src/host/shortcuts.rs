@@ -13,11 +13,14 @@ use std::time::Duration;
 
 use eileen_contracts::core_io::KeyEdge;
 use eileen_contracts::ids::Untrusted;
-use eileen_dbus_linux::{Buses, Stream};
+use eileen_dbus_linux::{Buses, Names, OwnerChange, OwnerChanges, Stream, owner_changes};
 use eileen_platform::Deadline;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
+use zbus::Connection;
+use zbus::names::UniqueName;
 
+use crate::shortcuts::PORTAL;
 use crate::{BoundShortcut, DbusError, Shortcut, ShortcutEvent, ShortcutEvents, ShortcutsSession};
 
 /// How long the set waits after a change for the next one before it is bound, so that the
@@ -41,8 +44,11 @@ const HOTKEY: &str = "hotkey-";
 /// What the holder's own errors name.
 const HOLDER: &str = "GlobalShortcuts holder";
 const SESSION: &str = "GlobalShortcuts session";
-/// Why the holder ended when the portal closed its session.
+/// Why the holder ended when the portal closed its session, the shell dropped, or the holder's
+/// connection closed.
 const CLOSED: &str = "the portal closed it";
+const SHELL_GONE: &str = "the shell is gone";
+const CONNECTION_GONE: &str = "its connection closed";
 
 /// What the shell reports beyond `ShellHost`'s answers, to the sink of
 /// [`LinuxShell::with_events`](super::LinuxShell::with_events).
@@ -60,12 +66,14 @@ pub enum LinuxShellEvent {
     /// `Deny` or an unmuting `SetMute` or `ToggleMute` until the owner decides how Linux meets
     /// it.
     Hotkey(u32),
-    /// The shortcuts the desktop bound, as a bind's answer, each with its trigger. A change the
-    /// user makes later in the desktop's settings is not reported yet.
+    /// The shortcuts the desktop binds, each with its trigger: a bind's answer, and again the
+    /// whole list each time the portal's `ShortcutsChanged` changes it, as when the user changes
+    /// a trigger in the desktop's settings. The latest replaces any before.
     ShortcutsBound(Vec<BoundHotkey>),
     /// The desktop bound none: the user dismissed its dialog or the portal refused, both of
     /// which GNOME answers with 2 ("refused or cancelled"), no answer came within
-    /// [`CONSENT_WAIT`], or a new session could not open. A changed set is bound in a new
+    /// [`CONSENT_WAIT`], a new session could not open, or the portal left the bus
+    /// (`Unavailable`), which its name's next owner binds again. A changed set is bound in a new
     /// session once the one before has closed, so the shortcuts bound before are off while its
     /// dialog waits. Once the desktop refuses the changed set, the holder binds the set it had
     /// again, which GNOME answers from what it stored, without a dialog, and the new shortcut
@@ -204,18 +212,14 @@ pub(super) async fn put(
 }
 
 /// The holder: on a session connection of its own, so that its close ends the session and the
-/// registry's call is the connection's first, it opens a session and serves it, and a new one
-/// each time a set must be bound again, the old one closed first so that its grabs stand in no
-/// new one's way. It ends when the shell's end of the asks drops, when the portal ends the
-/// session, or when a session cannot open, which every ask then waiting is answered with; the
-/// next ask starts a new holder.
+/// registry's call is the connection's first, it follows the portal's name and opens a session
+/// and serves it, and a new one each time a set must be bound again, or the name has a new
+/// owner. The old one is closed first, when its portal still owns the name, so that its grabs
+/// stand in no new one's way. It ends when the shell's end of the asks drops, when the portal
+/// ends the session, or when a session cannot open, which every ask then waiting is answered
+/// with; the next ask starts a new holder.
 async fn hold(buses: Buses, holder: Holder) {
-    let Holder { mut asks, deadline, app_id, sink } = holder;
-    let report = |event: LinuxShellEvent| {
-        if let Some(EventSink(sink)) = &sink {
-            sink(event);
-        }
-    };
+    let Holder { asks, deadline, app_id, sink } = holder;
     // zbus bounds no connect, so the holder bounds its own, as the keep-awake holder does.
     let until = Instant::now().checked_add(deadline.budget());
     let conn = match super::within(until, super::SESSION_BUS, buses.unshared_session()).await {
@@ -223,44 +227,219 @@ async fn hold(buses: Buses, holder: Holder) {
         Err(error) => return refuse(asks, &error),
     };
     drop(buses);
-    // What a new session binds at once, when the holder opened it to bind again.
-    let (mut wanted, mut rebind) = (Wanted::default(), None);
-    loop {
-        // The portal's answer waits the shell's deadline; its events come before any bind.
-        let open = async {
-            let session = ShortcutsSession::open(&conn, &app_id, deadline.budget()).await?;
-            let events = session.events().await?;
-            Ok::<_, DbusError>((session, events))
-        };
-        let (session, mut events) = match open.await {
-            Ok(opened) => opened,
-            Err(error) => {
-                // The session before is closed, so the desktop now binds none of the set.
-                if rebind.is_some() {
-                    report(LinuxShellEvent::ShortcutsRefused(error.clone()));
+    // Followed before the first session opens, so that no new owner goes unseen.
+    let owners = match owner_changes(&conn, Names::Name(PORTAL)).await {
+        Ok(owners) => owners,
+        Err(error) => return refuse(asks, &error),
+    };
+    let wanted = Wanted::default();
+    Holding { conn, app_id, deadline, asks, owners, sink, wanted }.run().await;
+}
+
+/// A started holder: its connection, the asks, the portal's owner changes, the sink, and the set.
+struct Holding {
+    conn: Connection,
+    /// The app ID the portal's host registry is given.
+    app_id: String,
+    /// The shell's deadline, which bounds opening each session.
+    deadline: Deadline,
+    asks: mpsc::Receiver<Ask>,
+    /// The owner changes of the portal's name, from before the first session.
+    owners: OwnerChanges,
+    sink: Option<EventSink>,
+    wanted: Wanted,
+}
+
+/// A session the holder opened, or why it could not, with what it binds at once and the ask
+/// whose call opened it, when one did.
+struct Opening {
+    opened: Result<(ShortcutsSession, ShortcutEvents), DbusError>,
+    rebind: Option<Rebind>,
+    ask: Option<Ask>,
+}
+
+impl Holding {
+    /// Opens a session and serves it, then the next one, as [`hold`] says, until the holder
+    /// ends.
+    async fn run(mut self) {
+        let mut next = Opening { opened: self.open().await, rebind: None, ask: None };
+        loop {
+            let Opening { opened, rebind, ask } = next;
+            let (session, mut events) = match opened {
+                Ok(opened) => opened,
+                Err(error) => {
+                    // The session before is gone, so the desktop now binds none of the set.
+                    if rebind.is_some() {
+                        self.report(LinuxShellEvent::ShortcutsRefused(error.clone()));
+                    }
+                    if let Some(ask) = ask {
+                        let _ignored = ask.answer.send(Err(error.clone()));
+                    }
+                    return refuse(self.asks, &error);
                 }
-                return refuse(asks, &error);
+            };
+            if let Some(ask) = ask {
+                let _taken = self.wanted.take(ask);
+            }
+            let served = self.serve(&session, &mut events, rebind).await;
+            drop(events);
+            self.wanted.session_ended();
+            next = match served {
+                Ok(Next::Again(rebind)) => {
+                    let _ignored = session.close().await;
+                    Opening { opened: self.open().await, rebind: Some(rebind), ask: None }
+                }
+                // The session went with its portal: a `Close` would only reach the new one.
+                Ok(Next::Moved(rebind)) => Opening { opened: self.open().await, rebind, ask: None },
+                Ok(Next::Lost(rebind)) => {
+                    let off = DbusError::Unavailable { what: SESSION };
+                    self.report(LinuxShellEvent::ShortcutsRefused(off));
+                    match self.without_portal(rebind).await {
+                        Ok(next) => next,
+                        Err(ended) => return refuse(self.asks, &ended),
+                    }
+                }
+                Err(ended) => {
+                    let _ignored = session.close().await;
+                    return refuse(self.asks, &ended);
+                }
+            };
+        }
+    }
+
+    /// A session on the holder's connection, whose portal's answer waits the shell's deadline,
+    /// and its events, subscribed before any bind.
+    async fn open(&self) -> Result<(ShortcutsSession, ShortcutEvents), DbusError> {
+        let session =
+            ShortcutsSession::open(&self.conn, &self.app_id, self.deadline.budget()).await?;
+        let events = session.events().await?;
+        Ok((session, events))
+    }
+
+    /// Passes `event` to the sink, if there is one.
+    fn report(&self, event: LinuxShellEvent) {
+        if let Some(EventSink(sink)) = &self.sink {
+            sink(event);
+        }
+    }
+
+    /// Waits while no portal owns its name for the name's next owner, whose new session binds
+    /// `rebind`, or for an ask. Its call opens a session at once, which lets the bus start the
+    /// portal where it can, and that session binds the whole set with the ask's shortcut. An
+    /// ask whose open still finds no portal is answered so (`Unavailable`), its shortcut not
+    /// taken, and the holder waits on. `Err` ends the holder.
+    async fn without_portal(&mut self, rebind: Option<Rebind>) -> Result<Opening, DbusError> {
+        loop {
+            tokio::select! {
+                ask = self.asks.recv() => {
+                    let ask = ask.ok_or_else(|| ended(HOLDER, SHELL_GONE))?;
+                    match self.open().await {
+                        Err(error @ DbusError::Unavailable { .. }) => {
+                            let _ignored = ask.answer.send(Err(error));
+                        }
+                        opened => {
+                            return Ok(Opening { opened, rebind: Some(Rebind::Whole), ask: Some(ask) });
+                        }
+                    }
+                }
+                change = self.owners.next() => {
+                    let change = change.ok_or_else(|| ended(HOLDER, CONNECTION_GONE))?;
+                    if change.new.is_some() {
+                        return Ok(Opening { opened: self.open().await, rebind, ask: None });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Serves `session`: takes each ask in, binds the whole set [`SETTLE`] after the last ask
+    /// that finds the session holding another, hands the session's events on, and follows the
+    /// portal's name; a session opened to bind again binds `first` at once. A session takes
+    /// one bind, so a set that changes once it has had one, or a changed set the desktop
+    /// refuses, asks for a new session ([`Next::Again`]). So after a refusal any call binds
+    /// again, and shows the dialog again. `Err` ends the holder, with what the asks still
+    /// waiting are answered.
+    async fn serve(
+        &mut self,
+        session: &ShortcutsSession,
+        events: &mut ShortcutEvents,
+        first: Option<Rebind>,
+    ) -> Result<Next, DbusError> {
+        let mut turn =
+            Turn { bind_at: first.is_some().then(Instant::now), first, ..Turn::default() };
+        let mut binding: Option<Binding> = None;
+        let sink = self.sink.clone();
+        let report = move |event: LinuxShellEvent| {
+            if let Some(EventSink(sink)) = &sink {
+                sink(event);
             }
         };
-        let first = rebind.take();
-        let served = serve(&session, &mut events, &mut asks, &mut wanted, &report, first).await;
-        drop(events);
-        wanted.session_ended();
-        let _ignored = session.close().await;
-        match served {
-            Ok(next) => rebind = Some(next),
-            Err(ended) => return refuse(asks, &ended),
+        loop {
+            tokio::select! {
+                ask = self.asks.recv() => {
+                    let ask = ask.ok_or_else(|| ended(HOLDER, SHELL_GONE))?;
+                    if self.wanted.take(ask) && turn.held.as_ref() != Some(&self.wanted.whole()) {
+                        turn.bind_at = Instant::now().checked_add(SETTLE);
+                    }
+                }
+                event = events.next() => self.wanted.hand_on(event, &report)?,
+                change = self.owners.next() => {
+                    let change = change.ok_or_else(|| ended(HOLDER, CONNECTION_GONE))?;
+                    if let Some(next) = turn.after(session.portal(), &change) {
+                        return Ok(next);
+                    }
+                }
+                () = tokio::time::sleep_until(turn.bind_at.unwrap_or_else(Instant::now)),
+                    if turn.bind_at.is_some() && binding.is_none() =>
+                {
+                    if turn.had_bind {
+                        return Ok(Next::Again(Rebind::Whole));
+                    }
+                    let list = turn.start(&self.wanted);
+                    let session = session.clone();
+                    binding = Some(Box::pin(async move {
+                        let answer = session.bind(&list, CONSENT_WAIT).await;
+                        (list, answer)
+                    }));
+                }
+                (list, answer) = async {
+                    match binding.as_mut() {
+                        Some(bind) => bind.await,
+                        None => std::future::pending().await,
+                    }
+                }, if binding.is_some() => {
+                    binding = None;
+                    if let Some(next) = turn.answered(&mut self.wanted, list, answer, &report) {
+                        return Ok(next);
+                    }
+                }
+            }
         }
     }
 }
 
-/// What a session the holder opened to bind again binds at once.
-#[derive(Debug, Clone, Copy)]
+/// What a new session binds at once, when the holder opened it to bind again.
+#[derive(Debug, Clone)]
 enum Rebind {
     /// The whole set, as it then stands.
     Whole,
-    /// The set the desktop bound last, which the close of the session that held it unbound.
-    Accepted,
+    /// This set: the one the desktop bound last, which the close of the session that held it
+    /// unbound, or the one the session before held or was binding when its portal went.
+    These(Vec<Shortcut>),
+}
+
+/// Why a session's service ended without ending the holder.
+#[derive(Debug)]
+enum Next {
+    /// The session cannot bind what the holder wants: a new session on the same portal binds
+    /// this.
+    Again(Rebind),
+    /// The portal's name has a new owner: the session went with the old one, and a new session
+    /// there binds this, when the old one held or was binding anything.
+    Moved(Option<Rebind>),
+    /// The portal's name has no owner: the session went with it, and the next owner's session
+    /// binds this.
+    Lost(Option<Rebind>),
 }
 
 /// A bind under way: the set it sent, and the desktop's answer once the user has seen its
@@ -268,74 +447,72 @@ enum Rebind {
 type Binding =
     Pin<Box<dyn Future<Output = (Vec<Shortcut>, Result<Vec<BoundShortcut>, DbusError>)>>>;
 
-/// Serves `session`: takes each ask in, binds the whole set [`SETTLE`] after the last ask that
-/// finds the session holding another, and hands the session's events on; a session opened to
-/// bind again binds `first` at once. A session takes one bind, so `Ok` asks for a new session
-/// that binds again: the whole set, for an ask that came once this session had had its bind,
-/// or the set the desktop bound last, once it refuses a changed set. So after a refusal any
-/// call binds again, and shows the dialog again. `Err` ends the holder, with what the asks
-/// still waiting are answered.
-async fn serve(
-    session: &ShortcutsSession,
-    events: &mut ShortcutEvents,
-    asks: &mut mpsc::Receiver<Ask>,
-    wanted: &mut Wanted,
-    report: &impl Fn(LinuxShellEvent),
-    mut first: Option<Rebind>,
-) -> Result<Rebind, DbusError> {
-    let mut bind_at = first.is_some().then(Instant::now);
-    let mut binding: Option<Binding> = None;
-    // Whether this session has had its bind, and what it sent, unless the desktop refused it.
-    let (mut had_bind, mut held) = (false, None::<Vec<Shortcut>>);
-    loop {
-        tokio::select! {
-            ask = asks.recv() => {
-                let ask = ask.ok_or_else(|| ended(HOLDER, "the shell is gone"))?;
-                if wanted.take(ask) && held.as_ref() != Some(&wanted.whole()) {
-                    bind_at = Instant::now().checked_add(SETTLE);
-                }
+/// Where one session's bind stands.
+#[derive(Debug, Default)]
+struct Turn {
+    /// What the session binds at once, until its bind starts.
+    first: Option<Rebind>,
+    /// When the session binds, or asks for a new session once it has had its bind.
+    bind_at: Option<Instant>,
+    /// Whether this session has had its bind.
+    had_bind: bool,
+    /// What its bind sent, unless the desktop refused it.
+    held: Option<Vec<Shortcut>>,
+}
+
+impl Turn {
+    /// Starts the session's one bind: answers what it sends, `first`'s set or else the whole of
+    /// `wanted`.
+    fn start(&mut self, wanted: &Wanted) -> Vec<Shortcut> {
+        (self.bind_at, self.had_bind) = (None, true);
+        let list = match self.first.take() {
+            Some(Rebind::These(list)) => list,
+            Some(Rebind::Whole) | None => wanted.whole(),
+        };
+        self.held = Some(list.clone());
+        list
+    }
+
+    /// Takes the desktop's `answer` to the bind of `list`, reporting it; answers a new session
+    /// that binds again the set the desktop bound last, once it refuses a changed set, since the
+    /// session before, which held that set, is closed.
+    fn answered(
+        &mut self,
+        wanted: &mut Wanted,
+        list: Vec<Shortcut>,
+        answer: Result<Vec<BoundShortcut>, DbusError>,
+        report: &impl Fn(LinuxShellEvent),
+    ) -> Option<Next> {
+        match answer {
+            Ok(bound) => {
+                let bound = hotkeys(bound);
+                report(LinuxShellEvent::ShortcutsBound(bound.clone()));
+                (wanted.bound, wanted.accepted) = (Some(bound), list);
+                None
             }
-            event = events.next() => wanted.hand_on(event, report)?,
-            () = tokio::time::sleep_until(bind_at.unwrap_or_else(Instant::now)),
-                if bind_at.is_some() && binding.is_none() =>
-            {
-                if had_bind {
-                    return Ok(Rebind::Whole);
-                }
-                (bind_at, had_bind) = (None, true);
-                let list = match first.take() {
-                    Some(Rebind::Accepted) => wanted.accepted.clone(),
-                    Some(Rebind::Whole) | None => wanted.whole(),
-                };
-                held = Some(list.clone());
-                let session = session.clone();
-                binding = Some(Box::pin(async move {
-                    let answer = session.bind(&list, CONSENT_WAIT).await;
-                    (list, answer)
-                }));
+            Err(error) => {
+                self.held = None;
+                report(LinuxShellEvent::ShortcutsRefused(error));
+                let again = !wanted.accepted.is_empty() && list != wanted.accepted;
+                again.then(|| Next::Again(Rebind::These(wanted.accepted.clone())))
             }
-            (list, answer) = async {
-                match binding.as_mut() {
-                    Some(bind) => bind.await,
-                    None => std::future::pending().await,
-                }
-            }, if binding.is_some() => {
-                binding = None;
-                match answer {
-                    Ok(bound) => {
-                        report(LinuxShellEvent::ShortcutsBound(hotkeys(bound)));
-                        wanted.accepted = list;
-                    }
-                    Err(error) => {
-                        held = None;
-                        report(LinuxShellEvent::ShortcutsRefused(error));
-                        // The session before, which held them, is closed: bind them again.
-                        if !wanted.accepted.is_empty() && list != wanted.accepted {
-                            return Ok(Rebind::Accepted);
-                        }
-                    }
-                }
-            }
+        }
+    }
+
+    /// What follows `change` of the portal's owner for a session that `portal` serves: `None`
+    /// while that portal keeps the name, as for a change from before the session opened. What
+    /// the next session binds is what this one would have: its `first` set, the whole set when
+    /// a change waits, or else what its bind sent, unless the desktop refused it.
+    fn after(&self, portal: &UniqueName<'_>, change: &OwnerChange) -> Option<Next> {
+        let rebind = || {
+            let waiting = self.bind_at.map(|_at| Rebind::Whole);
+            let first = self.first.clone().or(waiting);
+            first.or_else(|| self.held.clone().map(Rebind::These))
+        };
+        match (&change.old, &change.new) {
+            (_, Some(new)) if new.as_str() != portal.as_str() => Some(Next::Moved(rebind())),
+            (Some(old), None) if old.as_str() == portal.as_str() => Some(Next::Lost(rebind())),
+            _ => None,
         }
     }
 }
@@ -352,6 +529,9 @@ struct Wanted {
     down: BTreeSet<ShortcutId>,
     /// The set the desktop bound last, which a refused change of it binds again.
     accepted: Vec<Shortcut>,
+    /// What the desktop has bound in this session, each with its trigger, as the sink last
+    /// heard it; `None` until the session's bind is answered.
+    bound: Option<Vec<BoundHotkey>>,
 }
 
 impl Wanted {
@@ -372,8 +552,8 @@ impl Wanted {
         self.shortcuts.values().cloned().collect()
     }
 
-    /// Hands `event`, the session's next, on: a hotkey's press to `report`, and the dictation
-    /// key's edges to each listener. Only a change is an edge: GNOME repeats `Activated` while a
+    /// Hands `event`, the session's next, on: a hotkey's press and a change of what the desktop
+    /// binds to `report`, and the dictation key's edges to each listener. Only a change is an edge: GNOME repeats `Activated` while a
     /// key is held, so one that is down already says nothing, nor does a hotkey's release. `Err`
     /// once the session has ended, the portal having closed it or its signals having stopped,
     /// which the asks still waiting are answered with.
@@ -385,6 +565,10 @@ impl Wanted {
         let (id, down) = match event.ok_or_else(|| ended(SESSION, "its signals ended"))? {
             ShortcutEvent::Activated(id) => (id, true),
             ShortcutEvent::Deactivated(id) => (id, false),
+            ShortcutEvent::Changed(list) => {
+                self.changed(hotkeys(list), report);
+                return Ok(());
+            }
             ShortcutEvent::Closed => return Err(ended(SESSION, CLOSED)),
         };
         let Some(shortcut) = ShortcutId::of(&id) else { return Ok(()) };
@@ -398,13 +582,27 @@ impl Wanted {
         Ok(())
     }
 
+    /// Takes the desktop's `list` of what the session now binds (`ShortcutsChanged`), and
+    /// reports it as [`LinuxShellEvent::ShortcutsBound`] when it differs from what the sink last
+    /// heard. One before the session's bind is answered is passed over: GNOME sends one just
+    /// before its answer, which says the same.
+    fn changed(&mut self, list: Vec<BoundHotkey>, report: &impl Fn(LinuxShellEvent)) {
+        let Some(bound) = self.bound.as_mut() else { return };
+        if *bound != list {
+            bound.clone_from(&list);
+            report(LinuxShellEvent::ShortcutsBound(list));
+        }
+    }
+
     /// Ends the session's part: a dictation key still down is released, since the session's
-    /// `Deactivated` can no longer come, and the next session starts with every key up.
+    /// `Deactivated` can no longer come, and the next session starts with every key up and
+    /// nothing bound.
     fn session_ended(&mut self) {
         if self.down.remove(&ShortcutId::Dictation) {
             self.send(KeyEdge::Up);
         }
         self.down.clear();
+        self.bound = None;
     }
 
     /// Sends `edge` to each listener, dropping one that is full or gone.

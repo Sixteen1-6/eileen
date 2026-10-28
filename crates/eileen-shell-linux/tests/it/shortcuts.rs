@@ -1,6 +1,7 @@
 //! The `GlobalShortcuts` client against a fake portal on a private bus: the host registry's call
 //! before the session, the bind's shortcuts and the desktop's triggers, the U+0000 rule,
-//! refusals and odd answers, the session's signals and its close, a session or a bind left
+//! refusals and odd answers, the session's signals, its shortcuts' changes and its close, a
+//! session or a bind left
 //! unanswered, and portals without the interface. The fake's items are `pub(super)` for the
 //! shell's tests.
 
@@ -243,9 +244,14 @@ fn text(options: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
     options.get(key).map(|value| <&str>::try_from(value).unwrap().to_owned())
 }
 
-/// The desktop's answer to a bind of `listed`: each shortcut with its description and, for one
-/// offered with a trigger, a description of the trigger that names it.
+/// The desktop's answer to a bind of `listed`, as a bind's results hold it: [`described`].
 pub(super) fn triggers(listed: &[Listed]) -> Value<'static> {
+    Value::from(described(listed))
+}
+
+/// What the desktop says of `listed`: each shortcut with its description and, for one offered
+/// with a trigger, a description of the trigger that names it.
+fn described(listed: &[Listed]) -> Vec<(String, HashMap<String, Value<'static>>)> {
     let described = |(id, description, trigger): &Listed| {
         let mut details: HashMap<String, Value<'static>> = HashMap::new();
         if let Some(description) = description {
@@ -257,7 +263,7 @@ pub(super) fn triggers(listed: &[Listed]) -> Value<'static> {
         }
         (id.clone(), details)
     };
-    Value::from(listed.iter().map(described).collect::<Vec<_>>())
+    listed.iter().map(described).collect()
 }
 
 /// Answers `request` from `conn` to `caller` as `mode` says, with `results` when it grants.
@@ -297,6 +303,20 @@ pub(super) async fn press(
 ) {
     let body = (session, id, 7_u64, HashMap::<&str, Value<'_>>::new());
     conn.emit_signal(Some(caller), PORTAL_PATH, SHORTCUTS, member, &body).await.unwrap();
+}
+
+/// Emits the portal's `ShortcutsChanged` for `session` from `conn` to `caller`, with the desktop's
+/// description of each of `listed`, as [`described`] gives it.
+pub(super) async fn change(
+    conn: &zbus::Connection,
+    caller: &str,
+    session: &OwnedObjectPath,
+    listed: &[Listed],
+) {
+    let body = (session, described(listed));
+    conn.emit_signal(Some(caller), PORTAL_PATH, SHORTCUTS, "ShortcutsChanged", &body)
+        .await
+        .unwrap();
 }
 
 /// Emits the session's `Closed` for `session` from `conn` to `caller`, as the portal ends one.
@@ -479,6 +499,36 @@ async fn only_this_sessions_signals_from_the_portal_are_events() {
     assert_eq!(events.next().await, down, "the session's own press");
     let up = Some(ShortcutEvent::Deactivated("hotkey-1".to_owned()));
     assert_eq!(events.next().await, up, "and its release, in order");
+}
+
+#[tokio::test]
+async fn only_this_sessions_shortcuts_changed_is_a_change_with_the_new_triggers() {
+    let bus = PrivateBus::start();
+    let (fake, _reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = serve_portal(&bus, fake).await;
+    let (client, session) = opened(&bus).await;
+    let mut events = session.events().await.unwrap();
+    let to = client.unique_name().unwrap().to_string();
+    let ours = OwnedObjectPath::from(session.handle().to_owned());
+    let theirs = handle("session", ":1.999", "other");
+    let rebound = listed(&[("hotkey-1", Some("Mute or unmute"), Some("Ctrl+Alt+K"))]);
+    change(&portal, &to, &theirs, &rebound).await;
+    let odd = (&ours, "odd");
+    portal.emit_signal(Some(&*to), PORTAL_PATH, SHORTCUTS, "ShortcutsChanged", &odd).await.unwrap();
+    change(&portal, &to, &ours, &rebound).await;
+    press(&portal, &to, "Activated", &ours, "hotkey-1").await;
+    let changed = vec![BoundShortcut {
+        id: "hotkey-1".to_owned(),
+        trigger: Untrusted::new("Press Ctrl+Alt+K".to_owned()),
+    }];
+    assert_eq!(
+        events.next().await,
+        Some(ShortcutEvent::Changed(changed)),
+        "another session's change and a malformed one are passed over, and this session's \
+         comes before the press sent after it, with the desktop's new words for the trigger"
+    );
+    let down = Some(ShortcutEvent::Activated("hotkey-1".to_owned()));
+    assert_eq!(events.next().await, down, "then the press");
 }
 
 #[tokio::test]

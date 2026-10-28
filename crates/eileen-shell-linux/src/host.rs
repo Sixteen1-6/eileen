@@ -67,9 +67,10 @@
 //!   set it had again in another session, which GNOME answers without a dialog, and the new
 //!   shortcut waits for the next call, which shows the dialog again.
 //! - A bind waits [`CONSENT_WAIT`] for the desktop's dialog, which GNOME leaves up past it: a
-//!   late accept binds at the next call. Its answer and each hotkey's press reach the sink of
-//!   [`LinuxShell::with_events`] as [`LinuxShellEvent`]s; a change the user makes later in the
-//!   desktop's settings does not yet. The dictation key's press and release reach each
+//!   late accept binds at the next call. Its answer, each change of the triggers that the
+//!   portal's `ShortcutsChanged` brings later, as when the user changes one in the desktop's
+//!   settings, and each hotkey's press reach the sink of [`LinuxShell::with_events`] as
+//!   [`LinuxShellEvent`]s. The dictation key's press and release reach each
 //!   `watch_input` sink as `DictationKey(Down)` and `DictationKey(Up)`; `PhysicalActivity` never
 //!   does, since no source of it is chosen yet. Each press counts once, though GNOME repeats
 //!   `Activated` while a key is held, and a dictation key still down when its session ends is
@@ -81,6 +82,15 @@
 //!   a follow-up.
 //! - GNOME keeps the trigger the user chose for an ID over a changed chord, and shows its
 //!   dialog only for shortcuts it has not stored.
+//! - The holder follows the owner of the portal's name, `org.freedesktop.portal.Desktop`. A
+//!   session lives in the portal's process, so when the name gets a new owner, as when the
+//!   portal restarts, the holder opens a session there and binds again what the old one held
+//!   or was binding, within [`CONSENT_WAIT`] as any bind; GNOME answers a set it has stored
+//!   without a dialog. While no portal owns the name, the shortcuts are off: the sink hears
+//!   `ShortcutsRefused` with `Unavailable`, a dictation key still down is released, and each
+//!   call opens a session at once, which lets the bus start the portal where it can, to bind
+//!   the whole set with the call's shortcut. A call that still finds no portal is
+//!   `Unavailable`, its shortcut not taken, and the holder waits on for the name's next owner.
 //! - The holder ends when the [`LinuxShell`] drops, which closes the session and the
 //!   connection and ends each `watch_input`'s events, or when the portal closes the session;
 //!   the next call then starts a new holder.
@@ -130,11 +140,10 @@
 //!   portal) fires it as a keyboard does, so it cannot meet the rule that the approve, deny and
 //!   unmute hotkeys count only when a keyboard sent them (BUILD.md sections 2.5 and 2.9):
 //!   [`LinuxShellEvent::Hotkey`] says what a root must not map it to, until the owner decides.
-//! - A portal that restarts loses the session without a word, so the shortcuts stay dead until
-//!   a changed set is bound in a new session, and a dictation key held then never reports its
-//!   release; one that closes the session ends the holder, and the next call starts one that
-//!   binds that call's shortcut alone. Either way `watch_input` hears nothing more, which
-//!   nothing reports yet. Following the portal is a follow-up.
+//! - A portal that closes the session ends the holder, and the next call starts one that binds
+//!   that call's shortcut alone; `watch_input` hears nothing more, which nothing reports yet.
+//!   A portal that restarts while a bind's dialog is up takes the dialog with it, and the new
+//!   session's bind shows it again for the shortcuts the desktop has not stored.
 //! - A tray choice may not come from a person, as [`LinuxShellEvent::TrayChoice`] says.
 //! - A watcher that never answers keeps its registration under way for the holder connection's
 //!   method timeout, and each `set_tray` meanwhile spends half its deadline before it answers
