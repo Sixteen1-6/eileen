@@ -62,8 +62,7 @@
 //! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd): with
 //!   none it fails before the child starts, without I/O it panics or fails after (see [`spawn`]).
 //!   A [`ChildSpec::raw_stderr`] caller must read stderr.
-//! - On Linux a nice value orders a child only within its CPU cgroup or autogroup, and the idle
-//!   I/O class counts only under the BFQ and mq-deadline disk schedulers (`child.rs`).
+//! - On Linux nice counts only in a CPU cgroup or autogroup, idle I/O on some disks (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
