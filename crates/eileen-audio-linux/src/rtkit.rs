@@ -6,15 +6,21 @@
 //!
 //! # Promoting a thread
 //!
-//! [`RealtimeKit::promote`] reads the three limits, each property alone, since rtkit 0.13 answers
+//! [`RealtimeKit::promote`] first leaves a thread that is already real-time as it is, asking rtkit
+//! nothing ([`Promotion::Unchanged`]), whatever its priority, the asked one's included: rtkit
+//! grants only `SCHED_RR`, so a refusal's fallback and the revert of a grant could each only end
+//! with it on `SCHED_OTHER`, and raising a lower priority would also take its own policy, which
+//! no call of rtkit's puts back. Its priority is what made it real-time chose. A thread whose
+//! policy could not be read is asked for as before: the crate doc's Traps say why.
+//!
+//! Otherwise it reads the three limits, each property alone, since rtkit 0.13 answers
 //! `Get` but not `GetAll`, which zbus's default property cache calls. It then asks for real-time
 //! (`SCHED_RR`) at the policy's priority capped at `MaxRealtimePriority`, after bounding the
 //! process's `RLIMIT_RTTIME` to `RTTimeUSecMax`, which rtkit checks before and after it changes
 //! the thread. A refusal falls back to high priority (`SCHED_OTHER` at a negative nice level,
 //! floored at `MinNiceLevel`), and so does a bound that failed, unless the thread's nice level
 //! is already that level or lower: then nothing is asked, since the fallback would only lower
-//! its priority ([`Promotion::Unchanged`]). Only nice levels count: a thread already real-time
-//! falls back as any other (the crate doc's Traps). rtkit refuses with
+//! its priority ([`Promotion::Unchanged`]). rtkit refuses with
 //! `org.freedesktop.DBus.Error.AccessDenied` for every reason it has: a priority past its
 //! maximum, an unbounded `RLIMIT_RTTIME`, polkit (whose actions refuse a session that is not
 //! local, as over SSH), its rate limit (25 calls in 20 s per user, across all of that user's
@@ -34,7 +40,8 @@
 //!
 //! [`RealtimeKit::revert`] asks rtkit for `SCHED_OTHER`, since neither std nor rustix has a safe
 //! `sched_setscheduler`, at the nice level the thread had, floored at `MinNiceLevel`
-//! ([`Promoted::restore`]), below which rtkit refuses any. rtkit 0.14 records the real-time
+//! ([`Promoted::restore`]), below which rtkit refuses any; a thread that was under `SCHED_BATCH`
+//! or `SCHED_IDLE` comes back on `SCHED_OTHER`. rtkit 0.14 records the real-time
 //! priority it last granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend
 //! makes every thread it still records real-time again. It forgets a thread only in the garbage
 //! collection it runs at the start of each call to its object, once the thread is neither
@@ -44,7 +51,7 @@
 use zbus::proxy::CacheProperties;
 
 use crate::DbusError;
-use crate::thread::{ThreadId, bound_rttime};
+use crate::thread::{Scheduling, ThreadId, bound_rttime};
 
 /// What the errors name: the service, and each method and property by its D-Bus name.
 const RTKIT: &str = "org.freedesktop.RealtimeKit1";
@@ -117,11 +124,13 @@ pub enum Promotion {
         /// Its nice level.
         nice: i32,
     },
-    /// Nothing: real-time was refused or could not be asked for, and the thread already ran at
-    /// the fallback's nice level or a lower one (a higher priority), which the fallback would
-    /// only have raised. There is nothing to revert.
+    /// Nothing: the thread was already real-time, which [`RealtimeKit::promote`] leaves without
+    /// asking rtkit anything, or real-time was refused or could not be asked for, and the thread
+    /// already ran at the fallback's nice level or a lower one (a higher priority), which the
+    /// fallback would only have raised. There is nothing to revert.
     Unchanged {
-        /// The nice level it keeps.
+        /// The nice level it keeps, which a real-time policy sets aside until the thread leaves
+        /// it.
         nice: i32,
     },
 }
@@ -151,7 +160,8 @@ pub struct Promoted {
     pub promotion: Promotion,
     /// The nice level [`RealtimeKit::revert`] asks for: the one the thread had, floored at
     /// `MinNiceLevel`, below which rtkit refuses any level, so the revert asks for a level rtkit
-    /// accepts. A thread whose promotion [does not revert](Promotion::reverts) is left alone.
+    /// accepts. A thread whose promotion [does not revert](Promotion::reverts) is left alone; for
+    /// one already real-time, whose promotion reads no limit, it is the level the thread had.
     pub restore: i32,
 }
 
@@ -262,22 +272,28 @@ impl RealtimeKit {
             .map_err(|error| failed(MAKE_HIGH_PRIORITY, &error))
     }
 
-    /// Makes `thread`, whose nice level is `nice`, real-time as `policy` asks, or high priority
-    /// when rtkit refuses or the bound fails, never at a nice level above `nice`; the module's
-    /// doc says how. A request whose answer never came is reverted before the error returns, since rtkit
-    /// may still grant it: over this client's connection after a method timeout, and after a
-    /// failed connection over the one `fresh` makes, a new connection to the same bus. Any other
-    /// error leaves the thread as it was.
+    /// Makes `thread`, whose nice level is `nice` and whose policy is `scheduling` (`None` when it
+    /// could not be read), real-time as `policy` asks, or high priority when rtkit refuses or the
+    /// bound fails, never at a nice level above `nice`, and leaves it as it is, with no call at
+    /// all, when it is already real-time; the module's doc says how. A request whose answer never
+    /// came is reverted before the error returns, since rtkit may still grant it: over this
+    /// client's connection after a method timeout, and after a failed connection over the one
+    /// `fresh` makes, a new connection to the same bus. Any other error leaves the thread as it
+    /// was.
     pub async fn promote<F>(
         &self,
         thread: ThreadId,
         nice: i32,
+        scheduling: Option<Scheduling>,
         policy: RealtimePolicy,
         fresh: F,
     ) -> Result<Promoted, DbusError>
     where
         F: AsyncFnOnce() -> Result<zbus::Connection, DbusError>,
     {
+        if scheduling.is_some_and(Scheduling::is_realtime) {
+            return Ok(Promoted { promotion: Promotion::Unchanged { nice }, restore: nice });
+        }
         let limits = self.limits().await?;
         let restore = limits.nice_level(nice);
         let requested = self.request(thread, nice, policy, limits).await;

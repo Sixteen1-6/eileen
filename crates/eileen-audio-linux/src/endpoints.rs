@@ -11,7 +11,9 @@
 //!
 //! # The registration
 //!
-//! The thread's id and nice level are read on the caller's thread. Its one bridge call starts a
+//! The thread's id, nice level and policy are read on the caller's thread; a policy that could
+//! not be read is passed on as unknown, which [`RealtimeKit::promote`] asks for as before. Its one
+//! bridge call starts a
 //! promoter task on the bridge's thread and waits for its answer within the settings' deadline;
 //! past it, the bridge cancels only that wait, never the task, since a promotion cut short could
 //! leave a thread real-time with no ticket to revert it. Once promoted, the task answers with a
@@ -43,7 +45,7 @@ use eileen_platform::{
 };
 use tokio::sync::oneshot;
 
-use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, Scheduling, ThreadId};
 
 /// How long dropping a ticket waits for the revert, at most. rtkit answers in milliseconds, and
 /// a drop should not stall the audio thread for a call's whole deadline; past it, the promoter
@@ -127,11 +129,13 @@ impl AudioEndpoints for LinuxAudioEndpoints {
     fn register_audio_thread(&self) -> Result<ThreadTicket, PlatformError> {
         let thread = ThreadId::current();
         let nice = thread.nice()?;
+        let scheduling = thread.scheduling().ok();
         let policy = self.settings.policy;
         let bridge = self.bridge.clone();
         let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
-            drop(tokio::task::spawn_local(promoter(bridge, buses, thread, nice, policy, answer)));
+            let now = (thread, nice, scheduling);
+            drop(tokio::task::spawn_local(promoter(bridge, buses, now, policy, answer)));
             // Cancelled, the job drops `answered`, which makes the promoter revert what it got.
             answered.await.unwrap_or_else(|_gone| {
                 Err(PlatformError::Io { what: REGISTER, detail: PROMOTER_GONE.to_owned() })
@@ -142,22 +146,22 @@ impl AudioEndpoints for LinuxAudioEndpoints {
     }
 }
 
-/// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, hands the
-/// promotion over ([`hand_over`]), then reverts `thread`, unless nothing changed, and answers the
-/// ask, if one came. It keeps `bridge` until it has reverted, so the bridge's thread, which runs
-/// it, lives as long.
+/// The promoter task: promotes the thread of `now`, with its nice level and policy, as `policy`
+/// asks, hands the promotion over ([`hand_over`]), then reverts the thread, unless nothing
+/// changed, and answers the ask, if one came. It keeps `bridge` until it has reverted, so the
+/// bridge's thread, which runs it, lives as long.
 async fn promoter(
     bridge: Bridge,
     buses: Buses,
-    thread: ThreadId,
-    nice: i32,
+    now: (ThreadId, i32, Option<Scheduling>),
     policy: RealtimePolicy,
     answer: oneshot::Sender<Answer>,
 ) {
+    let (thread, nice, scheduling) = now;
     let promoted = match buses.system().await {
         Ok(system) => {
             let fresh = || reconnect(&buses, &system);
-            RealtimeKit::new(&system).promote(thread, nice, policy, fresh).await
+            RealtimeKit::new(&system).promote(thread, nice, scheduling, policy, fresh).await
         }
         Err(error) => Err(error),
     };

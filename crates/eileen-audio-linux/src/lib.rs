@@ -6,8 +6,8 @@
 //!
 //! - [`RealtimeKit`], the client of `rtkit-daemon` on the system bus: its limits ([`RtLimits`]),
 //!   promoting a thread to real-time or high priority ([`RealtimePolicy`], [`Promoted`],
-//!   [`Promotion`]) and the revert, with [`ThreadId`] and the bound on the process's
-//!   `RLIMIT_RTTIME`.
+//!   [`Promotion`]) and the revert, with [`ThreadId`], its [`Scheduling`] and the bound on the
+//!   process's `RLIMIT_RTTIME`.
 //! - [`LinuxAudioEndpoints`]: `eileen-platform`'s `AudioEndpoints` on `eileen-dbus-linux`'s
 //!   bridge. It serves `register_audio_thread`; the default endpoints wait for phase L2.
 //!
@@ -25,7 +25,7 @@
 //! - It never raises a limit (the `RLIMIT_RTTIME` bound only lowers), and never asks for more than
 //!   `RealtimeKit` grants: a priority capped at `MaxRealtimePriority`, a nice level floored at
 //!   `MinNiceLevel`, the revert's included. The fallback never asks for a nice level above the
-//!   thread's own, which would lower it (a thread already real-time: see Traps).
+//!   thread's own, which would lower it, and a thread already real-time is asked nothing.
 //! - Real-time comes only through `RealtimeKit`. It starts no process (a call may let the bus
 //!   start `rtkit-daemon`), needs no elevation, and changes only the threads that register.
 //! - A request that rtkit may still grant after its call gave up, past the bridge's deadline or
@@ -47,8 +47,8 @@
 //!   integration tests in `tests/it/` against a fake `RealtimeKit` on `eileen-dbus-linux`'s
 //!   private bus, which serves its calls in order, checks the caller's `RLIMIT_RTTIME` and keeps
 //!   rtkit 0.14's record of each thread, and [`LinuxAudioEndpoints`] through
-//!   `Bridge::on_private_bus`. No live test: WSL2 has no `RealtimeKit`; a real Ubuntu desktop
-//!   checks a registered thread with `chrt -p`.
+//!   `Bridge::on_private_bus`. The one live test reads the test thread's own policy; WSL2 has no
+//!   `RealtimeKit`, so a real Ubuntu desktop checks a registered thread with `chrt -p`.
 //!
 //! # Traps
 //!
@@ -62,9 +62,11 @@
 //!   thread real-time again. So does a suspend that starts between a revert's two calls, and any
 //!   suspend once a thread whose nice level was negative is reverted to it. A thread that ends
 //!   with its ticket escapes all three: rtkit checks a thread's start time before it acts.
-//! - A thread already real-time (registered twice, or made so by another library) leaves it:
-//!   the fallback compares nice levels only, so a refusal moves it to `SCHED_OTHER`, and so does
-//!   the revert of a grant, since rtkit has no call that puts a real-time policy back.
+//! - A thread already real-time (registered twice, or made so by another library) is left as it
+//!   is: rtkit has no call that puts a real-time policy back. Its policy is read from procfs
+//!   before the request, and one that cannot be read is asked for as before, since a refusal or
+//!   a revert then costs a rare real-time thread its policy, not every thread its priority. A
+//!   thread made real-time after it registered still leaves it when its ticket reverts.
 //! - rtkit's canary demotes every real-time thread when the system starves, which no ticket sees.
 //! - Under Flatpak the Realtime portal replaces `RealtimeKit` (phase L3).
 //!
@@ -87,4 +89,4 @@ mod thread;
 pub use eileen_dbus_linux::DbusError;
 pub use endpoints::{LinuxAudioEndpoints, LinuxAudioSettings, REVERT_WAIT};
 pub use rtkit::{Promoted, Promotion, RealtimeKit, RealtimePolicy, RtLimits};
-pub use thread::ThreadId;
+pub use thread::{Scheduling, ThreadId};

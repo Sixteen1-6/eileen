@@ -11,3 +11,5 @@
 mod endpoints;
 #[cfg(test)]
 mod rtkit;
+#[cfg(test)]
+mod thread;
