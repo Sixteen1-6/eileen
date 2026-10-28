@@ -135,6 +135,10 @@ minidumper = "0.11.0"
 # Linux (docs/LINUX.md): for the -linux crates. rustix 1.1.5 (2026-09-16) is already in the lock
 # through tempfile; `statvfs` needs its fs feature.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
+# libc 0.2.190 (2026-10-02, MIT OR Apache-2.0) is already in the lock through tokio, mio and zbus.
+# The supervisor takes it for the one call it needs that neither std nor rustix wraps,
+# `ioprio_set`; no member needs its `std` feature.
+libc = { version = "0.2.190", default-features = false }
 # zbus 5.19.0 (2026-08-09, MIT) speaks D-Bus on Eileen's tokio runtime, not on its own async-io
 # executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
 # releases from 2026-10-09 to 2026-10-16 for five crates of its tree, so the pull request whose

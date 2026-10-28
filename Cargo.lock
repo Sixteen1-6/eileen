@@ -1118,6 +1118,7 @@ dependencies = [
  "eileen-rt",
  "eileen-stdx",
  "eileen-trace",
+ "libc",
  "process-wrap",
  "rustix",
  "thiserror 2.0.21",

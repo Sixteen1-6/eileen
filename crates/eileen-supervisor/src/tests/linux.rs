@@ -1,7 +1,8 @@
 //! Linux process tests: a child leads a session of its own, its whole process group dies when
 //! it is dropped, when it exits and when the process that spawned it dies, `try_wait` reaps
 //! through tokio, children are forked on the supervisor's own thread, a Claude session runs
-//! nicer than a sidecar, and the detached spawn is reaped once it exits. Processes the test did
+//! nicer than a sidecar and in the idle I/O class, and the detached spawn is reaped once it
+//! exits. Processes the test did
 //! not start itself are watched through pidfds, which name one process for good, and killed by
 //! a guard when the test ends, however it ends.
 
@@ -19,6 +20,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::{TempDir, current_thread, helper, hold_block, lock_file, read_ready, say_ready};
 use crate::child::CLAUDE_SESSION_NICER_BY;
+use crate::ffi::IDLE_IO_PRIORITY;
 use crate::{ChildClass, ChildSpec, spawn};
 
 /// The longest a test waits for a kill to land.
@@ -46,6 +48,7 @@ pub(super) fn helper_entry(mode: &str, dir: &Path) {
             drop(child);
         }),
         "nice" => say_ready(&getpriority_process(None).unwrap().to_string()),
+        "ioprio" => say_ready(&crate::ffi::io_priority().unwrap().to_string()),
         // Answers one line from stdin.
         "echo" => {
             let mut line = String::new();
@@ -189,7 +192,7 @@ fn a_child_outlives_the_thread_that_spawned_it() {
             let child = spawn(&helper("echo", &helper_dir)).unwrap();
             let mut command = crate::child::base_command(&helper("block", &helper_dir));
             command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            crate::ffi::own_session_killed_with_parent(&mut command, 0);
+            crate::ffi::own_session_killed_with_parent(&mut command, crate::ffi::Lowered::NONE);
             (child, Watched::open(command.spawn().unwrap().id()))
         });
         let (mut child, witness) = thread.unwrap().join().unwrap();
@@ -229,6 +232,60 @@ fn a_claude_session_runs_nicer_than_a_sidecar() {
             (sidecar + CLAUDE_SESSION_NICER_BY).min(19),
             "a Claude session runs ten nice steps below a sidecar, at most at 19"
         );
+    });
+}
+
+/// The I/O priority a helper of `class` reports, as `ioprio_get` answers it.
+async fn io_priority_of(class: ChildClass, dir: &Path) -> i64 {
+    let mut child = spawn(&helper("ioprio", dir).class(class)).unwrap();
+    let (said, _stdout) = read_ready(&mut child).await;
+    assert!(child.wait().await.unwrap().success(), "the helper ran to the end");
+    said.parse().unwrap()
+}
+
+/// The I/O priority a helper reports when this thread starts it the plain way, with no setup:
+/// what any child of this process gets.
+fn plain_io_priority(dir: &Path) -> i64 {
+    let out = crate::child::base_command(&helper("ioprio", dir))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "the plain helper ran to the end");
+    let said = String::from_utf8(out.stdout).unwrap();
+    said.lines().find_map(|line| line.trim_end().strip_prefix("ready ")).unwrap().parse().unwrap()
+}
+
+#[test]
+fn a_claude_session_runs_in_the_idle_io_class() {
+    let dir = TempDir::new("ioprio-session");
+    current_thread().block_on(async {
+        let session = io_priority_of(ChildClass::ClaudeSession, &dir.0).await;
+        assert_eq!(
+            session,
+            i64::from(IDLE_IO_PRIORITY),
+            "a Claude session runs in the idle I/O class, which its builds inherit"
+        );
+    });
+}
+
+#[test]
+fn a_sidecar_keeps_the_io_priority_of_its_parent() {
+    let dir = TempDir::new("ioprio-sidecar");
+    let plain = plain_io_priority(&dir.0);
+    assert_ne!(
+        plain,
+        i64::from(IDLE_IO_PRIORITY),
+        "a test run in the idle I/O class cannot show that a sidecar stays out of it"
+    );
+    current_thread().block_on(async {
+        let sidecar = io_priority_of(ChildClass::Sidecar, &dir.0).await;
+        let tool = io_priority_of(ChildClass::Tool, &dir.0).await;
+        assert_eq!(
+            sidecar, plain,
+            "a sidecar keeps the I/O priority any child of this process gets"
+        );
+        assert_eq!(tool, plain, "and so does a tool");
     });
 }
 

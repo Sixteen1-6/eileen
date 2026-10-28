@@ -26,7 +26,7 @@
 //! - On Linux a child leads its own session, and its whole group dies before the reap: on drop,
 //!   on `wait`, on a `try_wait` that reaps (which forgets the pid), and with the process that
 //!   spawned it, from any thread; a Claude session runs ten nice steps below its forking thread
-//!   (a test of `tests::linux` for each).
+//!   and in the idle I/O class (a test of `tests::linux` for each).
 //! - The detached spawn outlives its parent (on Windows) and is reaped once it exits (on Unix):
 //!   `tests::the_guard_spawn_outlives_its_parent` and `tests::linux::the_guard_spawn_is_reaped`.
 //! - A failing child restarts at most `max_restarts` times per window
@@ -42,7 +42,7 @@
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
 //! - May depend on `eileen-rt`, `eileen-stdx`, `eileen-trace`, `process-wrap`, `thiserror`,
-//!   `tokio` and `tracing`; `windows` on Windows; `rustix` on Linux.
+//!   `tokio` and `tracing`; `windows` on Windows; `rustix` and `libc` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -62,7 +62,8 @@
 //! - [`spawn`] needs a tokio runtime with I/O (process driver, stderr task, Linux pidfd): with
 //!   none it fails before the child starts, without I/O it panics or fails after (see [`spawn`]).
 //!   A [`ChildSpec::raw_stderr`] caller must read stderr.
-//! - On Linux a nice value orders a child only within its CPU cgroup or autogroup (`child.rs`).
+//! - On Linux a nice value orders a child only within its CPU cgroup or autogroup, and the idle
+//!   I/O class counts only under the BFQ and mq-deadline disk schedulers (`child.rs`).
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
