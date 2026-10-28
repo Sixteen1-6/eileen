@@ -7,8 +7,8 @@
 //! `/proc/<pid>/sched` was the other choice: a scheduler debugging file whose format the kernel
 //! does not keep stable, and which has no real-time priority. The read needs no bound of its own
 //! (BUILD.md section 2.1 rule 2 bounds calls to another process): procfs makes the file in memory
-//! from the thread's own task, under short kernel locks that no other process can hold, as
-//! `/proc/<pid>/cmdline` can by holding its memory map's lock.
+//! from this process's own task, under spinlocks that nothing holds for long, and takes no memory
+//! map's lock, through which another process can stall a read of its `/proc/<pid>/cmdline`.
 //!
 //! `RLIMIT_RTTIME` counts the CPU time a thread under a real-time policy uses without a blocking
 //! system call. Past the soft limit the process gets `SIGXCPU`, whose default action ends it,
@@ -55,8 +55,8 @@ impl ThreadId {
     }
 
     /// How the kernel schedules the thread, from `/proc/self/task/<tid>/stat` (the module's doc
-    /// says why that file, and why the read has no bound of its own). A thread of another process
-    /// is not under `/proc/self`, and reads as [`PlatformError::Io`].
+    /// says why that file, and why the read has no bound of its own). A thread that has ended
+    /// reads as [`PlatformError::Io`].
     pub fn scheduling(self) -> Result<Scheduling, PlatformError> {
         let path = format!("/proc/self/task/{}/stat", self.get());
         let stat = std::fs::read(path).map_err(|error| PlatformError::io(STAT, &error))?;

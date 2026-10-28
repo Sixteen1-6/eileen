@@ -10,7 +10,7 @@
 //! nothing ([`Promotion::Unchanged`]), whatever its priority, the asked one's included: rtkit
 //! grants only `SCHED_RR`, so a refusal's fallback and the revert of a grant could each only end
 //! with it on `SCHED_OTHER`, and raising a lower priority would also take its own policy, which
-//! no call of rtkit's puts back. Its priority is what made it real-time chose. A thread whose
+//! no call of rtkit's puts back; whatever made it real-time chose its priority. A thread whose
 //! policy could not be read is asked for as before: the crate doc's Traps say why.
 //!
 //! Otherwise it reads the three limits, each property alone, since rtkit 0.13 answers
@@ -41,9 +41,9 @@
 //! [`RealtimeKit::revert`] asks rtkit for `SCHED_OTHER`, since neither std nor rustix has a safe
 //! `sched_setscheduler`, at the nice level the thread had, floored at `MinNiceLevel`
 //! ([`Promoted::restore`]), below which rtkit refuses any; a thread that was under `SCHED_BATCH`
-//! or `SCHED_IDLE` comes back on `SCHED_OTHER`. rtkit 0.14 records the real-time
-//! priority it last granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend
-//! makes every thread it still records real-time again. It forgets a thread only in the garbage
+//! or `SCHED_IDLE` comes back on `SCHED_OTHER`. rtkit 0.14 records the real-time priority it
+//! last granted a thread, which `MakeThreadHighPriority` leaves, and after a suspend makes every
+//! thread it still records real-time again. It forgets a thread only in the garbage
 //! collection it runs at the start of each call to its object, once the thread is neither
 //! real-time nor at a negative nice level, so the revert reads `RTTimeUSecMax` once more to start
 //! one, even when the revert failed: one whose answer never came still comes before the read.

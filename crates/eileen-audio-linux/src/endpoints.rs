@@ -11,9 +11,8 @@
 //!
 //! # The registration
 //!
-//! The thread's id, nice level and policy are read on the caller's thread; a policy that could
-//! not be read is passed on as unknown, which [`RealtimeKit::promote`] asks for as before. Its one
-//! bridge call starts a
+//! The thread's id, nice level and policy are read on the caller's thread, and a policy that
+//! cannot be read goes on as unknown ([`RealtimeKit::promote`]). Its one bridge call starts a
 //! promoter task on the bridge's thread and waits for its answer within the settings' deadline;
 //! past it, the bridge cancels only that wait, never the task, since a promotion cut short could
 //! leave a thread real-time with no ticket to revert it. Once promoted, the task answers with a
