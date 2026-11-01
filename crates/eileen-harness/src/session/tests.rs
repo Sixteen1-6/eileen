@@ -401,7 +401,7 @@ fn the_worker_environment_drops_the_denylist_and_keeps_the_pass_through_list() {
         for name in PASS_THROUGH {
             assert!(KEPT.contains(&name), "{name} is pinned as kept");
         }
-        assert_eq(files.env.get("GIT_CONFIG_COUNT"), Some("2"), "git's fsmonitor and bare rules");
+        assert_eq!(files.env.get("GIT_CONFIG_COUNT"), Some("2"), "git's fsmonitor and bare rules");
         assert_eq!(files.env.get("GIT_CONFIG_KEY_1"), Some("safe.bareRepository"), "bare rule");
         assert_eq!(files.env.get("EDITOR"), Some("notepad"), "the user's own variables stay");
     }
@@ -662,9 +662,9 @@ fn no_generated_path_lies_under_the_users_claude_folder() {
 #[test]
 fn the_working_folder_is_the_repository_or_one_under_the_data_folder() {
     let spec = computer_use_worker();
-    let files = files(&spec);
+    let relative = files(&spec);
     assert_eq!(
-        files.cwd,
+        relative.cwd,
         config().data_dir.join(format!("run/{}/cwd", spec.session)),
         "a relative cwd sits under the data folder"
     );
