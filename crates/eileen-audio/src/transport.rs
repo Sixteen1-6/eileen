@@ -97,15 +97,17 @@ pub enum ConnectionError {
 
 impl From<io::Error> for ConnectionError {
     fn from(error: io::Error) -> Self {
-        match error.kind() {
-            io::ErrorKind::BrokenPipe
-            | io::ErrorKind::ConnectionReset
-            | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::UnexpectedEof => Self::Closed,
-            _ => Self::Io(error),
-        }
+        if PEER_GONE.contains(&error.kind()) { Self::Closed } else { Self::Io(error) }
     }
 }
+
+/// The error kinds that mean the peer's end is gone.
+const PEER_GONE: [io::ErrorKind; 4] = [
+    io::ErrorKind::BrokenPipe,
+    io::ErrorKind::ConnectionReset,
+    io::ErrorKind::ConnectionAborted,
+    io::ErrorKind::UnexpectedEof,
+];
 
 /// A verified connection to the speech process: a byte duplex whose every read and write has a
 /// deadline. The transport bounds what it buffers; the halves buffer nothing of their own.
