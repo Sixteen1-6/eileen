@@ -1,10 +1,8 @@
 //! Eileen's audio (BUILD.md sections 2.8 and 4.7): WASAPI capture, playback and loopback through
-//! cpal, with capture and loopback at the endpoint's own mix rate (48 kHz or 44.1 kHz, since cpal
-//! opens no capture stream through Windows' converter) resampled to 16 kHz, and playback at 48 kHz
-//! or the endpoint's rate; echo cancellation with the loopback as the far-end reference, the
-//! 16 kHz frames into the speech ring buffer and the core end of the speech pipe (decision D81),
-//! mute, duck, pause and playback accounting, and the test sources and sinks. WP4 builds it in
-//! parts.
+//! cpal at the endpoint's own rate (see Traps), echo cancellation with the loopback as the far-end
+//! reference, the 16 kHz frames into the speech ring buffer and the core end of the speech pipe
+//! (decision D81), mute, duck, pause and playback accounting, and the test sources and sinks.
+//! WP4 builds it in parts.
 //!
 //! # Owns
 //!
@@ -80,9 +78,9 @@
 //! - A frame's replayed flag is its age on the capture clock, which the ring estimates from the
 //!   newest frame pulled plus 32 ms per number taken since; a mute forgets that clock, since the
 //!   next source may start its own at zero.
-//! - cpal opens a WASAPI capture stream only at the endpoint's own rate, so an endpoint mixing at
-//!   44.1 kHz is captured at 44.1 kHz and resampled by Eileen (up 160, down 441); only render
-//!   streams get Windows' own converter, and the synthesis path keeps its own 147:80 as well.
+//! - cpal opens WASAPI capture and loopback streams only at the endpoint's own rate, so a 44.1 kHz
+//!   endpoint's microphone and echo reference both take Eileen's 160:441; only render streams get
+//!   Windows' converter, and synthesis keeps its own 147:80. Other rates are unsupported for now.
 //! - A speech connection's halves need a tokio runtime with its timer; a failed write leaves the
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
 //!
@@ -92,8 +90,8 @@
 //!
 //! # Do not change without a decision record
 //!
-//! - The sample rates and frame sizes of the speech pipe (48 kHz devices, 16 kHz 512-sample
-//!   frames), and who owns which part of the pipe (D81).
+//! - The sample rates and frame sizes of the speech pipe (devices at 48 kHz or 44.1 kHz, 16 kHz
+//!   512-sample frames), and who owns which part of the pipe (D81).
 
 #![forbid(unsafe_code)]
 

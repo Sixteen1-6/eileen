@@ -13,9 +13,9 @@
 //! `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`). The loopback is such a capture stream, opened on the
 //! render endpoint with `AUDCLNT_STREAMFLAGS_LOOPBACK`, so the echo reference of a 44.1 kHz
 //! endpoint takes the same 160:441 conversion. An endpoint mixing at any other rate gets
-//! [`ResampleError::UnsupportedRates`]. Synthesis to a 44.1 kHz endpoint takes `up` 147 and `down` 80 for synthesis, which Eileen
-//! keeps so that the render path need not rely on Windows' own converter, whose quality this
-//! crate cannot measure on CI.
+//! [`ResampleError::UnsupportedRates`]. Synthesis to a 44.1 kHz endpoint takes `up` 147 and
+//! `down` 80, which Eileen keeps so that the render path need not rely on Windows' own converter,
+//! whose quality this crate cannot measure on CI.
 //!
 //! Each conversion meets the bar of section 6.6, measured in `tests` through `realfft`: a capture
 //! conversion is flat within 0.1 dB up to 7 kHz and at least 60 dB down from 9 kHz up, so nothing
