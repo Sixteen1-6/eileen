@@ -5,7 +5,7 @@ use std::fmt;
 use std::io;
 
 use arbitrary::Unstructured;
-use eileen_contracts::core_io::{Input, TimerId};
+use eileen_contracts::core_io::{Input, PlaybackEvent};
 use eileen_contracts::record::{InputRecord, SimRegression};
 use eileen_stdx::rng::CoreRng;
 
@@ -169,15 +169,9 @@ pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunRe
     let mut failure = None;
     while world.steps() < steps {
         let elapsed = bytes.int_in_range(1..=max_step_ms).unwrap_or(1);
-        let input = if let Some(timer) = world.advance(elapsed) {
-            Input::Timer(timer)
-        } else {
-            let now_ms = world.now_ms();
-            let speaking = world.speaking().to_vec();
-            generator
-                .next(&mut bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking)
-                .map_or(Input::Timer(TimerId(0)), |(_, input)| input)
-        };
+        let input = world
+            .advance(elapsed)
+            .unwrap_or_else(|| draw(&mut world, &mut generator, &mut bytes, profile));
         let outcome = world.step(input);
         if let Some(violation) = outcome.violation {
             failure = Some((world.steps(), violation));
@@ -185,6 +179,28 @@ pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunRe
         }
     }
     report_of(&world, None, failure)
+}
+
+/// The generator's next input. A draw of time passing goes to the core's next timer, or to
+/// whatever the world's parts answer before it; with no timer set, or when the bytes cannot
+/// draw, the device reports a change, which the core ignores.
+fn draw(
+    world: &mut World,
+    generator: &mut Generator,
+    bytes: &mut Unstructured<'_>,
+    profile: &Profile,
+) -> Input {
+    let now_ms = world.now_ms();
+    let speaking = world.speaking().to_vec();
+    let drawn = generator.next(bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking);
+    match drawn {
+        Ok((_, Some(input))) => input,
+        Ok((_, None)) => world
+            .until_next_timer()
+            .and_then(|wait| world.advance(wait.max(1)))
+            .unwrap_or(Input::Playback(PlaybackEvent::DeviceChanged)),
+        Err(_) => Input::Playback(PlaybackEvent::DeviceChanged),
+    }
 }
 
 /// Replays a stored regression: its inputs at their recorded times, against the current core.
@@ -252,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_runs_every_step_and_passes_against_the_stub_core() {
+    fn a_seed_runs_every_step_and_keeps_every_invariant() {
         let report = run_seed(&profile(), 5, Some(300)).unwrap();
         assert!(report.passed(), "{:?}", report.failure);
         assert_eq!(report.steps, 300, "every step taken");

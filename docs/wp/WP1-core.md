@@ -78,15 +78,70 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-Not started.
+- `wp1/minimal-core` (open): the minimal core slice S1 wires. `eileen-core` gains `turn` (a
+  pure, cloneable turn-taking machine), barge-in with pause-then-decide, the addressee gate's
+  rules 1, 3 and 4 in minimal form, fast-path dispatch through `IntentResolver::resolve` with
+  mute, unmute, stop, cancel, "go on" and "what time is it" answered by the core, one brain turn
+  spoken clause by clause, one job with a cold worker session and fail-closed hook answers,
+  mute, the attributed completion announcement, its spans, and `Core::snapshot` from the live
+  state. `eileen-sim` gains the parts that answer the core (the speech process, the playback
+  device in 10 ms callbacks, a scripted brain and scripted workers), `SimResolver`, timers drawn
+  from the world's pending timers, an incremental span collector for invariant 13, and the
+  slice tests `eileen-sim::it::slice::*`. Acceptance 4 (barge-in in simulation) is shown by
+  `stop_while_eileen_speaks_ducks_pauses_and_stops_within_the_decision` and
+  `a_backchannel_resumes_from_the_paused_sample`; the exhaustive enumeration
+  (`wp1/turn-exhaustive`) builds on `turn::Turns` next. "What time is it" speaks the offset of
+  `CoreConfig.local_time` in force at the turn's wall time (section 3.3.3 as #134 amended it),
+  shown across the United States' daylight-saving changes of 2026 by
+  `eileen-core::clock::tests::the_hour_moves_at_a_daylight_saving_change`. The crate keeps
+  `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
+  (check 24 as #134 amended it, D84). It follows #134 and builds on it.
+- Next: `wp1/speech-life`, the speech process's life of section 6.3 (start on the first step, a
+  missed heartbeat or a late `Ready`, an exit, the backoff, and replies on the HUD while speech
+  is down or the microphone is muted), which merges before WP2's `wp2/speech-transport` (D83).
+  #130 already ends an utterance that gets `SpeakDone` with no clause, as the audio component
+  answers while speech is down.
 
 ## Surprises
 
-None yet.
+- A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
+  commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
+  the reply is still open (synthesis behind playback). The contract does not say this yet; the
+  pull request proposes the wording for WP4's speech process and audio driver.
+- Dumping and re-parsing the flight-recorder ring after every step costs time in proportion to
+  everything recorded so far, which the real core's spans made too slow for the pull request
+  seeds. The simulator now collects span records as they happen and checks invariant 13 only
+  after a step that produced one.
 
 ## Decisions
 
-None yet.
+- The core strips the assistant's name (at the start or the end of the turn) before it calls
+  the resolver, and passes the lower-cased words that remain.
+- A worker session's `SessionSpec` leaves the hook and shim endpoints empty for the runtime to
+  fill at spawn (it mints the tokens), and names its working folder `run/<session>/cwd`
+  relative to the data directory.
+- Effects carry the core's own `seq` counter, kept in the snapshot as `effect_seq`.
+- The local time reaches the core as `CoreConfig.local_time`, an initial offset and the
+  changes the runtime read from the time zone's rules at start for the current year and the
+  next; the core takes the change with the latest `from` at or before the step's wall time,
+  whatever the order of the list.
+- `jobs_dispatch` takes its turn and authority from the core's record of the brain turn in
+  flight, not from the call's `CallOrigin`, and only from the brain's shim: the shim protocol
+  carries neither, so the claim is filled outside the core and is not trusted.
+- An `eileen say` turn may mute, stop and cancel, but an unmute from it is
+  routed with the reason `unmute_by_hand` and capture stays off; nothing is spoken, since
+  Eileen is muted. Cancel stays, because it only stops work the user started.
+- A brain turn that replaces one still unanswered holds both utterances with the weaker
+  authority, so an `eileen say` request neither rides on a spoken turn's authority nor drops
+  the spoken request.
+- The safety and control commands the minimal core does not run (section 2.4, precedence 1:
+  "that was for you", undo, forget, off the record and the rest) are answered "I can't do that
+  yet." and never reach the brain. Other core commands, such as "how's it going", still go to
+  the brain, which can answer them from its read-only tools.
+- A worker gets its kind's built-in tools narrowed to `Read`, `Grep`, `Edit` and `Write`, the
+  file tools the minimal hook can check. `Glob` is left out: its pattern can reach outside the
+  job's folder while only its `path` carries a path fact. `--allowedTools` repeats them with
+  `mcp__eileen__*`.
 
 ## Outcome
 
