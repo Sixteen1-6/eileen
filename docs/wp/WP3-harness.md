@@ -59,7 +59,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
 The approval contract test's first pass ran on the owner's PC on 2026-10-21 and settled the
 permission route, which section 6.5's amendment of that date records (see Goal).
 
-- `wp3/worker-tools` (#126, draft): pins the provisional `tools/worker` module of
+- `wp3/worker-tools` (#126, merged as d2e1281): pins the provisional `tools/worker` module of
   `eileen-contracts` (section 3.3, `modules.toml`), the worker toolset row of section 3.3.9.
   `Approve` now documents route 2 of section 2.5 and gains `matches_ask` (the same tool, the
   same `tool_use_id` and an equal input as the pending ask). `PendingAsk`, built only from the
@@ -81,6 +81,22 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   (refused and logged as a security event, never answered `allow`). The weekly contract test's
   case of an `updatedInput` that differs from the stored input (section 2.5) is the CLI's side
   of the same rule.
+- `wp3/approval-amendment` (draft, `type: amendment`, for the owner's review): brings BUILD.md
+  in line with #126 and the contract report. Section 3.3.3 writes
+  `HookRequest::PermissionRequest.tool_use_id` as `Option<String>`, as the crate already has
+  it, and section 6.5's "when WP3 next changes the contracts" clause is marked done. Section
+  3.3.16's `StubScriptLine::PermissionRequest`, and its doc comment in `record.rs`, say the stub
+  plays it the way the CLI behaves under `dontAsk`: a tool use posted to the `PreToolUse` guard,
+  with an `ask` routed to the permission-prompt tool, never the `PermissionRequest` hook. A
+  `PermissionRequest` with no id is keyed in scenario replay by its ordinal among the job's
+  permission requests. Tests in `eileen-contracts::it::wire` parse the recorded
+  `PermissionRequest` body (no id) and round-trip one with an id. No crate produces
+  `HookRequest` yet, so it never blocks slice S1.
+- For `eileen-stub-harness`: a `PermissionRequest` script line carries a tool and its input and
+  no id, so the stub mints the `tool_use_id`, posts the `PreToolUse` body to the guard's URL from
+  the session's settings file, and on `ask` calls `approve` through the session's MCP config
+  with the same id and input, then runs or refuses as the reply says. It never posts to the
+  `PermissionRequest` hook, which the CLI never calls on the approval route.
 
 ## Surprises
 
@@ -109,6 +125,12 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   would be a denial, never an allow.
 - An approve result is never an error, a denial included: the CLI reads an errored `approve`
   call as a failed tool, not a denial (the contract report's tool-error rows).
+- `HookRequest::PermissionRequest.tool_use_id` stays a plain `Option<String>` with no
+  `#[serde(default)]`: serde's derive already reads a missing `Option` field as `None`, no other
+  `Option` field in `eileen-contracts` carries the attribute, and schemars would add a default
+  to the pinned `harness` schema for no change in behaviour.
+  `a_permission_request_without_a_tool_use_id_parses` holds the behaviour instead, so a later
+  `with =` or `deserialize_with` on the field that made it required would fail there.
 
 ## Outcome
 
