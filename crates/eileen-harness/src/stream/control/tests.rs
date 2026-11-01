@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use eileen_contracts::ids::Untrusted;
 use eileen_trace::Redactor;
 
 use super::{
     INTERRUPT_CAPABILITY, MAX_OPEN_REQUESTS, MAX_REQUEST_ID_BYTES, Message, Reply, Requests,
-    SendError, interrupt, parse,
+    SendError, SettleError, interrupt, parse,
 };
 use crate::stream::{Init, Line, parse as parse_line};
 
@@ -28,8 +29,8 @@ fn init(capabilities: &[&str]) -> Init {
     }
 }
 
-/// The CLI's `control_response` to `request_id`, `success` or, with `error`, `error`.
-fn response(request_id: &str, error: Option<&str>) -> Message {
+/// The CLI's `control_response` line to `request_id`, `success` or, with `error`, `error`.
+fn response_line(request_id: &str, error: Option<&str>) -> String {
     let line = match error {
         None => format!(
             r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{request_id}"}}}}"#
@@ -38,7 +39,20 @@ fn response(request_id: &str, error: Option<&str>) -> Message {
             r#"{{"type":"control_response","response":{{"subtype":"error","request_id":"{request_id}","error":"{error}"}}}}"#
         ),
     };
-    parse(line.as_bytes(), &Redactor::new()).unwrap()
+    line
+}
+
+/// Parses the CLI's `control_response` to `request_id` and settles it on `requests`.
+fn settle(
+    requests: &mut Requests,
+    request_id: &str,
+    error: Option<&str>,
+) -> Result<Reply, SettleError> {
+    let line = response_line(request_id, error);
+    match parse(line.as_bytes(), &Redactor::new()) {
+        Ok(Message::Response { request_id, error }) => requests.settle(&request_id, error),
+        other => panic!("{line} parsed as {other:?}"),
+    }
 }
 
 fn untrusted(text: &str) -> Untrusted<String> {
@@ -78,14 +92,17 @@ fn summary(line: &Line) -> String {
 }
 
 /// Every seed of `fuzz/corpus/control_message/` and what it parses to.
-const SEEDS: [(&str, &str); 11] = [
+const SEEDS: [(&str, &str); 14] = [
     ("can-use-tool-allow", "can_use_tool 70bd7443-478d-4b77-8d60-d5c6ed0c44fe Bash"),
     ("can-use-tool-deny", "can_use_tool 59734163-8fdc-47d0-b37c-77a0447b7b05 Bash"),
     ("hand-cancel", "cancel req_1_0a1b2c3d"),
+    ("hand-error-secret", "error req_1_0a1b2c3d: fuzz-secret-7c1e was refused"),
     ("hand-interrupt", "interrupt req_1_0a1b2c3d"),
     ("hand-no-request-id", "malformed"),
     ("hand-not-json", "malformed"),
     ("hand-other-subtype", "request mcp_status req_2_0a1b2c3d"),
+    ("hand-reason-secret", "can_use_tool req_3_0a1b2c3d Bash"),
+    ("hand-response-eileen-1", "success eileen_1"),
     ("hand-response-error", "error req_1_0a1b2c3d: no turn to interrupt"),
     ("hand-response-success", "success req_1_0a1b2c3d"),
     ("response-allow", "success 70bd7443-478d-4b77-8d60-d5c6ed0c44fe"),
@@ -146,7 +163,7 @@ fn replies_are_matched_by_request_id() {
     let offered = init(&RECORDED_CAPABILITIES);
     requests.interrupt(&offered).unwrap();
     requests.interrupt(&offered).unwrap();
-    let failed = requests.settle(response("eileen_2", Some("no turn to interrupt")));
+    let failed = settle(&mut requests, "eileen_2", Some("no turn to interrupt"));
     assert_eq!(
         failed,
         Ok(Reply {
@@ -155,10 +172,14 @@ fn replies_are_matched_by_request_id() {
         }),
         "an error reply matches its request"
     );
-    let done = requests.settle(response("eileen_1", None));
+    let done = settle(&mut requests, "eileen_1", None);
     assert_eq!(done, Ok(Reply { request_id: "eileen_1".to_owned(), error: None }), "success");
     assert_eq!(requests.open(), 0, "both settled");
-    assert!(requests.settle(response("eileen_1", None)).is_err(), "a second reply to one request");
+    assert_eq!(
+        settle(&mut requests, "eileen_1", None),
+        Err(SettleError::NotOpen),
+        "a second reply to one request"
+    );
 }
 
 #[test]
@@ -176,13 +197,16 @@ fn a_reply_with_no_or_an_unknown_request_id_is_malformed_not_matched() {
     assert!(parse(empty, &redactor).is_err(), "an empty request_id");
     let long = "r".repeat(MAX_REQUEST_ID_BYTES + 1);
     assert!(parse(interrupt(&long).as_bytes(), &redactor).is_err(), "a request_id over the cap");
-    assert!(requests.settle(response("eileen_9", None)).is_err(), "an id Eileen never sent");
-    assert!(
-        requests.settle(response("70bd7443-478d-4b77-8d60-d5c6ed0c44fe", None)).is_err(),
+    assert_eq!(
+        settle(&mut requests, "eileen_9", None),
+        Err(SettleError::NotOpen),
+        "an id Eileen never sent"
+    );
+    assert_eq!(
+        settle(&mut requests, "70bd7443-478d-4b77-8d60-d5c6ed0c44fe", Some("unknown")),
+        Err(SettleError::NotOpen),
         "the CLI's own id"
     );
-    let sent = Message::Interrupt { request_id: "eileen_1".to_owned() };
-    assert!(requests.settle(sent).is_err(), "only a response settles");
     assert_eq!(requests.open(), 1, "the open request is still open");
 }
 
@@ -196,7 +220,11 @@ fn open_requests_are_bounded_and_can_be_abandoned() {
     assert_eq!(requests.interrupt(&offered), Err(SendError::Full), "at the cap");
     assert!(requests.abandon("eileen_1"), "the driver's deadline closes the oldest");
     assert!(!requests.abandon("eileen_1"), "only once");
-    assert!(requests.settle(response("eileen_1", None)).is_err(), "a late reply matches nothing");
+    assert_eq!(
+        settle(&mut requests, "eileen_1", None),
+        Err(SettleError::NotOpen),
+        "a late reply matches nothing"
+    );
     let line = requests.interrupt(&offered).unwrap();
     assert!(line.contains(r#""request_id":"eileen_5""#), "ids are never reused: {line}");
 }
@@ -217,4 +245,27 @@ fn other_control_lines_parse_to_their_kind() {
         br#"{"type":"control_response","response":{"subtype":"pending","request_id":"r"}}"#;
     assert!(parse(unknown_reply, &redactor).is_err(), "neither success nor error");
     assert!(parse(br#"{"type":"user"}"#, &redactor).is_err(), "not a control line");
+}
+
+#[test]
+fn reason_and_error_text_are_redacted() {
+    let secret = "hook-token-5f2a9c";
+    let redactor = Arc::new(Redactor::new());
+    let _token = redactor.add_literal(secret).unwrap();
+    let ask = format!(
+        r#"{{"type":"control_request","request_id":"r","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{}},"decision_reason":"the guard saw {secret}"}}}}"#
+    );
+    let Ok(Message::CanUseTool(ask)) = parse(ask.as_bytes(), &redactor) else {
+        panic!("{ask} is not a can_use_tool request");
+    };
+    let reason = ask.reason.unwrap();
+    assert!(!reason.get().contains(secret), "the reason: {}", reason.get());
+    assert!(reason.get().starts_with("the guard saw "), "the rest stays: {}", reason.get());
+    let reply = response_line("r", Some(&format!("{secret} was refused")));
+    let Ok(Message::Response { error: Some(error), .. }) = parse(reply.as_bytes(), &redactor)
+    else {
+        panic!("{reply} is not an error reply");
+    };
+    assert!(!error.get().contains(secret), "the error: {}", error.get());
+    assert!(error.get().ends_with(" was refused"), "the rest stays: {}", error.get());
 }

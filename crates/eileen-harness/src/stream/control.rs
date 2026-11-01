@@ -15,8 +15,11 @@ use super::{
     Init, MAX_KIND_BYTES, MAX_LINE_BYTES, cut, redact_settled, redacted_input, str_at, text,
 };
 
-/// The `system/init` capability Eileen requires before it sends an interrupt: with it, the CLI
-/// answers an interrupt with a `control_response`, which [`Requests::settle`] matches.
+/// The `system/init` capability Eileen requires before it sends an interrupt, taken to mean that
+/// the CLI acknowledges an interrupt with a `control_response`, which [`Requests::settle`]
+/// matches. The name is chosen from the three interrupt capabilities CLI 2.1.304's `system/init`
+/// lists and is not yet verified: acceptance 3's owner-run check (BUILD.md section 6.5) confirms
+/// both the name and the reply.
 pub const INTERRUPT_CAPABILITY: &str = "interrupt_receipt_v1";
 
 /// The most control requests Eileen keeps open on one session. A session runs one turn at a
@@ -83,9 +86,11 @@ pub fn parse(line: &[u8], redactor: &Redactor) -> Result<Message, &'static str> 
     from_value(&value, redactor)
 }
 
-/// The interrupt request line, without its line ending.
+/// The interrupt request line for `request_id`, without its line ending. It checks neither the
+/// session's capabilities nor [`MAX_OPEN_REQUESTS`] and records nothing as open, so it stays
+/// inside the crate: [`Requests::interrupt`] is the only public way to write one.
 #[must_use]
-pub fn interrupt(request_id: &str) -> String {
+pub(crate) fn interrupt(request_id: &str) -> String {
     serde_json::json!({
         "type": "control_request",
         "request_id": request_id,
@@ -173,6 +178,16 @@ pub enum SendError {
     Full,
 }
 
+/// Why a `control_response` settled nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SettleError {
+    /// The response names a request that is not open: one Eileen never sent, one already
+    /// answered, or one the driver abandoned at its deadline. It is a protocol fault, not an
+    /// ordinary line.
+    #[error("a control_response to a request that is not open")]
+    NotOpen,
+}
+
 /// The CLI's answer to a request Eileen sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {
@@ -211,19 +226,17 @@ impl Requests {
         Ok(line)
     }
 
-    /// The reply a `control_response` gives, matched to an open request by its `request_id`,
-    /// which is then closed. Any other message, and a response to a request that is not open,
-    /// is malformed: the reason comes back and nothing is matched.
-    pub fn settle(&mut self, message: Message) -> Result<Reply, &'static str> {
-        let Message::Response { request_id, error } = message else {
-            return Err("only a control_response settles a request");
-        };
-        let index = self
-            .open
-            .iter()
-            .position(|open| *open == request_id)
-            .ok_or("a control_response to a request that is not open")?;
-        self.open.remove(index);
+    /// Settles the open request a [`Message::Response`] answers, given that response's
+    /// `request_id` and `error`, and closes it. A response to a request that is not open
+    /// matches nothing and leaves every open request open.
+    pub fn settle(
+        &mut self,
+        request_id: &str,
+        error: Option<Untrusted<String>>,
+    ) -> Result<Reply, SettleError> {
+        let index =
+            self.open.iter().position(|open| open == request_id).ok_or(SettleError::NotOpen)?;
+        let request_id = self.open.remove(index);
         Ok(Reply { request_id, error })
     }
 
