@@ -3,7 +3,8 @@
 //! streamed text cut into clauses and spoken as one utterance, and `TurnDone`. Text is accepted
 //! only for the turn in flight and from the instance it was sent to. A reply Eileen cannot say
 //! aloud, because the microphone is muted, speech is down or the speech process made no clause
-//! of it, is shown on the HUD from there to its end (section 6.3).
+//! of it, is shown on the HUD from there to its end (section 6.3); a reply muted while Eileen
+//! speaks it goes on there from what the user had not heard.
 //!
 //! The core keeps the authority it sent each turn with: a job starts only from the turn in
 //! flight and with that authority, never with what a tool call claims (section 2.3). A turn that
@@ -204,11 +205,12 @@ impl Core {
             if text.trim().is_empty() {
                 return;
             }
+            let owner = Owner::turn(turn);
             if live.on_hud {
-                self.hud.append(&text);
+                self.hud.append(owner, &text);
             } else {
                 live.on_hud = true;
-                self.hud.show(&text);
+                self.hud.show(owner, &text);
             }
             return;
         }

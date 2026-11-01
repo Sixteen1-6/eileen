@@ -33,7 +33,7 @@ use crate::collect::Collector;
 use crate::hash::TraceHash;
 use crate::invariants::{self, ChildEvent, ChildRecord, Delivery, Violation};
 use crate::parts::Brain as BrainPart;
-use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Speech, Workers};
+use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Process, Speech, Workers};
 use crate::profile::Profile;
 use crate::resolver::SimResolver;
 
@@ -283,7 +283,13 @@ impl World {
 
     /// The speech process hangs: it sends nothing more until the core has it killed.
     pub fn hang_speech(&mut self) {
+        let event = match self.speech.process() {
+            Process::Up => ChildEvent::Hung,
+            Process::Loading => ChildEvent::Stuck,
+            Process::Off | Process::Hung | Process::Dead => return,
+        };
         self.speech.hang(&mut self.due);
+        self.child(SidecarId::Speech, event);
     }
 
     /// The speech process crashes: the supervisor reports its exit now, and the utterances it
@@ -297,6 +303,12 @@ impl World {
     /// again (`false`).
     pub const fn stick_speech_loads(&mut self, stuck: bool) {
         self.speech.stick_loads(stuck);
+    }
+
+    /// Makes the supervisor report each later kill of the speech process `ms` after it, as a
+    /// slow hang dump would.
+    pub const fn slow_speech_exits(&mut self, ms: u64) {
+        self.speech.slow_exits(ms);
     }
 
     /// The speech process ended: it holds no utterance now, and the device plays on only what
@@ -527,6 +539,9 @@ impl World {
                 };
                 self.child(*child, event);
                 if *child == SidecarId::Speech {
+                    if *cmd != SidecarCmd::HangDumpThenKill && self.speech.loads_stuck() {
+                        self.child(*child, ChildEvent::Stuck);
+                    }
                     self.speech.sidecar(now, *cmd, &mut self.due);
                     if *cmd == SidecarCmd::HangDumpThenKill {
                         self.speech_gone();

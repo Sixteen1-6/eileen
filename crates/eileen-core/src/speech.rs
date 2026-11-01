@@ -65,7 +65,7 @@ impl Core {
         text: &str,
     ) -> Option<SpeakId> {
         if !self.can_speak() {
-            self.hud.show(text);
+            self.hud.show(owner, text);
             return None;
         }
         let speak = self.start_speaking(cx, owner, cause, clauses_of(text))?;
@@ -115,6 +115,13 @@ impl Core {
         chosen.cloned().unwrap_or_default()
     }
 
+    /// What the utterance `speak` belongs to, while it holds the floor.
+    fn owner_of(&self, speak: SpeakId) -> Owner {
+        self.current
+            .filter(|current| current.speak == speak)
+            .map_or_else(Owner::default, |current| Owner { turn: current.turn, job: current.job })
+    }
+
     /// The correlation of the utterance holding the floor.
     fn current_ctx(&self) -> TraceCtx {
         self.current.map_or_else(TraceCtx::default, |current| TraceCtx {
@@ -138,7 +145,7 @@ impl Core {
                     self.spoke(cx, Ended { speak, text, heard_chars, interrupted, resumed });
                 }
                 Out::Unspoken { speak, text } => {
-                    self.hud.show(&text);
+                    self.hud.show(self.owner_of(speak), &text);
                     self.brain_reply_on_hud(speak);
                 }
                 Out::BargeIn { speak } => self.spans.open_barge_in(speak),
@@ -191,14 +198,23 @@ impl Core {
     }
 
     /// Mutes or unmutes: capture stops or starts, an earcon plays at the change, and nothing is
-    /// spoken while muted.
+    /// spoken while muted. What the user had not heard of an utterance muting stopped goes to
+    /// the HUD, and when it was the reply in flight, the rest of the reply follows it there.
     pub(crate) fn set_mute(&mut self, cx: &mut Cx<'_>, muted: bool) {
+        let stopped = self.turns.speaking().filter(|_| muted);
+        let owner = stopped.map_or_else(Owner::default, |speak| self.owner_of(speak));
         let mut out = Vec::new();
-        self.turns.set_mute(muted, &mut out);
+        let changed = self.turns.set_mute(muted, &mut out);
         if muted {
             self.partial = None;
         }
         self.apply(cx, out);
+        if changed && let Some(speak) = stopped {
+            if let Some(rest) = self.turns.rest() {
+                self.hud.show(owner, rest);
+            }
+            self.brain_reply_on_hud(speak);
+        }
     }
 
     /// After every step: speaks the next announcement once the conversation has been quiet for

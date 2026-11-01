@@ -275,9 +275,15 @@ impl Turns {
         }
     }
 
-    /// The user's turn ended.
-    pub const fn end_of_turn(&mut self) {
-        self.hearing = None;
+    /// The user's turn ended; returns the turn that was being heard.
+    pub const fn end_of_turn(&mut self) -> Option<TurnId> {
+        self.hearing.take()
+    }
+
+    /// What the user did not hear of the last interrupted utterance, left for "go on".
+    #[must_use]
+    pub fn rest(&self) -> Option<&str> {
+        self.rest.as_deref()
     }
 
     /// A brain turn is in flight.

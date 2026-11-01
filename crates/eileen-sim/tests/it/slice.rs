@@ -528,22 +528,105 @@ fn a_reply_while_speech_is_down_goes_to_the_hud() {
 
 #[test]
 fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
+    let sentences = [
+        "Rivers carry water from the hills down to the sea.",
+        "Along the way they cut valleys.",
+        "Some of the longest run for thousands of kilometres.",
+    ];
     let mut world = world();
     world.script_brain(BrainReply::text(&[
         "Rivers carry water from the hills down to the sea. ",
         "Along the way they cut valleys. ",
         "Some of the longest run for thousands of kilometres.",
     ]));
+    let from = world.effects().len();
     say(&mut world, 1, "Eileen, tell me about rivers");
     settle(&mut world, 1_000);
+    let (speak, _) = speaks(&bodies(&world, from)).first().cloned().expect("Eileen speaks");
+    let synthesized = world
+        .inputs()
+        .iter()
+        .filter(|r| {
+            let Input::Voice(VoiceEvent::ClauseReady { speak: s, .. }) = &r.input else {
+                return false;
+            };
+            *s == speak
+        })
+        .count();
+    assert!(
+        (1..sentences.len()).contains(&synthesized),
+        "some of the answer was synthesized and some not: {synthesized}"
+    );
     world.crash_speech();
     settle(&mut world, 2_000);
-    let line = hud_line(&world).unwrap_or_default();
+    let heard = sentences[..synthesized].join(" ").chars().count();
     assert!(
-        line.ends_with("Some of the longest run for thousands of kilometres."),
-        "what was not synthesized is on the HUD: {line:?}"
+        events(&world).iter().any(|e| matches!(
+            e,
+            BusEvent::SpeakingStopped { speak: s, interrupted: false, heard_chars, .. }
+                if *s == speak && usize::try_from(*heard_chars).unwrap() == heard
+        )),
+        "the synthesized clauses played to their end, {heard} characters"
     );
-    assert!(!line.contains("hills"), "the clause already synthesized played: {line:?}");
+    assert_eq!(
+        hud_line(&world).as_deref(),
+        Some(sentences[synthesized..].join(" ").as_str()),
+        "the rest, and only the rest, is on the HUD"
+    );
+}
+
+#[test]
+fn a_turn_open_when_speech_crashes_is_never_routed() {
+    let mut world = world();
+    let turn = TurnId::from_parts(world.now_ms(), 9);
+    step(&mut world, Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
+    settle(&mut world, 200);
+    world.crash_speech();
+    settle(&mut world, 10);
+    let (from, published) = (world.effects().len(), world.published().len());
+    step(
+        &mut world,
+        Input::Voice(VoiceEvent::EndOfTurn {
+            turn,
+            text: Personal::new("Eileen, what time is it?".to_owned()),
+            smart_turn_pct: 92,
+            silence_ms: 250,
+            asr_confidence_pct: 96,
+            reason: TurnEndReason::SmartTurn,
+            source: 0,
+            level_db: -28,
+        }),
+    );
+    settle(&mut world, 500);
+    assert!(
+        !world.published()[published..]
+            .iter()
+            .any(|e| matches!(e.body, BusEvent::TurnRouted { .. } | BusEvent::Heard { .. })),
+        "the turn's audio is replayed under a new turn, so this one is not routed"
+    );
+    let effects = bodies(&world, from);
+    assert_eq!(brain_turns(&effects), 0, "no brain turn");
+    assert!(speaks(&effects).is_empty(), "nothing said");
+    assert_eq!(hud_line(&world), None, "nothing shown");
+}
+
+#[test]
+fn a_kill_whose_exit_comes_after_the_backoff_step_restarts_once() {
+    let mut world = world();
+    world.slow_speech_exits(3_000);
+    settle(&mut world, 5_000);
+    let from = world.effects().len();
+    world.hang_speech();
+    settle(&mut world, 20_000);
+    let kills = times_of(&world, from, &KILL);
+    assert_eq!(kills.len(), 1, "killed once: {kills:?}");
+    assert_eq!(
+        times_of(&world, from, &RESTART),
+        [kills[0] + 3_000],
+        "restarted once, when the slow exit came, not at the 1 s step"
+    );
+    assert_eq!(mic(&world), Some(MicState::Listening), "the new process is kept");
+    assert_eq!(world.speech().process(), Process::Up);
 }
 
 #[test]

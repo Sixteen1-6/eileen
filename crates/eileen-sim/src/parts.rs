@@ -50,7 +50,8 @@ const SYNTH_MS: u64 = 60;
 pub const LOAD_MS: u64 = 2_000;
 /// How often the audio component pings the speech process, ms.
 pub const HEARTBEAT_MS: u64 = 1_000;
-/// How long the supervisor takes to report the exit of a process the guard killed, ms.
+/// How long the supervisor takes to report the exit of a process the guard killed, ms,
+/// unless a test makes the hang dump slower.
 const EXIT_MS: u64 = 50;
 /// The exit code of a crashed speech process.
 const CRASH_CODE: i32 = 1;
@@ -131,6 +132,9 @@ pub struct Speech {
     process: Process,
     /// Its loads never finish: no `Ready` comes (a fault a test injects).
     stuck_loads: bool,
+    /// How long a kill's `Exited` takes instead of [`EXIT_MS`] (a slow hang dump a test
+    /// injects).
+    exit_ms: Option<u64>,
 }
 
 /// What the speech process sends that stops when it ends or hangs: clauses, `SpeakDone`,
@@ -175,6 +179,17 @@ impl Speech {
         self.stuck_loads = stuck;
     }
 
+    /// Whether its loads never finish.
+    #[must_use]
+    pub const fn loads_stuck(&self) -> bool {
+        self.stuck_loads
+    }
+
+    /// Makes the supervisor report each later kill's `Exited` `ms` after the kill.
+    pub const fn slow_exits(&mut self, ms: u64) {
+        self.exit_ms = Some(ms);
+    }
+
     /// Answers the core's command for the process: `Start` and `Restart` load it, and
     /// `HangDumpThenKill` ends it.
     pub fn sidecar(&mut self, now_ms: u64, cmd: SidecarCmd, due: &mut Due) {
@@ -195,7 +210,7 @@ impl Speech {
                 }
                 self.end(due);
                 let exited = Input::Sidecar(SidecarId::Speech, SidecarEvent::Exited { code: None });
-                due.schedule(now_ms.saturating_add(EXIT_MS), exited);
+                due.schedule(now_ms.saturating_add(self.exit_ms.unwrap_or(EXIT_MS)), exited);
             }
         }
     }

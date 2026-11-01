@@ -177,6 +177,25 @@ fn invariant_8_fails_on_a_step_over_a_minute_or_a_child_left_down() {
 }
 
 #[test]
+fn invariant_8_fails_on_a_hung_child_never_killed() {
+    use ChildEvent::{Down, Hung, Restarted, Started, Stuck};
+    let killed = life(&[(0, Started), (10, Hung), (15, Down), (16, Restarted)]);
+    assert_eq!(children_restart_with_bounded_backoff(&killed, 30_000), Ok(()), "killed at 5 s");
+    let never = life(&[(0, Started), (10, Hung)]);
+    assert_eq!(children_restart_with_bounded_backoff(&never, 15_000), Ok(()), "not due yet");
+    let error = children_restart_with_bounded_backoff(&never, 15_001).unwrap_err();
+    assert_eq!(error.number, 8, "{error}");
+    assert!(error.detail.contains("not killed by 15000 ms"), "{error}");
+    let late = life(&[(0, Started), (10, Hung), (16, Down)]);
+    let error = children_restart_with_bounded_backoff(&late, 16_000).unwrap_err();
+    assert!(error.detail.contains("after its kill was due at 15000 ms"), "{error}");
+    let load = life(&[(0, Started), (10, Down), (11, Restarted), (11, Stuck)]);
+    assert_eq!(children_restart_with_bounded_backoff(&load, 131_000), Ok(()), "120 s to load");
+    let error = children_restart_with_bounded_backoff(&load, 131_001).unwrap_err();
+    assert!(error.detail.contains("not killed by 131000 ms"), "{error}");
+}
+
+#[test]
 fn invariant_8_fails_on_a_restart_of_a_child_that_was_up() {
     use ChildEvent::{Restarted, Started};
     let error =

@@ -8,13 +8,19 @@
 //! process has stayed up for a minute after its `Ready`, so a load that hangs and is killed at
 //! 120 s never resets them.
 //!
-//! While speech is down nothing is heard or synthesized: replies go to the HUD, as does the part
-//! of an utterance the speech process had not synthesized, and a turn left open is dropped,
-//! since its audio is replayed under a new turn once the process is back.
+//! An `Exited` carries no generation, so the core never sends `Restart` while the process it had
+//! killed may still report its exit: after `HangDumpThenKill` the restart waits for that
+//! `Exited` as well as the backoff step, and for no more than `EXIT_WAIT_NS` from the kill. An
+//! `Exited` while the process is down and its exit was not awaited changes nothing.
 //!
-//! Not yet: the core orders no reload that stops recognition, so the suspension of the 5 s
-//! count from such a reload to its first `Heartbeat` arrives with the first reload the core
-//! orders.
+//! While speech is down nothing is heard or synthesized: replies go to the HUD, as does the part
+//! of an utterance the speech process had not synthesized, and a turn left open is dropped: it
+//! is marked handled, so its own late `EndOfTurn` is never routed, since its audio is replayed
+//! under a new turn once the process is back.
+//!
+//! Not here: the core orders no reload that stops recognition yet, so the suspension of the 5 s
+//! count from such a reload to its first `Heartbeat` arrives with the machine profile's core
+//! part, which orders the first one (section 6.3 as #146 amends it).
 
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
@@ -42,6 +48,11 @@ pub(crate) const BACKOFF_MAX_NS: u64 = 60_000_000_000;
 /// first step, ns.
 pub(crate) const STABLE_NS: u64 = 60_000_000_000;
 
+/// How long after `HangDumpThenKill` the core waits for the killed process's `Exited` before it
+/// restarts anyway, ns (rule 7): the guard writes a hang dump of a process holding its models
+/// before the kill, which can take longer than the first backoff step.
+pub(crate) const EXIT_WAIT_NS: u64 = 10_000_000_000;
+
 /// Why the process went down, as `SidecarRestarted` says it.
 const HUNG: &str = "missed heartbeat";
 const NOT_READY: &str = "not ready within 120 s";
@@ -57,8 +68,20 @@ enum Life {
     Loading { since: MonoTime, restarted: bool },
     /// Ready since `since`; the last `Heartbeat` (or the `Ready`) came at `beat`.
     Up { since: MonoTime, beat: MonoTime },
-    /// Down for `why`; the speech timer brings the `Restart`.
-    Down { why: &'static str },
+    /// Down for `why` since `since`; the speech timer brings the `Restart`. `exit` says what
+    /// the restart still waits for after a kill.
+    Down { why: &'static str, since: MonoTime, exit: Exit },
+}
+
+/// After `HangDumpThenKill`, the killed process's `Exited` and the backoff step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exit {
+    /// Nothing: the process exited of itself, or the kill's `Exited` came.
+    Seen,
+    /// The kill's `Exited` has not come, and the backoff step has not passed.
+    Awaited,
+    /// The backoff step passed: the `Restart` goes out with the `Exited`.
+    AwaitedPastStep,
 }
 
 /// The speech process as the core sees it.
@@ -111,12 +134,15 @@ impl Core {
         match event {
             SidecarEvent::Ready { .. } => self.speech_ready(cx),
             SidecarEvent::Heartbeat => self.speech_beat(cx.now),
-            SidecarEvent::Exited { .. } => {
-                // An exit while down is the end of the process the core already killed.
-                if matches!(self.life.life, Life::Loading { .. } | Life::Up { .. }) {
-                    self.speech_down(cx, EXITED, false);
+            SidecarEvent::Exited { .. } => match self.life.life {
+                Life::Loading { .. } | Life::Up { .. } => self.speech_down(cx, EXITED, false),
+                // The end of the process the core killed: the restart may go out now.
+                Life::Down { why, since, exit: Exit::Awaited } => {
+                    self.life.life = Life::Down { why, since, exit: Exit::Seen };
                 }
-            }
+                Life::Down { why, exit: Exit::AwaitedPastStep, .. } => self.speech_restart(cx, why),
+                Life::Off | Life::Down { exit: Exit::Seen, .. } => {}
+            },
             SidecarEvent::Event(_) => {}
         }
     }
@@ -158,23 +184,32 @@ impl Core {
                     self.timers.set(cx, TimerKind::Speech, after(beat, HEARTBEAT_NS));
                 }
             }
-            Life::Down { why } => {
-                self.life.life = Life::Loading { since: cx.now, restarted: true };
-                cx.push(
-                    TraceCtx::default(),
-                    Effect::Sidecar(SidecarId::Speech, SidecarCmd::Restart),
-                );
-                let restarted =
-                    BusEvent::SidecarRestarted { which: SidecarId::Speech, reason: why.to_owned() };
-                cx.emit(TraceCtx::default(), restarted);
-                self.timers.set(cx, TimerKind::Speech, after(cx.now, READY_NS));
+            Life::Down { why, since, exit } => {
+                let waited = cx.now.0.saturating_sub(since.0) >= EXIT_WAIT_NS;
+                if exit == Exit::Seen || waited {
+                    self.speech_restart(cx, why);
+                } else {
+                    // The step passed before the killed process's exit was reported.
+                    self.life.life = Life::Down { why, since, exit: Exit::AwaitedPastStep };
+                    self.timers.set(cx, TimerKind::Speech, after(since, EXIT_WAIT_NS));
+                }
             }
         }
     }
 
+    /// `Restart`, with `SidecarRestarted` on the bus and 120 s to be ready.
+    fn speech_restart(&mut self, cx: &mut Cx<'_>, why: &'static str) {
+        self.life.life = Life::Loading { since: cx.now, restarted: true };
+        cx.push(TraceCtx::default(), Effect::Sidecar(SidecarId::Speech, SidecarCmd::Restart));
+        let restarted =
+            BusEvent::SidecarRestarted { which: SidecarId::Speech, reason: why.to_owned() };
+        cx.emit(TraceCtx::default(), restarted);
+        self.timers.set(cx, TimerKind::Speech, after(cx.now, READY_NS));
+    }
+
     /// The process hung (`hung`: it is hang-dumped and killed) or exited. `Restart` waits one
-    /// backoff step, the open turn is dropped, and what Eileen had not synthesized goes to the
-    /// HUD.
+    /// backoff step, and after a kill the killed process's `Exited` too; the open turn is
+    /// dropped, and what Eileen had not synthesized goes to the HUD.
     fn speech_down(&mut self, cx: &mut Cx<'_>, why: &'static str, hung: bool) {
         if let Life::Up { since, beat } = self.life.life {
             // A hung process was last known alive at its last heartbeat, an exited one now.
@@ -188,9 +223,13 @@ impl Core {
             cx.push(TraceCtx::default(), kill);
         }
         self.life.failures = self.life.failures.saturating_add(1);
-        self.life.life = Life::Down { why };
+        let exit = if hung { Exit::Awaited } else { Exit::Seen };
+        self.life.life = Life::Down { why, since: cx.now, exit };
         self.timers.set(cx, TimerKind::Speech, after(cx.now, backoff_ns(self.life.failures)));
-        self.turns.end_of_turn();
+        if let Some(open) = self.turns.end_of_turn() {
+            // Its audio is recognised afresh under a new turn: its own late events are dropped.
+            self.handled.first_time(open);
+        }
         self.partial = None;
         if let Some(speak) = self.turns.speaking() {
             // The utterance can take no more clauses, so the rest of a reply goes to the HUD.

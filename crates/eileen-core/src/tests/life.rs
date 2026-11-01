@@ -1,17 +1,21 @@
 //! The speech process's life through `Core::step`: the start on the first step, the 120 s load
-//! deadline, the 5 s heartbeat deadline, a crash, the backoff and its reset, and replies on the
-//! HUD while speech is down or the microphone is muted.
+//! deadline, the 5 s heartbeat deadline, a crash, the backoff and its reset, the wait for a
+//! killed process's exit, the turn open when speech went down, and replies on the HUD while
+//! speech is down or the microphone is muted, with the HUD line's limit.
 
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId, UserInput};
-use eileen_contracts::hud::MicState;
+use eileen_contracts::hud::{HudStateLine, MAX_LINE_BYTES, MicState};
 use eileen_contracts::ids::{MonoTime, Personal, TurnId};
 use eileen_contracts::speech::VoiceEvent;
 
-use super::{Harness, ask_brain, brain_turn, delta, done, events, ready, speech, spoken};
-use crate::CoreConfig;
+use super::{
+    Harness, ask_brain, brain_turn, delta, done, end_of_turn, events, ports, ready, speech, spoken,
+};
+use crate::hud::LINE_MAX_BYTES;
 use crate::turn::Phase;
+use crate::{Core, CoreConfig};
 
 const START: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::Start);
 const RESTART: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::Restart);
@@ -242,4 +246,134 @@ fn a_reply_the_speech_process_made_no_clause_of_goes_to_the_hud() {
     assert!(spoken(&effects).is_empty(), "the rest is not spoken: {effects:?}");
     h.step(done(turn));
     assert_eq!(h.hud_line(), Some("Rivers carry water to the sea. They shape valleys."));
+}
+
+#[test]
+fn an_exit_that_arrives_after_the_backoff_step_restarts_once() {
+    let (mut h, check) = up();
+    let effects = fire(&mut h, check, 6_000);
+    assert_eq!(effects.first(), Some(&KILL), "{effects:?}");
+    let step = timer_at(&effects, 7_000).expect("the first backoff step is 1 s");
+    // The hang dump outlasts the step: the killed process has not been reported gone.
+    let effects = fire(&mut h, step, 7_000);
+    assert!(!effects.contains(&RESTART), "no restart before the kill's exit: {effects:?}");
+    assert!(timer_at(&effects, 16_000).is_some(), "waited for at most 10 s: {effects:?}");
+    h.now_ms = 9_000;
+    let effects = h.step(exited());
+    assert_eq!(effects.first(), Some(&RESTART), "restarted with the exit: {effects:?}");
+    let effects = h.step(speech(ready()));
+    assert!(!effects.contains(&RESTART), "{effects:?}");
+    assert_eq!(h.mic(), Some(&MicState::Listening), "the new process is kept");
+}
+
+#[test]
+fn a_kill_whose_exit_never_comes_restarts_after_10_s() {
+    let (mut h, check) = up();
+    let effects = fire(&mut h, check, 6_000);
+    let step = timer_at(&effects, 7_000).unwrap();
+    let effects = fire(&mut h, step, 7_000);
+    let wait = timer_at(&effects, 16_000).unwrap();
+    let effects = fire(&mut h, wait, 16_000);
+    assert_eq!(effects.first(), Some(&RESTART), "{effects:?}");
+}
+
+#[test]
+fn an_exit_within_the_backoff_step_restarts_at_the_step() {
+    let (mut h, check) = up();
+    let effects = fire(&mut h, check, 6_000);
+    let step = timer_at(&effects, 7_000).unwrap();
+    h.now_ms = 6_050;
+    let effects = h.step(exited());
+    assert!(effects.is_empty(), "the kill's exit changes nothing yet: {effects:?}");
+    let effects = fire(&mut h, step, 7_000);
+    assert_eq!(effects.first(), Some(&RESTART), "{effects:?}");
+}
+
+#[test]
+fn a_turn_open_when_speech_went_down_is_never_routed() {
+    let (mut h, _) = up();
+    let open = TurnId::from_parts(5, 5);
+    h.step(Input::Voice(VoiceEvent::SpeechStarted { turn: open, source: 0, replayed: false }));
+    h.step(exited());
+    let late = [
+        Input::Voice(VoiceEvent::SpeechStarted { turn: open, source: 0, replayed: false }),
+        Input::Voice(end_of_turn(open, "Eileen, what time is it?")),
+    ];
+    for input in late {
+        let effects = h.step(input);
+        assert!(
+            !events(&effects).iter().any(|e| matches!(e, BusEvent::TurnRouted { .. })),
+            "the dropped turn is not routed: {effects:?}"
+        );
+        assert!(brain_turn(&effects).is_none(), "{effects:?}");
+    }
+    assert_eq!(h.hud_line(), None, "and not answered on the HUD");
+    assert_eq!(h.core.turns().phase(), Phase::Idle, "nor heard");
+}
+
+#[test]
+fn muting_mid_reply_shows_the_unheard_rest_and_the_rest_of_the_reply_on_the_hud() {
+    let (mut h, _) = up();
+    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
+    let effects = h.step(delta(turn, "Rivers carry water to the sea. They shape valleys. "));
+    let (speak, _) = spoken(&effects).remove(0);
+    for clause in 0..2 {
+        h.step(Input::Voice(VoiceEvent::ClauseReady { speak, clause, chars: 20, samples: 900 }));
+    }
+    // The first clause has played; the second is about to.
+    h.step(Input::Playback(PlaybackEvent::Played { speak, clause: 1, samples_played: 0 }));
+    let effects = h.step(Input::User(UserInput::SetMute(true)));
+    assert!(
+        events(&effects).iter().any(|e| matches!(
+            e,
+            BusEvent::SpeakingStopped { speak: s, interrupted: true, .. } if *s == speak
+        )),
+        "muting stops it: {effects:?}"
+    );
+    assert_eq!(h.hud_line(), Some("They shape valleys."), "what was not heard is on the HUD");
+    let effects = h.step(delta(turn, "And they feed lakes."));
+    assert!(spoken(&effects).is_empty(), "nothing spoken while muted: {effects:?}");
+    h.step(done(turn));
+    assert_eq!(
+        h.hud_line(),
+        Some("They shape valleys. And they feed lakes."),
+        "the rest of the reply follows it"
+    );
+}
+
+#[test]
+fn a_reply_longer_than_the_hud_line_is_cut_and_sent_no_more_once_full() {
+    let (mut h, _) = up();
+    h.step(Input::User(UserInput::SetMute(true)));
+    let effects = h.step(typed("tell me about rivers"));
+    let (turn, _) = brain_turn(&effects).expect("the brain is asked");
+    let clause = "Rivers carry water from the hills down to the sea, through every valley. ";
+    let mut streamed = 0;
+    let mut sent_when_full = None;
+    while streamed <= MAX_LINE_BYTES + clause.len() {
+        h.step(delta(turn, clause));
+        streamed += clause.len();
+        let state = h.hud.clone().expect("a HUD state");
+        let line = state.speaking.clone().unwrap_or_default();
+        assert!(line.len() <= LINE_MAX_BYTES, "{} bytes after {streamed}", line.len());
+        let wire = serde_json::to_string(&HudStateLine { v: 1, state }).unwrap();
+        assert!(wire.len() < MAX_LINE_BYTES, "{} bytes on the wire", wire.len());
+        if line.ends_with(" ...") && sent_when_full.is_none() {
+            sent_when_full = Some(h.hud_sent);
+        }
+    }
+    h.step(done(turn));
+    assert!(sent_when_full.is_some(), "the line was cut");
+    assert_eq!(Some(h.hud_sent), sent_when_full, "a full line is not sent again");
+}
+
+#[test]
+fn a_core_resumed_from_a_snapshot_starts_speech_again() {
+    let (h, _) = up();
+    let snapshot = h.core.snapshot();
+    let mut resumed = Harness::booting(CoreConfig::default(), Vec::new());
+    resumed.core = Core::new(CoreConfig::default(), ports(Vec::new()), Some(snapshot));
+    let effects = resumed.step(speech(SidecarEvent::Heartbeat));
+    assert_eq!(effects.first(), Some(&START), "the life is not in the snapshot: {effects:?}");
+    assert_eq!(resumed.mic(), Some(&MicState::LoadingSpeech));
 }

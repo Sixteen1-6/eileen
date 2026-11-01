@@ -6,10 +6,12 @@
 //!   belongs, nothing is emitted for a job after its terminal event, order is kept, a slow
 //!   subscriber gets an explicit `Lagged` and never silent loss, and no unaddressed speech
 //!   becomes a bus event.
-//! - 8, [`children_restart_with_bounded_backoff`]: a crashed or hung child is restarted only
-//!   after it went down, between [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most
-//!   [`RESTARTS_PER_WINDOW`] times in any [`RESTART_WINDOW_MS`]. That killed children leave no
-//!   descendants waits for the simulated Job Objects.
+//! - 8, [`children_restart_with_bounded_backoff`]: a hung child goes down within
+//!   [`HUNG_KILL_MS`] of hanging, a load that never finishes within [`LOAD_KILL_MS`] of its
+//!   start, and a crashed or hung child is restarted only after it went down, between
+//!   [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most [`RESTARTS_PER_WINDOW`] times
+//!   in any [`RESTART_WINDOW_MS`]. That killed children leave no descendants waits for the
+//!   simulated Job Objects.
 //! - 10, [`utterances_do_not_overlap`]: two utterances never overlap and the speech queue stays
 //!   bounded.
 //! - 13, [`spans_follow_the_table`]: the span-parent table holds for every span the run
@@ -172,6 +174,11 @@ pub const RESTART_WINDOW_MS: u64 = 60_000;
 /// restarts of a child that crashes at once in its first minute, and the steps start again
 /// from 1 s only after a minute up.
 pub const RESTARTS_PER_WINDOW: usize = 6;
+/// The longest a hung child may stay up after it hung, ms: five missed one-second heartbeats,
+/// counted from the last one, which came at or before the hang.
+pub const HUNG_KILL_MS: u64 = 5_000;
+/// The longest a load that never finishes may last from its start or restart, ms.
+pub const LOAD_KILL_MS: u64 = 120_000;
 
 /// What happened to a supervised child, as the world saw it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +187,10 @@ pub enum ChildEvent {
     Started,
     /// It went down: the core had it hang-dumped and killed, or it exited.
     Down,
+    /// It stopped answering while up (a fault the world injected).
+    Hung,
+    /// Its load will never finish (a fault the world injected).
+    Stuck,
     /// The core restarted it.
     Restarted,
 }
@@ -203,13 +214,30 @@ pub fn children_restart_with_bounded_backoff(
     const N: u8 = 8;
     const NAME: &str = "children_restart_with_bounded_backoff";
     let fail = |detail: String| Err(Violation::new(N, NAME, detail));
-    // Per child: when it went down, if it is down, and its restarts inside the window.
-    let mut children: BTreeMap<SidecarId, (Option<u64>, VecDeque<u64>)> = BTreeMap::new();
+    let mut children: BTreeMap<SidecarId, Life> = BTreeMap::new();
     for record in records {
-        let (down, restarts) = children.entry(record.child).or_default();
+        let Life { down, restarts, loaded, kill_by } = children.entry(record.child).or_default();
         match record.event {
-            ChildEvent::Started => *down = None,
+            ChildEvent::Started => {
+                *down = None;
+                *loaded = record.at_ms;
+            }
+            ChildEvent::Hung if kill_by.is_none() => {
+                *kill_by = Some(record.at_ms.saturating_add(HUNG_KILL_MS));
+            }
+            ChildEvent::Stuck if kill_by.is_none() => {
+                *kill_by = Some(loaded.saturating_add(LOAD_KILL_MS));
+            }
+            ChildEvent::Hung | ChildEvent::Stuck => {}
             ChildEvent::Down => {
+                if let Some(by) = kill_by.take()
+                    && record.at_ms > by
+                {
+                    return fail(format!(
+                        "{:?} went down at {} ms, after its kill was due at {by} ms",
+                        record.child, record.at_ms
+                    ));
+                }
                 // The exit that follows a kill is the same going down.
                 if down.is_none() {
                     *down = Some(record.at_ms);
@@ -222,6 +250,7 @@ pub fn children_restart_with_bounded_backoff(
                         record.child, record.at_ms
                     ));
                 };
+                *loaded = record.at_ms;
                 let wait = record.at_ms.saturating_sub(since);
                 if !(BACKOFF_MIN_MS..=BACKOFF_MAX_MS).contains(&wait) {
                     return fail(format!(
@@ -247,16 +276,34 @@ pub fn children_restart_with_bounded_backoff(
             }
         }
     }
-    for (child, (down, _)) in &children {
-        if let Some(since) = down
-            && now_ms.saturating_sub(*since) > BACKOFF_MAX_MS
+    for (child, life) in &children {
+        if let Some(since) = life.down
+            && now_ms.saturating_sub(since) > BACKOFF_MAX_MS
         {
             return fail(format!(
                 "{child:?} went down at {since} ms and was not restarted by {now_ms} ms"
             ));
         }
+        if let Some(by) = life.kill_by
+            && now_ms > by
+        {
+            return fail(format!("{child:?} hung and was not killed by {by} ms"));
+        }
     }
     Ok(())
+}
+
+/// One child's life as invariant 8 follows it.
+#[derive(Debug, Default)]
+struct Life {
+    /// When it went down, while it is down.
+    down: Option<u64>,
+    /// Its restarts inside the window.
+    restarts: VecDeque<u64>,
+    /// When its latest start or restart went out.
+    loaded: u64,
+    /// When it must be down by, once it hung or its load stuck.
+    kill_by: Option<u64>,
 }
 
 /// Invariant 10 over the events published so far and the speech queue's length now.

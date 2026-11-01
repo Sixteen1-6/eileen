@@ -152,6 +152,8 @@ struct Harness {
     now_ms: u64,
     turns: u64,
     hud: Option<HudState>,
+    /// How many HUD states the core has sent.
+    hud_sent: usize,
 }
 
 impl Harness {
@@ -175,6 +177,7 @@ impl Harness {
             now_ms: 1_000,
             turns: 0,
             hud: None,
+            hud_sent: 0,
         }
     }
 
@@ -190,6 +193,7 @@ impl Harness {
         for effect in effects {
             if let Effect::Hud(state) = effect.body {
                 self.hud = Some(*state);
+                self.hud_sent += 1;
             } else {
                 rest.push(effect.body);
             }

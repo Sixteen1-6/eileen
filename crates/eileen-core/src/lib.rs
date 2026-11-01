@@ -49,7 +49,8 @@
 //! - A job starts only from the brain's own shim, for the brain turn in flight, with the
 //!   authority the core sent that turn with; an ambient turn starts none (section 2.3).
 //! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
-//! - A speech turn is routed once, however often its `EndOfTurn` arrives.
+//! - A speech turn is routed once, however often its `EndOfTurn` arrives, and a turn open when
+//!   speech went down is never routed: its audio is replayed under a new turn.
 //! - The span-parent table holds for every span (invariant 13).
 //!
 //! # Boundaries
@@ -84,11 +85,17 @@
 //!   daylight-saving change is followed with no restart, a change of time zone only from the
 //!   next start.
 //! - Effects carry the core's own `seq`, one counter for every effect, kept in the snapshot.
-//! - An `Exited` while the speech process is down belongs to the process the core killed and
-//!   is ignored. One that came after the next `Restart` would be taken for the new process; the
-//!   first backoff step of 1 s leaves the supervisor that long to report the kill's exit.
-//! - The speech process's life is not in the snapshot: a resumed core starts the process again
-//!   on its first step, with the backoff from its first step.
+//! - An `Exited` carries no generation. After `HangDumpThenKill` the core sends `Restart` only
+//!   once the killed process's `Exited` came and the backoff step passed, or 10 s after the
+//!   kill if the exit is never reported; only an `Exited` that comes later still is taken for
+//!   the new process.
+//! - The speech process's life and the HUD's line are not in the snapshot: a resumed core
+//!   starts the process again on its first step, with the backoff from its first step. A core
+//!   restored from a checkpoint taken while speech was up therefore emits `Start` and treats
+//!   speech as loading, so strict replay can start only from a checkpoint taken at the core's
+//!   start until the snapshot carries them (section 3.3.16).
+//! - The HUD's line holds at most 4 KiB: model text has no bound, and the whole HUD state must
+//!   fit one line of the HUD pipe. A line cut at the limit ends with " ..." and takes no more.
 //!
 //! # Logs and tracing
 //!
@@ -405,6 +412,9 @@ impl Core {
 
     fn voice(&mut self, cx: &mut Cx<'_>, event: VoiceEvent) {
         match event {
+            // A turn already handled, or dropped when speech went down, is not heard again.
+            VoiceEvent::SpeechStarted { turn, .. } | VoiceEvent::Partial { turn, .. }
+                if self.handled.contains(turn) => {}
             VoiceEvent::SpeechStarted { turn, .. } => self.turns.speech_started(turn),
             VoiceEvent::Partial { turn, text, .. } => {
                 if !self.turns.muted() {

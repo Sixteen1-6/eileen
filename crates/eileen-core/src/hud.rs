@@ -8,46 +8,93 @@ use eileen_contracts::core_io::Effect;
 use eileen_contracts::hud::{HudLayout, HudState, Indicators};
 use eileen_contracts::ids::TraceCtx;
 
+use crate::speech::Owner;
 use crate::{Core, Cx};
 
 /// The HUD state's own version (section 3.3.6).
 const STATE_VERSION: u16 = 1;
+
+/// The longest line the HUD shows, in bytes. Model text has no bound, the whole state must fit
+/// one line of the HUD pipe (`eileen_contracts::hud::MAX_LINE_BYTES`, 64 KiB), and the state is
+/// sent again whenever the line grows, so the line stays far below that.
+pub(crate) const LINE_MAX_BYTES: usize = 4 * 1024;
+
+/// What ends a line cut at `LINE_MAX_BYTES`.
+const CUT: &str = " ...";
 
 /// What the core keeps for the HUD.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Hud {
     /// What Eileen shows instead of saying.
     line: Option<String>,
+    /// What the line belongs to: text is added only to a line of the same owner.
+    owner: Owner,
+    /// The line was cut at its limit and takes no more.
+    full: bool,
     /// The state last sent, so an unchanged one is not sent again.
     sent: Option<HudState>,
 }
 
 impl Hud {
-    /// Shows `text` as a new line; empty text changes nothing.
-    pub(crate) fn show(&mut self, text: &str) {
-        let text = text.trim();
-        if !text.is_empty() {
-            self.line = Some(text.to_owned());
-        }
-    }
-
-    /// Adds `text` to the line.
-    pub(crate) fn append(&mut self, text: &str) {
+    /// Shows `text` as a new line belonging to `owner`; empty text changes nothing.
+    pub(crate) fn show(&mut self, owner: Owner, text: &str) {
         let text = text.trim();
         if text.is_empty() {
             return;
         }
-        if let Some(line) = self.line.as_mut() {
-            line.push(' ');
-            line.push_str(text);
+        self.line = None;
+        self.owner = owner;
+        self.full = false;
+        self.push(text);
+    }
+
+    /// Adds `text` to the line when it belongs to `owner`, and shows it as a new line
+    /// otherwise.
+    pub(crate) fn append(&mut self, owner: Owner, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        if self.line.is_none() || self.owner != owner {
+            self.show(owner, text);
         } else {
-            self.line = Some(text.to_owned());
+            self.push(text);
+        }
+    }
+
+    /// Adds `text` after a space, cutting the line at its limit on a character boundary.
+    fn push(&mut self, text: &str) {
+        if self.full {
+            return;
+        }
+        let line = self.line.get_or_insert_with(String::new);
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(text);
+        if line.len() > LINE_MAX_BYTES {
+            let mut end = LINE_MAX_BYTES.saturating_sub(CUT.len());
+            while !line.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            line.truncate(end);
+            let kept = line.trim_end().len();
+            line.truncate(kept);
+            line.push_str(CUT);
+            self.full = true;
         }
     }
 
     /// Clears the line: Eileen speaks aloud again.
     pub(crate) fn clear(&mut self) {
         self.line = None;
+        self.full = false;
+    }
+
+    /// The line, for tests.
+    #[cfg(test)]
+    pub(crate) fn line(&self) -> Option<&str> {
+        self.line.as_deref()
     }
 }
 
@@ -90,3 +137,6 @@ impl Core {
         self.hud.sent = Some(state);
     }
 }
+
+#[cfg(test)]
+mod tests;

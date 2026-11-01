@@ -32,11 +32,17 @@ const NOT_BUILT: &str = "I can't do that yet.";
 /// again.
 const HANDLED_KEPT: usize = 8;
 
-/// The speech turns already routed, newest last, at most `HANDLED_KEPT`.
+/// The speech turns already routed, or dropped when speech went down, newest last, at most
+/// `HANDLED_KEPT`.
 #[derive(Debug, Default)]
 pub(crate) struct Handled(VecDeque<TurnId>);
 
 impl Handled {
+    /// Whether `turn` was handled already.
+    pub(crate) fn contains(&self, turn: TurnId) -> bool {
+        self.0.contains(&turn)
+    }
+
     /// Records `turn`; false when it was already handled.
     pub(crate) fn first_time(&mut self, turn: TurnId) -> bool {
         if self.0.contains(&turn) {
