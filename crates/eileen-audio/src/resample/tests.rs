@@ -55,6 +55,18 @@ fn db(amplitude: f64) -> f64 {
     20.0 * amplitude.max(1e-12).log10()
 }
 
+/// The loudest bin of `spectrum` in dB, leaving out the bins `skip` names: what a tone makes
+/// besides itself.
+fn loudest_besides(spectrum: &[f64], skip: &[usize]) -> f64 {
+    let loudest = spectrum
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| !skip.contains(k))
+        .map(|(_, amplitude)| *amplitude)
+        .fold(0.0, f64::max);
+    db(loudest)
+}
+
 /// The test tones below half the input rate.
 fn tones(conversion: Conversion) -> impl Iterator<Item = u32> {
     let nyquist = conversion.input_hz() / 2;
@@ -62,16 +74,25 @@ fn tones(conversion: Conversion) -> impl Iterator<Item = u32> {
 }
 
 /// The bar for capture (BUILD.md section 6.6): flat within 0.1 dB up to 7 kHz, and every tone
-/// from 9 kHz up at least 60 dB down wherever it lands in the output, so nothing aliases.
+/// from 9 kHz up at least 60 dB down wherever it lands in the output, so nothing aliases. Every
+/// tone up to 7 kHz also leaves nothing but itself within 60 dB anywhere in the band: in the
+/// 160:441 conversion the input's images at multiples of 44.1 kHz fold back across the whole
+/// output, and so would a gain that differs between phases. Tones between 7 and 9 kHz sit in the
+/// transition band, where the bar asks nothing.
 fn assert_capture_bar(conversion: Conversion) {
     let mut worst_flat: (f64, u32) = (0.0, 0);
     let mut worst_alias: (f64, u32) = (f64::NEG_INFINITY, 0);
+    let mut worst_spurious: (f64, u32) = (f64::NEG_INFINITY, 0);
     for hz in tones(conversion) {
         let spectrum = response(conversion, hz);
         if hz <= 7_000 {
             let gain = db(spectrum[bin(hz)]);
             if gain.abs() > worst_flat.0.abs() {
                 worst_flat = (gain, hz);
+            }
+            let spurious = loudest_besides(&spectrum, &[bin(hz)]);
+            if spurious > worst_spurious.0 {
+                worst_spurious = (spurious, hz);
             }
         }
         if hz >= 9_000 {
@@ -93,13 +114,25 @@ fn assert_capture_bar(conversion: Conversion) {
         worst_alias.1,
         worst_alias.0
     );
+    assert!(
+        worst_spurious.0 <= -60.0,
+        "{conversion:?}: a tone at {} Hz leaves a spurious product at {:.1} dB",
+        worst_spurious.1,
+        worst_spurious.0
+    );
 }
 
 /// The bar for synthesis (BUILD.md section 6.6): flat within 0.1 dB up to 10 kHz, and nothing
 /// any tone makes at 14 kHz or above comes within 60 dB of it, so its images are that far down.
+/// Nothing else any tone makes comes within 60 dB of it anywhere in the band either: in the
+/// 147:80 conversion the images at multiples of 24 kHz fold back below 14 kHz (an 8 kHz tone's
+/// image at 32 kHz lands at 12.1 kHz), and so would a gain that differs between phases. The one
+/// product left out is the image of a tone above 10 kHz at 24 kHz less its frequency, which falls
+/// in the transition band from 10 to 14 kHz.
 fn assert_synthesis_bar(conversion: Conversion) {
     let mut worst_flat: (f64, u32) = (0.0, 0);
     let mut worst_image: (f64, u32) = (f64::NEG_INFINITY, 0);
+    let mut worst_spurious: (f64, u32) = (f64::NEG_INFINITY, 0);
     for hz in tones(conversion) {
         let spectrum = response(conversion, hz);
         if hz <= 10_000 {
@@ -111,6 +144,11 @@ fn assert_synthesis_bar(conversion: Conversion) {
         let image = db(spectrum[bin(14_000)..].iter().copied().fold(0.0, f64::max));
         if image > worst_image.0 {
             worst_image = (image, hz);
+        }
+        let skip = if hz > 10_000 { vec![bin(hz), bin(24_000 - hz)] } else { vec![bin(hz)] };
+        let spurious = loudest_besides(&spectrum, &skip);
+        if spurious > worst_spurious.0 {
+            worst_spurious = (spurious, hz);
         }
     }
     assert!(
@@ -124,6 +162,12 @@ fn assert_synthesis_bar(conversion: Conversion) {
         "{conversion:?}: a tone at {} Hz leaves an image at {:.1} dB from 14 kHz up",
         worst_image.1,
         worst_image.0
+    );
+    assert!(
+        worst_spurious.0 <= -60.0,
+        "{conversion:?}: a tone at {} Hz leaves a spurious product at {:.1} dB",
+        worst_spurious.1,
+        worst_spurious.0
     );
 }
 
@@ -145,6 +189,25 @@ fn capture_at_44k1_meets_the_decimator_bar() {
 #[test]
 fn synthesis_to_44k1_meets_the_interpolator_bar() {
     assert_synthesis_bar(Conversion::From24kTo44k1);
+}
+
+#[test]
+fn the_lane_sums_match_a_running_sum() {
+    // 8 lanes with no remainder, as every filter has, and 8 lanes with a remainder of 3.
+    for len in [128, 11] {
+        let coefficients = signal(len);
+        let window = signal(len + 7).split_off(7);
+        let products =
+            || coefficients.iter().zip(&window).map(|(c, x)| f64::from(*c) * f64::from(*x));
+        let running: f64 = products().sum();
+        let magnitude: f64 = products().map(f64::abs).sum();
+        let lanes = f64::from(super::dot(&coefficients, &window));
+        // Within the rounding of a few dozen f32 additions.
+        assert!(
+            (lanes - running).abs() <= 1e-5 * magnitude,
+            "{len} taps: {lanes} against {running}"
+        );
+    }
 }
 
 /// A deterministic test signal with energy across the band: a few tones and a linear

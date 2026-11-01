@@ -1,7 +1,10 @@
 //! Eileen's audio (BUILD.md sections 2.8 and 4.7): WASAPI capture, playback and loopback through
-//! cpal at 48 kHz, echo cancellation with the loopback as the far-end reference, the 16 kHz frames
-//! into the speech ring buffer and the core end of the speech pipe (decision D81), mute, duck,
-//! pause and playback accounting, and the test sources and sinks. WP4 builds it in parts.
+//! cpal, with capture and loopback at the endpoint's own mix rate (48 kHz or 44.1 kHz, since cpal
+//! opens no capture stream through Windows' converter) resampled to 16 kHz, and playback at 48 kHz
+//! or the endpoint's rate; echo cancellation with the loopback as the far-end reference, the
+//! 16 kHz frames into the speech ring buffer and the core end of the speech pipe (decision D81),
+//! mute, duck, pause and playback accounting, and the test sources and sinks. WP4 builds it in
+//! parts.
 //!
 //! # Owns
 //!

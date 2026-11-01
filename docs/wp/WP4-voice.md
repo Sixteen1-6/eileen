@@ -227,6 +227,16 @@ The speech series has not opened yet.
   endpoint needs Eileen's 160:441 conversion. A render stream could be opened at 48 kHz through
   Windows' converter at its default quality, which CI cannot measure, so the synthesis path
   keeps Eileen's own 147:80 conversion as well; the render part chooses between them.
+- The loopback is a capture stream too: cpal opens it as an input stream on the render endpoint
+  with `AUDCLNT_STREAMFLAGS_LOOPBACK` and no converter, so a 44.1 kHz endpoint's echo reference
+  also arrives at 44.1 kHz and takes the 160:441 conversion, even when playback runs at 48 kHz
+  through Windows' converter. BUILD.md sections 2.2 step 1, 2.8 and 6.6 still say capture and
+  loopback run at 48 kHz; the pull request for this part proposes the wording under "Suggested
+  guidance changes".
+- An endpoint mixing at any other rate (32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
+  resampler. Until the part of this series that first opens a cpal stream decides what then
+  happens (refuse the endpoint with a logged reason, or add the conversions, measured against
+  the same bar), such an endpoint is unsupported.
 
 ## Outcome
 

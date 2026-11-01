@@ -10,7 +10,10 @@
 //! interpolator (`up` 2, `down` 1). An endpoint whose shared-mode rate is 44.1 kHz needs `up` 160
 //! and `down` 441 for capture, since cpal opens a WASAPI capture stream only at the device's own
 //! rates (cpal 0.18.2, `host/wasapi/device.rs`, where only output streams take
-//! `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), and `up` 147 and `down` 80 for synthesis, which Eileen
+//! `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`). The loopback is such a capture stream, opened on the
+//! render endpoint with `AUDCLNT_STREAMFLAGS_LOOPBACK`, so the echo reference of a 44.1 kHz
+//! endpoint takes the same 160:441 conversion. An endpoint mixing at any other rate gets
+//! [`ResampleError::UnsupportedRates`]. Synthesis to a 44.1 kHz endpoint takes `up` 147 and `down` 80 for synthesis, which Eileen
 //! keeps so that the render path need not rely on Windows' own converter, whose quality this
 //! crate cannot measure on CI.
 //!
@@ -197,8 +200,9 @@ impl Resampler {
             // `offset` below `up` names the phase of the next output, which this sample is the
             // newest input of; the window ends at this sample.
             while let Some(phase) = self.phases.get(self.offset) {
-                let window = self.line.iter().skip(self.pos);
-                let value: f32 = phase.iter().zip(window).map(|(c, x)| c * x).sum();
+                // The doubled delay line always holds `taps` samples from `pos`.
+                let window = self.line.get(self.pos..self.pos + self.taps).unwrap_or_default();
+                let value = dot(phase, window);
                 if let Some(slot) = output.get_mut(written) {
                     *slot = value;
                 }
@@ -209,6 +213,27 @@ impl Resampler {
         }
         Ok(written)
     }
+}
+
+/// Partial sums [`dot`] keeps apart. Every filter's `taps` is a multiple of it.
+const LANES: usize = 8;
+
+/// The inner product of a phase's coefficients and the window of samples they multiply. A
+/// single running sum would make each multiply-add wait on the one before it, since the compiler
+/// may not reorder `f32` additions; `LANES` independent sums let it use vector registers. The
+/// order of the additions depends only on `taps`, never on how the input was cut into buffers,
+/// so the result is the same bit for bit whatever the buffer sizes.
+fn dot(coefficients: &[f32], window: &[f32]) -> f32 {
+    let (coefficient_chunks, coefficient_rest) = coefficients.as_chunks::<LANES>();
+    let (window_chunks, window_rest) = window.as_chunks::<LANES>();
+    let mut lanes = [0.0_f32; LANES];
+    for (c, x) in coefficient_chunks.iter().zip(window_chunks) {
+        for ((lane, c), x) in lanes.iter_mut().zip(c).zip(x) {
+            *lane += c * x;
+        }
+    }
+    let rest: f32 = coefficient_rest.iter().zip(window_rest).map(|(c, x)| c * x).sum();
+    lanes.iter().sum::<f32>() + rest
 }
 
 impl fmt::Debug for Resampler {
