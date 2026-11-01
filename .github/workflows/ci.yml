@@ -118,7 +118,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -175,44 +175,6 @@ jobs:
           name: logic-linux-junit
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
-      - name: PROBE (temporary), dating the artifacts, then the same builds again
-        if: success()
-        shell: bash
-        env:
-          CARGO_LOG: cargo::core::compiler::fingerprint=info
-          CARGO_TERM_COLOR: never
-        run: |
-          rebuild() {
-            log="$RUNNER_TEMP/probe-$1.log"
-            : > "$log"
-            cargo clippy --workspace --all-targets --locked -- -D warnings >> "$log" 2>&1
-            if [ "$RUNNER_OS" = Linux ]; then
-              cargo nextest run --workspace --locked --profile ci --no-run >> "$log" 2>&1
-            fi
-            built="$(grep -cE '^ *(Compiling|Checking) ' "$log" || true)"
-            newer="$(grep -c 'is newer than we are' "$log" || true)"
-            echo "PROBE $1: $built units built, $newer lines 'is newer than we are'"
-            grep -E '^ *(Compiling|Checking) ' "$log" | head -12 || true
-            grep 'is newer than we are' "$log" | head -5 | cut -c1-300 || true
-            eval "built_$1=$built"
-          }
-          new_dating() {
-            stamp="$(date +%s)"
-            for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
-              if [ -d "$dir" ]; then
-                find "$dir" -exec touch -c -d "@$stamp" -- {} +
-                echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
-              fi
-            done
-          }
-          rebuild baseline
-          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
-            find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
-          done
-          rebuild old
-          new_dating
-          rebuild new
-          test "$built_new" = 0
       - name: Date the cached dependency artifacts to this save
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
@@ -277,40 +239,6 @@ jobs:
         run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: PROBE (temporary), dating the artifacts, then the same builds again
-        if: success()
-        shell: bash
-        env:
-          CARGO_LOG: cargo::core::compiler::fingerprint=info
-          CARGO_TERM_COLOR: never
-        run: |
-          rebuild() {
-            log="$RUNNER_TEMP/probe-$1.log"
-            : > "$log"
-            cargo clippy --workspace --all-targets --locked -- -D warnings >> "$log" 2>&1
-            if [ "$RUNNER_OS" = Linux ]; then
-              cargo nextest run --workspace --locked --profile ci --no-run >> "$log" 2>&1
-            fi
-            built="$(grep -cE '^ *(Compiling|Checking) ' "$log" || true)"
-            newer="$(grep -c 'is newer than we are' "$log" || true)"
-            echo "PROBE $1: $built units built, $newer lines 'is newer than we are'"
-            grep -E '^ *(Compiling|Checking) ' "$log" | head -12 || true
-            grep 'is newer than we are' "$log" | head -5 | cut -c1-300 || true
-            eval "built_$1=$built"
-          }
-          new_dating() {
-            stamp="$(date +%s)"
-            for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
-              if [ -d "$dir" ]; then
-                find "$dir" -exec touch -c -d "@$stamp" -- {} +
-                echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
-              fi
-            done
-          }
-          rebuild baseline
-          new_dating
-          rebuild new
-          test "$built_new" = 0
       - name: Date the cached dependency artifacts to this save
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
