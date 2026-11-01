@@ -59,7 +59,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
 The approval contract test's first pass ran on the owner's PC on 2026-10-21 and settled the
 permission route, which section 6.5's amendment of that date records (see Goal).
 
-- `wp3/worker-tools` (open, draft): pins the provisional `tools/worker` module of
+- `wp3/worker-tools` (#126, draft): pins the provisional `tools/worker` module of
   `eileen-contracts` (section 3.3, `modules.toml`), the worker toolset row of section 3.3.9.
   `Approve` now documents route 2 of section 2.5 and gains `matches_ask` (the same
   `tool_use_id` and an equal input); `ApproveReply` holds the two shapes the CLI accepted,
