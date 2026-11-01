@@ -1,15 +1,15 @@
 //! The bench and the search: each start is the state it names, a state that differs only in
-//! time is pruned, and a broken machine is caught by the invariant it breaks, with the sequence
-//! that broke it.
+//! time is pruned, the decision timer fires at its instant, and a broken machine is caught by
+//! the invariant it breaks, with the sequence that broke it.
 
 use eileen_core::turn::Phase;
 
-use super::{Bench, Fault, PR_DEPTH, Start, Step, explore};
+use super::{Bench, Fact, Fault, PR_DEPTH, Start, Step, explore};
 
 fn bench_at(start: Start) -> Bench {
     let mut bench = Bench::new(Fault::Off);
     for step in start.prefix() {
-        bench.apply(*step).unwrap();
+        bench.apply(step).unwrap();
     }
     bench
 }
@@ -23,6 +23,12 @@ fn each_start_is_the_state_it_names() {
     let paused = bench_at(Start::Paused);
     assert!(paused.turns().paused(), "paused after three windows");
     assert_eq!(paused.now_ms(), 96, "three ticks of 32 ms");
+    let due = bench_at(Start::PausedDecisionDue);
+    assert!(due.turns().paused(), "still paused");
+    assert_eq!(due.now_ms(), 672, "the decision, due at 696 ms, falls in the next tick");
+    let lapsing = bench_at(Start::DuckedDecisionDue);
+    assert!(lapsing.turns().barge_in() && !lapsing.turns().paused(), "ducked, not paused");
+    assert_eq!(lapsing.now_ms(), 608, "the duck, due to lapse at 632 ms, does so in the next tick");
 }
 
 #[test]
@@ -49,6 +55,26 @@ fn the_backchannel_resumes_the_pause_and_playback_goes_on() {
 }
 
 #[test]
+fn reaching_the_deadline_of_a_pause_resumes_it_at_600_ms() {
+    let mut bench = bench_at(Start::PausedDecisionDue);
+    assert!(!bench.events().contains(&Fact::DeadlineResumed), "not before the deadline");
+    bench.apply(Step::PlaybackTick).unwrap();
+    assert!(bench.events().contains(&Fact::DeadlineResumed), "{:?}", bench.events());
+    assert!(!bench.turns().barge_in(), "resumed");
+    assert_eq!(bench.turns().phase(), Phase::Speaking, "still speaking");
+}
+
+#[test]
+fn reaching_the_deadline_of_a_duck_that_never_paused_undoes_it() {
+    let mut bench = bench_at(Start::DuckedDecisionDue);
+    assert!(!bench.events().contains(&Fact::DeadlineUnducked), "not before the deadline");
+    bench.apply(Step::PlaybackTick).unwrap();
+    assert!(bench.events().contains(&Fact::DeadlineUnducked), "{:?}", bench.events());
+    assert!(!bench.turns().barge_in(), "unducked");
+    assert_eq!(bench.turns().phase(), Phase::Speaking, "still speaking");
+}
+
+#[test]
 fn a_short_search_covers_every_input_and_prunes() {
     let explored = explore(Start::Speaking, 3, Fault::Off).unwrap();
     assert_eq!(explored.depth, 3, "{explored:?}");
@@ -61,7 +87,7 @@ fn a_short_search_covers_every_input_and_prunes() {
 fn caught(start: Start, fault: Fault, number: u8) -> Vec<Step> {
     let found = explore(start, PR_DEPTH, fault).unwrap_err();
     assert_eq!(found.violation.number, number, "{found}");
-    assert!(found.steps.starts_with(start.prefix()), "{found}");
+    assert!(found.steps.starts_with(&start.prefix()), "{found}");
     found.steps
 }
 
@@ -89,6 +115,16 @@ fn a_machine_that_tells_the_brain_the_whole_reply_breaks_invariant_3() {
 fn a_mute_that_leaves_the_microphone_on_breaks_invariant_9() {
     let steps = caught(Start::Idle, Fault::CaptureLeftOn, 9);
     assert_eq!(steps, [Step::Mute, Step::PlaybackTick], "the shortest is found");
+}
+
+#[test]
+fn a_machine_that_ignores_a_mute_breaks_invariant_9() {
+    let steps = caught(Start::Speaking, Fault::IgnoresMute, 9);
+    assert_eq!(
+        steps.get(Start::Speaking.prefix().len()..),
+        Some([Step::Mute, Step::PlaybackTick].as_slice()),
+        "the shortest: the mute, then the next tick finds capture still on"
+    );
 }
 
 #[test]

@@ -10,17 +10,26 @@
 //! transcript resumes at its deadline. The parts: a device that takes 32 ms of samples at each
 //! playback tick and reports its position after it, a speech process that readies one clause
 //! at a time, and the user, whose speech over Eileen reaches the core as one barge-in window a
-//! tick while the microphone is captured. Other audio and physical input reach the core, which
-//! does not act on them yet (section 2.8's media pause and the input leases come with the full
-//! core), so they leave the state as it was and the search folds them at once.
+//! tick while the microphone is captured. The decision timer fires at its own instant inside
+//! the tick it falls in, before that tick's callback. Other audio and physical input reach the
+//! core, which does not act on them yet (section 2.8's media pause and the input leases come
+//! with the full core), so they leave the state as it was and the search folds them at once.
+//! Another app taking the microphone is not a step: the core does not act on it yet (#152).
+//!
+//! The device reports after every tick, so the core always knows the exact position and a
+//! stop with no pause first tells the brain exactly what was heard. The world's device reports
+//! every 50 ms, where the same stop can be a character short (#151, asserted in
+//! `it::barge_in`); the enumeration does not show that case.
 //!
 //! The search is depth first from each [`Start`], cloning the bench to share each prefix, and
 //! skips a state it already explored with at least as many inputs left. A state is keyed by a
 //! 64-bit FNV-1a hash of everything that can change what follows, every time in it taken as an
 //! age, so states that differ only in when they happened are explored once. Every tick is the
-//! same 32 ms, so no phase of a clock is lost by that.
+//! same 32 ms, so no phase of a clock is lost by that. Two starts run the clock up to just
+//! before the 600 ms decision deadline, so the depth is spent around it. The search returns the
+//! [`Fact`]s it reached, so a test can show it covered what it claims to.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
@@ -32,7 +41,7 @@ use eileen_contracts::harness::{BrainCmd, BrainSlot};
 use eileen_contracts::ids::{MonoTime, Personal, SpeakId, TurnId};
 use eileen_contracts::jobs::TurnAuthority;
 use eileen_contracts::speech::{SpeechCmd, TurnEndReason, VoiceEvent};
-use eileen_core::turn::{Out, Turns, Verdict};
+use eileen_core::turn::{Out, Phase, Turns, Verdict};
 
 use crate::hash::TraceHash;
 use crate::invariants::{
@@ -116,32 +125,114 @@ pub enum Start {
     Speaking,
     /// The user spoke over that clause for three windows, and playback is paused.
     Paused,
+    /// Paused, the user fell quiet, and the decision is due within the next tick.
+    PausedDecisionDue,
+    /// Ducked by one window, the user fell quiet, and the duck lapses within the next tick.
+    DuckedDecisionDue,
 }
+
+/// The ticks after the window that set the decision timer that bring it within one tick: the
+/// timer is 600 ms away, 18 ticks and 24 ms.
+const TICKS_TO_DUE: usize = 18;
 
 impl Start {
     /// Every start.
-    pub const ALL: [Self; 3] = [Self::Idle, Self::Speaking, Self::Paused];
+    pub const ALL: [Self; 5] = [
+        Self::Idle,
+        Self::Speaking,
+        Self::Paused,
+        Self::PausedDecisionDue,
+        Self::DuckedDecisionDue,
+    ];
 
     /// The inputs that lead from idle to this start.
     #[must_use]
-    pub const fn prefix(self) -> &'static [Step] {
+    pub fn prefix(self) -> Vec<Step> {
+        const SPEAKING: [Step; 4] =
+            [Step::SpeechStart, Step::EndOfTurn, Step::BrainText, Step::ClauseReady];
+        let ticks = || std::iter::repeat_n(Step::PlaybackTick, TICKS_TO_DUE);
         match self {
-            Self::Idle => &[],
-            Self::Speaking => {
-                &[Step::SpeechStart, Step::EndOfTurn, Step::BrainText, Step::ClauseReady]
+            Self::Idle => Vec::new(),
+            Self::Speaking => SPEAKING.to_vec(),
+            Self::Paused => SPEAKING
+                .into_iter()
+                .chain([
+                    Step::SpeechStart,
+                    Step::PlaybackTick,
+                    Step::PlaybackTick,
+                    Step::PlaybackTick,
+                ])
+                .collect(),
+            Self::PausedDecisionDue => {
+                Self::Paused.prefix().into_iter().chain([Step::SpeechEnd]).chain(ticks()).collect()
             }
-            Self::Paused => &[
-                Step::SpeechStart,
-                Step::EndOfTurn,
-                Step::BrainText,
-                Step::ClauseReady,
-                Step::SpeechStart,
-                Step::PlaybackTick,
-                Step::PlaybackTick,
-                Step::PlaybackTick,
-            ],
+            Self::DuckedDecisionDue => SPEAKING
+                .into_iter()
+                .chain([Step::SpeechStart, Step::PlaybackTick, Step::SpeechEnd])
+                .chain(ticks())
+                .collect(),
         }
     }
+}
+
+/// Something the enumeration can reach: a phase or a condition of a state, or an event on the
+/// way to one. [`explore`] returns the facts it reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Fact {
+    /// Nobody holds the floor.
+    Idle,
+    /// The user's turn is being heard.
+    Hearing,
+    /// A brain turn is in flight and Eileen has not started its answer.
+    Thinking,
+    /// Eileen speaks.
+    Speaking,
+    /// A barge-in ducked playback.
+    Ducked,
+    /// A barge-in paused playback.
+    Paused,
+    /// The microphone is muted.
+    Muted,
+    /// The microphone is not captured.
+    CaptureOff,
+    /// A mute stopped Eileen mid-utterance.
+    MutedMidUtterance,
+    /// A reply went to the HUD instead of being spoken.
+    ReplyOnHud,
+    /// One callback handed samples of two clauses.
+    AcrossClauses,
+    /// An utterance ended with every sample played.
+    SpokeToTheEnd,
+    /// A brain turn was told what the user heard of an interrupted utterance.
+    HeardTold,
+    /// A backchannel resumed a paused utterance.
+    BackchannelResumed,
+    /// The decision timer resumed a pause.
+    DeadlineResumed,
+    /// The decision timer undid a duck that never paused.
+    DeadlineUnducked,
+}
+
+impl Fact {
+    /// Every fact.
+    pub const ALL: [Self; 16] = [
+        Self::Idle,
+        Self::Hearing,
+        Self::Thinking,
+        Self::Speaking,
+        Self::Ducked,
+        Self::Paused,
+        Self::Muted,
+        Self::CaptureOff,
+        Self::MutedMidUtterance,
+        Self::ReplyOnHud,
+        Self::AcrossClauses,
+        Self::SpokeToTheEnd,
+        Self::HeardTold,
+        Self::BackchannelResumed,
+        Self::DeadlineResumed,
+        Self::DeadlineUnducked,
+    ];
 }
 
 /// A broken core, for proving that the enumeration catches each invariant: the bench alters
@@ -158,6 +249,8 @@ pub enum Fault {
     ToldWholeReply,
     /// Muting leaves the microphone captured (invariant 9).
     CaptureLeftOn,
+    /// A mute the user asks for is dropped, and Eileen goes on speaking (invariant 9).
+    IgnoresMute,
     /// Every utterance is announced after another that never stops (invariant 10).
     PhantomUtterance,
 }
@@ -175,7 +268,7 @@ impl Fault {
 }
 
 /// What an enumeration covered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Explored {
     /// Where it started.
     pub start: Start,
@@ -187,6 +280,10 @@ pub struct Explored {
     pub transitions: u64,
     /// Inputs that led to a state already explored deeply enough.
     pub pruned: u64,
+    /// Inputs during which the decision timer resumed a pause or undid a duck.
+    pub deadlines: u64,
+    /// The facts the inputs reached, from the start on (not the prefix's events).
+    pub coverage: BTreeSet<Fact>,
 }
 
 /// A sequence that broke an invariant.
@@ -215,11 +312,12 @@ pub fn explore(start: Start, depth: u8, fault: Fault) -> Result<Explored, Counte
     let mut bench = Bench::new(fault);
     let mut path = Vec::new();
     for step in start.prefix() {
-        path.push(*step);
-        if let Err(violation) = bench.apply(*step) {
+        path.push(step);
+        if let Err(violation) = bench.apply(step) {
             return Err(Counterexample { start, steps: path, violation });
         }
     }
+    bench.facts.clear();
     let mut search = Search::new(start, depth, &bench, path.clone());
     let Err(violation) = search.below(&bench, depth) else {
         search.explored.states = search.visited.len();
@@ -247,7 +345,15 @@ struct Search {
 impl Search {
     fn new(start: Start, depth: u8, bench: &Bench, path: Vec<Step>) -> Self {
         let visited = BTreeMap::from([(bench.key(), depth)]);
-        let explored = Explored { start, depth, states: 0, transitions: 0, pruned: 0 };
+        let explored = Explored {
+            start,
+            depth,
+            states: 0,
+            transitions: 0,
+            pruned: 0,
+            deadlines: 0,
+            coverage: bench.state_facts(),
+        };
         Self { visited, path, explored }
     }
 
@@ -259,6 +365,12 @@ impl Search {
             self.path.push(step);
             let mut next = bench.clone();
             next.apply(step)?;
+            let facts = std::mem::take(&mut next.facts);
+            if facts.contains(&Fact::DeadlineResumed) || facts.contains(&Fact::DeadlineUnducked) {
+                self.explored.deadlines = self.explored.deadlines.saturating_add(1);
+            }
+            self.explored.coverage.extend(facts);
+            self.explored.coverage.extend(next.state_facts());
             let key = next.key();
             if self.visited.get(&key).is_some_and(|had| *had >= remaining) {
                 self.explored.pruned = self.explored.pruned.saturating_add(1);
@@ -441,6 +553,8 @@ pub struct Bench {
     /// The number of the last barge-in window, 0 while no run is under way.
     window: u8,
     watches: Watches,
+    /// Events reached since the search last took them; not part of the state.
+    facts: BTreeSet<Fact>,
 }
 
 impl Bench {
@@ -459,7 +573,34 @@ impl Bench {
             decide_by: None,
             window: 0,
             watches: Watches::default(),
+            facts: BTreeSet::new(),
         }
+    }
+
+    /// The facts of the state as it stands.
+    #[must_use]
+    pub fn state_facts(&self) -> BTreeSet<Fact> {
+        let phase = match self.turns.phase() {
+            Phase::Idle => Fact::Idle,
+            Phase::Hearing => Fact::Hearing,
+            Phase::Thinking => Fact::Thinking,
+            Phase::Speaking => Fact::Speaking,
+        };
+        let conditions = [
+            (self.turns.barge_in() && !self.turns.paused(), Fact::Ducked),
+            (self.turns.paused(), Fact::Paused),
+            (self.turns.muted(), Fact::Muted),
+            (!self.device.capture, Fact::CaptureOff),
+            (self.brain.is_some_and(|reply| reply.on_hud), Fact::ReplyOnHud),
+        ];
+        let held = conditions.into_iter().filter(|(holds, _)| *holds).map(|(_, fact)| fact);
+        std::iter::once(phase).chain(held).collect()
+    }
+
+    /// The events reached so far, the prefix's included.
+    #[must_use]
+    pub const fn events(&self) -> &BTreeSet<Fact> {
+        &self.facts
     }
 
     /// The machine.
@@ -515,6 +656,7 @@ impl Bench {
         if !self.turns.barge_in() || self.turns.paused() {
             self.window = 0;
         }
+        self.watches.mute.by(self.now_ms)?;
         self.watches.barge.by(self.now_ms)
     }
 
@@ -584,6 +726,9 @@ impl Bench {
         }
         let mut out = Vec::new();
         if text == BACKCHANNEL {
+            if self.turns.paused() {
+                self.facts.insert(Fact::BackchannelResumed);
+            }
             if self.turns.barge_in() {
                 self.turns.resolve_barge_in(Verdict::Resume, &mut out);
             }
@@ -602,7 +747,10 @@ impl Bench {
             heard
         };
         let message = match told {
-            Some(heard) => format!("[heard] {text}\n        {HEARD_MARKER}{heard}\""),
+            Some(heard) => {
+                self.facts.insert(Fact::HeardTold);
+                format!("[heard] {text}\n        {HEARD_MARKER}{heard}\"")
+            }
             None => format!("[heard] {text}"),
         };
         self.effect(Effect::Audio(AudioCmd::Earcon(Earcon::Routed)))?;
@@ -636,12 +784,20 @@ impl Bench {
         Ok(())
     }
 
-    /// 32 ms pass: the device's callback and its report, then the user's window, then the
-    /// decision timer if it is due.
+    /// 32 ms pass: the decision timer at its own instant if it falls inside them, then the
+    /// device's callback at their end and its report, then the user's window.
     fn tick(&mut self) -> Result<(), Violation> {
-        self.now_ms = self.now_ms.saturating_add(TICK_MS);
+        let end = self.now_ms.saturating_add(TICK_MS);
+        if let Some(at) = self.decide_by.filter(|at| *at <= end) {
+            self.now_ms = at.max(self.now_ms);
+            self.deadline()?;
+        }
+        self.now_ms = end;
         let handed = self.device.callback();
         let played = !handed.is_empty();
+        if handed.len() > 1 {
+            self.facts.insert(Fact::AcrossClauses);
+        }
         self.see(&AudioEvent::Callback(handed))?;
         let mut out = Vec::new();
         if let Some(speak) = self.device.speak.filter(|_| !self.device.paused) {
@@ -673,26 +829,37 @@ impl Bench {
             // A window with no speech in it: the next one is not consecutive.
             self.window = self.window.wrapping_add(1);
         }
-        if self.decide_by.is_some_and(|at| at <= self.now_ms) {
-            self.decide_by = None;
-            let mut out = Vec::new();
-            if self.turns.barge_in_deadline(&mut out) {
-                // `route::verdict_from_partial` with no partial transcript resumes.
-                self.turns.resolve_barge_in(Verdict::Resume, &mut out);
-            }
-            self.apply_outs(out)?;
-        }
         Ok(())
+    }
+
+    /// The decision timer fires: a duck that never paused is undone, and a pause is resumed,
+    /// as `route::verdict_from_partial` does with no partial transcript.
+    fn deadline(&mut self) -> Result<(), Violation> {
+        self.decide_by = None;
+        let mut out = Vec::new();
+        if self.turns.barge_in_deadline(&mut out) {
+            self.facts.insert(Fact::DeadlineResumed);
+            self.turns.resolve_barge_in(Verdict::Resume, &mut out);
+        } else if out.contains(&Out::Audio(AudioCmd::Unduck)) {
+            self.facts.insert(Fact::DeadlineUnducked);
+        }
+        self.apply_outs(out)
     }
 
     /// The user mutes or unmutes, as `speech::set_mute` does it: a reply muting stopped goes
     /// on to the HUD.
     fn set_mute(&mut self, muted: bool) -> Result<(), Violation> {
         self.input(Input::User(UserInput::SetMute(muted)))?;
+        if muted && self.fault == Fault::IgnoresMute {
+            return Ok(());
+        }
         let stopped = self.turns.speaking().filter(|_| muted);
         let mut out = Vec::new();
         let changed = self.turns.set_mute(muted, &mut out);
         self.apply_outs(out)?;
+        if changed && stopped.is_some() {
+            self.facts.insert(Fact::MutedMidUtterance);
+        }
         if changed
             && let Some(reply) = self.brain.as_mut()
             && stopped.is_some()
@@ -817,7 +984,12 @@ impl Bench {
                     }
                     self.effect(Effect::Emit(BusEvent::Speaking { speak, cause, text }))?;
                 }
-                Out::Stopped { speak, heard_chars, interrupted, resumed, .. } => {
+                Out::Stopped { speak, text, heard_chars, interrupted, resumed } => {
+                    if !interrupted
+                        && usize::try_from(heard_chars).ok() == Some(text.chars().count())
+                    {
+                        self.facts.insert(Fact::SpokeToTheEnd);
+                    }
                     let event =
                         BusEvent::SpeakingStopped { speak, heard_chars, interrupted, resumed };
                     self.effect(Effect::Emit(event))?;

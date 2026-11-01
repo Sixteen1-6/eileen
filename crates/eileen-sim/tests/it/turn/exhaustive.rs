@@ -2,8 +2,17 @@
 //! inputs to depth 6 from each start, with invariants 2, 3, 9 and 10 checked after every
 //! input. The nightly lane sets `EILEEN_EXHAUSTIVE_DEPTH=8`.
 
-use eileen_sim::exhaustive::{DEPTH_ENV, Fault, NIGHTLY_DEPTH, PR_DEPTH, STEPS, Start, explore};
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+
+use eileen_sim::exhaustive::{
+    DEPTH_ENV, Fact, Fault, NIGHTLY_DEPTH, PR_DEPTH, STEPS, Start, explore,
+};
 use eileen_sim::invariants::EXHAUSTIVE;
+
+/// What the search reaches from each start at the pull request depth. A change here is a
+/// change in the search's reach, to be explained in review.
+const REACH_AT_PR_DEPTH: &str = "";
 
 /// The depth to run: `EILEEN_EXHAUSTIVE_DEPTH` when it is set, else the pull request depth.
 fn depth() -> u8 {
@@ -22,12 +31,27 @@ fn every_sequence_to_the_depth_keeps_invariants_2_3_9_and_10() {
     assert_eq!(numbers, [2, 3, 9, 10], "section 4.7 names invariants 2, 3, 9 and 10");
     let depth = depth();
     assert!(depth >= PR_DEPTH, "never shallower than the pull request depth: {depth}");
+    let mut reach = String::new();
+    let mut covered = BTreeSet::new();
     for start in Start::ALL {
         let explored = explore(start, depth, Fault::Off).unwrap_or_else(|found| panic!("{found}"));
-        println!(
-            "turn::exhaustive from {start:?} to depth {depth}: {} states, {} inputs applied, {} pruned",
-            explored.states, explored.transitions, explored.pruned
-        );
-        assert!(explored.states > 1, "the search went somewhere: {explored:?}");
+        writeln!(
+            reach,
+            "{start:?}: {} states, {} inputs, {} pruned, {} deadlines",
+            explored.states, explored.transitions, explored.pruned, explored.deadlines
+        )
+        .unwrap();
+        if matches!(start, Start::PausedDecisionDue | Start::DuckedDecisionDue) {
+            assert!(explored.deadlines > 0, "the decision timer fired: {explored:?}");
+        }
+        covered.extend(explored.coverage);
+    }
+    println!("turn::exhaustive to depth {depth}:\n{reach}");
+    let missed: Vec<Fact> = Fact::ALL.into_iter().filter(|fact| !covered.contains(fact)).collect();
+    assert!(missed.is_empty(), "the search never reached {missed:?}");
+    assert!(covered.contains(&Fact::DeadlineResumed), "a pause resumed at its deadline");
+    assert!(covered.contains(&Fact::DeadlineUnducked), "a duck lapsed at its deadline");
+    if depth == PR_DEPTH {
+        assert_eq!(reach, REACH_AT_PR_DEPTH, "the search's reach at depth {PR_DEPTH} changed");
     }
 }
