@@ -15,8 +15,8 @@ completion announcements, with simulation tests that include "stop" while Eileen
 
 The first follow-up, `wp1/speech-life`, adds the speech process's life (start, a missed heartbeat
 or a late `Ready`, an exit, the backoff, and replies on the HUD while speech is down or the
-microphone is muted) and merges before WP2's `wp2/speech-transport`. Turns heard late follow in
-`wp1/speech-late` once WP4's first part adds `SpeechStarted.replayed`.
+microphone is muted) and merges before WP2's `wp2/speech-transport` (D83). The rule for turns
+heard late follows in `wp1/speech-late` once WP4's first part adds `SpeechStarted.replayed`.
 
 Then the full core (the addressee gate of section 2.8, intent dispatch, the fact path, `Act` jobs,
 the brain turn, jobs, sessions and the warm pool, memory admission, the permission gate, approvals,
@@ -58,8 +58,9 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 9. A recorded run replays in strict mode with no divergence, a router change reports the first
    divergent event, and scenario mode survives an extra minted ID.
 10. `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` replay green.
-11. Of Eileen's crates, `eileen-core` depends only on `eileen-contracts`, `eileen-stdx` and
-    `eileen-trace`, and of third-party crates only on `tracing` and `serde_json` (check 24).
+11. In its normal dependencies, `eileen-core` depends, of Eileen's crates, only on
+    `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of third-party crates only on
+    `tracing` and `serde_json` (check 24, D84).
 12. The learning decisions in the core, in simulation: facts and their retirement, aliases,
     exact repeats, `rung_skipped`, forget, the `[match]` block, follow-ups, speech levels and calls.
 13. Scenario mode: timers and playback synthesized, brain turns keyed by transcript digest and

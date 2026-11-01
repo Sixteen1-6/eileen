@@ -92,7 +92,7 @@ Every serialized type: IDs, `TraceCtx` and `Envelope`, `Input`, `Effect`, `BusEv
 
 `Core::step(now, rng, input, effects)`: turns, the addressee gate, intent dispatch, the brain turn and its authority, jobs and sessions, memory admission, routing, the permission gate, taint and approvals, announcements, barge-in and what the user heard, the input lock and leases, the journal, the settings flow, the first run, plan-usage policy, supervisor policy, and the learning loop's decisions through the `SkillEngine` port.
 **Architecture invariant:** sans-IO. No clock, no OS randomness, no IO, no threads; every queue bounded; ordered maps wherever order can reach an effect.
-**Architecture invariant:** of Eileen's crates, depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of third-party crates only on `tracing` and `serde_json`. The resolver, dictation cleaner, settings validator and skill engine arrive through ports.
+**Architecture invariant:** of Eileen's crates, depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of third-party crates only on `tracing` and `serde_json` (dev-dependencies aside). The resolver, dictation cleaner, settings validator and skill engine arrive through ports.
 **Architecture invariant:** an action above tier 1 needs an approval built from the user's own input: a physical click, an approval hotkey pressed on a real keyboard, or speech in the approval window that contains the action word (and matches the enrolled voice once the speaker check exists). That type cannot be made from screen text, model output, tool results, a command line or a learned skill.
 
 ### `eileen-runtime`, `eileen-mcp`, `eileen-cli`, `eileen-shell-win`
