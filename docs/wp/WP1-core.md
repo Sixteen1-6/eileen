@@ -121,32 +121,48 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `wp1/turn-exhaustive` (open): acceptance 2 and 4. `eileen-sim::exhaustive` enumerates every
   sequence of section 4.7's eleven turn-taking inputs (speech start, speech end, end of turn,
   clause ready, playback tick, mute, unmute, brain text, backchannel, other audio, physical
-  input) through the real `eileen_core::turn::Turns`, from three starts (idle, speaking the
-  first clause of a streaming reply, and paused by a barge-in), to depth 6 on pull requests.
-  A bench plays the core's part around `Turns` for these inputs and the parts that answer it
-  (a device that takes 32 ms of samples a tick and reports its position, a speech process that
-  readies a clause at a time, the user's speech as one barge-in window a tick while captured),
-  and checks invariants 2, 3, 9 and 10 after every input. States are pruned by a 64-bit FNV-1a
-  hash of everything that can change what follows, with times taken as ages, which is why
-  `Turns` now derives `Hash`. A broken machine (no duck, no pause, the whole reply told to the
-  brain, capture left on when muted, an utterance over another) is caught with a shortest
-  counterexample (`eileen-sim::exhaustive::tests::*`). Invariants 2
-  (`barge_in_pauses_in_time`), 3 (`heard_prefix_matches_playback`) and 9
-  (`nothing_sounds_while_muted`, its mute and microphone parts) are named functions in
-  `eileen-sim::invariants`, each a watch the enumeration carries in its states, with
-  hand-built violating traces (`invariants::tests::audio::*`); invariant 10 runs on the same
-  watch as before. The world keeps an audio trace (inputs, effects and each callback's
-  samples), and `eileen-sim::it::barge_in` shows acceptance 4 through the real core: onset to
-  silence within 96 ms plus one callback, the heard prefix the brain is told equal to the
-  samples handed to the device, and a backchannel that resumes from the exact paused sample,
-  with invariants 2, 3 and 9 holding over each trace. The nightly hook: `nightly.yml` is not on
-  `main` yet, so WP0 phase B's nightly job runs
+  input) through the real `eileen_core::turn::Turns`, to depth 6 on pull requests, from five
+  starts: idle, speaking the first clause of a streaming reply, paused by a barge-in, and two
+  that run the clock to just before the 600 ms decision deadline (a pause, and a duck that
+  never paused), so the timer's resume and unduck are enumerated. A bench plays the core's
+  part around `Turns` for these inputs and the parts that answer it (a device that takes 32 ms
+  of samples a tick and reports its position, a speech process that readies a clause at a
+  time, the user's speech as one barge-in window a tick while captured, the decision timer at
+  its own instant inside a tick), and checks invariants 2, 3, 9 and 10 after every input.
+  States are pruned by a 64-bit FNV-1a hash of everything that can change what follows, with
+  times taken as ages, which is why `Turns` now derives `Hash`. The search returns the facts
+  it reached (phases, duck, pause, mute, capture off, a mute mid-utterance, a reply on the HUD,
+  a callback across clauses, an utterance spoken to the end, a heard prefix told, a
+  backchannel resume, and both deadlines), and `it::turn::exhaustive` asserts every one is
+  reached and pins each start's state and input counts at depth 6. A broken machine (no duck,
+  no pause, the whole reply told to the brain, capture left on when muted, a mute ignored, an
+  utterance over another) is caught with a shortest counterexample
+  (`eileen-sim::exhaustive::tests::*`). Invariants 2 (`barge_in_pauses_in_time`), 3
+  (`heard_prefix_matches_playback`) and 9 (`nothing_sounds_while_muted`, its mute and
+  microphone parts) are named functions in `eileen-sim::invariants`, each a watch the
+  enumeration carries in its states, with hand-built violating traces
+  (`invariants::tests::audio::*`); invariant 10 runs on the same watch as before. Invariant
+  2 measures onset to silence from the user's `SpeechStarted` and judges a pause's 600 ms at
+  every record, its resume included; invariant 9 learns a mute from the user's request as well
+  as the core's announcement and wants capture off within one 10 ms frame. `Turns::set_mute`
+  now announces an unmute before its earcon, so no earcon sounds inside a mute. A world keeps
+  an audio trace (inputs, effects and each callback's samples while the device holds an
+  utterance) only when a test asks (`World::record_audio`), and `eileen-sim::it::barge_in`
+  shows acceptance 4 through the real core: onset to silence within 96 ms plus one callback,
+  the heard prefix the brain is told equal to the scripted sentence cut at the samples handed
+  to the device, and a backchannel that resumes from the exact paused sample, with invariants
+  2, 3 and 9 holding over each trace. It also asserts two gaps as they are today, with
+  `FIXME`: a stop with no pause first tells a prefix a character short (#151), and Eileen keeps
+  speaking while another app uses the microphone (#152). The nightly hook: `nightly.yml` is not
+  on `main` yet, so WP0 phase B's nightly job runs
   `EILEEN_EXHAUSTIVE_DEPTH=8 cargo nextest run -p eileen-sim --profile nightly -E 'test(/turn::exhaustive/)'`;
   the test reads the variable (`eileen_sim::exhaustive::DEPTH_ENV`) and runs depth 6 without
   it.
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
   `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
-  after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1).
+  after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
+  #151 is fixed. Invariant 9's microphone part is not in the core yet (#152): the core ignores
+  `MicInUseElsewhere`, and the enumeration gains a step for it when the core acts on it.
 
 ## Surprises
 
@@ -168,13 +184,14 @@ Every pull request also meets the rules section 6.1 sets for every package.
   after a step that produced one.
 
 - The core ends an utterance it stops at once, so after a stop with no pause first (muting, a
-  typed request) the heard prefix is the position of the last `Played` report, up to 50 ms of
-  audio behind the device, under one character at speaking pace. A barge-in pauses first, and
-  the `Paused` report is exact, so the brain is told exactly what was heard there. The
-  exhaustive bench reports after every tick, so invariant 3 holds in it; in the world, whose
-  device reports every 50 ms, a mute mid-sentence can be a character short, which is why
-  invariant 3 is not yet in the world's per-step check. Taking the `Stopped` report's position
-  for a heard prefix not yet handed to the brain would close the gap for muting.
+  request after one or two windows) the heard prefix is the position of the last `Played`
+  report, up to 50 ms of audio behind the device, under one character at speaking pace (#151).
+  A barge-in pauses first, and the `Paused` report is exact, so the brain is told exactly what
+  was heard there. The exhaustive bench reports after every tick, so invariant 3 holds in it
+  and the enumeration cannot show the gap; in the world, whose device reports every 50 ms,
+  `it::barge_in` asserts the shortfall for a mute and for a request after one window, with
+  `FIXME(#151)`, which is why invariant 3 is not yet in the world's per-step check. Taking the
+  `Stopped` report's position for a heard prefix not yet handed to the brain would close it.
 
 ## Decisions
 
@@ -228,12 +245,13 @@ Every pull request also meets the rules section 6.1 sets for every package.
   differ only in time are one state, and onset to silence is bounded by three windows and one
   tick (128 ms, within invariant 2's 150 ms). The 10 ms device and acceptance 4's 96 ms plus
   one callback are shown in the world (`it::barge_in`).
-- Invariant 2's onset is the first window of a run less one window (the speech process judges
-  32 ms windows), and its 150 ms bound applies when the run's windows came at that pace; the
-  duck, the pause by the third consecutive window, silence while paused and the 600 ms
-  decision hold whatever the pace.
-- Invariant 9 lets the mute and unmute earcons play at the change: they confirm the user's own
-  key press, and the unmute earcon is emitted just before `MuteChanged { muted: false }`.
+- Invariant 2's onset is the user's `SpeechStarted` (or the moment Eileen began, if they were
+  already speaking), and the run's first window less one window when no `SpeechStarted` came
+  first, since a window covers the 32 ms before it. The 150 ms bound holds whatever the pace of
+  the windows, as section 4.7 states it.
+- Invariant 9 judges earcons against the mute the core announced, and judges speech, phrases
+  and samples against that or the user's request: the mute earcon confirms the request before
+  `MuteChanged { muted: true }`, and the unmute earcon follows `MuteChanged { muted: false }`.
 
 ## Outcome
 
