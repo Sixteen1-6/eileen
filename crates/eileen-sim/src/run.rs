@@ -9,7 +9,7 @@ use eileen_contracts::core_io::{Input, PlaybackEvent};
 use eileen_contracts::record::{InputRecord, SimRegression};
 use eileen_stdx::rng::CoreRng;
 
-use crate::inputs::{Draw, Generator};
+use crate::inputs::Generator;
 use crate::invariants::Violation;
 use crate::profile::{Profile, ProfileError};
 use crate::world::World;
@@ -194,8 +194,8 @@ fn draw(
     let speaking = world.speaking().to_vec();
     let drawn = generator.next(bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking);
     match drawn {
-        Ok((_, Draw::Input(input))) => input,
-        Ok((_, Draw::NextTimer)) => world
+        Ok((_, Some(input))) => input,
+        Ok((_, None)) => world
             .until_next_timer()
             .and_then(|wait| world.advance(wait.max(1)))
             .unwrap_or(Input::Playback(PlaybackEvent::DeviceChanged)),

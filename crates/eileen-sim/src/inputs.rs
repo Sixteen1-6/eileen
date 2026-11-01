@@ -39,15 +39,6 @@ const PHRASES: &[&str] = &[
     "cancel",
 ];
 
-/// What the generator drew.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Draw {
-    /// An input to deliver now.
-    Input(Input),
-    /// Let virtual time pass to the core's next timer.
-    NextTimer,
-}
-
 /// The kinds of input the generator draws, for the step log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
@@ -77,9 +68,9 @@ impl Generator {
         self.turn
     }
 
-    /// Draws the next input. `now_ms` stamps any ID it mints; `rng` supplies IDs' random bits;
-    /// `speaking` lists utterances the world is playing, which playback events and barge-in
-    /// windows may name.
+    /// Draws the next input, or `None` to let virtual time pass to the core's next timer.
+    /// `now_ms` stamps any ID it mints; `rng` supplies IDs' random bits; `speaking` lists
+    /// utterances the world is playing, which playback events and barge-in windows may name.
     pub fn next(
         &mut self,
         bytes: &mut Unstructured<'_>,
@@ -87,15 +78,15 @@ impl Generator {
         now_ms: u64,
         rng: &mut CoreRng,
         speaking: &[SpeakId],
-    ) -> arbitrary::Result<(InputKind, Draw)> {
+    ) -> arbitrary::Result<(InputKind, Option<Input>)> {
         let kind = pick_kind(bytes, mix)?;
-        let draw = match kind {
-            InputKind::Voice => Draw::Input(self.voice(bytes, now_ms, rng, speaking)?),
-            InputKind::User => Draw::Input(user(bytes)?),
-            InputKind::Playback => Draw::Input(playback(bytes, speaking)?),
-            InputKind::Timer => Draw::NextTimer,
+        let input = match kind {
+            InputKind::Voice => Some(self.voice(bytes, now_ms, rng, speaking)?),
+            InputKind::User => Some(user(bytes)?),
+            InputKind::Playback => Some(playback(bytes, speaking)?),
+            InputKind::Timer => None,
         };
-        Ok((kind, draw))
+        Ok((kind, input))
     }
 
     fn voice(
@@ -211,7 +202,7 @@ mod tests {
     use eileen_contracts::speech::VoiceEvent;
     use eileen_stdx::rng::CoreRng;
 
-    use super::{Draw, Generator, InputKind};
+    use super::{Generator, InputKind};
     use crate::profile::InputMix;
 
     const VOICE_ONLY: InputMix = InputMix { voice: 1, user: 0, playback: 0, timer: 0 };
@@ -228,7 +219,7 @@ mod tests {
             let (kind, draw) =
                 generator.next(&mut bytes, &VOICE_ONLY, step, &mut rng, &[]).unwrap();
             assert_eq!(kind, InputKind::Voice, "the mix allows only voice");
-            let Draw::Input(Input::Voice(event)) = draw else { panic!("a voice input") };
+            let Some(Input::Voice(event)) = draw else { panic!("a voice input") };
             match event {
                 VoiceEvent::SpeechStarted { turn, .. } => {
                     assert!(open.is_none_or(|o| o == turn), "one turn at a time");

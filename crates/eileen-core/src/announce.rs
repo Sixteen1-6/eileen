@@ -115,11 +115,13 @@ fn first_sentence(text: &str) -> String {
             break;
         }
     }
-    let mut sentence: String = sentence.trim().to_owned();
-    if sentence.chars().count() > SUMMARY_CHARS {
+    let sentence = sentence.trim();
+    let mut sentence = if sentence.chars().count() > SUMMARY_CHARS {
         let cut: String = sentence.chars().take(SUMMARY_CHARS).collect();
-        sentence = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head).to_owned();
-    }
+        cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head).to_owned()
+    } else {
+        sentence.to_owned()
+    };
     if !sentence.is_empty() && !sentence.ends_with(['.', '!', '?']) {
         sentence.push('.');
     }

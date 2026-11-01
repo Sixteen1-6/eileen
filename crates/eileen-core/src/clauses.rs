@@ -37,9 +37,10 @@ impl Cutter {
         }
         let mut clauses = Vec::new();
         while let Some(at) = self.next_cut() {
-            let Some((clause, rest)) = self.buffer.split_at_checked(at) else { break };
-            let clause = clause.trim().to_owned();
-            self.buffer = rest.trim_start().to_owned();
+            let Some((head, rest)) = self.buffer.split_at_checked(at) else { break };
+            let clause = head.trim().to_owned();
+            let keep_from = self.buffer.len() - rest.trim_start().len();
+            self.buffer.replace_range(..keep_from, "");
             if !clause.is_empty() {
                 self.started = true;
                 clauses.push(clause);
