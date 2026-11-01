@@ -36,6 +36,8 @@ use eileen_contracts::jobs::{CallOrigin, Cost, TurnAuthority};
 use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 use serde_json::{Value, json};
 
+use crate::invariants::Handed;
+
 /// The device's callback period, ms.
 pub const CALLBACK_MS: u64 = 10;
 /// Samples the device takes per callback: 10 ms at 24 kHz.
@@ -417,17 +419,26 @@ impl Device {
         }
     }
 
-    /// One 10 ms callback at `now_ms`: the first utterance takes its samples.
-    pub fn callback(&mut self, now_ms: u64, due: &mut Due) {
-        let Some(playing) = self.playing.front_mut() else { return };
+    /// The clause playing and its samples played, or the last position reached, of `speak`
+    /// while the device holds it.
+    #[must_use]
+    pub fn position(&self, speak: SpeakId) -> Option<(u16, u32)> {
+        self.playing.iter().find(|playing| playing.speak == speak).map(Playing::position)
+    }
+
+    /// One 10 ms callback at `now_ms`: the first utterance takes its samples. Returns the
+    /// samples it handed to the device, clause by clause.
+    pub fn callback(&mut self, now_ms: u64, due: &mut Due) -> Vec<Handed> {
+        let mut handed = Vec::new();
+        let Some(playing) = self.playing.front_mut() else { return handed };
         if playing.paused {
-            return;
+            return handed;
         }
-        if !playing.take(SAMPLES_PER_CALLBACK) {
+        if !playing.take(SAMPLES_PER_CALLBACK, &mut handed) {
             let speak = playing.speak;
             self.playing.pop_front();
             due.schedule(now_ms, Input::Playback(PlaybackEvent::Drained { speak }));
-            return;
+            return handed;
         }
         playing.since_report = playing.since_report.saturating_add(CALLBACK_MS);
         if playing.since_report >= REPORT_MS {
@@ -439,6 +450,7 @@ impl Device {
                 Input::Playback(PlaybackEvent::Played { speak, clause, samples_played }),
             );
         }
+        handed
     }
 }
 
@@ -448,8 +460,9 @@ impl Playing {
         self.current.map_or(self.last, |(clause, _, played)| (clause, played))
     }
 
-    /// Takes up to `budget` samples; false when nothing was left to play.
-    fn take(&mut self, mut budget: u32) -> bool {
+    /// Takes up to `budget` samples, noting them in `handed`; false when nothing was left to
+    /// play.
+    fn take(&mut self, mut budget: u32, handed: &mut Vec<Handed>) -> bool {
         let mut took = false;
         while budget > 0 {
             let next = self
@@ -460,6 +473,9 @@ impl Playing {
             budget -= step;
             let played = played.saturating_add(step);
             took = took || step > 0;
+            if step > 0 {
+                handed.push(Handed { speak: self.speak, clause, samples: step });
+            }
             self.last = (clause, played);
             self.current = (played < total).then_some((clause, total, played));
         }

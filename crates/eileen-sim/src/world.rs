@@ -31,7 +31,9 @@ use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::collect::Collector;
 use crate::hash::TraceHash;
-use crate::invariants::{self, ChildEvent, ChildRecord, Delivery, Violation};
+use crate::invariants::{
+    self, AudioEvent, AudioRecord, ChildEvent, ChildRecord, Delivery, Violation,
+};
 use crate::parts::Brain as BrainPart;
 use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Process, Speech, Workers};
 use crate::profile::Profile;
@@ -144,6 +146,8 @@ pub struct World {
     hud: Option<HudState>,
     effects: Vec<Envelope<Effect>>,
     published: Vec<Envelope<BusEvent>>,
+    /// The inputs, effects and playback callbacks in time order (invariants 2, 3 and 9).
+    audio: Vec<AudioRecord>,
     bus: Bus,
     inputs: Vec<InputRecord>,
     log: String,
@@ -212,6 +216,7 @@ impl World {
             hud: None,
             effects: Vec::new(),
             published: Vec::new(),
+            audio: Vec::new(),
             bus,
             inputs: Vec::new(),
             log: String::new(),
@@ -255,6 +260,13 @@ impl World {
     #[must_use]
     pub fn effects(&self) -> &[Envelope<Effect>] {
         &self.effects
+    }
+
+    /// Every input, effect and playback callback so far, in time order, as invariants 2, 3
+    /// and 9 read them.
+    #[must_use]
+    pub fn audio(&self) -> &[AudioRecord] {
+        &self.audio
     }
 
     /// The simulated playback device.
@@ -360,7 +372,9 @@ impl World {
                 (self.now_ms / CALLBACK_MS).saturating_add(1).saturating_mul(CALLBACK_MS);
             self.now_ms = next_tick.min(target);
             if self.now_ms == next_tick {
-                self.device.callback(self.now_ms, &mut self.due);
+                let handed = self.device.callback(self.now_ms, &mut self.due);
+                let event = AudioEvent::Callback(handed);
+                self.audio.push(AudioRecord { at_ms: self.now_ms, event });
             }
             if let Some(input) = self.take_due() {
                 return Some(input);
@@ -429,6 +443,8 @@ impl World {
         let record = InputRecord { seq: self.seq, mono, at, ctx, input: input.clone() };
         self.hash.record(&serde_json::to_vec(&record).unwrap_or_default());
         self.apply_input(&input);
+        self.audio
+            .push(AudioRecord { at_ms: self.now_ms, event: AudioEvent::Input(input.clone()) });
         self.inputs.push(record);
         let envelope = Envelope { seq: self.seq, at, mono, ctx, body: input };
         let mut effects = Vec::new();
@@ -503,6 +519,8 @@ impl World {
 
     fn apply_effect(&mut self, effect: Envelope<Effect>) {
         let now = self.now_ms;
+        let event = AudioEvent::Effect(effect.body.clone());
+        self.audio.push(AudioRecord { at_ms: now, event });
         match &effect.body {
             Effect::Emit(event) => {
                 self.bus.publish(effect.seq);
