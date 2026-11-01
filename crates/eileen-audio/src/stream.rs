@@ -6,8 +6,17 @@
 //! A source or sink owns its thread and its timing, as cpal's streams do, and calls the
 //! component's callback once per buffer. The callback is the component's code on the audio
 //! thread, so it allocates, frees, blocks and logs nothing (this crate's invariant).
+//!
+//! The source or sink also says when each buffer was captured or will play, on its own clock, as
+//! cpal's callback infos do, so the callback never reads a clock of its own. The component needs
+//! those times for an audio frame's replayed flag (written more than 250 ms after capture,
+//! decision D81) and for playback accounting. A frame's age is the newest buffer's time less its
+//! own, so the component never maps one clock onto another. A device's times come from its
+//! stream's timestamps; a test source or sink derives them from its sample position, so both stay
+//! deterministic however fast the test paces its buffers and under paused tokio time.
 
 use std::io;
+use std::time::Duration;
 
 /// The shape of a stream's samples: interleaved `f32` at this rate and channel count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,11 +27,30 @@ pub struct StreamFormat {
     pub channels: u16,
 }
 
-/// What a source calls with each captured buffer of interleaved samples.
-pub type CaptureCallback = Box<dyn FnMut(&[f32]) + Send + 'static>;
+/// When a captured buffer was captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaptureInfo {
+    /// When its first sample reached the source, on the source's clock: time since the source's
+    /// first stream started, which a later stream of the same source continues, so a mute and
+    /// unmute do not reset it.
+    pub captured_at: Duration,
+}
 
-/// What a sink calls to have each playback buffer of interleaved samples filled.
-pub type RenderCallback = Box<dyn FnMut(&mut [f32]) + Send + 'static>;
+/// When a playback buffer will play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderInfo {
+    /// When its first sample will leave the sink, on the sink's clock: time since the sink's
+    /// first stream started, which a later stream of the same sink continues.
+    pub plays_at: Duration,
+}
+
+/// What a source calls with each captured buffer of interleaved samples and when it was
+/// captured.
+pub type CaptureCallback = Box<dyn FnMut(&[f32], CaptureInfo) + Send + 'static>;
+
+/// What a sink calls to have each playback buffer of interleaved samples filled, with when it
+/// will play.
+pub type RenderCallback = Box<dyn FnMut(&mut [f32], RenderInfo) + Send + 'static>;
 
 /// Captured audio: the microphone, or a test's WAV file or room mixer.
 pub trait AudioSource: Send {

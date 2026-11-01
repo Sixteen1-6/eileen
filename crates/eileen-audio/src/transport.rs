@@ -5,9 +5,10 @@
 //! transport (`eileen_runtime::speech`) and `eileen-cli` implements this trait over it.
 //!
 //! Like the ports of section 3.3.15, the trait and the byte traits beneath [`SpeechConnection`]
-//! use std types only, so an implementation needs nothing from this crate's async runtime. The
-//! connection's halves add the deadlines: every read and every write says how long it may wait,
-//! and they run on a tokio runtime with its timer enabled.
+//! use std types only, so an implementation needs nothing from this crate's async runtime. Every
+//! wait has a deadline: `accept` takes one, which the transport keeps, and the connection's halves
+//! add their own, since every read and every write says how long it may wait; the halves run on a
+//! tokio runtime with its timer enabled.
 
 use std::fmt;
 use std::future::Future;
@@ -20,19 +21,37 @@ pub type IoFuture<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + '
 
 /// Where the component's connections to the speech process come from.
 pub trait SpeechTransport: Send + Sync {
-    /// Waits for the next connection whose `Hello` the transport has verified. `None` once the
-    /// transport has shut down and will make no more.
+    /// Waits at most `within` for the next connection whose `Hello` the transport has verified.
     ///
-    /// The wait has no deadline of its own: the speech process connects only once it listens (10
-    /// to 20 s after it starts, or after a reload), the component keeps capturing into its ring
-    /// meanwhile and races this wait against its effects and shutdown, and the core's 120 s load
-    /// deadline (section 6.3) bounds how long the process may take.
-    fn accept(&self) -> Pin<Box<dyn Future<Output = Option<SpeechConnection>> + Send + '_>>;
+    /// The speech process connects only once it listens, 10 to 20 s after it starts or after a
+    /// reload, so the component calls this in a loop: each [`AcceptError::TimedOut`] is its chance
+    /// to report that speech is still not connected, and the transport stays usable after one.
+    /// The component keeps capturing into its ring meanwhile and races this wait against its
+    /// effects and shutdown, so the future must be cancel safe: one dropped before it completes
+    /// has taken no connection. [`AcceptError::Shutdown`] once the transport will make no more.
+    fn accept(
+        &self,
+        within: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<SpeechConnection, AcceptError>> + Send + '_>>;
 
     /// Closes a connection the component is done with, because it broke or the codec refused a
     /// frame. It only closes it: the speech process exits when its connection closes, the
     /// transport reports the exit, and the core decides the restart.
     fn close(&self, connection: SpeechConnection);
+}
+
+/// Why [`SpeechTransport::accept`] returned no connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AcceptError {
+    /// No verified connection came within the deadline. The transport stays usable.
+    #[error("no speech connection came within {within:?}")]
+    TimedOut {
+        /// The deadline that passed.
+        within: Duration,
+    },
+    /// The transport has shut down and will make no more connections.
+    #[error("the speech transport has shut down")]
+    Shutdown,
 }
 
 /// The reading side of a connection's bytes, as a transport supplies it.

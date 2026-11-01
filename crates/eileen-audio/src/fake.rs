@@ -18,7 +18,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, DuplexStream, ReadHalf, W
 use tokio::sync::Mutex;
 
 use crate::transport::{
-    ByteRead, ByteWrite, ConnectionId, IoFuture, SpeechConnection, SpeechTransport,
+    AcceptError, ByteRead, ByteWrite, ConnectionId, IoFuture, SpeechConnection, SpeechTransport,
 };
 
 /// The maxima of a memory transport's queues.
@@ -60,7 +60,8 @@ pub fn memory_transport(limits: MemoryLimits) -> (MemoryTransport, StandIns) {
 }
 
 /// The component's side of a memory transport. Once its [`StandIns`] is dropped and every
-/// waiting connection has been accepted, [`SpeechTransport::accept`] returns `None`.
+/// waiting connection has been accepted, [`SpeechTransport::accept`] returns
+/// [`AcceptError::Shutdown`].
 #[derive(Debug)]
 pub struct MemoryTransport {
     pending: Mutex<Receiver<SpeechConnection>>,
@@ -68,8 +69,19 @@ pub struct MemoryTransport {
 }
 
 impl SpeechTransport for MemoryTransport {
-    fn accept(&self) -> Pin<Box<dyn Future<Output = Option<SpeechConnection>> + Send + '_>> {
-        Box::pin(async move { self.pending.lock().await.recv().await })
+    /// Cancel safe: the lock and the channel's `recv` take nothing until they complete.
+    fn accept(
+        &self,
+        within: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<SpeechConnection, AcceptError>> + Send + '_>> {
+        Box::pin(async move {
+            let next = async { self.pending.lock().await.recv().await };
+            match tokio::time::timeout(within, next).await {
+                Err(_elapsed) => Err(AcceptError::TimedOut { within }),
+                Ok(Some(connection)) => Ok(connection),
+                Ok(None) => Err(AcceptError::Shutdown),
+            }
+        })
     }
 
     /// Drops the connection, which closes both directions, and records its id.
@@ -170,7 +182,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{ConnectRefused, MemoryLimits, NotHandedBack, memory_transport};
-    use crate::transport::{ConnectionError, ConnectionId, SpeechConnection, SpeechTransport};
+    use crate::transport::{
+        AcceptError, ConnectionError, ConnectionId, SpeechConnection, SpeechTransport,
+    };
 
     const WAIT: Duration = Duration::from_secs(1);
 
@@ -180,7 +194,7 @@ mod tests {
 
     /// Takes the next connection, or fails the test if none is waiting within `WAIT`.
     async fn accept(transport: &dyn SpeechTransport) -> SpeechConnection {
-        tokio::time::timeout(WAIT, transport.accept()).await.expect("accepted").expect("open")
+        transport.accept(WAIT).await.expect("accepted")
     }
 
     async fn read_some(connection: &mut SpeechConnection) -> Result<Vec<u8>, ConnectionError> {
@@ -192,8 +206,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_stand_in_connected_late_is_accepted_and_carries_bytes_both_ways() {
         let (transport, mut stand_ins) = memory_transport(MemoryLimits::default());
-        let none_yet = tokio::time::timeout(Duration::from_secs(5), transport.accept()).await;
-        assert!(none_yet.is_err(), "nothing to accept before a stand-in connects");
+        let five = Duration::from_secs(5);
+        let none_yet = transport.accept(five).await;
+        assert!(
+            matches!(none_yet, Err(AcceptError::TimedOut { within }) if within == five),
+            "nothing to accept before a stand-in connects: {none_yet:?}"
+        );
 
         let mut stand_in = stand_ins.connect().unwrap();
         let mut component = accept(&transport).await;
@@ -203,6 +221,23 @@ mod tests {
         assert_eq!(read_some(&mut stand_in).await.unwrap(), b"audio", "component to stand-in");
         stand_in.writer().write_all(b"event", WAIT).await.unwrap();
         assert_eq!(read_some(&mut component).await.unwrap(), b"event", "stand-in to component");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn accept_times_out_again_and_again_and_the_transport_stays_usable() {
+        let (transport, mut stand_ins) = memory_transport(MemoryLimits::default());
+        let start = tokio::time::Instant::now();
+        for _ in 0..3 {
+            let waited = transport.accept(WAIT).await;
+            assert_eq!(waited.unwrap_err(), AcceptError::TimedOut { within: WAIT }, "timed out");
+        }
+        assert_eq!(start.elapsed(), WAIT * 3, "each wait took exactly its deadline");
+
+        let abandoned = tokio::time::timeout(WAIT / 2, transport.accept(WAIT)).await;
+        assert!(abandoned.is_err(), "a wait dropped part way");
+        let stand_in = stand_ins.connect().unwrap();
+        let component = accept(&transport).await;
+        assert_eq!(component.id(), stand_in.id(), "the next connection is still accepted");
     }
 
     #[tokio::test(start_paused = true)]
@@ -304,8 +339,9 @@ mod tests {
         let (transport, mut stand_ins) = memory_transport(MemoryLimits::default());
         let _waiting = stand_ins.connect().unwrap();
         drop(stand_ins);
-        assert!(transport.accept().await.is_some(), "a waiting connection is still accepted");
-        assert!(transport.accept().await.is_none(), "then no more");
+        assert!(transport.accept(WAIT).await.is_ok(), "a waiting connection is still accepted");
+        let after = transport.accept(WAIT).await;
+        assert!(matches!(after, Err(AcceptError::Shutdown)), "then no more: {after:?}");
 
         let (transport, mut stand_ins) = memory_transport(MemoryLimits::default());
         drop(transport);
