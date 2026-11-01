@@ -63,7 +63,17 @@ fn summary(line: &Line) -> String {
         }
         Line::Control(Message::Cancel { request_id }) => format!("cancel {request_id}"),
         Line::Malformed { .. } => "malformed".to_owned(),
-        other => panic!("a control seed parsed as {other:?}"),
+        other @ (Line::Init(_)
+        | Line::Assistant(_)
+        | Line::ToolResults(_)
+        | Line::TextDelta(_)
+        | Line::Partial
+        | Line::RateLimit(_)
+        | Line::HookStarted(_)
+        | Line::HookResponse(..)
+        | Line::PermissionDenied(_)
+        | Line::Result(_)
+        | Line::Unknown { .. }) => panic!("a control seed parsed as {other:?}"),
     }
 }
 
