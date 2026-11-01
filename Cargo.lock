@@ -927,6 +927,7 @@ dependencies = [
  "clap",
  "eileen-contracts",
  "eileen-trace",
+ "insta",
  "serde_json",
  "thiserror 2.0.21",
 ]

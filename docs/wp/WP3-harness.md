@@ -165,6 +165,28 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   those. The fuzz entry now also fails when a tool input that kept its shape holds anything the
   redactor would still replace, or a cut input or skill call holds a GitHub, API or Slack token.
 
+- `wp3/session-files`: what each Claude session spawns with, in a new `eileen_harness::session`
+  module. `session_files` turns a `SessionSpec` and the `HarnessConfig` (which gains
+  `data_dir`, `hook_hold_s`, `shim_exe` and `mcp`) into the command line of section 2.5, the
+  settings file and the MCP config under `<data_dir>/run/<session>/`, and the environment of
+  section 2.12. The settings file holds `disableSkillShellExecution: true`,
+  `fileCheckpointingEnabled: false`, the `PreToolUse` guard with `onFailure: "block"` and a
+  10 s timeout, the `PermissionRequest` tripwire, and the seven bus hooks at 5 s each, every
+  one sending `Bearer $EILEEN_HOOK_TOKEN` and `$EILEEN_SESSION_ID` through `allowedEnvVars`.
+  The MCP config starts `eileen-shim` with the session's pipe and role and names its token as
+  `${EILEEN_SHIM_TOKEN}`; approved third-party servers follow with Eileen's tokens blanked,
+  and each one's rung comes back beside the files from `mcp.servers.<app>.rung` (`app_mcp`
+  when the app has no entry). Every session gets `ENABLE_CLAUDEAI_MCP_SERVERS=false`,
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1`, its id,
+  both tokens, `TRACEPARENT` and `MCP_TOOL_TIMEOUT=(hook_hold_s + 30) * 1000`.
+  `CLAUDE_FLAGS` and `CLAUDE_UNLISTED_FLAGS` are the constants the nightly drift job reads.
+  Insta snapshots in `session::tests` hold the three files for a coding worker, a
+  computer-use worker and the brain, and the other tests check the denylist and the
+  pass-through list, the brain's allowlist, the timeout, that no token reaches a file or the
+  command line, memory and checkpointing off everywhere, `Task,Agent` in `--disallowedTools`,
+  and that no path lies under a `.claude` folder. This is the environment half of acceptance 4
+  and the CI half of acceptance 8 ("every session spawns with vendor memory off").
+
 ## Surprises
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
@@ -259,6 +281,29 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   `TurnDone`, so the turn still ends.
 - `serde` is not a dependency: the parser walks `serde_json::Value`, which tolerates the fields
   a CLI release adds, and an unused `serde` would fail cargo-machete.
+
+- The session files leave out what waits on WP3's owner-run probes or on later pull requests:
+  `--restricted`, `--add-dir` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, the notes
+  hub's `--append-system-prompt-file`, `--fallback-model` (it needs the resolved alias of the
+  next model down), the brain's own `--system-prompt`, the D77 receipt hooks (`PostToolUse` on
+  the memory folders and `InstructionsLoaded`, moot while `MemorySpec` is off) and the
+  `dev` toolset's shim. Each is one more flag or entry beside the ones built.
+- The brain is the session whose toolsets hold `brain`: `SessionSpec` has no brain kind. It
+  gets `--tools ""` and `--allowedTools mcp__eileen__*` whatever the spec lists, and a brain
+  spec with the worker denylist is refused, so the brain never sees the user's environment.
+- Each hook posts to `http://127.0.0.1:<port>/<path>/<event>`, with `HookEndpoint.path` as the
+  session's prefix and the event in kebab case (`pre-tool-use`, `stop-failure`), the layout the
+  contract test used. WP2's endpoint serves these paths.
+- The shim's token reaches it through `${EILEEN_SHIM_TOKEN}` in the MCP config's `env`, which
+  the CLI expands from its own environment, and its pipe and role through `--pipe`, `--role`
+  and, for a worker, `--session`; WP2's shim reads them. The drift job checks that the CLI
+  accepts the generated config.
+- The session's span in `TRACEPARENT` is the low 64 bits of its `ws_` ULID, so it is stable and
+  needs no randomness.
+- Environment names compare without ASCII case on every OS, because Windows keeps `Path` and a
+  user can set `github_token`; a session variable replaces every spelling of its name.
+- A subagent tool in a spec's `builtin_tools` or `allowed_tools` is dropped, not refused: the
+  session still starts, without it.
 
 ## Outcome
 
