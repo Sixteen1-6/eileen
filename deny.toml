@@ -77,7 +77,7 @@ deny = [
   # D82: allocation-counter declares its own #[global_allocator]. eileen-audio's allocation tests
   # take it as a dev-dependency; this keeps every other crate from taking it. cargo-deny cannot tell
   # a dev-dependency from a normal one, so check 15 (BUILD.md section 4b.3, WP0's phase B) holds
-  # that half.
+  # that half. Until eileen-audio takes the crate, cargo-deny warns that the wrapper is unused.
   { crate = "allocation-counter", wrappers = ["eileen-audio"], reason = "D82: only eileen-audio's tests may take it" },
 ]
 
