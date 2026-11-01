@@ -39,3 +39,8 @@ fn replay(target: &str, entry: fn(&[u8]) -> Result<(), &'static str>) {
 fn stream_json_line_corpus_replays() {
     replay("stream_json_line", fuzz_entry::stream_json_line);
 }
+
+#[test]
+fn control_message_corpus_replays() {
+    replay("control_message", fuzz_entry::control_message);
+}

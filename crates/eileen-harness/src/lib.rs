@@ -10,7 +10,8 @@
 //! - The harness [`component`] (the brain's Primary, Spare and Fallback slots, the workers) and
 //!   `eileen bench brain`, `eileen claude` and `eileen doctor claude` ([`cli`]).
 //! - The typed stream-json parser and its mappings to `WorkerEvent` and `BrainEvent`
-//!   ([`stream`]).
+//!   ([`stream`]), and the stdio control protocol's lines with the interrupt Eileen writes
+//!   ([`stream::control`]).
 //! - [`SUBAGENT_TOOLS`], the subagent tools every session disallows in v0.1.
 //! - The `stream_json_line` and `control_message` fuzz targets' entries (`fuzz_entry`).
 //!
@@ -32,6 +33,12 @@
 //!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
 //!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
 //!   `stream_json_line` fuzz target).
+//! - An interrupt is written only when `system/init` offers it, at most
+//!   `stream::control::MAX_OPEN_REQUESTS` are open at once, and a `control_response` settles
+//!   only a request Eileen sent and has not seen answered; one with no `request_id` is
+//!   malformed, and one to a request that is not open settles nothing
+//!   (`stream::control::SettleError::NotOpen`; `stream::control::tests`, and the
+//!   `control_message` fuzz target).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -53,8 +60,7 @@
 //! - Layers: unit tests for the parser and the flags (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
 //!   against `eileen-stub-harness`, the two fuzz targets with their corpora replayed in
-//!   `it::fuzz_corpus` (`control_message` once its parser lands), and `real_claude::` tests on
-//!   the owner's PC.
+//!   `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC.
 //! - A bug here starts as a stream-json line that became `Unknown`, or a session whose init
 //!   lists a server it should not.
 //!
