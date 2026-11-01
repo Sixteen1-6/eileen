@@ -321,14 +321,12 @@ pub fn doctor(
     let env: Vec<(String, String)> =
         inputs.host_vars.iter().filter(|(name, _)| !is_denylisted(name)).cloned().collect();
     let auth = auth_status(&install.exe, &env, runner);
-    let mut version = install.version;
-    let mut toolchains = None;
-    if auth == AuthCheck::SignedIn {
-        if version.is_none() {
-            version = ask_version(&install.exe, &env, runner);
-        }
-        toolchains = Some(find_toolchains(inputs, &env, runner));
-    }
+    let signed_in = auth == AuthCheck::SignedIn;
+    let version = match install.version {
+        None if signed_in => ask_version(&install.exe, &env, runner),
+        known => known,
+    };
+    let toolchains = signed_in.then(|| find_toolchains(inputs, &env, runner));
     let version = VersionCheck::of(version);
     let running = running_check(inputs.running.as_deref(), version.version());
     Ok(DoctorReport { install, version, auth, running, toolchains })

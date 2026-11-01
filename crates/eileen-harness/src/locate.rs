@@ -427,7 +427,7 @@ pub fn is_desktop_app_copy(path: &Path) -> bool {
 }
 
 /// Whether two names are one, without regard to ASCII case.
-fn named(name: &str, wanted: &str) -> bool {
+const fn named(name: &str, wanted: &str) -> bool {
     name.eq_ignore_ascii_case(wanted)
 }
 
