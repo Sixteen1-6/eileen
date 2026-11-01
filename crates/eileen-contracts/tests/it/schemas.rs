@@ -288,12 +288,6 @@ fn no_snapshot_file_is_unreferenced() {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(&folder).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
-        // A `.snap.new` is insta's pending file from a snapshot test that failed in this same
-        // run and reports the failure itself (CI keeps the file for the lane to take). Like
-        // cargo insta's own unreferenced check, this one leaves it alone.
-        if name.ends_with(".snap.new") {
-            continue;
-        }
         assert!(expected.contains(&name), "{name} in {} belongs to no test", folder.display());
         found.push(name);
     }

@@ -25,8 +25,9 @@
 //! - `pr-meta` reads only commits, never the working tree, and only `tests:` and `scenarios:`
 //!   lines as ids (test `hyphenated_prose_is_not_an_id`); its path classes equal the `plan`
 //!   job's filters (test `ci_filters_match_the_classifier`).
-//! - Every CI job that runs tests sets `INSTA_UPDATE=new` on them and keeps the `.snap.new` and
-//!   `.pending-snap` files a failure leaves (test `ci_keeps_pending_snapshots`).
+//! - Every CI step that runs tests sets `INSTA_UPDATE=new` and `INSTA_PENDING_DIR`, its job keeps
+//!   the pending snapshots a failure leaves under `target/`, and `hygiene` rejects one committed
+//!   to the tree (test `ci_keeps_pending_snapshots`).
 //! - The desktop group's filter equals `.config/nextest.toml`'s (test
 //!   `cargo_run::tests::the_desktop_filter_is_nextests`).
 //! - Every failure names its check or step, where it is, the fix and the command to rerun.
