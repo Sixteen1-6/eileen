@@ -74,8 +74,7 @@ mod tests {
     fn cache_savers_keep_only_the_pinned_toolchain() {
         let channel = TOOLCHAIN
             .lines()
-            .find_map(|line| line.trim().strip_prefix("channel = "))
-            .map(|value| value.trim_matches('"'))
+            .find_map(|line| Some(line.trim().strip_prefix("channel = ")?.trim_matches('"')))
             .unwrap_or_else(|| panic!("rust-toolchain.toml has no channel"));
         // The key hashes `rustc -vV` of every installed toolchain, and with the environment hash
         // turned off it also drops the lockfile hash, so the cache would never be saved again.
