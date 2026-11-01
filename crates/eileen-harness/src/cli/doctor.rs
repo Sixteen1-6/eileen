@@ -419,14 +419,10 @@ fn ask_vswhere(
 
 /// The first `name` a worker would run from `dirs`: `name.exe` or `name.cmd` on Windows.
 fn on_path(dirs: &[PathBuf], name: &str, windows: bool) -> Option<PathBuf> {
-    let files = if windows {
-        vec![format!("{name}.exe"), format!("{name}.cmd")]
-    } else {
-        vec![name.to_owned()]
-    };
+    let suffixes: &[&str] = if windows { &[".exe", ".cmd"] } else { &[""] };
     dirs.iter()
         .filter(|dir| !under_claude_folder(dir))
-        .flat_map(|dir| files.iter().map(move |file| dir.join(file)))
+        .flat_map(|dir| suffixes.iter().map(move |suffix| dir.join(format!("{name}{suffix}"))))
         .find(|path| path.is_file())
 }
 
