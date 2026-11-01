@@ -188,9 +188,10 @@ impl Harness {
         self.core.step(mono, &mut self.rng, input, &mut effects);
         let mut rest = Vec::new();
         for effect in effects {
-            match effect.body {
-                Effect::Hud(state) => self.hud = Some(*state),
-                body => rest.push(body),
+            if let Effect::Hud(state) = effect.body {
+                self.hud = Some(*state);
+            } else {
+                rest.push(effect.body);
             }
         }
         rest

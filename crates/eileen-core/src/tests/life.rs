@@ -19,9 +19,14 @@ const KILL: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::HangDumpThen
 
 /// The timer set in `effects` for `at_ms` of virtual time.
 fn timer_at(effects: &[Effect], at_ms: u64) -> Option<TimerId> {
-    effects.iter().find_map(|effect| match effect {
-        Effect::SetTimer { id, at } if *at == MonoTime(at_ms * 1_000_000) => Some(*id),
-        _ => None,
+    effects.iter().find_map(|effect| {
+        if let Effect::SetTimer { id, at } = effect
+            && *at == MonoTime(at_ms * 1_000_000)
+        {
+            Some(*id)
+        } else {
+            None
+        }
     })
 }
 
@@ -128,9 +133,14 @@ fn the_backoff_doubles_and_starts_over_after_a_minute_up() {
         let effects = h.step(exited());
         let (id, at) = effects
             .iter()
-            .find_map(|e| match e {
-                Effect::SetTimer { id, at } if at.0 > down * 1_000_000 => Some((*id, *at)),
-                _ => None,
+            .find_map(|e| {
+                if let Effect::SetTimer { id, at } = e
+                    && at.0 > down * 1_000_000
+                {
+                    Some((*id, *at))
+                } else {
+                    None
+                }
             })
             .expect("a restart timer");
         let at_ms = at.0 / 1_000_000;
