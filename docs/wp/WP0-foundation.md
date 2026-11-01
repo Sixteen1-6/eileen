@@ -27,7 +27,7 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
-| 8 | `wp0/ci-cache-fresh` | Pull request #139, opened 2026-11-01, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. A throwaway probe job, reverted, ran the steps that only run on `main` in run 41310530260 |
+| 8 | `wp0/ci-cache-fresh` | Pull request #139, opened 2026-11-01, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974 |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -127,19 +127,22 @@ misses. On a restore that is not a full match, rust-cache v2.9.3 deletes every e
 `target/debug/build`, `.fingerprint` and `deps` dated more than a week ago, and artifacts carried
 from key to key keep their first build's date, so any `Cargo.toml` or `Cargo.lock` change a week
 after a dependency was first built rebuilt it. `logic-linux`, `windows-clippy` and `windows-test`
-now end with a step that runs only where they save (`main`) and gives every file and folder
-below those three folders one and the same date before rust-cache's save. One date, not each
-entry's own moment, because cargo rebuilds a unit whose dependency's output is newer than its own
-and counts equal dates as fresh: dating only the top-level entries would leave each build
-script's compiled program older than the libraries it was built from, so every restore would
-rerun those scripts and rebuild what depends on them. They also keep only the toolchain
-`rust-toolchain.toml` pins before rust-cache runs, on every event, because rust-cache hashes
-`rustc -vV` of every installed toolchain into the key and the runner images carry their own
-stable. A `prune-caches` job, on pushes to `main` only and after those three jobs, keeps the
-newest entry of each shared key (`linux`, `win-clippy`, `win-test`) and deletes the older ones
-with `gh cache delete`, holding `actions: write` and nothing else; it is upkeep, so `all-green`
-does not need it. The tests in `xtask::workflows::tests` hold `ci.yml` to all of it, and hold
-every job in any workflow that restores one of those keys to the same toolchain step.
+now end with a step that runs only where they save (`main`) and gives every file and folder below
+those three folders one and the same date before rust-cache's save. One date, not each entry's own
+moment, because cargo rebuilds a unit whose dependency's output is newer than its own and counts
+equal dates as fresh: dating only the top-level entries would leave each build script's compiled
+program older than the libraries it was built from, so every restore would rerun those scripts and
+rebuild what depends on them. A temporary probe in run 41314107974, after `logic-linux`'s own
+builds, dated only the top-level entries and ran clippy and `cargo nextest run --no-run` again:
+cargo rebuilt 222 units. After the one-date step it rebuilt none, and none in `windows-clippy`
+either. The three jobs also keep only the toolchain `rust-toolchain.toml` pins before rust-cache
+runs, on every event, because rust-cache hashes `rustc -vV` of every installed toolchain into the
+key and the runner images carry their own stable. A `prune-caches` job, on pushes to `main` only and
+after those three jobs, keeps the newest entry of each shared key (`linux`, `win-clippy`,
+`win-test`) and deletes the older ones with `gh cache delete`, holding `actions: write` and nothing
+else; it is upkeep, so `all-green` does not need it. The tests in `xtask::workflows::tests` hold
+`ci.yml` to all of it, and hold every job in any workflow that restores one of those keys to the
+same toolchain step.
 
 The Linux desktop lane (`linux-desktop.yml`, WP10's) restores the `linux` key without saving, and
 until now matched `main`'s entry in full, because both kept the image's stable 1.99.1 beside the
