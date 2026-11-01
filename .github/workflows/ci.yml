@@ -213,26 +213,6 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
 
-  loom-audio-check:
-    name: loom-audio-check (temporary, not part of the change)
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the toolchain rust-toolchain.toml pins
-        run: rustup toolchain install --no-self-update && rustup show active-toolchain
-      - name: eileen-audio's loom models, warnings denied
-        env:
-          RUSTFLAGS: --cfg loom -D warnings
-        run: cargo test --locked -p eileen-audio --lib ring::concurrency
-      - name: eileen-audio's clippy under loom
-        env:
-          RUSTFLAGS: --cfg loom
-        run: cargo clippy --locked -p eileen-audio --all-targets -- -D warnings
-
   all-green:
     name: all-green
     needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]
