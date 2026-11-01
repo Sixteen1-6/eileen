@@ -676,15 +676,17 @@ source: crates/eileen-contracts/tests/it/schemas.rs
                   "type": "string"
                 },
                 "tool_use_id": {
-                  "description": "The vendor's id for the use.",
-                  "type": "string"
+                  "description": "The vendor's id for the use, when the CLI sends one (2.1.304's body carries none).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
                 "request",
                 "tool_name",
-                "tool_input",
-                "tool_use_id"
+                "tool_input"
               ],
               "type": "object"
             }

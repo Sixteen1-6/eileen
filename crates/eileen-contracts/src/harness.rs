@@ -278,8 +278,8 @@ pub enum HookRequest {
         tool_name: String,
         /// Its input.
         tool_input: Untrusted<Value>,
-        /// The vendor's id for the use.
-        tool_use_id: String,
+        /// The vendor's id for the use, when the CLI sends one (2.1.304's body carries none).
+        tool_use_id: Option<String>,
     },
     /// A notification from the CLI.
     Notification {
