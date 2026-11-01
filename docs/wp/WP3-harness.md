@@ -61,14 +61,26 @@ permission route, which section 6.5's amendment of that date records (see Goal).
 
 - `wp3/worker-tools` (#126, draft): pins the provisional `tools/worker` module of
   `eileen-contracts` (section 3.3, `modules.toml`), the worker toolset row of section 3.3.9.
-  `Approve` now documents route 2 of section 2.5 and gains `matches_ask` (the same
-  `tool_use_id` and an equal input); `ApproveReply` holds the two shapes the CLI accepted,
+  `Approve` now documents route 2 of section 2.5 and gains `matches_ask` (the same tool, the
+  same `tool_use_id` and an equal input as the pending ask). `PendingAsk`, built only from the
+  guard's `PreToolUse` request, holds the ask until the user decides, and `ApproveReply::allow`
+  consumes it, so an allow carries the guard's stored input and never the call's.
+  `ApproveReply` holds the two shapes the CLI accepted,
   `{"behavior":"allow","updatedInput":<input>}` and `{"behavior":"deny","message":...}`, with
-  `text()` and `content()` for the one text block. Tests in `eileen-contracts::it::wire` check
-  the call and both replies against `docs/research/fixtures/wp3-approval/mcp-approve.json` and
-  the guard's ask in `hooks.json`, and a property test shows `allow` carries any stored value
-  unchanged. None of the acceptance items above closes with it; it is the contract the
-  dispatcher (WP2) and `wp3/worker-brain` build on.
+  `text()` and `content()` for the one text block. The same pull request makes
+  `HookRequest::PermissionRequest.tool_use_id` optional, as section 6.5 directs, because the
+  CLI's `PermissionRequest` body carries none. Tests in `eileen-contracts::it::wire` check the
+  call and both replies against copies of `mcp-approve.json` and `hooks.json` from
+  `docs/research/fixtures/wp3-approval/` (under `tests/it/fixtures/wp3-approval/`, so a change
+  to them runs the Rust lanes), a property test shows `allow` carries any stored value
+  unchanged, and compile-fail doc tests show the call's input cannot become an allow. None of
+  the acceptance items above closes with it; it is the contract the dispatcher (WP2) and
+  `wp3/worker-brain` build on.
+- For WP2's dispatcher: hold each ask as the `PendingAsk` the guard's request made, keyed by
+  session and `tool_use_id`, and test an `approve` call whose input differs from the stored one
+  (refused and logged as a security event, never answered `allow`). The weekly contract test's
+  case of an `updatedInput` that differs from the stored input (section 2.5) is the CLI's side
+  of the same rule.
 
 ## Surprises
 
@@ -79,11 +91,20 @@ permission route, which section 6.5's amendment of that date records (see Goal).
 
 ## Decisions
 
-- `ApproveReply::allow` takes an `Untrusted<Value>`, the type of the guard's stored
-  `HookRequest::PreToolUse.tool_input`, while `Approve.input` stays a plain `Value`. So the
-  call's own input does not type-check as an allow, which section 2.5's echo rule needs
+- An allow is built only from a `PendingAsk`, and a `PendingAsk` only from the guard's
+  `PreToolUse` request (`PendingAsk::from_guard_ask`), which section 2.5's echo rule needs
   (finding 7 of the contract report: the CLI runs `updatedInput` without calling the guard
-  again). A compile-fail doc test on `allow` keeps it so.
+  again). The first design took any `Untrusted<Value>`, which did not hold the rule: the
+  shim's `CallLine.args`, a `PermissionRequest`'s input and `Untrusted::new(call.input)` all
+  have that type. Now `PendingAsk`'s fields are private, the `Allow` variant's field is an
+  `AskedInput` whose field is private, `ApproveReply` is not deserializable, and `PendingAsk`
+  is not `Clone`, so `allow` consuming it allows each ask once. Compile-fail doc tests show
+  that `allow(Untrusted::new(call.input))`, the variant written out with that input, an
+  `AskedInput` made from it and a parsed reply do not compile. The one way around it is to
+  write a `HookRequest::PreToolUse` out by hand from the call, which review catches; the
+  dispatcher's own tests still check the input comes from the stored ask.
+- `Approve::matches_ask` also compares the tool's name, which section 2.5 does not ask for: the
+  CLI sends it and the stored ask has it, and a mismatch can only be an error or an attack.
 - `ApproveReply::text()` cannot fail; if `serde_json` ever failed to write a reply, the text
   would be a denial, never an allow.
 - An approve result is never an error, a denial included: the CLI reads an errored `approve`
