@@ -112,6 +112,27 @@ jobs:
           key: ${{ steps.apt-cache-key.outputs.key }}
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). ci.yml's logic-linux saves the `linux` key on main after the same
+        # step, so this lane computes that key only if it drops the image's stable toolchain too.
+        # xtask's workflow tests hold the two steps to the same text.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: linux

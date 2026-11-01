@@ -13,11 +13,6 @@ mod tests {
         [("logic-linux", "linux"), ("windows-clippy", "win-clippy"), ("windows-test", "win-test")];
     /// The condition rust-cache's `save-if` uses in every saving job.
     const ON_MAIN: &str = "github.ref == 'refs/heads/main'";
-    /// Jobs, by workflow file, that restore a saved key but still keep the runner image's other
-    /// toolchains, so their key differs from the one `main` saves and they find no full match.
-    // FIXME(#144): the Linux desktop lane gains the step in its own pull request; this list then
-    // empties, and the test below fails until it does.
-    const WITHOUT_THE_TOOLCHAIN_STEP: [(&str, &str); 1] = [("linux-desktop.yml", "session")];
 
     fn indent_of(line: &str) -> usize {
         line.len() - line.trim_start().len()
@@ -201,28 +196,21 @@ mod tests {
                 if !saved {
                     continue;
                 }
-                let pending =
-                    WITHOUT_THE_TOOLCHAIN_STEP.iter().any(|(f, j)| *f == file && *j == name);
-                let toolchain = steps.iter().position(|step| *step == reference);
-                if pending {
-                    assert!(toolchain.is_none(), "{file} {name} has the step now: empty the list");
-                } else {
-                    let toolchain = toolchain.unwrap_or_else(|| {
+                let toolchain =
+                    steps.iter().position(|step| *step == reference).unwrap_or_else(|| {
                         panic!("{file} {name}: no step identical to {}'s: {reference}", SAVERS[0].0)
                     });
-                    assert!(toolchain < cache, "{file} {name}: the toolchain step comes first");
-                }
+                assert!(toolchain < cache, "{file} {name}: the toolchain step comes first");
                 restorers.push((file.clone(), name.to_owned()));
             }
         }
-        for (file, name) in WITHOUT_THE_TOOLCHAIN_STEP {
+        // The savers, and the Linux desktop lane, which restores `linux` and never saves.
+        let expected = SAVERS.iter().map(|(name, _)| ("ci.yml", *name));
+        for (file, name) in expected.chain([("linux-desktop.yml", "session")]) {
             assert!(
                 restorers.iter().any(|(f, n)| f == file && n == name),
-                "{file} {name} no longer restores a saved key: drop it from the list"
+                "{file} {name} was checked: {restorers:?}"
             );
-        }
-        for (name, _) in SAVERS {
-            assert!(restorers.iter().any(|(f, n)| f == "ci.yml" && n == name), "{name} was seen");
         }
     }
 
