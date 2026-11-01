@@ -11,8 +11,8 @@ use eileen_trace::Redactor;
 use serde_json::{Value, json};
 
 use super::{
-    Block, BrainAt, Denial, DenialKind, HookOutcome, Line, MAX_LINE_BYTES, MAX_TOOL_INPUT_BYTES,
-    ToolResult, brain_events, parse, worker_events,
+    Block, BrainAt, Denial, DenialKind, HookOutcome, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES,
+    MAX_TOOL_INPUT_BYTES, ToolResult, brain_events, parse, worker_events,
 };
 
 const EVENTS: &str = include_str!("../../tests/fixtures/wp3-approval/stream-events.json");
@@ -317,6 +317,14 @@ fn a_skill_call_becomes_skill_invoked() {
     let unnamed = br#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"Skill","input":{}}]}}"#;
     let events = worker_events(parse(unnamed, &Redactor::new()), PID);
     assert!(matches!(&events[..], [WorkerEvent::ToolUse { .. }]), "no skill named: {events:?}");
+    let long = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_3", "name": "Skill",
+          "input": { "skill": format!("ghp_abcdefghijklmnopqrstuvwxyz0123456789:{}", "s".repeat(1_000)) } },
+    ] } });
+    let Line::Assistant(blocks) = parse_value(&long) else { panic!("an assistant line") };
+    let [Block::SkillInvoked { name, .. }] = &blocks[..] else { panic!("{blocks:?}") };
+    assert!(name.len() <= MAX_SKILL_NAME_BYTES, "a skill's name is capped: {} bytes", name.len());
+    assert!(name.starts_with("[redacted:github_token]"), "and redacted first: {name}");
 }
 
 #[test]
@@ -365,8 +373,35 @@ fn a_tool_input_is_redacted_and_capped() {
     let Value::String(cut) = long.input.get() else {
         panic!("an input over the cap is cut to text")
     };
-    assert!(cut.len() <= MAX_TOOL_INPUT_BYTES, "{} bytes", cut.len());
     assert!(cut.starts_with(r#"{"content":"xxx"#), "it keeps the start: {cut}");
+    let wire = long.input.get().to_string().len();
+    assert!(wire <= MAX_TOOL_INPUT_BYTES, "{wire} bytes as JSON, quotes and escapes counted");
+}
+
+#[test]
+fn a_secret_across_the_cut_is_redacted_whole() {
+    // The token starts 2,032 bytes into the input's JSON text and ends 40 bytes later, so a cut
+    // made before the redaction would keep `ghp_` and the token's first characters, too few
+    // for the redactor to find them afterwards.
+    let command = format!(
+        "{}ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}",
+        "x".repeat(2_020),
+        "y".repeat(200)
+    );
+    let line = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": { "command": command } },
+    ] } });
+    let Line::Assistant(blocks) = parse(line.to_string().as_bytes(), &Redactor::new()) else {
+        panic!("an assistant line")
+    };
+    let [Block::ToolUse(call)] = &blocks[..] else { panic!("{blocks:?}") };
+    let Value::String(cut) = call.input.get() else {
+        panic!("an input over the cap is cut to text")
+    };
+    assert!(!cut.contains("ghp_"), "no part of the token is left: {cut}");
+    assert!(cut.starts_with(r#"{"command":"xxx"#), "it keeps the start");
+    let wire = call.input.get().to_string().len();
+    assert!(wire <= MAX_TOOL_INPUT_BYTES, "{wire} bytes as JSON");
 }
 
 #[test]
