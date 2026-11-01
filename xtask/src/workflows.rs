@@ -1,6 +1,7 @@
-//! Config assertions over `.github/workflows/ci.yml` that no command checks: how the jobs that
-//! save rust-cache keep their cache usable. CI runs these tests like any other, so a later edit
-//! that drops one of these steps fails the pull request that makes it.
+//! Config assertions over `.github/workflows/` that no command checks: how the jobs that save
+//! rust-cache, and every job that restores what they save, keep the cache usable. CI runs these
+//! tests like any other, so a later edit that drops or changes one of these steps fails the pull
+//! request that makes it.
 
 #[cfg(test)]
 mod tests {
@@ -12,9 +13,25 @@ mod tests {
         [("logic-linux", "linux"), ("windows-clippy", "win-clippy"), ("windows-test", "win-test")];
     /// The condition rust-cache's `save-if` uses in every saving job.
     const ON_MAIN: &str = "github.ref == 'refs/heads/main'";
+    /// Jobs, by workflow file, that restore a saved key but still keep the runner image's other
+    /// toolchains, so their key differs from the one `main` saves and they find no full match.
+    // FIXME(#141): the Linux desktop lane gains the step in its own pull request; this list then
+    // empties, and the test below fails until it does.
+    const WITHOUT_THE_TOOLCHAIN_STEP: [(&str, &str); 1] = [("linux-desktop.yml", "session")];
 
     fn indent_of(line: &str) -> usize {
         line.len() - line.trim_start().len()
+    }
+
+    /// The names of a workflow's jobs, in order.
+    fn jobs(workflow: &str) -> Vec<&str> {
+        workflow
+            .lines()
+            .skip_while(|line| *line != "jobs:")
+            .skip(1)
+            .filter(|line| indent_of(line) == 2 && !line.trim().starts_with('#'))
+            .filter_map(|line| line.trim().strip_suffix(':'))
+            .collect()
     }
 
     /// The lines of one job under `jobs:`, from its `name:` line to the next job.
@@ -24,7 +41,7 @@ mod tests {
         let start = lines
             .iter()
             .position(|line| indent_of(line) == 2 && line.trim() == header)
-            .unwrap_or_else(|| panic!("ci.yml has no `{name}` job"));
+            .unwrap_or_else(|| panic!("the workflow has no `{name}` job"));
         lines[start + 1..]
             .iter()
             .take_while(|line| line.trim().is_empty() || indent_of(line) > 2)
@@ -32,7 +49,8 @@ mod tests {
             .collect()
     }
 
-    /// A job's steps, each as the text of its lines, in order.
+    /// A job's steps, each as the text of its lines, trimmed and without comment lines, in
+    /// order, so a comment can neither satisfy nor fail a check.
     fn steps(job: &[&str]) -> Vec<String> {
         let at = job
             .iter()
@@ -41,7 +59,7 @@ mod tests {
         let indent = indent_of(job[at]);
         let mut steps: Vec<String> = Vec::new();
         for line in &job[at + 1..] {
-            if line.trim().is_empty() {
+            if line.trim().is_empty() || line.trim().starts_with('#') {
                 continue;
             }
             if indent_of(line) <= indent {
@@ -60,14 +78,37 @@ mod tests {
 
     /// The index of the first step that holds every one of `needles`.
     fn position(steps: &[String], needles: &[&str]) -> usize {
-        steps
-            .iter()
-            .position(|step| needles.iter().all(|needle| step.contains(needle)))
+        try_position(steps, needles)
             .unwrap_or_else(|| panic!("no step holds {needles:?}: {steps:#?}"))
+    }
+
+    fn try_position(steps: &[String], needles: &[&str]) -> Option<usize> {
+        steps.iter().position(|step| needles.iter().all(|needle| step.contains(needle)))
+    }
+
+    /// Whether one of the step's keys, not a comment or a script line, starts with `key`.
+    fn has_key(step: &str, key: &str) -> bool {
+        step.lines().any(|line| line.trim_start_matches("- ").starts_with(key))
+    }
+
+    /// Whether the text holds a version number such as `1.99`, however it is written.
+    fn has_version_number(text: &str) -> bool {
+        text.as_bytes()
+            .windows(3)
+            .any(|w| w[0].is_ascii_digit() && w[1] == b'.' && w[2].is_ascii_digit())
     }
 
     fn on_windows(job: &[&str]) -> bool {
         job.iter().any(|line| line.trim() == "runs-on: windows-latest")
+    }
+
+    const PRUNE_NEEDLES: [&str; 2] = ["rust-toolchain.toml", "rustup toolchain uninstall"];
+
+    /// `logic-linux`'s step that keeps only the pinned toolchain: every other job that uses one
+    /// of the saved keys runs the same text.
+    fn reference_prune() -> String {
+        let steps = steps(&job(CI, SAVERS[0].0));
+        steps[position(&steps, &PRUNE_NEEDLES)].clone()
     }
 
     #[test]
@@ -79,19 +120,33 @@ mod tests {
         // The key hashes `rustc -vV` of every installed toolchain, and with the environment hash
         // turned off it also drops the lockfile hash, so the cache would never be saved again.
         assert!(!CI.contains("add-rust-environment-hash-key"), "the key keeps its hashes");
+        let reference = reference_prune();
+        // The pinned version is read from rust-toolchain.toml, and that one is kept.
+        assert!(
+            reference.contains("pinned=\"$(sed -n ")
+                && reference.contains(" rust-toolchain.toml)\""),
+            "the pinned channel comes from rust-toolchain.toml: {reference}"
+        );
+        assert!(reference.contains("rustup default \"$pinned\"\n"), "{reference}");
+        assert!(reference.contains("\"$pinned\"-*) ;;\n"), "the pinned one is kept: {reference}");
+        assert!(
+            reference.contains("*) rustup toolchain uninstall \"$toolchain\" ;;\n"),
+            "every other one goes: {reference}"
+        );
+        assert!(
+            !reference.contains(channel) && !has_version_number(&reference),
+            "no version is written into the workflow: {reference}"
+        );
         for (name, shared) in SAVERS {
             let job = job(CI, name);
             let steps = steps(&job);
             let install = position(&steps, &["run: rustup toolchain install --no-self-update"]);
             let cache = position(&steps, &["uses: Swatinem/rust-cache@"]);
-            let prune = position(&steps, &["rust-toolchain.toml", "rustup toolchain uninstall"]);
+            let prune = position(&steps, &PRUNE_NEEDLES);
             assert!(install < prune && prune < cache, "{name}: install, prune, then rust-cache");
+            assert_eq!(steps[prune], reference, "{name}: the same step as {}", SAVERS[0].0);
             // Every run prunes, pull requests too, so they compute the key `main` saved.
-            assert!(!steps[prune].contains("if:"), "{name}: the pruning runs on every event");
-            assert!(
-                !steps[prune].contains(channel),
-                "{name}: the pinned version is read from rust-toolchain.toml, not written here"
-            );
+            assert!(!has_key(&steps[prune], "if:"), "{name}: the pruning runs on every event");
             assert!(steps[cache].contains(&format!("shared-key: {shared}\n")), "{name}: its key");
             assert!(
                 steps[cache].contains(&format!("save-if: ${{{{ {ON_MAIN} }}}}\n")),
@@ -103,19 +158,83 @@ mod tests {
         }
     }
 
+    /// Every job in every workflow that restores a key the savers write computes the key the
+    /// same way, or it never finds `main`'s entry once `prune-caches` removes the older ones.
+    #[test]
+    fn every_restore_of_a_saved_key_keeps_only_the_pinned_toolchain() {
+        let reference = reference_prune();
+        let folder = crate::repo_root().join(".github/workflows");
+        let mut files: Vec<_> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "yml" || ext == "yaml"))
+            .collect();
+        files.sort();
+        let mut restorers = Vec::new();
+        for path in files {
+            let file = path.file_name().unwrap().to_string_lossy().into_owned();
+            let workflow = std::fs::read_to_string(&path).unwrap();
+            for name in jobs(&workflow) {
+                let job = job(&workflow, name);
+                let steps = steps(&job);
+                let Some(cache) = try_position(&steps, &["uses: Swatinem/rust-cache@"]) else {
+                    continue;
+                };
+                let saved = SAVERS
+                    .iter()
+                    .any(|(_, shared)| steps[cache].contains(&format!("shared-key: {shared}\n")));
+                if !saved {
+                    continue;
+                }
+                let pending =
+                    WITHOUT_THE_TOOLCHAIN_STEP.iter().any(|(f, j)| *f == file && *j == name);
+                let prune = steps.iter().position(|step| *step == reference);
+                if pending {
+                    assert!(prune.is_none(), "{file} {name} has the step now: empty the list");
+                } else {
+                    let prune = prune.unwrap_or_else(|| {
+                        panic!("{file} {name}: no step identical to {}'s: {reference}", SAVERS[0].0)
+                    });
+                    assert!(prune < cache, "{file} {name}: the pruning comes before rust-cache");
+                }
+                restorers.push((file.clone(), name.to_owned()));
+            }
+        }
+        for (file, name) in WITHOUT_THE_TOOLCHAIN_STEP {
+            assert!(
+                restorers.iter().any(|(f, n)| f == file && n == name),
+                "{file} {name} no longer restores a saved key: drop it from the list"
+            );
+        }
+        for (name, _) in SAVERS {
+            assert!(restorers.iter().any(|(f, n)| f == "ci.yml" && n == name), "{name} was seen");
+        }
+    }
+
     #[test]
     fn cache_savers_date_their_artifacts_last_on_main() {
+        let reference = {
+            let steps = steps(&job(CI, SAVERS[0].0));
+            steps.last().cloned().unwrap_or_default()
+        };
         for (name, _) in SAVERS {
             let job = job(CI, name);
             let steps = steps(&job);
             let last = steps.last().unwrap_or_else(|| panic!("{name} has no steps"));
+            assert_eq!(*last, reference, "{name}: the same step as {}", SAVERS[0].0);
             // rust-cache's restore purges entries of these folders older than a week when the
             // key does not fully match; its save runs after the job's last step.
             for folder in ["target/debug/build", "target/debug/.fingerprint", "target/debug/deps"] {
                 assert!(last.contains(folder), "{name}: the last step dates {folder}: {last}");
             }
-            assert!(last.contains("-mindepth 1 -maxdepth 1"), "{name}: top-level entries only");
-            assert!(last.contains("touch -c"), "{name}: touches, never creates: {last}");
+            // Cargo rebuilds a unit whose dependency's output is newer than its own, so every
+            // file and folder below them, at any depth, gets one and the same date.
+            assert!(last.contains("stamp=\"$(date +%s)\"\n"), "{name}: one date: {last}");
+            assert!(
+                last.contains("find \"$dir\" -exec touch -c -d \"@$stamp\" -- {} +\n"),
+                "{name}: everything, to that date, never creating a file: {last}"
+            );
+            assert!(!last.contains("-maxdepth") && !last.contains("-mindepth"), "{name}: {last}");
             assert!(
                 last.contains(&format!("if: success() && {ON_MAIN}\n")),
                 "{name}: only on the runs that save: {last}"
