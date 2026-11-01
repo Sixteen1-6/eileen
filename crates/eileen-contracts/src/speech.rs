@@ -26,8 +26,8 @@
 //! [`Frame::encode_audio_into`] writes an audio frame straight from a borrowed window of samples.
 //! [`FrameReader`] reads frames from bytes as they arrive and reserves a body only after its
 //! header passed. A reader is made for one end ([`FrameKind::sender`]) and refuses a kind its
-//! peer may not send; the core's reader also refuses any frame before the `Hello` and a second
-//! `Hello`. Both ends of the pipe use this codec, so neither crate depends on the other. The
+//! peer may not send. The core's readers also refuse a second `Hello`, and the one that starts a
+//! connection refuses any frame before the first. Both ends of the pipe use this codec, so neither crate depends on the other. The
 //! transport (WP2) checks the `Hello`'s token before it hands a connection on; the codec only
 //! reads it.
 

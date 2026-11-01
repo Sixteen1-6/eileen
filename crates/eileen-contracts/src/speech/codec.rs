@@ -804,7 +804,7 @@ mod tests {
 
     /// Short text of any characters; even fully escaped, 40 of them fit a `Hello`.
     fn text() -> impl Strategy<Value = String> {
-        prop::collection::vec(any::<char>(), 0..40).prop_map(String::from_iter)
+        prop::collection::vec(any::<char>(), 0..=40).prop_map(String::from_iter)
     }
 
     /// The header fields of a frame that carries no flags.
@@ -900,9 +900,11 @@ mod tests {
         pieces
     }
 
-    /// Bytes that start with a header of any kind, flags and a small length, so a body is read.
+    /// Bytes that start with a header of any kind, flags and a small length, so a body is read;
+    /// often an audio frame's exact length, so audio bodies are read too.
     fn noise() -> impl Strategy<Value = Vec<u8>> {
-        (0_u8..9, 0_u8..17, 0_u32..1100, prop::collection::vec(any::<u8>(), 0..2400)).prop_map(
+        let len = prop_oneof![0_u32..1100, Just(AUDIO_FRAME_BYTES)];
+        (0_u8..9, 0_u8..17, len, prop::collection::vec(any::<u8>(), 0..2400)).prop_map(
             |(kind, flags, len, rest)| {
                 let header = FrameHeader { kind, flags, source: 0, len, seq: 0, turn: [0; 16] };
                 cat(&[&header.encode(), &rest])
