@@ -18,11 +18,22 @@ unsafe = "forbid"
 [package.metadata.cargo-machete]
 ignored = ["cpal"]
 
+[features]
+# `fake`, the in-memory speech transport, for other crates' tests (WP2's). Only dev-dependencies
+# turn it on, so no shipped binary carries it.
+fake = []
+
 [dependencies]
 eileen-contracts.workspace = true
+eileen-rt.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cpal.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

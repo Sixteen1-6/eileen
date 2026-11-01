@@ -15,8 +15,11 @@ pub fn components(args: &RunArgs) -> Vec<Box<dyn Component>> {
         Some(dir) => eileen_replay::responder(dir),
         None => eileen_harness::component(&HarnessConfig),
     };
-    let mut components =
-        vec![models, eileen_audio::component(&AudioConfig), eileen_learn::component(&LearnConfig)];
+    let mut components = vec![
+        models,
+        eileen_audio::component(&AudioConfig::default()),
+        eileen_learn::component(&LearnConfig),
+    ];
     components.extend(platform_components());
     components
 }

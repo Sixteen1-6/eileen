@@ -756,6 +756,9 @@ version = "0.0.0"
 dependencies = [
  "cpal",
  "eileen-contracts",
+ "eileen-rt",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
