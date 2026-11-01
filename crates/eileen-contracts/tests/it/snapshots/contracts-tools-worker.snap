@@ -4,7 +4,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
 {
   "definitions": {
     "Approve": {
-      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat id and that exact input; held up to `approvals.hook_hold_s` while the user decides;\nanswered with an `ApproveReply`.",
+      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat tool, that id and that exact input; held up to `approvals.hook_hold_s` while the user\ndecides; answered with an `ApproveReply`.",
       "properties": {
         "input": {
           "description": "Its input, as the CLI sends it."
@@ -271,7 +271,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
   "tool_inputs": {
     "approve": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat id and that exact input; held up to `approvals.hook_hold_s` while the user decides;\nanswered with an `ApproveReply`.",
+      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat tool, that id and that exact input; held up to `approvals.hook_hold_s` while the user\ndecides; answered with an `ApproveReply`.",
       "properties": {
         "input": {
           "description": "Its input, as the CLI sends it."
