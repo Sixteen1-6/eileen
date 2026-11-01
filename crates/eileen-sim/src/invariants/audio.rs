@@ -458,7 +458,7 @@ impl MuteWatch {
     const N: u8 = 9;
     const NAME: &'static str = "nothing_sounds_while_muted";
 
-    fn fail(&self, at_ms: u64, what: String) -> Result<(), Violation> {
+    fn fail(&self, at_ms: u64, what: &str) -> Result<(), Violation> {
         let why = if self.muted { "muted" } else { "another app used the microphone" };
         Err(Violation::new(Self::N, Self::NAME, format!("{what} at {at_ms} ms while {why}")))
     }
@@ -475,27 +475,27 @@ impl MuteWatch {
                 self.elsewhere = *elsewhere;
             }
             AudioEvent::Effect(Effect::Emit(BusEvent::Speaking { speak, .. })) if silent => {
-                return self.fail(at_ms, format!("{speak} began"));
+                return self.fail(at_ms, &format!("{speak} began"));
             }
             AudioEvent::Effect(Effect::Speech(SpeechCmd::Speak { speak, .. })) if silent => {
-                return self.fail(at_ms, format!("{speak} was sent to synthesis"));
+                return self.fail(at_ms, &format!("{speak} was sent to synthesis"));
             }
             AudioEvent::Effect(Effect::Audio(AudioCmd::PlayPhrase { .. })) if silent => {
-                return self.fail(at_ms, "a phrase played".to_owned());
+                return self.fail(at_ms, "a phrase played");
             }
             AudioEvent::Effect(Effect::Audio(AudioCmd::Earcon(earcon)))
                 if silent && !matches!(earcon, Earcon::Muted | Earcon::Unmuted) =>
             {
-                return self.fail(at_ms, format!("the {earcon:?} earcon played"));
+                return self.fail(at_ms, &format!("the {earcon:?} earcon played"));
             }
             AudioEvent::Callback(handed) => {
                 if self.muted && self.capture {
-                    return self.fail(at_ms, "the microphone was still captured".to_owned());
+                    return self.fail(at_ms, "the microphone was still captured");
                 }
                 if silent && let Some(part) = handed.iter().find(|part| part.samples > 0) {
                     return self.fail(
                         at_ms,
-                        format!("{} samples of {} reached the device", part.samples, part.speak),
+                        &format!("{} samples of {} reached the device", part.samples, part.speak),
                     );
                 }
             }

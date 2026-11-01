@@ -550,12 +550,11 @@ impl Bench {
         if !self.device.capture {
             return Ok(());
         }
-        let turn = match self.user.turn {
-            Some(turn) => turn,
-            None => {
-                let id = self.mint();
-                TurnId::from_parts(id, u128::from(id))
-            }
+        let turn = if let Some(turn) = self.user.turn {
+            turn
+        } else {
+            let id = self.mint();
+            TurnId::from_parts(id, u128::from(id))
         };
         self.user.turn = Some(turn);
         self.input(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }))?;
