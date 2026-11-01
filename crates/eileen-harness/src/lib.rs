@@ -1,7 +1,7 @@
 //! Eileen's drivers for vendor CLIs (BUILD.md sections 2.3, 2.5 and 3.3.8): Claude workers and
 //! the Claude brain, the warm pool's session lifecycle, the brain benchmark, and the Codex, ACP,
-//! `DeepSeek` and local routes as designed slots. The stream-json parser is built; the drivers
-//! are stubs until WP3 builds them.
+//! `DeepSeek` and local routes as designed slots. The stream-json parser and each session's
+//! spawn files are built; the drivers are stubs until WP3 builds them.
 //!
 //! # Owns
 //!
@@ -13,6 +13,9 @@
 //!   ([`stream`]), and the stdio control protocol's lines with the interrupt Eileen writes
 //!   ([`stream::control`]).
 //! - [`SUBAGENT_TOOLS`], the subagent tools every session disallows in v0.1.
+//! - What each Claude session spawns with ([`session`]): its command line, settings file, MCP
+//!   config and environment, and the flag constants the nightly CLI drift job reads
+//!   ([`session::CLAUDE_FLAGS`], [`session::CLAUDE_UNLISTED_FLAGS`]).
 //! - The `stream_json_line` and `control_message` fuzz targets' entries (`fuzz_entry`).
 //!
 //! # Does not own
@@ -39,6 +42,14 @@
 //!   malformed, and one to a request that is not open settles nothing
 //!   (`stream::control::SettleError::NotOpen`; `stream::control::tests`, and the
 //!   `control_message` fuzz target).
+//! - Every session spawns with `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode
+//!   dontAsk`, the `approve` permission-prompt tool, the subagent tools disallowed, vendor memory
+//!   and file checkpointing off, and its tokens only in its environment, never in a file or on
+//!   the command line; the brain gets no built-in tool and no third-party MCP server, the brain
+//!   and the librarian only the constructed allowlist, a worker the user's environment minus the
+//!   denylist (sections 2.3, 2.5 and 2.12; `session::tests`). Every path a session is given is
+//!   absolute and none lies under a `.claude` folder. A third-party MCP server reaches only the
+//!   job kinds its config entry names.
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -57,7 +68,8 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-harness`.
-//! - Layers: unit tests for the parser and the flags (the parser's against the lines CLI 2.1.304
+//! - Layers: unit tests for the parser and the flags, with insta snapshots of each session kind's
+//!   command line, settings file and MCP config (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
 //!   against `eileen-stub-harness`, the two fuzz targets with their corpora replayed in
 //!   `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC.
@@ -75,6 +87,16 @@
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
 //!   failed in the same text, so only a call the guard asked about counts.
+//! - Windows variable names ignore case and Linux ones do not: `HostEnv::names_ignore_case`
+//!   carries the host's rule, so on Windows `Path` is `PATH` and a session variable replaces
+//!   every spelling of its name, while on Linux `http_proxy` and `HTTP_PROXY` both survive.
+//! - The settings file and the MCP config name the tokens (`$EILEEN_HOOK_TOKEN` through
+//!   `allowedEnvVars`, `${EILEEN_SHIM_TOKEN}`), and the CLI fills them from the session's
+//!   environment; writing a token into either file puts it on disk.
+//! - The CLI expands `${VAR}` in every MCP server's command, arguments and `env` from its own
+//!   environment, which holds both tokens, so a third-party server whose command or arguments
+//!   hold a `$` is refused (`session::SessionError::ExpandableMcpArg`); blanking the tokens in
+//!   its `env` does not stop an expansion in its arguments.
 //! - Redact a JSON value's strings before serializing it, never its text: serialized, a newline
 //!   before a token is the `n` of `\n`, after which the `Redactor` sees no word start.
 //! - One pass of the `Redactor` can leave a token: right after another match it has no word
@@ -98,13 +120,17 @@ mod brain;
 pub mod cli;
 #[doc(hidden)]
 pub mod fuzz_entry;
+pub mod session;
 pub mod stream;
 mod worker;
+
+use std::path::PathBuf;
 
 pub use brain::{
     AnyBrain, BrainBackend, BrainBenchResult, BrainSuite, ClaudeBrain, CodexBrain, DeepSeekBrain,
     LocalBrain, brain_benchmark, brain_for,
 };
+use eileen_contracts::config::{ApprovalsConfig, McpConfig};
 use eileen_contracts::core_io::EffectFamily;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::ports::{Component, IdleComponent};
@@ -117,10 +143,36 @@ pub use worker::{
 /// `Task` and the model calls it `Agent` (WP3's approval contract test, section 2.5).
 pub const SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
 
-/// What the harness reads at start. WP3 adds its fields (the CLI's location, the model aliases,
-/// the pool sizes).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct HarnessConfig;
+/// What the harness reads at start. WP3 adds the rest of its fields (the CLI's location, the
+/// model aliases, the pool sizes) as it builds the drivers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessConfig {
+    /// Eileen's data folder; each session's files go under `run/<session>/` in it.
+    pub data_dir: PathBuf,
+    /// `approvals.hook_hold_s`: how long an `approve` call is held while the user decides,
+    /// seconds. `MCP_TOOL_TIMEOUT` is this plus 30 s.
+    pub hook_hold_s: u16,
+    /// The absolute path of `eileen-shim` in Eileen's install folder, which each session's MCP
+    /// config starts. Never a bare name: the CLI would search for it, from the worker's folder
+    /// too.
+    pub shim_exe: PathBuf,
+    /// The approved third-party MCP servers: which job kinds get each, and its rung.
+    pub mcp: McpConfig,
+}
+
+/// A config with no data folder and no shim, for the stub drivers. `session::session_files`
+/// refuses it, so a session never starts from it by accident: the runtime fills both paths
+/// before the first spawn.
+impl Default for HarnessConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: PathBuf::new(),
+            hook_hold_s: ApprovalsConfig::default().hook_hold_s,
+            shim_exe: PathBuf::new(),
+            mcp: McpConfig::default(),
+        }
+    }
+}
 
 /// What went wrong in a driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -142,10 +194,6 @@ pub enum DriverError {
 /// The harness component: the brain's slots and the workers. The stub accepts the brain and
 /// worker families and does nothing.
 #[must_use]
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "section 3.3.15's signature; HarnessConfig has no fields until WP3"
-)]
 pub fn component(_cfg: &HarnessConfig) -> Box<dyn Component> {
     Box::new(IdleComponent::new("harness", &[EffectFamily::Brain, EffectFamily::Worker]))
 }

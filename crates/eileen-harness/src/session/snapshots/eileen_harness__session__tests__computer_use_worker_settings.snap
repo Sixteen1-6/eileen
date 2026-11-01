@@ -1,0 +1,183 @@
+---
+source: crates/eileen-harness/src/session/tests.rs
+expression: portable_json(&files.settings)
+---
+{
+  "disableSkillShellExecution": true,
+  "fileCheckpointingEnabled": false,
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/notification"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/permission-denied"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "onFailure": "block",
+            "timeout": 10,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/permission-request"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/post-tool-use-failure"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "onFailure": "block",
+            "timeout": 10,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/stop"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/stop-failure"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/subagent-start"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "allowedEnvVars": [
+              "EILEEN_HOOK_TOKEN",
+              "EILEEN_SESSION_ID"
+            ],
+            "headers": {
+              "Authorization": "Bearer $EILEEN_HOOK_TOKEN",
+              "X-Eileen-Session": "$EILEEN_SESSION_ID"
+            },
+            "timeout": 5,
+            "type": "http",
+            "url": "http://127.0.0.1:47615/v1/hooks/claude/subagent-stop"
+          }
+        ]
+      }
+    ]
+  }
+}
