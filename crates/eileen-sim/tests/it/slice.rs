@@ -561,12 +561,18 @@ fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
     // At 1 600 samples a character, 24 000 a second, the clauses play for about 5 s.
     settle(&mut world, 10_000);
     let heard = sentences[..synthesized].join(" ").chars().count();
-    assert!(
-        events(&world).iter().any(|e| matches!(
-            e,
-            BusEvent::SpeakingStopped { speak: s, interrupted: false, heard_chars, .. }
-                if *s == speak && usize::try_from(*heard_chars).unwrap() == heard
-        )),
+    let stopped: Vec<(bool, u32)> = events(&world)
+        .iter()
+        .filter_map(|e| {
+            let BusEvent::SpeakingStopped { speak: s, interrupted, heard_chars, .. } = e else {
+                return None;
+            };
+            (*s == speak).then_some((*interrupted, *heard_chars))
+        })
+        .collect();
+    assert_eq!(
+        stopped,
+        [(false, u32::try_from(heard).unwrap())],
         "the synthesized clauses played to their end, {heard} characters"
     );
     assert_eq!(
