@@ -86,7 +86,7 @@ The amendments before the first part:
 
 The parts of the audio series, in merge order, as each opens:
 
-1. `amend/speech-pipe-codec` (draft, the owner reviews it): the first part, an amendment to
+1. `amend/speech-pipe-codec` (#136, merged 2026-11-01): the first part, an amendment to
    WP0's `eileen_contracts::speech`. It writes the frame codec both ends of the pipe use and
    D81's meanings: `FrameKind::Hello` (kind 7, at most 256 bytes), `AudioFlags` (replayed,
    break, playback, other audio, bits 0 to 3), the `seq` and `turn` meanings on `FrameHeader`,
@@ -108,8 +108,8 @@ The parts of the audio series, in merge order, as each opens:
    in `eileen-speech`, as BUILD.md section 4.7's table gives the target to WP4, though the parser
    is in `eileen-contracts`; `fuzz/AGENTS.md` says "the neutral crate that owns the parser", and
    pull request #136 proposes the wording under "Suggested guidance changes".
-2. `wp4/s1-audio-transport` (draft): defines what WP2's `wp2/speech-transport` builds against, so it
-   merges early. In `eileen-audio`: the `SpeechTransport` trait (`accept` a verified connection
+2. `wp4/s1-audio-transport` (#140, merged 2026-11-01): defines what WP2's
+   `wp2/speech-transport` builds against, so it merges early. In `eileen-audio`: the `SpeechTransport` trait (`accept` a verified connection
    within a deadline, `close` one the component is done with), with std types only, as section
    3.3.15's ports use; `SpeechConnection`, a byte duplex over two std-only byte traits (`ByteRead`,
    `ByteWrite`) whose read and write halves give every read and write a deadline, and whose writer
@@ -120,6 +120,18 @@ The parts of the audio series, in merge order, as each opens:
    callback told when its buffer was captured or will play on the source's or sink's own clock; and
    `AudioConfig::speech`, the transport the later parts read. Evidence: the unit tests in
    `eileen_audio::fake::tests` and `eileen_audio::transport::tests`.
+3. `wp4/s1-audio-ring` (draft): the speech ring, crate-private in `eileen-audio` until the
+   component takes it. `CaptureWriter`, the capture callback's end, numbers each 512-sample frame
+   (`seq` from 1, counted from the core's start and never restarting) and hands it, with its
+   capture time and capture flags, over an `rtrb` SPSC ring; it allocates nothing. `SpeechRing`,
+   the reader's end, moves frames into a replay store of at most 180 s (5,625 frames, allocated
+   once) that keeps every frame the speech process has not confirmed, confirms through the `seq`
+   of a `Pong` with no turn open or of the frame that carried an `EndOfTurn`, replays from the
+   oldest unconfirmed frame on each new connection, drops the oldest on overrun, sets the break
+   and replayed flags, and empties on a mute. Evidence: the unit tests in
+   `eileen_audio::ring::tests` (each rule, WP4 acceptance 15's overrun and mute pieces at the
+   unit layer, and the push inside `allocation_counter::measure`) and the loom tests in
+   `eileen_audio::ring::concurrency`, which run once on a real thread without `--cfg loom`.
 
 The speech series has not opened yet.
 
@@ -133,6 +145,13 @@ The speech series has not opened yet.
   code names it: rustc links a crate passed with `--extern` only when code uses it. So the check
   cannot run in product debug builds without a feature in `eileen.exe`; D82 checks the real
   callbacks in an `owner_pc::` device test instead.
+
+- rtrb's newest release, 0.4.1, came out on 2026-10-25, inside the 14-day cooling-off period
+  when the ring took the crate, so the lock holds 0.4.0, the release section 4.1 named.
+- No CI lane builds with `--cfg loom` yet (section 4.6 plans one for pull requests that change
+  `eileen-audio`), so the ring's loom tests are written to run once on a real thread in every
+  other build: CI compiles and runs their bodies, and the loom exploration runs where the flag is
+  set.
 
 - `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
   first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
@@ -163,6 +182,22 @@ The speech series has not opened yet.
   The replayed flag (D81) and playback accounting need those times, and a callback that read a
   clock itself would read the real one on the audio thread, which no test can pace. A test source
   derives them from its sample position, so WP4 acceptance 15 runs in virtual time.
+- The ring's break flag follows from the numbers: a frame carries it when its `seq` is not one
+  more than the frame written before it on the connection, or, first on a connection, than the
+  newest confirmed frame. A frame lost at the full handoff, one dropped from the full store before
+  it was written and one written to a connection that ended before confirming it all show as such
+  a gap, so one rule covers them. A mute skips no number, so it sets the flag on the next frame by
+  hand.
+- A confirmation never reaches past the newest frame written on the connection: the speech
+  process can only have read what it was sent, and a `seq` beyond that would drop frames it never
+  heard.
+- The handoff is `rtrb`, whose producer cannot drop the oldest frame, so a full handoff loses the
+  newest one. Its number is still used, so the gap shows, and the reader counts the loss. The
+  store, on the reader's side, drops its oldest, as section 6.6 asks. A new capture stream gets a
+  new handoff, since a stopped stream drops its callback and the producer with it; the next `seq`
+  lives in an atomic both sides share, so numbering goes on across streams.
+- A frame counts as written once the ring hands it out. A write that fails ends the connection,
+  and the next connection replays from the oldest unconfirmed frame, so the ring needs no undo.
 - Resampling: the bar of BUILD.md section 6.6 (the decimator flat within 0.1 dB to 7 kHz and
   60 dB down from 9 kHz, the interpolator flat to 10 kHz with its images 60 dB down from 14 kHz,
   each at most 25 us per 10 ms buffer). At the 48 kHz endpoint rate both ratios are integers (3:1

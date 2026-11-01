@@ -25,8 +25,14 @@
 //! - Mute stops the capture stream within one buffer (WP4 acceptance 9 tests it).
 //! - Every accept, read and write on a speech connection has a deadline, and every queue of the
 //!   memory transport a maximum (tests in `fake::tests`). A shipped binary never enables `fake`.
-//! - The ring buffer is safe under concurrent use by the callback and its reader (WP4 adds its
-//!   loom tests, under `cfg(loom)`).
+//! - The speech ring's capture callback and its reader share only an SPSC handoff (`rtrb`) and
+//!   two atomics, the next `seq` and the count of frames lost. Loom models in `ring::concurrency`
+//!   explore every order of those two under `cfg(loom)`; rtrb's own tests cover the handoff, and
+//!   a test on real threads in the same module drives a 4-frame handoff through 10 000 frames.
+//!   Its capture side allocates nothing (`allocation_counter::measure` in `ring::tests`).
+//! - The ring keeps every frame the speech process has not confirmed, up to 180 s, numbered from
+//!   the core's start (decision D81); a mute empties it, so nothing captured before a mute is
+//!   written after it (`ring::tests`).
 //!
 //! # Boundaries
 //!
@@ -36,8 +42,10 @@
 //!   [`AudioConfig`]. The component never names the pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
-//!   target table. Today `eileen-rt` is used only by `fake`, so it is optional and the feature
-//!   turns it on, and a dev-dependency for this crate's own tests.
+//!   target table; `rtrb` for the ring's handoff, and `loom` only under `cfg(loom)`. Today
+//!   `eileen-rt` is used only by `fake`, so it is optional and the feature turns it on, and a
+//!   dev-dependency for this crate's own tests, as are `eileen-stdx` and `allocation-counter`
+//!   (decision D82: never outside `[dev-dependencies]`).
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -46,14 +54,25 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-audio`.
-//! - Layers: unit tests for the DSP and the memory transport (paused tokio time), loom for the
-//!   ring buffer, `RoomMixer` echo tests, and device tests on the owner's PC under `desktop.lock`.
+//! - Layers: unit tests for the DSP, the ring's rules and the memory transport (paused tokio
+//!   time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with `--lib
+//!   ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the same
+//!   models run once on a real thread), `RoomMixer` echo tests, and device tests on the owner's
+//!   PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
 //!
 //! - Echo cancellation is bypassed after 500 ms of loopback silence and Eileen's own PCM becomes
 //!   the reference.
+//! - The ring's break flag follows from the numbers: a frame carries it when its `seq` is not one
+//!   more than the frame written before it on the connection, so a frame lost at the handoff, one
+//!   dropped from a full store and one written to a connection that ended all show as gaps. Only a
+//!   mute skips no number, so the first frame pulled after one is marked in the store, and keeps
+//!   the flag when a later connection replays it.
+//! - A frame's replayed flag is its age on the capture clock, which the ring estimates from the
+//!   newest frame pulled plus 32 ms per number taken since; a mute forgets that clock, since the
+//!   next source may start its own at zero.
 //! - A speech connection's halves need a tokio runtime with its timer; a failed write leaves the
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
 //!
@@ -76,6 +95,13 @@ use eileen_contracts::ports::{Component, IdleComponent};
 
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
+// The component takes the ring in a later part of the audio series; until then only its tests
+// use it, and under loom only the concurrency models, which leave the rules' items unused.
+#[cfg_attr(
+    any(not(test), loom),
+    expect(dead_code, reason = "the component wires the ring in a later part")
+)]
+mod ring;
 pub mod stream;
 pub mod transport;
 
