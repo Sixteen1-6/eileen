@@ -248,7 +248,7 @@ impl fmt::Debug for FrameReader {
             .field("header_bytes", &self.have)
             .field("body_kind_len_read", &body)
             .field("failed", &self.failed)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -584,7 +584,8 @@ mod tests {
         assert_eq!((taken, done), (bytes.len() - 1, None), "all but the last byte");
         let shown = format!("{reader:?}");
         let token_bytes = format!("{:?}", &b"s3cret"[..]);
-        assert!(!shown.contains(&token_bytes[1..token_bytes.len() - 1]), "the reader: {shown}");
+        let token_bytes = token_bytes.trim_matches(['[', ']']);
+        assert!(!shown.contains(token_bytes), "the reader: {shown}");
         assert!(shown.contains("Hello"), "the reader names the kind it is reading: {shown}");
     }
 
