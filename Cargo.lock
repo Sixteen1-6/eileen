@@ -936,10 +936,13 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "eileen-contracts",
+ "eileen-rt",
+ "eileen-supervisor",
  "eileen-trace",
  "insta",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

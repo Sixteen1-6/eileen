@@ -1,7 +1,8 @@
 //! Eileen's drivers for vendor CLIs (BUILD.md sections 2.3, 2.5 and 3.3.8): Claude workers and
 //! the Claude brain, the warm pool's session lifecycle, the brain benchmark, and the Codex, ACP,
-//! `DeepSeek` and local routes as designed slots. The stream-json parser and each session's
-//! spawn files are built; the drivers are stubs until WP3 builds them.
+//! `DeepSeek` and local routes as designed slots. The stream-json parser, each session's spawn
+//! files, the CLI's location and `eileen doctor claude` are built; the drivers are stubs until
+//! WP3 builds them.
 //!
 //! # Owns
 //!
@@ -16,6 +17,10 @@
 //! - What each Claude session spawns with ([`session`]): its command line, settings file, MCP
 //!   config and environment, and the flag constants the nightly CLI drift job reads
 //!   ([`session::CLAUDE_FLAGS`], [`session::CLAUDE_UNLISTED_FLAGS`]).
+//! - Finding the real `claude` executable ([`locate`]): through npm's shim or the native
+//!   installer's layout, with its version and the D77 floor ([`locate::MIN_CLI`]).
+//! - `eileen doctor claude` ([`cli::doctor`]): the CLI found, its version, `claude auth status`
+//!   by exit code, the running sessions' versions and the toolchains a worker sees.
 //! - The `stream_json_line` and `control_message` fuzz targets' entries (`fuzz_entry`).
 //!
 //! # Does not own
@@ -50,6 +55,15 @@
 //!   denylist (sections 2.3, 2.5 and 2.12; `session::tests`). Every path a session is given is
 //!   absolute and none lies under a `.claude` folder. A third-party MCP server reaches only the
 //!   job kinds its config entry names.
+//! - The CLI found is never the Claude desktop app's bundled copy and never lies under a
+//!   `.claude` folder, and a `PATH` folder under one is refused before anything in it is looked
+//!   at (`locate::tests::the_desktop_app_copy_is_refused`,
+//!   `locate::tests::a_folder_under_the_users_claude_folder_is_never_searched`).
+//! - `eileen doctor claude` reads `claude auth status` by its exit code only, never its output,
+//!   and a signed-out CLI gets the `claude auth login` suggestion with nothing else started
+//!   (`cli::doctor::tests::a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs`);
+//!   every probe runs in the worker environment with a deadline
+//!   (`cli::doctor::tests::auth_status_runs_in_the_worker_environment_with_a_deadline`).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -59,7 +73,7 @@
 //!
 //! - Called by `eileen-cli` (the component) and `eileen-stub-harness`.
 //! - May depend on `eileen-supervisor`, `eileen-buildguard`, `eileen-rt`, `eileen-contracts`,
-//!   `eileen-stdx` and `eileen-trace`.
+//!   `eileen-stdx` and `eileen-trace`, and on `tokio` for the doctor's deadlines.
 //! - Must not depend on `eileen-core` or `eileen-runtime` (the core decides), `eileen-mcp` or
 //!   rmcp (section 3.1), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: the vendors' CLI flags and protocols (stream-json for Claude), which only this
@@ -71,7 +85,8 @@
 //! - Layers: unit tests for the parser and the flags, with insta snapshots of each session kind's
 //!   command line, settings file and MCP config (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
-//!   against `eileen-stub-harness`, the two fuzz targets with their corpora replayed in
+//!   against `eileen-stub-harness`, the CLI's location against fake npm and native layouts in a
+//!   temporary folder, the doctor against a scripted probe runner, the two fuzz targets with their corpora replayed in
 //!   `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC.
 //! - A bug here starts as a stream-json line that became `Unknown`, or a session whose init
 //!   lists a server it should not.
@@ -79,7 +94,12 @@
 //! # Traps
 //!
 //! - The real executable is resolved through the npm shim or the native layout, never the
-//!   desktop app's copy.
+//!   desktop app's copy. npm writes `claude.cmd`, `claude.ps1` and a shell script side by side;
+//!   the `.cmd` and `.ps1` name the package's `bin\claude.exe` relative to their own folder
+//!   (`%dp0%`, `$basedir`), and an older package's shim runs `cli.js` through node instead,
+//!   which is no executable Eileen can supervise.
+//! - `claude auth status` prints the account's email and organisation, so the doctor never
+//!   pipes its output; the exit code is the whole answer.
 //! - CI never holds vendor credentials, and no code path opens a vendor credential file.
 //! - The CLI writes `system/init` again at the start of every user turn, and `system/init`
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
@@ -120,6 +140,7 @@ mod brain;
 pub mod cli;
 #[doc(hidden)]
 pub mod fuzz_entry;
+pub mod locate;
 pub mod session;
 pub mod stream;
 mod worker;
