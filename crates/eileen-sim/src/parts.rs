@@ -4,7 +4,12 @@
 //! order.
 //!
 //! - The speech process answers `Speak` with one `ClauseReady` per clause, a synthesis time
-//!   apart, then `SpeakDone`; `Cancel` drops what it has not delivered.
+//!   apart, then `SpeakDone`; `Cancel` drops what it has not delivered. It answers the core's
+//!   `Start` and `Restart` with `Ready` after a load, and the audio component's pings with a
+//!   `Heartbeat` every second while it is ready; `HangDumpThenKill` ends it with `Exited`. A
+//!   test can hang it (no more heartbeats or clauses), crash it (`Exited` at once) or make its
+//!   loads never finish. While it is not ready the audio component answers `Speak` with
+//!   `SpeakDone` and no clause.
 //! - The device plays the clauses whose `ClauseReady` was delivered, in 10 ms callbacks of
 //!   240 samples (24 kHz), reports `Played` at most every 50 ms, and honours `Duck`, `Pause`
 //!   (with a `Paused` report), `Resume` and `Stop` (with a `Stopped` report). It reports
@@ -16,12 +21,17 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use eileen_contracts::connectors::{
+    ConnectorManifest, Platform, RunsIn, SidecarCmd, SidecarEvent, SidecarId,
+};
 use eileen_contracts::core_io::{
     AudioCmd, Caller, Input, PathAccess, PathClass, PathFact, PlaybackEvent, ShimRole,
     ToolCallRequest,
 };
 use eileen_contracts::harness::{BrainCmd, BrainEvent, HookRequest, WorkerCmd, WorkerEvent};
-use eileen_contracts::ids::{Personal, SpeakId, ToolName, TurnId, Untrusted, WorkerSessionId};
+use eileen_contracts::ids::{
+    ConnectorId, Personal, SpeakId, ToolName, TurnId, Untrusted, WorkerSessionId,
+};
 use eileen_contracts::jobs::{CallOrigin, Cost, TurnAuthority};
 use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 use serde_json::{Value, json};
@@ -36,6 +46,14 @@ const REPORT_MS: u64 = 50;
 const SAMPLES_PER_CHAR: u32 = 1_600;
 /// How long the speech process takes to synthesize one clause, ms.
 const SYNTH_MS: u64 = 60;
+/// How long the speech process takes from `Start` or `Restart` to `Ready`, ms.
+pub const LOAD_MS: u64 = 2_000;
+/// How often the audio component pings the speech process, ms.
+pub const HEARTBEAT_MS: u64 = 1_000;
+/// How long the supervisor takes to report the exit of a process the guard killed, ms.
+const EXIT_MS: u64 = 50;
+/// The exit code of a crashed speech process.
+const CRASH_CODE: i32 = 1;
 /// How long the brain takes to its first text, and between deltas, ms.
 const BRAIN_FIRST_MS: u64 = 800;
 const BRAIN_DELTA_MS: u64 = 150;
@@ -88,16 +106,159 @@ impl Due {
     }
 }
 
-/// The simulated speech process: synthesis only (recognition comes from the generator).
+/// Where the simulated speech process stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Process {
+    /// Not started.
+    #[default]
+    Off,
+    /// Loading its models after a `Start` or `Restart`.
+    Loading,
+    /// Ready: it synthesizes, and the audio component's pings come back as heartbeats.
+    Up,
+    /// Hung: it answers nothing until it is killed.
+    Hung,
+    /// Ended, by a crash or a kill.
+    Dead,
+}
+
+/// The simulated speech process: synthesis and its life (recognition comes from the
+/// generator).
 #[derive(Debug, Default)]
 pub struct Speech {
     /// The next clause number of each utterance, and when its synthesis is free.
     utterances: BTreeMap<SpeakId, (u16, u64)>,
+    process: Process,
+    /// Its loads never finish: no `Ready` comes (a fault a test injects).
+    stuck_loads: bool,
+}
+
+/// What the speech process sends that stops when it ends or hangs: clauses, `SpeakDone`,
+/// `Ready` and heartbeats.
+const fn from_the_process(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::Voice(VoiceEvent::ClauseReady { .. } | VoiceEvent::SpeakDone { .. })
+            | Input::Sidecar(
+                SidecarId::Speech,
+                SidecarEvent::Ready { .. } | SidecarEvent::Heartbeat
+            )
+    )
+}
+
+/// The speech process's `Ready`. The speech process serves no MCP, so the transport fills its
+/// manifest, with no tools.
+fn ready() -> Option<Input> {
+    let manifest = ConnectorManifest {
+        id: ConnectorId::new("pc.speech").ok()?,
+        version: "0.1.0".to_owned(),
+        runs: RunsIn::Sidecar { binary: "eileen-speech".to_owned() },
+        platforms: vec![Platform::Windows, Platform::Linux],
+        tools: Vec::new(),
+        events: Vec::new(),
+        checks: Vec::new(),
+        senses_room: false,
+        requires_opt_in: false,
+    };
+    Some(Input::Sidecar(SidecarId::Speech, SidecarEvent::Ready { manifest: Box::new(manifest) }))
 }
 
 impl Speech {
-    /// Answers a speech command.
+    /// Where the process stands.
+    #[must_use]
+    pub const fn process(&self) -> Process {
+        self.process
+    }
+
+    /// Makes every later load never send `Ready` (`true`), or finish again (`false`).
+    pub const fn stick_loads(&mut self, stuck: bool) {
+        self.stuck_loads = stuck;
+    }
+
+    /// Answers the core's command for the process: `Start` and `Restart` load it, and
+    /// `HangDumpThenKill` ends it.
+    pub fn sidecar(&mut self, now_ms: u64, cmd: SidecarCmd, due: &mut Due) {
+        match cmd {
+            SidecarCmd::Start | SidecarCmd::Restart => {
+                due.drop_where(from_the_process);
+                self.utterances.clear();
+                self.process = Process::Loading;
+                if !self.stuck_loads
+                    && let Some(ready) = ready()
+                {
+                    due.schedule(now_ms.saturating_add(LOAD_MS), ready);
+                }
+            }
+            SidecarCmd::HangDumpThenKill => {
+                if matches!(self.process, Process::Off | Process::Dead) {
+                    return;
+                }
+                self.end(due);
+                let exited = Input::Sidecar(SidecarId::Speech, SidecarEvent::Exited { code: None });
+                due.schedule(now_ms.saturating_add(EXIT_MS), exited);
+            }
+        }
+    }
+
+    /// The world delivered `input`: a `Ready` makes a loading process ready, and while it is,
+    /// each heartbeat brings the next a second later.
+    pub fn delivered(&mut self, now_ms: u64, input: &Input, due: &mut Due) {
+        let Input::Sidecar(SidecarId::Speech, event) = input else { return };
+        let beats = match event {
+            SidecarEvent::Ready { .. } if self.process == Process::Loading => {
+                self.process = Process::Up;
+                true
+            }
+            SidecarEvent::Heartbeat => self.process == Process::Up,
+            SidecarEvent::Ready { .. } | SidecarEvent::Event(_) | SidecarEvent::Exited { .. } => {
+                false
+            }
+        };
+        if beats {
+            let beat = Input::Sidecar(SidecarId::Speech, SidecarEvent::Heartbeat);
+            due.schedule(now_ms.saturating_add(HEARTBEAT_MS), beat);
+        }
+    }
+
+    /// The process hangs: no heartbeat, clause or `Ready` comes until it is killed.
+    pub fn hang(&mut self, due: &mut Due) {
+        if matches!(self.process, Process::Loading | Process::Up) {
+            due.drop_where(from_the_process);
+            self.process = Process::Hung;
+        }
+    }
+
+    /// The process crashes: the supervisor reports `Exited` at once.
+    pub fn crash(&mut self, now_ms: u64, due: &mut Due) {
+        if matches!(self.process, Process::Off | Process::Dead) {
+            return;
+        }
+        self.end(due);
+        let exited = SidecarEvent::Exited { code: Some(CRASH_CODE) };
+        due.schedule(now_ms, Input::Sidecar(SidecarId::Speech, exited));
+    }
+
+    /// The process is gone, with everything it had not sent.
+    fn end(&mut self, due: &mut Due) {
+        due.drop_where(from_the_process);
+        self.utterances.clear();
+        self.process = Process::Dead;
+    }
+
+    /// Answers a speech command. Only a ready process synthesizes; while none is, the audio
+    /// component answers `Speak` with `SpeakDone` and no clause, and a hung one answers
+    /// nothing.
     pub fn command(&mut self, now_ms: u64, cmd: &SpeechCmd, due: &mut Due) {
+        match self.process {
+            Process::Up => {}
+            Process::Hung => return,
+            Process::Off | Process::Loading | Process::Dead => {
+                if let SpeechCmd::Speak { speak, .. } = cmd {
+                    due.schedule(now_ms, Input::Voice(VoiceEvent::SpeakDone { speak: *speak }));
+                }
+                return;
+            }
+        }
         match cmd {
             SpeechCmd::Speak { speak, clauses, .. } => {
                 let (next, free) = self.utterances.entry(*speak).or_insert((0, now_ms));

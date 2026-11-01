@@ -1,20 +1,25 @@
 //! The invariants of BUILD.md section 4.7 that the skeleton checks after every step, each a
 //! named function over what the run produced so far. Their numbers are the section's, which
-//! regressions and acceptance lines cite. WP1 adds the other thirteen.
+//! regressions and acceptance lines cite. WP1 adds the other twelve.
 //!
 //! - 6, [`bus_events_are_attributed`]: every bus event carries a turn or job id where it
 //!   belongs, nothing is emitted for a job after its terminal event, order is kept, a slow
 //!   subscriber gets an explicit `Lagged` and never silent loss, and no unaddressed speech
 //!   becomes a bus event.
+//! - 8, [`children_restart_with_bounded_backoff`]: a crashed or hung child is restarted only
+//!   after it went down, between [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most
+//!   [`RESTARTS_PER_WINDOW`] times in any [`RESTART_WINDOW_MS`]. That killed children leave no
+//!   descendants waits for the simulated Job Objects.
 //! - 10, [`utterances_do_not_overlap`]: two utterances never overlap and the speech queue stays
 //!   bounded.
 //! - 13, [`spans_follow_the_table`]: the span-parent table holds for every span the run
 //!   produced, and every log line inside a turn carries its turn id.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
+use eileen_contracts::connectors::SidecarId;
 use eileen_contracts::ids::{Envelope, SpeakId, TurnId};
 use eileen_trace::names;
 use eileen_trace::{EventRecord, SpanRecord};
@@ -23,6 +28,7 @@ use serde_json::Value;
 /// The invariants the skeleton checks, by number and name.
 pub const CHECKED: &[(u8, &str)] = &[
     (6, "bus_events_are_attributed"),
+    (8, "children_restart_with_bounded_backoff"),
     (10, "utterances_do_not_overlap"),
     (13, "spans_follow_the_table"),
 ];
@@ -151,6 +157,104 @@ fn subscriber_lost_nothing(
     let tail = u64::try_from(published.len() - next.min(published.len())).unwrap_or(u64::MAX);
     if owed > tail {
         return Err(format!("the subscriber was told of {owed} missed events, but {tail} remain"));
+    }
+    Ok(())
+}
+
+/// The shortest wait from a child going down to its restart, ms: the first backoff step.
+pub const BACKOFF_MIN_MS: u64 = 1_000;
+/// The longest wait from a child going down to its restart, ms: the last backoff step, which
+/// the speech process's audio ring covers (section 6.6).
+pub const BACKOFF_MAX_MS: u64 = 60_000;
+/// The window restarts are counted in, ms.
+pub const RESTART_WINDOW_MS: u64 = 60_000;
+/// The most restarts of one child in any window. Steps of 1, 2, 4, 8 and 16 s put five
+/// restarts of a child that crashes at once in its first minute, and the steps start again
+/// from 1 s only after a minute up.
+pub const RESTARTS_PER_WINDOW: usize = 6;
+
+/// What happened to a supervised child, as the world saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildEvent {
+    /// The core started it.
+    Started,
+    /// It went down: the core had it hang-dumped and killed, or it exited.
+    Down,
+    /// The core restarted it.
+    Restarted,
+}
+
+/// One event in a child's life, at a virtual time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildRecord {
+    /// When, ms of virtual time.
+    pub at_ms: u64,
+    /// Which child.
+    pub child: SidecarId,
+    /// What happened.
+    pub event: ChildEvent,
+}
+
+/// Invariant 8 over the children's lives so far, at `now_ms`.
+pub fn children_restart_with_bounded_backoff(
+    records: &[ChildRecord],
+    now_ms: u64,
+) -> Result<(), Violation> {
+    const N: u8 = 8;
+    const NAME: &str = "children_restart_with_bounded_backoff";
+    let fail = |detail: String| Err(Violation::new(N, NAME, detail));
+    // Per child: when it went down, if it is down, and its restarts inside the window.
+    let mut children: BTreeMap<SidecarId, (Option<u64>, VecDeque<u64>)> = BTreeMap::new();
+    for record in records {
+        let (down, restarts) = children.entry(record.child).or_default();
+        match record.event {
+            ChildEvent::Started => *down = None,
+            ChildEvent::Down => {
+                // The exit that follows a kill is the same going down.
+                if down.is_none() {
+                    *down = Some(record.at_ms);
+                }
+            }
+            ChildEvent::Restarted => {
+                let Some(since) = down.take() else {
+                    return fail(format!(
+                        "{:?} restarted at {} ms while it was up",
+                        record.child, record.at_ms
+                    ));
+                };
+                let wait = record.at_ms.saturating_sub(since);
+                if !(BACKOFF_MIN_MS..=BACKOFF_MAX_MS).contains(&wait) {
+                    return fail(format!(
+                        "{:?} restarted {wait} ms after it went down at {since} ms",
+                        record.child
+                    ));
+                }
+                restarts.push_back(record.at_ms);
+                while restarts
+                    .front()
+                    .is_some_and(|first| first.saturating_add(RESTART_WINDOW_MS) <= record.at_ms)
+                {
+                    restarts.pop_front();
+                }
+                if restarts.len() > RESTARTS_PER_WINDOW {
+                    return fail(format!(
+                        "{:?} restarted {} times in the {RESTART_WINDOW_MS} ms to {} ms",
+                        record.child,
+                        restarts.len(),
+                        record.at_ms
+                    ));
+                }
+            }
+        }
+    }
+    for (child, (down, _)) in &children {
+        if let Some(since) = down
+            && now_ms.saturating_sub(*since) > BACKOFF_MAX_MS
+        {
+            return fail(format!(
+                "{child:?} went down at {since} ms and was not restarted by {now_ms} ms"
+            ));
+        }
     }
     Ok(())
 }

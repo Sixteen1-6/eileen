@@ -1,18 +1,28 @@
 //! Slice S1's flows through the minimal core, in the simulator (BUILD.md section 6.3, the
 //! first pull request): the fast path, "stop" while Eileen speaks, a backchannel, a brain
-//! answer clause by clause, a job's completion, mute, and room talk. Every step keeps every
+//! answer clause by clause, a job's completion, mute, and room talk; and the speech process's
+//! life (`wp1/speech-life`): its start, a hang, a crash, a load that never finishes, and
+//! replies on the HUD while speech is down or the microphone is muted. Every step keeps every
 //! invariant the world checks.
 
 use eileen_contracts::bus::{BusEvent, SpeakCause};
+use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{AudioCmd, Effect, Input, PlaybackEvent, UserInput};
 use eileen_contracts::harness::{BrainCmd, HookDecision, HookReply};
+use eileen_contracts::hud::MicState;
 use eileen_contracts::ids::{Personal, SpeakId, TurnId};
 use eileen_contracts::speech::{SpeechCmd, TurnEndReason, VoiceEvent};
+use eileen_sim::parts::{LOAD_MS, Process};
 use eileen_sim::world::StepOutcome;
 use eileen_sim::{BrainReply, Profile, World};
 
+/// A world whose core took its first step and whose speech process is ready.
 fn world() -> World {
-    World::new(Profile::default_profile().unwrap(), 1)
+    let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    step(&mut world, Input::User(UserInput::SetMute(false)));
+    settle(&mut world, LOAD_MS);
+    assert_eq!(world.speech().process(), Process::Up, "speech is ready");
+    world
 }
 
 fn ok(outcomes: &[StepOutcome]) {
@@ -360,8 +370,194 @@ fn mute_stops_capture_and_nothing_is_spoken() {
 #[test]
 fn an_unnamed_non_command_outside_the_window_produces_no_bus_event() {
     let mut world = world();
+    let from = world.effects().len();
     say(&mut world, 1, "want coffee?");
     settle(&mut world, 2_000);
     assert!(world.published().is_empty(), "no bus event: {:?}", events(&world));
-    assert!(world.effects().is_empty(), "no effect at all");
+    let after = bodies(&world, from);
+    assert!(
+        after.iter().all(|e| matches!(e, Effect::SetTimer { .. })),
+        "no effect but the speech process's heartbeat check: {after:?}"
+    );
+}
+
+const START: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::Start);
+const RESTART: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::Restart);
+const KILL: Effect = Effect::Sidecar(SidecarId::Speech, SidecarCmd::HangDumpThenKill);
+
+/// When the core emitted each `effect` from `from` on, ms of virtual time.
+fn times_of(world: &World, from: usize, effect: &Effect) -> Vec<u64> {
+    world
+        .effects()
+        .iter()
+        .skip(from)
+        .filter(|e| e.body == *effect)
+        .map(|e| e.mono.0 / 1_000_000)
+        .collect()
+}
+
+fn mic(world: &World) -> Option<MicState> {
+    world.hud().map(|state| state.mic.clone())
+}
+
+fn hud_line(world: &World) -> Option<String> {
+    world.hud().and_then(|state| state.speaking.clone())
+}
+
+fn typed(world: &mut World, text: &str) {
+    step(world, Input::User(UserInput::Typed { text: Personal::new(text.to_owned()) }));
+}
+
+fn heartbeats(world: &World) -> usize {
+    world
+        .inputs()
+        .iter()
+        .filter(|r| r.input == Input::Sidecar(SidecarId::Speech, SidecarEvent::Heartbeat))
+        .count()
+}
+
+#[test]
+fn speech_starts_at_boot_and_the_hud_says_loading() {
+    let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    step(&mut world, Input::User(UserInput::SetMute(false)));
+    assert_eq!(bodies(&world, 0).first(), Some(&START), "`Start` on the first step");
+    assert_eq!(mic(&world), Some(MicState::LoadingSpeech), "the HUD says loading");
+    settle(&mut world, LOAD_MS);
+    assert_eq!(mic(&world), Some(MicState::Listening), "listening once ready");
+    settle(&mut world, 60_000);
+    assert!(heartbeats(&world) >= 59, "a heartbeat every second: {}", heartbeats(&world));
+    assert_eq!(times_of(&world, 0, &START).len(), 1, "started once");
+    assert!(times_of(&world, 0, &KILL).is_empty(), "never killed while it answers");
+    assert!(times_of(&world, 0, &RESTART).is_empty(), "never restarted");
+}
+
+#[test]
+fn a_missed_heartbeat_dumps_kills_and_restarts_within_the_backoff() {
+    let mut world = world();
+    settle(&mut world, 10_000);
+    let hung_at = world.now_ms();
+    let from = world.effects().len();
+    world.hang_speech();
+    settle(&mut world, 10_000);
+    let kills = times_of(&world, from, &KILL);
+    assert_eq!(kills.len(), 1, "hang-dumped and killed once: {kills:?}");
+    assert!(
+        kills[0] > hung_at && kills[0] <= hung_at + 5_000,
+        "within 5 s of the last heartbeat: hung at {hung_at} ms, killed at {} ms",
+        kills[0]
+    );
+    let restarts = times_of(&world, from, &RESTART);
+    assert_eq!(restarts, [kills[0] + 1_000], "restarted after the first step, 1 s");
+    assert!(
+        events(&world).iter().any(|e| matches!(
+            e,
+            BusEvent::SidecarRestarted { which: SidecarId::Speech, reason }
+                if reason == "missed heartbeat"
+        )),
+        "the restart is on the bus"
+    );
+    assert_eq!(mic(&world), Some(MicState::Listening), "back after its load");
+    assert_eq!(world.speech().process(), Process::Up);
+}
+
+#[test]
+fn a_crash_restarts_without_a_dump() {
+    let mut world = world();
+    settle(&mut world, 3_000);
+    let from = world.effects().len();
+    world.crash_speech();
+    let crashed_at = world.now_ms();
+    settle(&mut world, 500);
+    assert_eq!(mic(&world), Some(MicState::SpeechRestarting), "the HUD says restarting");
+    settle(&mut world, 10_000);
+    assert!(times_of(&world, from, &KILL).is_empty(), "no dump for a process that exited");
+    assert_eq!(times_of(&world, from, &RESTART), [crashed_at + 1_000], "restarted after 1 s");
+    assert_eq!(mic(&world), Some(MicState::Listening), "back");
+}
+
+#[test]
+fn a_load_that_never_readies_is_killed_and_restarted_with_longer_steps() {
+    let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    world.stick_speech_loads(true);
+    step(&mut world, Input::User(UserInput::SetMute(false)));
+    settle(&mut world, 1_200_000);
+    let starts: Vec<u64> =
+        times_of(&world, 0, &START).into_iter().chain(times_of(&world, 0, &RESTART)).collect();
+    let kills = times_of(&world, 0, &KILL);
+    assert_eq!(kills.len(), 8, "eight loads given up in 20 minutes: {kills:?}");
+    for (start, kill) in starts.iter().zip(&kills) {
+        assert_eq!(kill - start, 120_000, "each load gets 120 s");
+    }
+    let steps: Vec<u64> =
+        kills.iter().zip(starts.iter().skip(1)).map(|(kill, next)| (next - kill) / 1_000).collect();
+    assert_eq!(steps, [1, 2, 4, 8, 16, 32, 60, 60], "each step longer, up to 60 s and no more");
+    assert_eq!(mic(&world), Some(MicState::SpeechRestarting));
+    world.stick_speech_loads(false);
+    settle(&mut world, 240_000);
+    assert_eq!(mic(&world), Some(MicState::Listening), "a load that finishes is kept");
+}
+
+#[test]
+fn a_reply_while_speech_is_down_goes_to_the_hud() {
+    let mut world = world();
+    world.crash_speech();
+    settle(&mut world, 10);
+    let from = world.effects().len();
+    typed(&mut world, "what time is it");
+    assert!(
+        hud_line(&world).is_some_and(|line| line.starts_with("It's ")),
+        "the answer is on the HUD: {:?}",
+        hud_line(&world)
+    );
+    world.script_brain(BrainReply::text(&["Rivers carry water to the sea. ", "They feed lakes."]));
+    typed(&mut world, "tell me about rivers");
+    settle(&mut world, 1_500);
+    assert_eq!(world.speech().process(), Process::Loading, "speech is not back yet");
+    assert!(speaks(&bodies(&world, from)).is_empty(), "nothing is spoken while speech is down");
+    assert_eq!(
+        hud_line(&world).as_deref(),
+        Some("Rivers carry water to the sea. They feed lakes."),
+        "the brain's answer is on the HUD"
+    );
+    settle(&mut world, 5_000);
+    let from = world.effects().len();
+    say(&mut world, 2, "Eileen, what time is it?");
+    settle(&mut world, 100);
+    assert_eq!(speaks(&bodies(&world, from)).len(), 1, "spoken again once speech is back");
+}
+
+#[test]
+fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
+    let mut world = world();
+    world.script_brain(BrainReply::text(&[
+        "Rivers carry water from the hills down to the sea. ",
+        "Along the way they cut valleys. ",
+        "Some of the longest run for thousands of kilometres.",
+    ]));
+    say(&mut world, 1, "Eileen, tell me about rivers");
+    settle(&mut world, 1_000);
+    world.crash_speech();
+    settle(&mut world, 2_000);
+    let line = hud_line(&world).unwrap_or_default();
+    assert!(
+        line.ends_with("Some of the longest run for thousands of kilometres."),
+        "what was not synthesized is on the HUD: {line:?}"
+    );
+    assert!(!line.contains("hills"), "the clause already synthesized played: {line:?}");
+}
+
+#[test]
+fn a_typed_request_while_muted_is_answered_on_the_hud() {
+    let mut world = world();
+    step(&mut world, Input::User(UserInput::SetMute(true)));
+    assert_eq!(mic(&world), Some(MicState::Muted));
+    let from = world.effects().len();
+    typed(&mut world, "what time is it");
+    settle(&mut world, 2_000);
+    assert!(speaks(&bodies(&world, from)).is_empty(), "nothing spoken while muted");
+    assert!(
+        hud_line(&world).is_some_and(|line| line.starts_with("It's ")),
+        "answered on the HUD: {:?}",
+        hud_line(&world)
+    );
 }
