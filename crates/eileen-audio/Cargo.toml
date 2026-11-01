@@ -26,13 +26,24 @@ fake = ["dep:eileen-rt"]
 [dependencies]
 eileen-contracts.workspace = true
 eileen-rt = { workspace = true, optional = true }
+rtrb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cpal.workspace = true
 
+# The ring's own atomics come from loom under `--cfg loom`, so its loom tests explore them; no
+# build without that flag takes loom.
+[target.'cfg(loom)'.dependencies]
+loom.workspace = true
+
 [dev-dependencies]
+# The capture side's no-allocation check (decision D82): a dev-dependency only, so its global
+# allocator reaches only this crate's test binaries.
+allocation-counter.workspace = true
+# The ring's concurrency tests run on a named thread when they do not run under loom.
+eileen-stdx.workspace = true
 # This crate's own tests compile `fake` under `cfg(test)`, without the feature.
 eileen-rt.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
