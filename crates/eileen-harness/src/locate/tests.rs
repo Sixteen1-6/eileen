@@ -319,13 +319,49 @@ fn versions_compare_by_number_and_the_floor_is_2_1_284() {
 #[test]
 fn a_claude_exe_comes_before_the_shims_in_one_folder() {
     let scratch = Scratch::new();
-    let exe = scratch.file("bin/claude.exe", "MZ");
-    scratch.file("bin/claude.cmd", CMD_SHIM);
+    let exe = scratch.file("home/.local/bin/claude.exe", "MZ");
+    scratch.file("home/.local/bin/claude.cmd", CMD_SHIM);
 
-    let install = locate_claude(&windows_env(&[&scratch.path().join("bin")])).unwrap();
+    let install = locate_claude(&windows_env(&[&scratch.path().join("home/.local/bin")])).unwrap();
 
     assert_eq!(install.exe, exe, "cmd.exe runs claude.exe first, as the default PATHEXT orders");
-    assert_eq!(install.kind, InstallKind::Other, "neither npm's nor the native installer's");
+    assert_eq!(install.kind, InstallKind::Native, "the native installer's");
+}
+
+#[test]
+fn a_bare_claude_exe_in_another_folder_is_passed_over() {
+    let scratch = Scratch::new();
+    let stray = scratch.file("tools/claude.exe", "MZ");
+    let (shim, exe) = npm_layout(&scratch, "2.1.304");
+    let env = windows_env(&[&scratch.path().join("tools"), &scratch.path().join("npm")]);
+
+    let install = locate_claude(&env).unwrap();
+
+    assert_eq!(install.exe, exe, "the npm install after it is chosen");
+    assert_eq!(install.kind, InstallKind::NpmShim { shim }, "through its shim");
+    assert_eq!(
+        install.skipped,
+        vec![Refusal { path: stray, reason: RefusalReason::UnknownInstall }],
+        "an executable of neither layout is named and passed over"
+    );
+}
+
+#[test]
+fn a_shim_that_names_a_binary_outside_the_npm_package_is_passed_over() {
+    let scratch = Scratch::new();
+    scratch.file("elsewhere/claude.exe", "MZ");
+    let shim =
+        scratch.file("npm/claude.cmd", "@ECHO off\r\n\"%dp0%\\..\\elsewhere\\claude.exe\" %*\r\n");
+
+    let found = locate_claude(&windows_env(&[&scratch.path().join("npm")]));
+
+    assert_eq!(
+        found,
+        Err(LocateError::NoUsableCli {
+            refused: vec![Refusal { path: shim, reason: RefusalReason::UnknownInstall }],
+        }),
+        "a shim is accepted only when it leads into npm's package"
+    );
 }
 
 #[test]
@@ -435,5 +471,45 @@ fn a_path_folder_linked_into_a_claude_folder_is_refused() {
             refused: vec![Refusal { path: link, reason: RefusalReason::UnderClaudeFolder }],
         }),
         "the folder's link is read, and its target refused by name before anything in it"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_native_link_on_unix_resolves_to_its_release() {
+    let scratch = Scratch::new();
+    let release = scratch.file("home/.local/share/claude/versions/2.1.316", "MZ");
+    fs::create_dir_all(scratch.path().join("home/.local/bin")).unwrap();
+    let link = scratch.path().join("home/.local/bin/claude");
+    std::os::unix::fs::symlink(&release, &link).unwrap();
+    let env =
+        LocateEnv { windows: false, ..windows_env(&[&scratch.path().join("home/.local/bin")]) };
+
+    let install = locate_claude(&env).unwrap();
+
+    assert_eq!(install.kind, InstallKind::Native, "the native installer's link");
+    assert_eq!(install.exe, release, "the release it leads to is the binary");
+    assert_eq!(install.version, Some(version("2.1.316")), "named by the release");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_unix_claude_outside_both_layouts_is_passed_over() {
+    let scratch = Scratch::new();
+    let stray = scratch.file(
+        "bin/claude",
+        "#!/bin/sh
+",
+    );
+    let env = LocateEnv { windows: false, ..windows_env(&[&scratch.path().join("bin")]) };
+
+    let found = locate_claude(&env);
+
+    assert_eq!(
+        found,
+        Err(LocateError::NoUsableCli {
+            refused: vec![Refusal { path: stray, reason: RefusalReason::UnknownInstall }],
+        }),
+        "neither npm's link nor the native installer's"
     );
 }

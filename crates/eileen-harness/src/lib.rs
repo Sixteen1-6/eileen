@@ -55,16 +55,22 @@
 //!   denylist (sections 2.3, 2.5 and 2.12; `session::tests`). Every path a session is given is
 //!   absolute and none lies under a `.claude` folder. A third-party MCP server reaches only the
 //!   job kinds its config entry names.
-//! - The CLI found is never the Claude desktop app's bundled copy and never lies under a
-//!   `.claude` folder, and a `PATH` folder under one is refused before anything in it is looked
-//!   at (`locate::tests::the_desktop_app_copy_is_refused`,
+//! - The CLI found is npm's package binary or the native installer's, never the Claude desktop
+//!   app's bundled copy or another `claude` on `PATH`, and never lies under a `.claude` folder;
+//!   a `PATH` folder under one is refused before anything in it is looked at
+//!   (`locate::tests::the_desktop_app_copy_is_refused`,
+//!   `locate::tests::a_bare_claude_exe_in_another_folder_is_passed_over`,
 //!   `locate::tests::a_folder_under_the_users_claude_folder_is_never_searched`).
 //! - `eileen doctor claude` reads `claude auth status` by its exit code only, never its output,
-//!   and a signed-out CLI gets the `claude auth login` suggestion with nothing else started
-//!   (`cli::doctor::tests::a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs`);
-//!   every probe runs in the worker environment with a deadline
-//!   (`cli::doctor::tests::auth_status_runs_in_the_worker_environment_with_a_deadline`, and
-//!   the version and vswhere probes in their own tests).
+//!   and any exit code but 0 gets the `claude auth login` suggestion with nothing else started
+//!   (`cli::doctor::tests::a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs`,
+//!   `cli::doctor::tests::any_non_zero_exit_of_auth_status_gets_the_login_suggestion`); every
+//!   probe runs as a tool in a coding worker's environment, built by the same code as a
+//!   worker's, with a deadline, and the CLI and the toolchains are looked for on that
+//!   environment's `PATH`
+//!   (`cli::doctor::tests::auth_status_runs_in_the_worker_environment_with_a_deadline`,
+//!   `cli::doctor::tests::the_toolchains_are_looked_for_on_the_path_a_worker_gets`, and the
+//!   version and vswhere probes in their own tests).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -87,8 +93,14 @@
 //!   command line, settings file and MCP config (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
 //!   against `eileen-stub-harness`, the CLI's location against fake npm and native layouts in a
-//!   temporary folder, the doctor against a scripted probe runner, the two fuzz targets with their corpora replayed in
-//!   `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC.
+//!   temporary folder, the doctor against a scripted probe runner, its supervised runner against
+//!   this test binary run again as a chatty child
+//!   (`cli::doctor::tests::the_supervised_runner_reads_a_real_child_to_its_exit`: exit code,
+//!   the 4 KB cap on standard output, standard error drained), the two fuzz targets with their
+//!   corpora replayed in `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC. The
+//!   kill when a probe's deadline passes is dropping the supervised child, which
+//!   `eileen-supervisor`'s own tests cover (dropping a child kills its job), since testing it
+//!   here would need a real-time wait.
 //! - A bug here starts as a stream-json line that became `Unknown`, or a session whose init
 //!   lists a server it should not.
 //!
@@ -102,7 +114,12 @@
 //! - `claude auth status` prints the account's email and organisation, so the doctor reads its
 //!   exit code only: standard output is null, and standard error is drained and dropped
 //!   (`ChildSpec::raw_stderr`), since the supervisor would otherwise forward each line into
-//!   tracing.
+//!   tracing. Only exit code 0 is recorded as signed in, so every other code is read as signed
+//!   out.
+//! - On Windows tokio reads each child pipe on a blocking-pool thread, and a probe reads its
+//!   standard output while draining its standard error, so the doctor's runtime needs two
+//!   blocking threads (`cli::doctor::BLOCKING_THREADS`); with one, a child that fills its
+//!   standard error stalls until the deadline.
 //! - Windows links count too: a `claude.exe` in a `PATH` folder can be a symbolic link or sit
 //!   behind a junction, so `locate` follows each link by reading it, checking every target by
 //!   name before anything there is looked at, rather than canonicalizing, which would open

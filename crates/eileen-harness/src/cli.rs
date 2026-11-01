@@ -68,12 +68,16 @@ pub const fn claude(_command: Option<ClaudeCommand>) -> Result<(), CliError> {
 }
 
 /// Runs `eileen doctor claude` and prints its report on standard output: the CLI Eileen
-/// would run, its version, whether it is signed in, and the toolchains a worker sees. Fails
+/// would run, its version, whether it is signed in, and the toolchains a worker sees, all in a
+/// coding worker's environment. Fails
 /// when no CLI can be used or the one found is not ready.
 pub fn doctor_claude() -> Result<(), CliError> {
     let failed = |error: io::Error| CliError::DoctorFailed { reason: error.to_string() };
     let inputs = doctor::DoctorInputs::from_process();
-    let runtime = eileen_rt::runtime::build("doctor", Some(1), 1).map_err(failed)?;
+    // Two blocking threads: on Windows each child pipe is read on one, and a probe reads its
+    // standard output and drains its standard error at once.
+    let runtime =
+        eileen_rt::runtime::build("doctor", Some(1), doctor::BLOCKING_THREADS).map_err(failed)?;
     let found = doctor::doctor(&inputs, &mut doctor::SupervisedRunner::new(&runtime));
     let mut out = io::stdout().lock();
     match found {

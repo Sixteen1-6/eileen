@@ -35,6 +35,7 @@ use eileen_contracts::harness::{Effort, EnvPolicy, SessionSpec};
 use eileen_contracts::jobs::{JobKind, Toolset};
 use serde_json::{Map, Value, json};
 
+pub(crate) use self::env::worker_env;
 pub use self::env::{
     BRAIN_ALLOWLIST, HostEnv, PASS_THROUGH, SessionEnv, is_denylisted, mcp_tool_timeout_ms,
 };

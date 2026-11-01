@@ -5,9 +5,10 @@
 //! The search reads only what it is given ([`LocateEnv`]), so both layouts are tested in a
 //! temporary folder on every OS. It walks `PATH` in order, because the first `claude` there is
 //! the one the user runs, then npm's global folder under `%APPDATA%` and the native installer's
-//! `~/.local/bin`. A candidate in the desktop app's folders is skipped and named, so the user
-//! learns why it was passed over, and a `PATH` folder under a `.claude` folder is refused before
-//! anything in it is looked at.
+//! `~/.local/bin`. Only those two layouts are accepted (section 2.5): any other `claude` found,
+//! the desktop app's copy or a stray executable earlier on `PATH`, is skipped and named, so the
+//! user learns why it was passed over, and a `PATH` folder under a `.claude` folder is refused
+//! before anything in it is looked at.
 //!
 //! The native layout, from the installer's documentation: the binary at
 //! `~/.local/bin/claude.exe` (on Unix `~/.local/bin/claude`, a link), and each downloaded
@@ -96,10 +97,8 @@ pub enum InstallKind {
         /// `claude.cmd` or `claude.ps1` (on Unix, npm's link).
         shim: PathBuf,
     },
-    /// The native installer's binary in `~/.local/bin`.
+    /// The native installer's binary in `~/.local/bin`, or one of its releases.
     Native,
-    /// Some other `claude` executable on `PATH`.
-    Other,
 }
 
 /// Why a candidate was passed over.
@@ -111,6 +110,8 @@ pub enum RefusalReason {
     UnderClaudeFolder,
     /// A shim that runs a script through node, or leads to no binary that exists.
     ShimWithoutBinary,
+    /// An executable that is neither npm's package binary nor the native installer's.
+    UnknownInstall,
 }
 
 impl fmt::Display for RefusalReason {
@@ -119,6 +120,7 @@ impl fmt::Display for RefusalReason {
             Self::DesktopApp => "the Claude desktop app's own copy, which Eileen never runs",
             Self::UnderClaudeFolder => "under a .claude folder, which Eileen never opens",
             Self::ShimWithoutBinary => "a shim with no claude executable behind it",
+            Self::UnknownInstall => "not an npm or native-installer copy",
         })
     }
 }
@@ -225,7 +227,7 @@ fn in_windows_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
         .map(|shim| through_shim(&shim))
 }
 
-/// `claude` in `dir`: npm's link into its package, the native installer's, or another.
+/// `claude` in `dir`: npm's link into its package, or the native installer's.
 fn in_unix_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
     let found = dir.join("claude");
     if !is_here(&found) {
@@ -239,10 +241,7 @@ fn in_unix_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
     if target.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("js")) {
         return Some(Err(refuse(RefusalReason::ShimWithoutBinary)));
     }
-    if in_npm_package(&target) {
-        return Some(checked(&found, target, |shim| InstallKind::NpmShim { shim }));
-    }
-    Some(checked(&found, target, |found| native_or_other(&found)))
+    Some(checked(&found, target))
 }
 
 /// Whether something, a dangling link included, is at `path`; nothing a link leads to is
@@ -254,28 +253,34 @@ fn is_here(path: &Path) -> bool {
 /// A `claude` executable found as it is, or a link to one.
 fn direct(found: &Path) -> Result<ClaudeInstall, Refusal> {
     let exe = resolve(found).map_err(|reason| Refusal { path: found.to_path_buf(), reason })?;
-    checked(found, exe, |found| native_or_other(&found))
-}
-
-fn native_or_other(found: &Path) -> InstallKind {
-    if is_native_bin(found) { InstallKind::Native } else { InstallKind::Other }
+    checked(found, exe)
 }
 
 /// Refuses `exe`, already resolved, when it or `found` is the desktop app's, lies under a
-/// `.claude` folder or is no file; otherwise the install, with its version from the layout. A
-/// refusal names `found`, what the user has.
-fn checked(
-    found: &Path,
-    exe: PathBuf,
-    kind: impl FnOnce(PathBuf) -> InstallKind,
-) -> Result<ClaudeInstall, Refusal> {
+/// `.claude` folder, is no file, or belongs to neither layout; otherwise the install, with its
+/// version from the layout. A refusal names `found`, what the user has.
+fn checked(found: &Path, exe: PathBuf) -> Result<ClaudeInstall, Refusal> {
     let refuse = |reason| Refusal { path: found.to_path_buf(), reason };
     refuse_by_name(found).and_then(|()| refuse_by_name(&exe)).map_err(refuse)?;
     if !exe.is_file() {
         return Err(refuse(RefusalReason::ShimWithoutBinary));
     }
+    let kind = install_kind(found, &exe).ok_or_else(|| refuse(RefusalReason::UnknownInstall))?;
     let version = layout_version(&exe);
-    Ok(ClaudeInstall { kind: kind(found.to_path_buf()), exe, version, skipped: Vec::new() })
+    Ok(ClaudeInstall { kind, exe, version, skipped: Vec::new() })
+}
+
+/// Which of the two layouts section 2.5 accepts `exe`, found as `found`, belongs to: npm's
+/// package binary, or the native installer's `~/.local/bin` executable or one of its releases.
+/// `None` for anything else, which the search passes over.
+fn install_kind(found: &Path, exe: &Path) -> Option<InstallKind> {
+    if in_npm_package(exe) {
+        Some(InstallKind::NpmShim { shim: found.to_path_buf() })
+    } else if is_native_bin(found) || is_native_release(exe) {
+        Some(InstallKind::Native)
+    } else {
+        None
+    }
 }
 
 /// The desktop app's folders and `.claude` folders, by name alone, before anything there is
@@ -366,7 +371,7 @@ fn through_shim(shim: &Path) -> Result<ClaudeInstall, Refusal> {
     });
     let exe = named.unwrap_or_else(|| npm_package_dir(&dir).join("bin").join("claude.exe"));
     let exe = resolve(&exe).map_err(refuse)?;
-    checked(shim, exe, |shim| InstallKind::NpmShim { shim })
+    checked(shim, exe)
 }
 
 /// Every path a shim starts relative to its own folder: `%dp0%\...` or `%~dp0\...` in
@@ -415,6 +420,16 @@ fn is_native_bin(path: &Path) -> bool {
         && from_end.next().is_some_and(|local| local.eq_ignore_ascii_case(".local"))
 }
 
+/// Whether `path` is one of the native installer's releases,
+/// `.local/share/claude/versions/<version>`.
+fn is_native_release(path: &Path) -> bool {
+    let names = names(path);
+    let mut from_end = names.iter().rev();
+    let wanted = ["versions", "claude", "share", ".local"];
+    from_end.next().is_some_and(|release| ClaudeVersion::parse(release).is_some())
+        && wanted.iter().all(|want| from_end.next().is_some_and(|name| named(name, want)))
+}
+
 /// The version the layout records: `version` in npm's `package.json` for the package's binary,
 /// or the name of the native installer's release a Unix link leads to
 /// (`~/.local/share/claude/versions/<version>`). `None` when the layout says nothing, as for
@@ -428,11 +443,7 @@ fn layout_version(exe: &Path) -> Option<ClaudeVersion> {
         let value: serde_json::Value = serde_json::from_str(&text).ok()?;
         return value.get("version")?.as_str().and_then(ClaudeVersion::parse);
     }
-    let parent_is_versions = exe
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|name| name.eq_ignore_ascii_case("versions"));
-    if parent_is_versions {
+    if is_native_release(exe) {
         return exe.file_name()?.to_str().and_then(ClaudeVersion::parse);
     }
     None

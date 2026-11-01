@@ -4,10 +4,14 @@
 //!
 //! The sign-in check is `claude auth status`, read by its exit code only (D4): its output names
 //! the account, so standard output is null and standard error is read and dropped, never
-//! forwarded into the logs. When the CLI is signed out the report asks the user to run
-//! `claude auth login` and nothing else starts; Eileen never runs a login. Nothing here opens a
-//! credential file or anything under a `.claude` folder. Every probe starts through
-//! `eileen_supervisor`, in the worker environment, with a deadline.
+//! forwarded into the logs. Exit code 0 is the only one recorded as signed in, so any other
+//! code counts as signed out: the report names the code, asks the user to run `claude auth
+//! login` and starts nothing else; Eileen never runs a login. Nothing here opens a credential
+//! file or anything under a `.claude` folder.
+//!
+//! Every probe starts through `eileen_supervisor` as a short tool run, with a deadline, in the
+//! environment a coding worker gets (`session::worker_env`), and the CLI and the toolchains are
+//! looked for on that environment's `PATH`, so the doctor sees what a worker sees.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -15,6 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use eileen_contracts::jobs::JobKind;
 use eileen_supervisor::{ChildClass, ChildSpec};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -22,7 +27,7 @@ use crate::locate::{
     ClaudeInstall, ClaudeVersion, InstallKind, LocateEnv, LocateError, MIN_CLI, TESTED_CLI,
     locate_claude,
 };
-use crate::session::{is_denylisted, under_claude_folder};
+use crate::session::{HostEnv, SessionEnv, under_claude_folder, worker_env};
 
 /// How long `claude auth status` may take. A cold start of the CLI takes about 1.5 s on the
 /// owner's PC (the prior-art report), and much longer under load.
@@ -34,8 +39,10 @@ pub const VERSION_DEADLINE: Duration = Duration::from_secs(20);
 /// How long vswhere may take.
 pub const VSWHERE_DEADLINE: Duration = Duration::from_secs(15);
 
-/// The exit code of `claude auth status` when no account is signed in.
-pub const SIGNED_OUT_EXIT: i32 = 1;
+/// The blocking threads the doctor's runtime needs: on Windows tokio reads each child pipe on
+/// a blocking thread, and a probe reads its standard output and drains its standard error at
+/// once.
+pub const BLOCKING_THREADS: usize = 2;
 
 /// The most bytes of a probe's standard output kept; the rest is read and dropped.
 const MAX_STDOUT: usize = 4 * 1024;
@@ -45,12 +52,14 @@ const MSVC_COMPONENT: &str = "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
 
 /// What the doctor reads from the user's machine. The CLI fills it from the process
 /// ([`DoctorInputs::from_process`]); tests build it.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorInputs {
-    /// Where to look for the CLI.
-    pub locate: LocateEnv,
-    /// The user's environment, from which each probe's is built by the worker denylist.
-    pub host_vars: Vec<(String, String)>,
+    /// What a worker's environment is built from, as for a session: the user's variables, and
+    /// the registry's `PATH` and the toolchain folders when they were read. Its `Debug` shows
+    /// names only.
+    pub host: HostEnv,
+    /// Whether to look for Windows names; the CLI sets it to `cfg!(windows)`.
+    pub windows: bool,
     /// `vswhere.exe` in the Visual Studio Installer folder, on Windows.
     pub vswhere: Option<PathBuf>,
     /// The CLI versions the running Eileen's Claude sessions report, or `None` when no running
@@ -58,50 +67,40 @@ pub struct DoctorInputs {
     pub running: Option<Vec<ClaudeVersion>>,
 }
 
-/// Names only: the values can hold the user's secrets.
-impl fmt::Debug for DoctorInputs {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DoctorInputs")
-            .field("locate", &self.locate)
-            .field("host_vars", &self.host_vars.iter().map(|(name, _)| name).collect::<Vec<_>>())
-            .field("vswhere", &self.vswhere)
-            .field("running", &self.running)
-            .finish()
-    }
-}
-
 impl DoctorInputs {
-    /// Reads the process's environment: `PATH` (which the worker denylist keeps), `%APPDATA%`,
-    /// the home folder and the Visual Studio Installer folder. No running Eileen is asked yet:
-    /// the status endpoint that reports the running sessions' versions is WP2's.
+    /// Reads the process's environment and finds the Visual Studio Installer folder. The
+    /// registry's `PATH` and the toolchain folders are left unread, so the `PATH` searched is
+    /// this shell's and the report says so; reading them for a worker is the runtime's (WP2).
+    /// No running Eileen is asked yet: the status endpoint that reports the running sessions'
+    /// versions is WP2's too.
     #[must_use]
     pub fn from_process() -> Self {
         let windows = cfg!(windows);
-        let host_vars: Vec<(String, String)> = std::env::vars_os()
+        let vars: Vec<(String, String)> = std::env::vars_os()
             .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
             .collect();
-        let get = |wanted: &str| {
-            host_vars
-                .iter()
-                .find(
-                    |(name, _)| {
-                        if windows { name.eq_ignore_ascii_case(wanted) } else { name == wanted }
-                    },
-                )
-                .map(|(_, value)| PathBuf::from(value))
-        };
-        let path_dirs = get("PATH").map(|path| std::env::split_paths(&path).collect());
-        let vswhere = get("ProgramFiles(x86)").filter(|_| windows).map(|programs| {
-            programs.join("Microsoft Visual Studio").join("Installer").join("vswhere.exe")
-        });
-        let locate = LocateEnv {
-            path_dirs: path_dirs.unwrap_or_default(),
-            appdata: get("APPDATA"),
-            home: get(if windows { "USERPROFILE" } else { "HOME" }),
-            windows,
-        };
-        Self { locate, host_vars, vswhere, running: None }
+        let vswhere = vars
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("ProgramFiles(x86)"))
+            .filter(|_| windows)
+            .map(|(_, programs)| {
+                Path::new(programs)
+                    .join("Microsoft Visual Studio")
+                    .join("Installer")
+                    .join("vswhere.exe")
+            });
+        let host = HostEnv { vars, names_ignore_case: windows, ..HostEnv::default() };
+        Self { host, windows, vswhere, running: None }
     }
+}
+
+/// Where the `PATH` the doctor searched came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathSource {
+    /// The registry's system and user `PATH`, as a worker gets it.
+    Registry,
+    /// The shell `eileen doctor claude` runs in, because the registry's was not read.
+    Shell,
 }
 
 /// One process the doctor starts, and how long it may take.
@@ -246,16 +245,17 @@ impl VersionCheck {
 /// What `claude auth status` answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthCheck {
-    /// Exit code 0.
+    /// Exit code 0, the only code recorded as signed in (D4).
     SignedIn,
-    /// Exit code [`SIGNED_OUT_EXIT`].
-    SignedOut,
-    /// Another exit code, or none.
-    Unclear {
-        /// The exit code, `None` when a signal ended it.
-        exit_code: Option<i32>,
+    /// Any other exit code. Which code a signed-out CLI exits with is not recorded, so every
+    /// code but 0 gets the login suggestion.
+    SignedOut {
+        /// The exit code, which the report names.
+        exit_code: i32,
     },
-    /// No answer at all.
+    /// A signal ended it before it answered.
+    EndedBySignal,
+    /// No answer at all: it could not start, or its deadline passed.
     NoAnswer(ProbeError),
 }
 
@@ -301,6 +301,8 @@ pub struct Toolchains {
 /// What `eileen doctor claude` found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorReport {
+    /// Where the `PATH` searched for the CLI and the toolchains came from.
+    pub path: PathSource,
     /// The CLI Eileen would run.
     pub install: ClaudeInstall,
     /// Its version.
@@ -322,32 +324,52 @@ impl DoctorReport {
     }
 }
 
-/// Runs the checks: finds the CLI, asks `claude auth status`, and only when it is signed in
-/// asks its version (when the layout gave none) and looks for the toolchains.
+/// Runs the checks in a coding worker's environment: finds the CLI on its `PATH`, asks `claude
+/// auth status`, and only when it is signed in asks its version (when the layout gave none) and
+/// looks for the toolchains.
 pub fn doctor(
     inputs: &DoctorInputs,
     runner: &mut dyn ProbeRunner,
 ) -> Result<DoctorReport, LocateError> {
-    let install = locate_claude(&inputs.locate)?;
+    let worker = worker_env(JobKind::Coding, &inputs.host);
+    let locate = locate_env(&worker, inputs.windows);
+    let install = locate_claude(&locate)?;
     let env: Vec<(String, String)> =
-        inputs.host_vars.iter().filter(|(name, _)| !is_denylisted(name)).cloned().collect();
+        worker.vars().map(|(name, value)| (name.to_owned(), value.to_owned())).collect();
     let auth = auth_status(&install.exe, &env, runner);
     let signed_in = auth == AuthCheck::SignedIn;
     let version = match install.version {
         None if signed_in => ask_version(&install.exe, &env, runner),
         known => known,
     };
-    let toolchains = signed_in.then(|| find_toolchains(inputs, &env, runner));
+    let toolchains = signed_in.then(|| find_toolchains(inputs, &locate.path_dirs, &env, runner));
     let version = VersionCheck::of(version);
     let running = running_check(inputs.running.as_deref(), version.version());
-    Ok(DoctorReport { install, version, auth, running, toolchains })
+    let path =
+        if inputs.host.registry_path.is_some() { PathSource::Registry } else { PathSource::Shell };
+    Ok(DoctorReport { path, install, version, auth, running, toolchains })
 }
 
+/// Where to look for the CLI, from a worker's environment: its `PATH`, `%APPDATA%` and home.
+fn locate_env(worker: &SessionEnv, windows: bool) -> LocateEnv {
+    LocateEnv {
+        path_dirs: worker
+            .get("PATH")
+            .map(|path| std::env::split_paths(path).collect())
+            .unwrap_or_default(),
+        appdata: worker.get("APPDATA").map(PathBuf::from),
+        home: worker.get(if windows { "USERPROFILE" } else { "HOME" }).map(PathBuf::from),
+        windows,
+    }
+}
+
+/// A probe of the CLI. It is a short tool run, like vswhere, not a session: a session's lower
+/// priority on a busy machine could push it past its deadline.
 fn claude_probe(exe: &Path, args: &[&str], env: &[(String, String)], deadline: Duration) -> Probe {
     let mut spec = ChildSpec::new("claude.doctor", exe)
         .args(args)
         .envs(env.iter().cloned())
-        .class(ChildClass::ClaudeSession);
+        .class(ChildClass::Tool);
     spec.env_clear = true;
     spec.piped = false;
     spec.raw_stderr = true;
@@ -357,8 +379,8 @@ fn claude_probe(exe: &Path, args: &[&str], env: &[(String, String)], deadline: D
 fn auth_status(exe: &Path, env: &[(String, String)], runner: &mut dyn ProbeRunner) -> AuthCheck {
     match runner.run(&claude_probe(exe, &["auth", "status"], env, AUTH_STATUS_DEADLINE)) {
         Ok(ProbeOutput { exit_code: Some(0), .. }) => AuthCheck::SignedIn,
-        Ok(ProbeOutput { exit_code: Some(SIGNED_OUT_EXIT), .. }) => AuthCheck::SignedOut,
-        Ok(ProbeOutput { exit_code, .. }) => AuthCheck::Unclear { exit_code },
+        Ok(ProbeOutput { exit_code: Some(exit_code), .. }) => AuthCheck::SignedOut { exit_code },
+        Ok(ProbeOutput { exit_code: None, .. }) => AuthCheck::EndedBySignal,
         Err(error) => AuthCheck::NoAnswer(error),
     }
 }
@@ -376,11 +398,11 @@ fn ask_version(
 
 fn find_toolchains(
     inputs: &DoctorInputs,
+    dirs: &[PathBuf],
     env: &[(String, String)],
     runner: &mut dyn ProbeRunner,
 ) -> Toolchains {
-    let windows = inputs.locate.windows;
-    let dirs = &inputs.locate.path_dirs;
+    let windows = inputs.windows;
     let msvc = match &inputs.vswhere {
         _ if !windows => MsvcCheck::NotWindows,
         Some(vswhere) if vswhere.is_file() => ask_vswhere(vswhere, env, runner),
@@ -461,10 +483,19 @@ fn running_check(
 impl fmt::Display for DoctorReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Claude CLI")?;
+        match self.path {
+            PathSource::Registry => {
+                writeln!(f, "  PATH:        the registry's system and user PATH, as a worker's")?;
+            }
+            PathSource::Shell => writeln!(
+                f,
+                "  PATH:        this shell's; a worker's comes from the registry, so a toolchain \
+                 installed since this shell started may show as missing here"
+            )?,
+        }
         match &self.install.kind {
             InstallKind::NpmShim { shim } => writeln!(f, "  npm shim:    {}", shim.display())?,
             InstallKind::Native => writeln!(f, "  installed:   by the native installer")?,
-            InstallKind::Other => writeln!(f, "  installed:   not by npm or the native installer")?,
         }
         writeln!(f, "  executable:  {}", self.install.exe.display())?;
         for refusal in &self.install.skipped {
@@ -526,14 +557,13 @@ impl fmt::Display for AuthCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SignedIn => f.write_str("yes"),
-            Self::SignedOut => f.write_str(
-                "no. Please run `claude auth login` yourself, then run `eileen doctor claude` \
-                 again. Eileen never runs the login.",
+            Self::SignedOut { exit_code } => write!(
+                f,
+                "no (`claude auth status` exited with code {exit_code}). Please run `claude auth \
+                 login` yourself, then run `eileen doctor claude` again. Eileen never runs the \
+                 login."
             ),
-            Self::Unclear { exit_code: Some(code) } => {
-                write!(f, "not clear: `claude auth status` exited with code {code}")
-            }
-            Self::Unclear { exit_code: None } => {
+            Self::EndedBySignal => {
                 f.write_str("not clear: `claude auth status` was ended by a signal")
             }
             Self::NoAnswer(ProbeError::DeadlinePassed(deadline)) => write!(
