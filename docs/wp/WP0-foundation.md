@@ -27,6 +27,7 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
+| 8 | `wp0/ci-cache-fresh` | Pull request #139, opened 2026-11-01, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974 |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -120,6 +121,38 @@ vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRI
 third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
 and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
 in the workspace.
+
+`wp0/ci-cache-fresh` keeps the dependency artifacts in the rust-cache entries usable when the key
+misses. On a restore that is not a full match, rust-cache v2.9.3 deletes every entry of
+`target/debug/build`, `.fingerprint` and `deps` dated more than a week ago, and artifacts carried
+from key to key keep their first build's date, so any `Cargo.toml` or `Cargo.lock` change a week
+after a dependency was first built rebuilt it. `logic-linux`, `windows-clippy` and `windows-test`
+now end with a step that runs only where they save (`main`) and gives every file and folder below
+those three folders one and the same date before rust-cache's save. One date, not each entry's own
+moment, because cargo rebuilds a unit whose dependency's output is newer than its own and counts
+equal dates as fresh: dating only the top-level entries would leave each build script's compiled
+program older than the libraries it was built from, so every restore would rerun those scripts and
+rebuild what depends on them. A temporary probe in run 41314107974, after `logic-linux`'s own
+builds, dated only the top-level entries and ran clippy and `cargo nextest run --no-run` again:
+cargo rebuilt 222 units. After the one-date step it rebuilt none, and none in `windows-clippy`
+either. The three jobs also keep only the toolchain `rust-toolchain.toml` pins before rust-cache
+runs, on every event, because rust-cache hashes `rustc -vV` of every installed toolchain into the
+key and the runner images carry their own stable. A `prune-caches` job, on pushes to `main` only and
+after those three jobs, keeps the newest entry of each shared key (`linux`, `win-clippy`,
+`win-test`) and deletes the older ones with `gh cache delete`, holding `actions: write` and nothing
+else; it is upkeep, so `all-green` does not need it. The tests in `xtask::workflows::tests` hold
+`ci.yml` to all of it, and hold every job in any workflow that restores one of those keys to the
+same toolchain step.
+
+The Linux desktop lane (`linux-desktop.yml`, WP10's) restores the `linux` key without saving, and
+until now matched `main`'s entry in full, because both kept the image's stable 1.99.1 beside the
+pinned 1.99.0 (`a820fa96`). Once this merges, `main` saves under the pinned-only hash
+(`df0daf48`) and the first `prune-caches` run deletes the `a820fa96` entries, so the lane loses
+its only matching Rust cache and builds from a partial restore each night until it keeps only the
+pinned toolchain too. That change is pull request #144, an amendment to WP10's file, which should
+merge with this one; until it does, the workflow tests list the lane's `session` job as the one
+known exception and fail once it gains the step. BUILD.md's sections 4.6 and 4b.3 gain
+`prune-caches` and this cache policy in amendment #143.
 
 ## Acceptance records
 
@@ -736,6 +769,23 @@ the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows
 `logic-linux` 190 s (tests 55 s, the simulator's seed set 61 s with its build), `windows-clippy`
 120 s (clippy 50 s, `fetch-native` 15 s), `windows-test` 165 s (tests 93 s), `all-green` 3 s;
 `pr-meta` 21 s. Against `wp0/stubs`' cold run each Windows job took about 69 percent less time.
+
+The cache, measured on 2026-11-01 over the week's runs (131 pull request runs with the Rust lanes,
+27 `windows-test` logs read in full): a run whose cache key matched in full took a median of 3.0
+minutes, and `windows-test` compiled only the 47 workspace crates; the 6 runs whose partial restore
+purged week-old artifacts compiled 152 to 245 crates and took 5.7 to 10 minutes. One of them, after
+`d19fbe6` added no crates.io package at all, still rebuilt 107. The cache held 11.1 GB in 28
+entries, over GitHub's 10 GB limit. `wp0/ci-cache-fresh` answers both. Its own run 41310530260 found
+no Windows cache, as expected once: the Windows images carry stable 1.99.1 beside the pinned 1.99.0,
+so dropping it moved the Windows key from `d502fb97` to `d199978c`, and `main`'s first run after the
+merge saves the new entries. On Linux, `main`'s current key (`a820fa96`) also hashes the image's
+1.99.1; the pull request restored an older `df0daf48` entry, saved before the image moved, as a
+partial match. To confirm the fix, read the `windows-test` log of a pull request that edits a
+`Cargo.toml` or the lockfile and restores an entry `main` saved less than a week before, while that
+entry holds dependencies first built more than a week earlier: rust-cache logs `full match: false`,
+yet the tests step compiles only the workspace crates and the changed dependencies, not the 107 to
+245 crates of before. The step that dates the artifacts prints how many files and folders it dated
+in each folder in `main`'s logs, and `prune-caches` names each entry it deletes.
 
 The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
 the owner's PC writes its percentiles between these markers and its thresholds to
