@@ -2,9 +2,12 @@
 //! device's 10 ms callbacks: onset to pause within 96 ms of virtual time plus one callback, the
 //! heard prefix equal to the text of the samples played, and a backchannel that resumes from
 //! the paused sample. Each test also runs invariants 2, 3 and 9 over the world's audio trace.
+//! Two known gaps are asserted as they are today: a stop with no pause first can tell a heard
+//! prefix a character short (#151), and Eileen keeps speaking while another app uses the
+//! microphone (#152).
 
 use eileen_contracts::bus::BusEvent;
-use eileen_contracts::core_io::{AudioCmd, Effect, Input, UserInput};
+use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Effect, Input, PlaybackEvent, UserInput};
 use eileen_contracts::harness::BrainCmd;
 use eileen_contracts::ids::{Personal, SpeakId, TurnId};
 use eileen_contracts::speech::{SpeechCmd, TurnEndReason, VoiceEvent};
@@ -18,6 +21,7 @@ use eileen_sim::{BrainReply, Profile, World};
 /// A world whose core took its first step and whose speech process is ready.
 fn world() -> World {
     let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    world.record_audio();
     step(&mut world, Input::User(UserInput::SetMute(false)));
     settle(&mut world, LOAD_MS);
     world
@@ -140,6 +144,118 @@ fn through(world: &World, speak: SpeakId, (clause, samples): (u16, u32)) -> u64 
     before + u64::from(samples)
 }
 
+/// The first sentence of the scripted answer, which every position these tests reach is in.
+const FIRST_CLAUSE: &str = "Rivers carry water from the hills down to the sea.";
+
+/// The text of clause `clause` of `speak` as the core sent it to synthesis, and its size as
+/// the speech process reported it ready: characters and samples.
+fn clause_of(world: &World, speak: SpeakId, clause: u16) -> (String, u64, u64) {
+    let text = world
+        .effects()
+        .iter()
+        .filter_map(|effect| {
+            if let Effect::Speech(SpeechCmd::Speak { speak: s, clauses, .. }) = &effect.body
+                && *s == speak
+            {
+                Some(clauses.clone())
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .nth(usize::from(clause))
+        .expect("the clause was sent to synthesis");
+    let (chars, samples) = world
+        .inputs()
+        .iter()
+        .find_map(|record| {
+            if let Input::Voice(VoiceEvent::ClauseReady { speak: s, clause: c, chars, samples }) =
+                &record.input
+                && *s == speak
+                && *c == clause
+            {
+                Some((u64::from(*chars), u64::from(*samples)))
+            } else {
+                None
+            }
+        })
+        .expect("the clause was synthesized");
+    (text, chars, samples)
+}
+
+/// Section 2.8's heard prefix after `samples` of the first clause of `speak`, worked out here
+/// from the scripted text: its characters in proportion to the samples played, trimmed.
+fn heard_after(world: &World, speak: SpeakId, samples: u32) -> String {
+    let (text, chars, total) = clause_of(world, speak, 0);
+    assert_eq!(text.trim(), FIRST_CLAUSE, "the first clause is the scripted first sentence");
+    let cut = usize::try_from(chars * u64::from(samples) / total).unwrap();
+    text.chars().take(cut).collect::<String>().trim().to_owned()
+}
+
+/// The last position of `speak` the device reported to the core.
+fn last_reported(world: &World, speak: SpeakId) -> Option<(u16, u32)> {
+    world.inputs().iter().rev().find_map(|record| {
+        if let Input::Playback(PlaybackEvent::Played { speak: s, clause, samples_played }) =
+            &record.input
+            && *s == speak
+        {
+            Some((*clause, *samples_played))
+        } else {
+            None
+        }
+    })
+}
+
+/// Plays on a callback at a time until the device has handed more of the first clause than
+/// the core's last report carries, by a character the heard prefix shows. Returns the prefix
+/// of the reported position and of the device's.
+fn until_the_report_lags_a_character(world: &mut World, speak: SpeakId) -> (String, String) {
+    for _ in 0..100 {
+        let at = world.device().position(speak).expect("the device holds the answer");
+        assert_eq!(at.0, 0, "still in the first clause");
+        if let Some((0, reported)) = last_reported(world, speak) {
+            let (told, heard) =
+                (heard_after(world, speak, reported), heard_after(world, speak, at.1));
+            if told != heard {
+                return (told, heard);
+            }
+        }
+        settle(world, CALLBACK_MS);
+    }
+    panic!("the report never lagged the device by a character");
+}
+
+/// The heard prefix a brain turn's message carries.
+fn told_in(message: &str) -> Option<&str> {
+    let line = message.split(HEARD_MARKER).nth(1)?.lines().next()?;
+    line.rsplit_once('"').map(|(heard, _)| heard)
+}
+
+/// The last brain turn's message.
+fn last_brain_message(world: &World) -> Option<String> {
+    world.effects().iter().rev().find_map(|effect| {
+        if let Effect::Brain(BrainCmd::Turn { message, .. }) = &effect.body {
+            Some(message.clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// The `heard_chars` of the interrupted stop of `speak`.
+fn heard_chars_of(world: &World, speak: SpeakId) -> Option<u32> {
+    world.published().iter().find_map(|event| {
+        if let BusEvent::SpeakingStopped { speak: s, heard_chars, interrupted: true, .. } =
+            &event.body
+            && *s == speak
+        {
+            Some(*heard_chars)
+        } else {
+            None
+        }
+    })
+}
+
 fn invariants_hold(world: &World) {
     let audio = world.audio();
     assert_eq!(barge_in_pauses_in_time(audio, world.now_ms()), Ok(()), "invariant 2");
@@ -189,29 +305,68 @@ fn the_heard_prefix_equals_the_text_of_the_samples_played() {
         through(&world, speak, at_pause),
         "the paused position is every sample handed to the device"
     );
+    assert_eq!(at_pause.0, 0, "paused in the first clause");
+    let expected = heard_after(&world, speak, at_pause.1);
+    assert!(!expected.is_empty() && expected.len() < FIRST_CLAUSE.len(), "{expected:?}");
+    assert!(FIRST_CLAUSE.starts_with(&expected), "a prefix of the sentence: {expected:?}");
     end_of_turn(&mut world, turn, "Eileen, what about lakes");
-    let told = world.effects().iter().rev().find_map(|effect| {
-        if let Effect::Brain(BrainCmd::Turn { message, .. }) = &effect.body {
-            Some(message.clone())
-        } else {
-            None
-        }
-    });
-    let told = told.expect("the request went to the brain");
-    assert!(told.contains(HEARD_MARKER), "the brain is told what was heard: {told}");
-    let stopped = world.published().iter().find_map(|event| {
-        if let BusEvent::SpeakingStopped { speak: s, heard_chars, interrupted: true, .. } =
-            &event.body
-            && *s == speak
-        {
-            Some(*heard_chars)
-        } else {
-            None
-        }
-    });
-    let heard_chars = stopped.expect("the answer stopped, interrupted");
-    assert!(heard_chars > 0, "some of it was heard");
+    let message = last_brain_message(&world).expect("the request went to the brain");
+    assert_eq!(told_in(&message), Some(expected.as_str()), "the brain is told it: {message}");
+    let heard_chars = heard_chars_of(&world, speak).expect("the answer stopped, interrupted");
+    assert_eq!(
+        usize::try_from(heard_chars).unwrap(),
+        expected.chars().count(),
+        "and the stop counts its characters"
+    );
     invariants_hold(&world);
+}
+
+#[test]
+fn a_mute_mid_sentence_counts_the_heard_prefix_a_character_short() {
+    let mut world = world();
+    let speak = speaking_a_long_answer(&mut world);
+    let (reported, played) = until_the_report_lags_a_character(&mut world, speak);
+    step(&mut world, Input::User(UserInput::SetMute(true)));
+    let heard_chars = heard_chars_of(&world, speak).expect("muting stopped the answer");
+    // FIXME(#151): the stop counts the last report's prefix, not the samples played.
+    assert_eq!(usize::try_from(heard_chars).unwrap(), reported.chars().count(), "{reported:?}");
+    assert!(played.starts_with(&reported) && played.len() > reported.len(), "{played:?}");
+    let error = heard_prefix_matches_playback(world.audio()).unwrap_err();
+    assert_eq!(error.number, 3, "invariant 3 sees the shortfall: {error}");
+    let audio = world.audio();
+    assert_eq!(barge_in_pauses_in_time(audio, world.now_ms()), Ok(()), "invariant 2");
+    assert_eq!(nothing_sounds_while_muted(audio), Ok(()), "invariant 9");
+}
+
+#[test]
+fn a_request_after_one_window_tells_the_brain_a_heard_prefix_a_character_short() {
+    let mut world = world();
+    let speak = speaking_a_long_answer(&mut world);
+    let (reported, played) = until_the_report_lags_a_character(&mut world, speak);
+    let turn = speech_started(&mut world, 2);
+    step(&mut world, Input::Voice(VoiceEvent::BargeInWindow { speak, window: 1, prob_pct: 90 }));
+    assert!(emitted_at(world.audio(), &AudioCmd::Pause { speak }).is_none(), "ducked only");
+    end_of_turn(&mut world, turn, "Eileen, what about lakes");
+    let message = last_brain_message(&world).expect("the request went to the brain");
+    // FIXME(#151): the brain is told the last report's prefix, not the samples played.
+    assert_eq!(told_in(&message), Some(reported.as_str()), "{message}");
+    assert!(played.starts_with(&reported) && played.len() > reported.len(), "{played:?}");
+    let error = heard_prefix_matches_playback(world.audio()).unwrap_err();
+    assert_eq!(error.number, 3, "invariant 3 sees the shortfall: {error}");
+}
+
+#[test]
+fn eileen_keeps_speaking_while_another_app_uses_the_microphone() {
+    let mut world = world();
+    let speak = speaking_a_long_answer(&mut world);
+    let before = handed(world.audio(), speak);
+    step(&mut world, Input::Activity(ActivityEvent::MicInUseElsewhere(true)));
+    settle(&mut world, 200);
+    // FIXME(#152): the core ignores the call; she should fall silent and keep to the HUD.
+    assert!(handed(world.audio(), speak) > before, "she plays on");
+    let error = nothing_sounds_while_muted(world.audio()).unwrap_err();
+    assert_eq!(error.number, 9, "{error}");
+    assert!(error.detail.contains("another app used the microphone"), "{error}");
 }
 
 #[test]

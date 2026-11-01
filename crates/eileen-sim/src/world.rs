@@ -146,8 +146,9 @@ pub struct World {
     hud: Option<HudState>,
     effects: Vec<Envelope<Effect>>,
     published: Vec<Envelope<BusEvent>>,
-    /// The inputs, effects and playback callbacks in time order (invariants 2, 3 and 9).
-    audio: Vec<AudioRecord>,
+    /// The inputs, effects and playback callbacks in time order (invariants 2, 3 and 9), kept
+    /// only once a test asks for them ([`World::record_audio`]).
+    audio: Option<Vec<AudioRecord>>,
     bus: Bus,
     inputs: Vec<InputRecord>,
     log: String,
@@ -216,7 +217,7 @@ impl World {
             hud: None,
             effects: Vec::new(),
             published: Vec::new(),
-            audio: Vec::new(),
+            audio: None,
             bus,
             inputs: Vec::new(),
             log: String::new(),
@@ -262,11 +263,23 @@ impl World {
         &self.effects
     }
 
-    /// Every input, effect and playback callback so far, in time order, as invariants 2, 3
-    /// and 9 read them.
+    /// Keeps the audio trace from now on. Runs do not keep it by default: it holds a record
+    /// for every input, effect and 10 ms callback, and the per-step check does not read it.
+    pub fn record_audio(&mut self) {
+        self.audio.get_or_insert_with(Vec::new);
+    }
+
+    /// Every input, effect and playback callback since [`World::record_audio`], in time order,
+    /// as invariants 2, 3 and 9 read them; empty when the trace is not kept.
     #[must_use]
     pub fn audio(&self) -> &[AudioRecord] {
-        &self.audio
+        self.audio.as_deref().unwrap_or_default()
+    }
+
+    fn note(&mut self, event: AudioEvent) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.push(AudioRecord { at_ms: self.now_ms, event });
+        }
     }
 
     /// The simulated playback device.
@@ -372,9 +385,14 @@ impl World {
                 (self.now_ms / CALLBACK_MS).saturating_add(1).saturating_mul(CALLBACK_MS);
             self.now_ms = next_tick.min(target);
             if self.now_ms == next_tick {
+                // The trace skips callbacks while the device holds nothing, which would be most
+                // of a run; a paused utterance's empty callbacks stay, being the silence
+                // invariant 2 checks.
+                let holding = self.audio.is_some() && !self.device.speaking().is_empty();
                 let handed = self.device.callback(self.now_ms, &mut self.due);
-                let event = AudioEvent::Callback(handed);
-                self.audio.push(AudioRecord { at_ms: self.now_ms, event });
+                if holding {
+                    self.note(AudioEvent::Callback(handed));
+                }
             }
             if let Some(input) = self.take_due() {
                 return Some(input);
@@ -443,8 +461,9 @@ impl World {
         let record = InputRecord { seq: self.seq, mono, at, ctx, input: input.clone() };
         self.hash.record(&serde_json::to_vec(&record).unwrap_or_default());
         self.apply_input(&input);
-        self.audio
-            .push(AudioRecord { at_ms: self.now_ms, event: AudioEvent::Input(input.clone()) });
+        if self.audio.is_some() {
+            self.note(AudioEvent::Input(input.clone()));
+        }
         self.inputs.push(record);
         let envelope = Envelope { seq: self.seq, at, mono, ctx, body: input };
         let mut effects = Vec::new();
@@ -519,8 +538,9 @@ impl World {
 
     fn apply_effect(&mut self, effect: Envelope<Effect>) {
         let now = self.now_ms;
-        let event = AudioEvent::Effect(effect.body.clone());
-        self.audio.push(AudioRecord { at_ms: now, event });
+        if self.audio.is_some() {
+            self.note(AudioEvent::Effect(effect.body.clone()));
+        }
         match &effect.body {
             Effect::Emit(event) => {
                 self.bus.publish(effect.seq);
