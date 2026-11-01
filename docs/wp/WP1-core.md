@@ -90,13 +90,17 @@ Every pull request also meets the rules section 6.1 sets for every package.
   slice tests `eileen-sim::it::slice::*`. Acceptance 4 (barge-in in simulation) is shown by
   `stop_while_eileen_speaks_ducks_pauses_and_stops_within_the_decision` and
   `a_backchannel_resumes_from_the_paused_sample`; the exhaustive enumeration
-  (`wp1/turn-exhaustive`) builds on `turn::Turns` next. Every CI lane is green on #130.
-- Next for the first pull request's scope: #127 (merged while #130 was open) adds the speech
-  process's life (start at boot, hang dump and restart on a missed heartbeat or a late `Ready`,
-  replies on the HUD while speech is down, turns heard late addressed only by name, a named
-  command during a restart acted on once from the replay). It waits for `SpeechStarted.replayed`
-  in the contracts and is the follow-up `wp1/speech-life`. #130 already ends an utterance that
-  gets `SpeakDone` with no clause, as the audio component answers while speech is down.
+  (`wp1/turn-exhaustive`) builds on `turn::Turns` next. "What time is it" speaks the offset of
+  `CoreConfig.local_time` in force at the turn's wall time (section 3.3.3 as #134 amended it),
+  shown across the United States' daylight-saving changes of 2026 by
+  `eileen-core::clock::tests::the_hour_moves_at_a_daylight_saving_change`. The crate keeps
+  `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
+  (check 24 as #134 amended it, D84). It follows #134 and builds on it.
+- Next: `wp1/speech-life`, the speech process's life of section 6.3 (start on the first step, a
+  missed heartbeat or a late `Ready`, an exit, the backoff, and replies on the HUD while speech
+  is down or the microphone is muted), which merges before WP2's `wp2/speech-transport` (D83).
+  #130 already ends an utterance that gets `SpeakDone` with no clause, as the audio component
+  answers while speech is down.
 
 ## Surprises
 
@@ -117,8 +121,10 @@ Every pull request also meets the rules section 6.1 sets for every package.
   fill at spawn (it mints the tokens), and names its working folder `run/<session>/cwd`
   relative to the data directory.
 - Effects carry the core's own `seq` counter, kept in the snapshot as `effect_seq`.
-- The local time zone reaches the core as `CoreConfig.local_offset_min`, read by the runtime at
-  start.
+- The local time reaches the core as `CoreConfig.local_time`, an initial offset and the
+  changes the runtime read from the time zone's rules at start for the current year and the
+  next; the core takes the change with the latest `from` at or before the step's wall time,
+  whatever the order of the list.
 
 ## Outcome
 
