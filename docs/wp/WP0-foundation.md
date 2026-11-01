@@ -27,7 +27,7 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
-| 7 | `wp0/ci-pending-snapshots` | Phase B's first. Pull request #133, draft, opened 2026-10-31 |
+| 7 | `wp0/ci-pending-snapshots` | Phase B's first. Pull request #133, opened 2026-10-31; a throwaway probe's runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`, and the probe is reverted |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -133,6 +133,10 @@ gives the files at their repository paths (when the artifact holds a snapshot); 
 `.snap.new` to the `.snap` beside it and remove its `assertion_line:` header line, which insta
 writes only in pending files and `cargo insta accept` drops. An inline snapshot's `.pending-snap`
 holds the new value as JSON, for the literal in the test. Read the diff before committing it.
+The contracts' `no_snapshot_file_is_unreferenced` now leaves `.snap.new` files alone, as cargo
+insta's own unreferenced check does: otherwise a changed contract snapshot also failed it, but only
+when it ran after the snapshot test (the first probe run failed it on Linux and passed it on
+Windows).
 
 ## Acceptance records
 
