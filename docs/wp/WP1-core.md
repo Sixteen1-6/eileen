@@ -58,9 +58,9 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 9. A recorded run replays in strict mode with no divergence, a router change reports the first
    divergent event, and scenario mode survives an extra minted ID.
 10. `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` replay green.
-11. In its normal dependencies, `eileen-core` depends, of Eileen's crates, only on
-    `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of third-party crates only on
-    `tracing` and `serde_json` (check 24, D84).
+11. `eileen-core` has no build dependencies, and in its normal dependencies depends, of
+    Eileen's crates, only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of
+    third-party crates only on `tracing` and `serde_json` (check 24, D84).
 12. The learning decisions in the core, in simulation: facts and their retirement, aliases,
     exact repeats, `rung_skipped`, forget, the `[match]` block, follow-ups, speech levels and calls.
 13. Scenario mode: timers and playback synthesized, brain turns keyed by transcript digest and
