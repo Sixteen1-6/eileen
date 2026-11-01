@@ -11,20 +11,26 @@
 //!   one that is not a JSON object with a string `type`, or a known type without the fields it
 //!   needs. A `type`, or a `system` subtype, this parser does not know is [`Line::Unknown`].
 //! - Model text, tool results and the vendor's messages are `Untrusted`. A tool's input is
-//!   redacted with the [`Redactor`] before anything else sees it and capped at
-//!   [`MAX_TOOL_INPUT_BYTES`]; a `Skill` call becomes [`Block::SkillInvoked`].
+//!   redacted with the [`Redactor`] before anything else sees it, each string, key and number on
+//!   its own raw text, and only then serialized and capped at [`MAX_TOOL_INPUT_BYTES`]; a `Skill`
+//!   call becomes [`Block::SkillInvoked`].
 //! - Assistant text is split into text and narration: each line that starts with
 //!   [`NARRATION_PREFIX`] is one narration line.
 //! - Denials come from the stream, because the CLI's denial hooks never fired (section 2.5):
 //!   [`Line::denials`] reads the errored `tool_result`, `result.permission_denials` and
 //!   `system/permission_denied`, and counts an `approve` call that errored, timed out or lost its
-//!   server as a denial, though the CLI reports it as a tool error.
+//!   server as a denial, though the CLI reports it as a tool error, for a call the guard asked
+//!   about.
+//! - A `rate_limit_event` reports one window of the plan; [`PlanWindows`] keeps both and gives
+//!   the contract's [`PlanUsage`], so the mappings give no event for it.
 //! - A failed sign-in is read from the `result` event, never from the exit code.
 //! - The CLI writes `system/init` again at the start of every user turn, so the mappings give an
 //!   `Init` or a `Ready` for each one; the driver passes on the first and checks the rest.
 //! - The stdio control protocol's lines (`control_request`, `control_response`,
 //!   `control_cancel_request`) are [`Line::Unknown`] here; their parser is the `control_message`
 //!   half of this work, in a pull request of its own.
+
+use std::borrow::Cow;
 
 use eileen_contracts::harness::{BrainEvent, BrainSlot, WorkerEvent};
 use eileen_contracts::ids::{Personal, TurnId, Untrusted, WallTime};
@@ -73,8 +79,8 @@ pub enum Line {
     TextDelta(Untrusted<String>),
     /// Any other partial message: message and block starts and stops, tool input and thinking.
     Partial,
-    /// A `rate_limit_event`, for one window of the plan.
-    RateLimit(PlanUsage),
+    /// A `rate_limit_event` for the five-hour or the seven-day window of the plan.
+    RateLimit(RateLimit),
     /// `system/hook_started`.
     HookStarted(Hook),
     /// `system/hook_response`.
@@ -83,9 +89,11 @@ pub enum Line {
     PermissionDenied(Denial),
     /// The `result` that ends a turn.
     Result(Box<TurnResult>),
-    /// A `type`, or `system/<subtype>`, this parser does not know.
+    /// A `type`, a `system/<subtype>` or a `rate_limit_event/<rateLimitType>` this parser does
+    /// not know.
     Unknown {
-        /// The `type`, or `system/` and the subtype, each cut to [`MAX_KIND_BYTES`].
+        /// The `type`, or `system/` and the subtype, or `rate_limit_event/` and the window, each
+        /// name cut to [`MAX_KIND_BYTES`].
         kind: String,
     },
     /// A line that did not parse.
@@ -180,7 +188,9 @@ pub struct ToolResult {
     pub tool_use_id: String,
     /// Whether the CLI marked it an error.
     pub is_error: bool,
-    /// Why, when the error text says a permission stopped the call.
+    /// Why, when the error text says a permission stopped the call. `ApproveFailed` here says
+    /// only that the text has the CLI's wrapper for a tool that failed; [`Line::denials`] counts
+    /// it for a call the guard asked about.
     pub denial: Option<DenialKind>,
 }
 
@@ -203,7 +213,9 @@ pub enum DenialKind {
     /// The permission mode refused a call outside `--allowedTools`.
     Mode,
     /// The `approve` call errored, timed out or lost its server: a tool error to the CLI, which
-    /// leaves it out of `permission_denials`, and a denial to Eileen.
+    /// leaves it out of `permission_denials`, and a denial to Eileen. The CLI wraps any tool that
+    /// failed the same way, naming the called tool, so the text alone cannot tell a failed
+    /// `approve` call from an MCP tool's own error.
     ApproveFailed,
     /// The `approve` reply was in neither shape the CLI accepts.
     ApproveInvalid,
@@ -252,21 +264,81 @@ pub struct TurnResult {
     pub auth_failed: bool,
 }
 
+/// A window of the plan that a `rate_limit_event` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanWindow {
+    /// `five_hour`.
+    FiveHour,
+    /// `seven_day`, the whole plan's. The per-model seven-day windows (`seven_day_opus`,
+    /// `seven_day_sonnet`) are another quantity, which [`PlanUsage`] has no field for.
+    SevenDay,
+}
+
+/// One `rate_limit_event`: one window's use and reset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimit {
+    /// The window.
+    pub window: PlanWindow,
+    /// How much of it is used, in percent; 100 when the CLI says the plan refused a request.
+    pub pct: Option<u8>,
+    /// When it resets.
+    pub resets_at: Option<WallTime>,
+}
+
+/// The plan's windows as the rate-limit events last reported them. Each event reports one
+/// window, and the contract's [`PlanUsage`] holds both with the nearer reset, so the driver keeps
+/// one of these for the account and sends what [`PlanWindows::update`] gives.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanWindows {
+    five_hour: Option<RateLimit>,
+    seven_day: Option<RateLimit>,
+}
+
+impl PlanWindows {
+    /// Takes in one event and gives the plan's usage at `now`: each window's last percent and
+    /// the nearer of their resets. A window whose reset is not after `now` has started again,
+    /// so its old percent and reset are left out until an event reports it again.
+    pub fn update(&mut self, limit: RateLimit, now: WallTime) -> PlanUsage {
+        match limit.window {
+            PlanWindow::FiveHour => self.five_hour = Some(limit),
+            PlanWindow::SevenDay => self.seven_day = Some(limit),
+        }
+        let current = |window: Option<RateLimit>| {
+            window.filter(|window| window.resets_at.is_none_or(|resets_at| resets_at > now))
+        };
+        let five_hour = current(self.five_hour);
+        let seven_day = current(self.seven_day);
+        PlanUsage {
+            five_hour_pct: five_hour.and_then(|window| window.pct),
+            seven_day_pct: seven_day.and_then(|window| window.pct),
+            resets_at: [five_hour, seven_day]
+                .into_iter()
+                .filter_map(|window| window?.resets_at)
+                .min(),
+        }
+    }
+}
+
 impl Line {
     /// The denials this line reports (section 2.5): an errored `tool_result` whose text names a
     /// refusal or a failed `approve` call, a `system/permission_denied` event, or the calls a
     /// `result` lists. One refused call can appear in all three; the caller counts it once by
-    /// its `tool_use_id`.
+    /// its `tool_use_id`. `asked` says whether the guard answered `ask` for a call, by its
+    /// `tool_use_id`: a failed call it did not ask about never reached `approve`, so its error is
+    /// the tool's own and no denial.
     #[must_use]
-    pub fn denials(&self) -> Vec<Denial> {
+    pub fn denials(&self, asked: impl Fn(&str) -> bool) -> Vec<Denial> {
         match self {
             Self::ToolResults(results) => results
                 .iter()
                 .filter_map(|result| {
-                    result.denial.map(|kind| Denial {
-                        tool_use_id: Some(result.tool_use_id.clone()),
-                        tool_name: None,
-                        kind,
+                    let kind = result.denial?;
+                    (kind != DenialKind::ApproveFailed || asked(&result.tool_use_id)).then(|| {
+                        Denial {
+                            tool_use_id: Some(result.tool_use_id.clone()),
+                            tool_name: None,
+                            kind,
+                        }
                     })
                 })
                 .collect(),
@@ -312,8 +384,9 @@ pub fn parse(line: &[u8], redactor: &Redactor) -> Line {
 
 /// The worker events a line gives (the Claude column of section 3.3.8's mapping table). Partial
 /// messages give none, because the whole message follows them; hook events, unknown lines and
-/// denials have no worker event of their own (read denials first with
-/// [`Line::denials`]). `ToolResult.observed` waits for WP1's table of observed reads.
+/// denials have no worker event of their own (read denials first with [`Line::denials`]), and a
+/// rate-limit line goes through [`PlanWindows`] first. `ToolResult.observed` waits for WP1's
+/// table of observed reads.
 #[must_use]
 pub fn worker_events(line: Line, pid: u32) -> Vec<WorkerEvent> {
     match line {
@@ -342,7 +415,6 @@ pub fn worker_events(line: Line, pid: u32) -> Vec<WorkerEvent> {
                 observed: None,
             })
             .collect(),
-        Line::RateLimit(usage) => vec![WorkerEvent::RateLimit(usage)],
         Line::Result(result) => {
             let TurnResult { is_error, cost, text, auth_failed, .. } = *result;
             let mut events = Vec::with_capacity(2);
@@ -355,6 +427,7 @@ pub fn worker_events(line: Line, pid: u32) -> Vec<WorkerEvent> {
         Line::Malformed { line_len, .. } => vec![WorkerEvent::Malformed { line_len }],
         Line::TextDelta(_)
         | Line::Partial
+        | Line::RateLimit(_)
         | Line::HookStarted(_)
         | Line::HookResponse(..)
         | Line::PermissionDenied(_)
@@ -386,7 +459,8 @@ pub struct BrainAt {
 }
 
 /// The brain events a line gives. The brain speaks from partial messages, so text comes only
-/// from [`Line::TextDelta`]; a delta or a result with no turn in progress gives nothing.
+/// from [`Line::TextDelta`]; a delta or a result with no turn in progress gives nothing, and a
+/// rate-limit line goes through [`PlanWindows`] first.
 #[must_use]
 pub fn brain_events(line: Line, at: BrainAt) -> Vec<BrainEvent> {
     let BrainAt { which, instance, turn } = at;
@@ -408,8 +482,8 @@ pub fn brain_events(line: Line, at: BrainAt) -> Vec<BrainEvent> {
             })
             .into_iter()
             .collect(),
-        Line::RateLimit(usage) => vec![BrainEvent::RateLimit(usage)],
         Line::Assistant(_)
+        | Line::RateLimit(_)
         | Line::ToolResults(_)
         | Line::Partial
         | Line::HookStarted(_)
@@ -530,10 +604,11 @@ fn tool_use(block: &Value, redactor: &Redactor) -> Result<Block, &'static str> {
     if name == SKILL_TOOL
         && let Some(skill) = input.and_then(|input| input.get("skill")).and_then(Value::as_str)
     {
-        let args = input.and_then(|input| input.get("args")).map_or_else(String::new, |args| {
-            args.as_str().map_or_else(|| args.to_string(), str::to_owned)
-        });
-        let args = redactor.redact(&args);
+        let args = match input.and_then(|input| input.get("args")) {
+            None => String::new(),
+            Some(Value::String(args)) => redactor.redact(args).into_owned(),
+            Some(args) => redacted(args, redactor).to_string(),
+        };
         return Ok(Block::SkillInvoked {
             name: cut(&redactor.redact(skill), MAX_SKILL_NAME_BYTES).to_owned(),
             args: Untrusted::new(cut(&args, MAX_TOOL_INPUT_BYTES).to_owned()),
@@ -544,18 +619,39 @@ fn tool_use(block: &Value, redactor: &Redactor) -> Result<Block, &'static str> {
 }
 
 /// A tool's input, redacted and capped: the redacted value when its compact text fits in
-/// [`MAX_TOOL_INPUT_BYTES`], else the start of the redacted text as a JSON string that fits. It
-/// is redacted whole before it is cut, so a cut never leaves part of a secret behind.
+/// [`MAX_TOOL_INPUT_BYTES`], else the start of that text as a JSON string that fits. It is
+/// redacted whole before it is cut, so a cut never leaves part of a secret behind.
 fn redacted_input(input: &Value, redactor: &Redactor) -> Value {
-    let text = input.to_string();
-    let redacted = redactor.redact(&text);
-    if redacted.len() <= MAX_TOOL_INPUT_BYTES
-        && let Ok(value) = serde_json::from_str::<Value>(&redacted)
-        && value.to_string().len() <= MAX_TOOL_INPUT_BYTES
-    {
+    let value = redacted(input, redactor);
+    let text = value.to_string();
+    if text.len() <= MAX_TOOL_INPUT_BYTES {
         return value;
     }
-    json_string_within(&redacted, MAX_TOOL_INPUT_BYTES)
+    json_string_within(&text, MAX_TOOL_INPUT_BYTES)
+}
+
+/// `value` with each string, object key and number redacted on its own raw text, as the trace's
+/// log writer does. Serialized first, a newline or tab before a token would be the letter of its
+/// escape (`\n`, `\t`), and the [`Redactor`]'s token rules find no word start after a letter.
+/// A number whose digits hold a match, a card number, becomes `0`. `serde_json` parses at most
+/// 128 levels deep, which bounds the recursion.
+fn redacted(value: &Value, redactor: &Redactor) -> Value {
+    match value {
+        Value::String(text) => Value::String(redactor.redact(text).into_owned()),
+        Value::Number(number) => match redactor.redact(&number.to_string()) {
+            Cow::Owned(_) => Value::from(0),
+            Cow::Borrowed(_) => value.clone(),
+        },
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| redacted(item, redactor)).collect())
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (redactor.redact(key).into_owned(), redacted(item, redactor)))
+                .collect(),
+        ),
+        Value::Null | Value::Bool(_) => value.clone(),
+    }
 }
 
 /// The longest start of `text`, ending on a character boundary, whose JSON string is at most
@@ -637,9 +733,18 @@ fn partial(value: &Value) -> Line {
 }
 
 /// A `rate_limit_event`: `rate_limit_info` with `status`, `rateLimitType`, `utilization` (a
-/// fraction) and `resetsAt` (Unix seconds), as the Agent SDK's parser reads it.
+/// fraction) and `resetsAt` (Unix seconds), as the Agent SDK's parser reads it. A window other
+/// than `five_hour` and `seven_day` is [`Line::Unknown`].
 fn rate_limit(value: &Value) -> Result<Line, &'static str> {
     let info = value.get("rate_limit_info").ok_or("a rate_limit_event without rate_limit_info")?;
+    let window = match str_at(info, "rateLimitType") {
+        "five_hour" => PlanWindow::FiveHour,
+        "seven_day" => PlanWindow::SevenDay,
+        other => {
+            let kind = format!("rate_limit_event/{}", cut(other, MAX_KIND_BYTES));
+            return Ok(Line::Unknown { kind });
+        }
+    };
     let pct = info
         .get("utilization")
         .and_then(Value::as_f64)
@@ -650,13 +755,7 @@ fn rate_limit(value: &Value) -> Result<Line, &'static str> {
         .and_then(Value::as_i64)
         .and_then(|seconds| seconds.checked_mul(1_000_000))
         .map(WallTime);
-    let mut usage = PlanUsage { resets_at, ..PlanUsage::default() };
-    match str_at(info, "rateLimitType") {
-        "five_hour" => usage.five_hour_pct = pct,
-        "seven_day" | "seven_day_opus" | "seven_day_sonnet" => usage.seven_day_pct = pct,
-        _ => {}
-    }
-    Ok(Line::RateLimit(usage))
+    Ok(Line::RateLimit(RateLimit { window, pct, resets_at }))
 }
 
 /// A fraction of the plan as a whole percent, rounded half up and held to 0 to 100.

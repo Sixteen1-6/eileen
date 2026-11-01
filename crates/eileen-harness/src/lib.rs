@@ -29,10 +29,13 @@
 //!   `tests::only_the_claude_route_has_a_worker_driver` and
 //!   `tests::the_stub_claude_brain_answers_not_built_and_measures_nothing`).
 //! - A stream-json line longer than `stream::MAX_LINE_BYTES` is malformed before it is parsed,
-//!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` before it
-//!   leaves the parser, at most 2 KB (`stream::tests`, and the `stream_json_line` fuzz target).
+//!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
+//!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
+//!   `stream_json_line` fuzz target).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
-//!   server counts as one (section 2.5; `stream::tests::failed_approve_calls_count_as_denials`).
+//!   server counts as one when the guard asked about the call (section 2.5;
+//!   `stream::tests::failed_approve_calls_count_as_denials` and
+//!   `stream::tests::a_failed_call_the_guard_did_not_ask_about_is_no_denial`).
 //!
 //! # Boundaries
 //!
@@ -64,7 +67,12 @@
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
 //! - Not every denial looks like one: an `approve` call that fails reaches the model as a tool
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
-//!   tool result's text (`stream::DenialKind::ApproveFailed`).
+//!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
+//!   failed in the same text, so only a call the guard asked about counts.
+//! - Redact a JSON value's strings before serializing it, never its text: serialized, a newline
+//!   before a token is the `n` of `\n`, after which the `Redactor` sees no word start.
+//! - A `rate_limit_event` reports one window, while `PlanUsage` holds both with the nearer
+//!   reset, so the events pass through `stream::PlanWindows` before they become `RateLimit`.
 //!
 //! # Logs and tracing
 //!

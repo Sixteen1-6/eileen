@@ -112,7 +112,7 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   input, and it never posts to the `PermissionRequest` hook, which the CLI never calls on the
   approval route.
 
-- `wp3/stream-json` (#135, draft): the typed stream-json parser of section 6.5, in a new
+- `wp3/stream-json` (#135, merged): the typed stream-json parser of section 6.5, in a new
   `eileen_harness::stream` module. `parse` caps the line before parsing (`MAX_LINE_BYTES`,
   16 MB, since a tool result can carry a screenshot), gives `Unknown` for an unknown `type` or
   `system` subtype, keeps what `system/init` reports for feature detection (session id, model,
@@ -121,7 +121,7 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   tool input with the `Redactor` and caps it at 2 KB as JSON text (a cut input is a JSON string
   whose quotes and escapes count), turns a `Skill` call into `SkillInvoked` with its name
   redacted and capped at 256 bytes,
-  and types tool results, partial text deltas, rate-limit events (as `PlanUsage`), hook events,
+  and types tool results, partial text deltas, rate-limit events, hook events,
   `system/permission_denied` and `result` (cost, context tokens, `permission_denials`, a failed
   sign-in). `Line::denials` reads the three denial sources of section 2.5 and counts a failed
   `approve` call as a denial. `worker_events` and `brain_events` map a line into the contracts'
@@ -137,6 +137,14 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   `stdio-control.json`) is built and goes in its own pull request, `wp3/control-message`, on top
   of `wp3/stream-json`: with it the logic ran to about 800 lines. Until it lands, control lines
   parse as `Unknown` and the `control_message` entry is the stub.
+- `wp3/stream-fixes`: review fixes to the parser. A tool input and a `Skill` call's object
+  arguments are redacted string by string, keys and numbers included, before they are
+  serialized and cut (`stream::tests::a_token_at_the_start_of_a_line_in_an_input_is_redacted`).
+  A rate-limit line is a `RateLimit` for the `five_hour` or the `seven_day` window, any other
+  window is `Unknown`, and `stream::PlanWindows` merges them into the contract's `PlanUsage`.
+  `Line::denials` takes which calls the guard asked about and counts `ApproveFailed` only for
+  those. The fuzz entry now also fails when a tool input that kept its shape holds anything the
+  redactor would still replace, or a cut input or skill call holds a GitHub, API or Slack token.
 
 ## Surprises
 
@@ -151,6 +159,13 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   arrives while the model thinks; the parser gives it `Unknown`.
 - The contract test's fixtures leave the rate-limit event out (it describes the account's plan
   usage), so its shape comes from the Agent SDK's parser until a recorded script confirms it.
+- Redacting a tool input's serialized text missed a token at the start of a line: serialized,
+  the newline before it is the `n` of `\n`, and the `Redactor`'s token rules find no word start
+  after a letter (only its card rule treats an escape's letter as a word break). The trace's log
+  writer was never affected, because it redacts each string raw. The same rule also misses a
+  token after a literal backslash and letter in raw text, such as `printf 'a\nghp_...'`;
+  teaching `word_start` the card rule's escape case is an `eileen-trace` change, suggested in
+  the pull request.
 
 ## Decisions
 
@@ -185,11 +200,24 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   tool (` a failed `approve` call, "The permission prompt tool returned an invalid permission
   result" a malformed reply, and "Permission to use ... has been denied" the mode. An `approve`
   deny's text is Eileen's own sentence, so it is counted from `result.permission_denials`
-  instead. Whether an Eileen MCP tool's own error uses the same wrapper is not recorded; if it
-  does, it counts as a denial, the safe direction, and `contract-claude` should record one.
+  instead. The wrapper names the called tool, so it is the CLI's text for any tool that
+  failed, not one for `approve`: `Line::denials` takes a predicate for the calls the guard
+  answered `ask` for (the driver knows them from `HookRequest::PreToolUse.tool_use_id`) and
+  counts `ApproveFailed` only for those. A call that was asked about and then failed on its
+  own, after an allow, still reads as a denial; `contract-claude` should record what the CLI
+  writes for an Eileen MCP tool's own error, with and without an ask, to tell the two apart.
 - A tool input is redacted whole, then cut: cutting first could leave half a key or a private
-  key block without its end marker, which the `Redactor` would no longer match. An input whose
-  redacted text is over 2 KB becomes the first 2 KB of that text as a JSON string.
+  key block without its end marker, which the `Redactor` would no longer match. Each string,
+  key and number is redacted raw, as the trace's log writer does, and only then is the value
+  serialized. An input whose text is over 2 KB becomes the first 2 KB of that text as a JSON
+  string.
+- A `rate_limit_event` reports one window, and `PlanUsage.resets_at` is the nearer window's
+  reset, so the mappings give no `RateLimit` event; the driver (`wp3/worker-brain`) keeps one
+  `PlanWindows` for the account, passes each `RateLimit` line and the current time to
+  `PlanWindows::update`, and sends the merged `PlanUsage`. A window past its reset is left out
+  until an event reports it again. The per-model windows (`seven_day_opus`,
+  `seven_day_sonnet`) and any other window are `Unknown`, since `PlanUsage` has no field for
+  them; a field would be an amendment to the pinned contract.
 - Worker text and narration come from the whole assistant message, because narration needs
   whole lines; the brain speaks from partial deltas, so its text comes only from them and the
   whole message gives it nothing, and nothing is spoken twice.
