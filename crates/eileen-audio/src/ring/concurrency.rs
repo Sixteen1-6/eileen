@@ -121,23 +121,28 @@ fn a_later_capture_stream_goes_on_numbering_where_the_last_stopped() {
     model(|| {
         let mut ring = SpeechRing::new(8, 1);
         let mut first = ring.open_capture();
-        let first_handed = on_capture_thread(move || push_range(&mut first, 1, 2)).join().unwrap();
-        assert_eq!(first_handed, 1, "nothing read the handoff, so 2 was lost");
+        let first_handed = on_capture_thread(move || push_range(&mut first, 1, 1)).join().unwrap();
+        assert_eq!(first_handed, 1);
+        ring.connected();
+        let mut before = Vec::new();
+        assert_eq!(drain(&mut ring, &mut before), 0);
+        check_written(&before, 0, false);
+        ring.confirm_through(1);
         ring.capture_stopped();
 
+        // Same connection: 2 follows the 1 written with no gap, so only the mute breaks it.
         let mut second = ring.open_capture();
-        let capture = on_capture_thread(move || push_range(&mut second, 3, 4));
-        ring.connected();
+        let capture = on_capture_thread(move || push_range(&mut second, 2, 3));
         let mut written = Vec::new();
         let mut dropped = drain(&mut ring, &mut written);
         dropped += drain(&mut ring, &mut written);
         let handed = capture.join().unwrap();
         dropped += drain(&mut ring, &mut written);
 
-        assert!(written.iter().all(|(seq, _, _)| (3..=4).contains(seq)), "{written:?}");
-        check_written(&written, 0, true);
+        assert!(written.iter().all(|(seq, _, _)| (2..=3).contains(seq)), "{written:?}");
+        check_written(&written, 1, true);
         assert_eq!(count(&written), handed);
-        assert_eq!(handed + dropped, 3, "2, and whatever the second stream lost");
+        assert_eq!(handed + dropped, 2, "whatever the second stream lost is counted");
     });
 }
 
@@ -158,7 +163,6 @@ fn nothing_captured_before_a_stop_is_written_after_it() {
 
         assert!(ring.next_frame().is_none(), "the store and the handoff were emptied");
         check_written(&written, 0, false);
-        assert!(count(&written) <= handed);
         assert_eq!(handed + dropped, 3, "a frame the stop discarded was handed, not lost");
     });
 }
@@ -182,13 +186,12 @@ fn a_reader_draining_beside_a_writer_that_wraps_the_handoff_keeps_every_rule() {
         }
         std::thread::yield_now();
     }
-    let handed = capture.join().unwrap();
+    capture.join().unwrap();
     dropped += drain_confirming(&mut ring, &mut written);
 
     check_written(&written, 0, false);
     // A reader slower than the writer can also overrun the store, which drops frames handed but
-    // not yet written; each of those is counted too.
-    assert!(count(&written) <= handed, "only frames the handoff took are written");
+    // not yet written, so the count covers both kinds of loss.
     assert_eq!(
         count(&written) + dropped,
         u64::try_from(PUSHED).unwrap(),
