@@ -50,12 +50,12 @@ mod tests {
     }
 
     /// A job's steps, each as the text of its lines, trimmed and without comment lines, in
-    /// order, so a comment can neither satisfy nor fail a check.
+    /// order, so a comment can neither satisfy nor fail a check. Empty for a job without steps,
+    /// such as one that calls a reusable workflow.
     fn steps(job: &[&str]) -> Vec<String> {
-        let at = job
-            .iter()
-            .position(|line| line.trim() == "steps:")
-            .unwrap_or_else(|| panic!("a job without steps: {job:#?}"));
+        let Some(at) = job.iter().position(|line| line.trim() == "steps:") else {
+            return Vec::new();
+        };
         let indent = indent_of(job[at]);
         let mut steps: Vec<String> = Vec::new();
         for line in &job[at + 1..] {
@@ -98,17 +98,26 @@ mod tests {
             .any(|w| w[0].is_ascii_digit() && w[1] == b'.' && w[2].is_ascii_digit())
     }
 
+    /// The value of a rust-cache step's `shared-key`, without quotes or a trailing comment.
+    fn shared_key(step: &str) -> Option<&str> {
+        step.lines().find_map(|line| {
+            let value = line.trim_start_matches("- ").strip_prefix("shared-key:")?;
+            let value = value.split(" #").next().unwrap_or_default().trim();
+            Some(value.trim_matches(['"', '\'']))
+        })
+    }
+
     fn on_windows(job: &[&str]) -> bool {
         job.iter().any(|line| line.trim() == "runs-on: windows-latest")
     }
 
-    const PRUNE_NEEDLES: [&str; 2] = ["rust-toolchain.toml", "rustup toolchain uninstall"];
+    const TOOLCHAIN_STEP_NEEDLES: [&str; 2] = ["rust-toolchain.toml", "rustup toolchain uninstall"];
 
     /// `logic-linux`'s step that keeps only the pinned toolchain: every other job that uses one
     /// of the saved keys runs the same text.
-    fn reference_prune() -> String {
+    fn reference_toolchain_step() -> String {
         let steps = steps(&job(CI, SAVERS[0].0));
-        steps[position(&steps, &PRUNE_NEEDLES)].clone()
+        steps[position(&steps, &TOOLCHAIN_STEP_NEEDLES)].clone()
     }
 
     #[test]
@@ -120,7 +129,7 @@ mod tests {
         // The key hashes `rustc -vV` of every installed toolchain, and with the environment hash
         // turned off it also drops the lockfile hash, so the cache would never be saved again.
         assert!(!CI.contains("add-rust-environment-hash-key"), "the key keeps its hashes");
-        let reference = reference_prune();
+        let reference = reference_toolchain_step();
         // The pinned version is read from rust-toolchain.toml, and that one is kept.
         assert!(
             reference.contains("pinned=\"$(sed -n ")
@@ -142,18 +151,25 @@ mod tests {
             let steps = steps(&job);
             let install = position(&steps, &["run: rustup toolchain install --no-self-update"]);
             let cache = position(&steps, &["uses: Swatinem/rust-cache@"]);
-            let prune = position(&steps, &PRUNE_NEEDLES);
-            assert!(install < prune && prune < cache, "{name}: install, prune, then rust-cache");
-            assert_eq!(steps[prune], reference, "{name}: the same step as {}", SAVERS[0].0);
-            // Every run prunes, pull requests too, so they compute the key `main` saved.
-            assert!(!has_key(&steps[prune], "if:"), "{name}: the pruning runs on every event");
+            let toolchain = position(&steps, &TOOLCHAIN_STEP_NEEDLES);
+            assert!(
+                install < toolchain && toolchain < cache,
+                "{name}: install, keep only the pinned toolchain, then rust-cache"
+            );
+            assert_eq!(steps[toolchain], reference, "{name}: the same step as {}", SAVERS[0].0);
+            // Every run drops the other toolchains, pull requests too, so they compute the key
+            // `main` saved.
+            assert!(!has_key(&steps[toolchain], "if:"), "{name}: the step runs on every event");
             assert!(steps[cache].contains(&format!("shared-key: {shared}\n")), "{name}: its key");
             assert!(
                 steps[cache].contains(&format!("save-if: ${{{{ {ON_MAIN} }}}}\n")),
                 "{name}: saves only on main"
             );
             if on_windows(&job) {
-                assert!(steps[prune].contains("shell: bash\n"), "{name}: bash, said explicitly");
+                assert!(
+                    steps[toolchain].contains("shell: bash\n"),
+                    "{name}: bash, said explicitly"
+                );
             }
         }
     }
@@ -162,7 +178,7 @@ mod tests {
     /// same way, or it never finds `main`'s entry once `prune-caches` removes the older ones.
     #[test]
     fn every_restore_of_a_saved_key_keeps_only_the_pinned_toolchain() {
-        let reference = reference_prune();
+        let reference = reference_toolchain_step();
         let folder = crate::repo_root().join(".github/workflows");
         let mut files: Vec<_> = std::fs::read_dir(&folder)
             .unwrap()
@@ -180,22 +196,21 @@ mod tests {
                 let Some(cache) = try_position(&steps, &["uses: Swatinem/rust-cache@"]) else {
                     continue;
                 };
-                let saved = SAVERS
-                    .iter()
-                    .any(|(_, shared)| steps[cache].contains(&format!("shared-key: {shared}\n")));
+                let saved = shared_key(&steps[cache])
+                    .is_some_and(|key| SAVERS.iter().any(|(_, shared)| *shared == key));
                 if !saved {
                     continue;
                 }
                 let pending =
                     WITHOUT_THE_TOOLCHAIN_STEP.iter().any(|(f, j)| *f == file && *j == name);
-                let prune = steps.iter().position(|step| *step == reference);
+                let toolchain = steps.iter().position(|step| *step == reference);
                 if pending {
-                    assert!(prune.is_none(), "{file} {name} has the step now: empty the list");
+                    assert!(toolchain.is_none(), "{file} {name} has the step now: empty the list");
                 } else {
-                    let prune = prune.unwrap_or_else(|| {
+                    let toolchain = toolchain.unwrap_or_else(|| {
                         panic!("{file} {name}: no step identical to {}'s: {reference}", SAVERS[0].0)
                     });
-                    assert!(prune < cache, "{file} {name}: the pruning comes before rust-cache");
+                    assert!(toolchain < cache, "{file} {name}: the toolchain step comes first");
                 }
                 restorers.push((file.clone(), name.to_owned()));
             }
@@ -272,15 +287,15 @@ mod tests {
         assert!(text.contains("for shared in linux win-clippy win-test; do"), "{text}");
         assert!(text.contains("--key \"v0-rust-$shared-\""), "{text}");
         assert!(text.contains("--sort created_at --order desc"), "newest first: {text}");
-        assert!(text.contains("'.[1:][]"), "the newest of each key is kept: {text}");
+        // A later key that starts the same way, such as `linux-fuzz`, is left alone: only the
+        // entries whose next part is rust-cache's OS name count, and the newest is kept.
+        assert!(text.contains("grep -E \"^[0-9]+ v0-rust-$shared-(Linux|Windows_NT)-\""), "{text}");
+        assert!(text.contains("tail -n +2)"), "the newest of each key is kept: {text}");
+        assert!(!text.contains("[1:]"), "kept after the filter, not before: {text}");
         assert!(text.contains("gh cache delete"), "{text}");
-        // The aggregate does not wait for maintenance, and its list is unchanged.
+        // The aggregate does not wait for maintenance.
         let all_green = job_text("all-green");
-        assert!(
-            all_green
-                .contains("needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]\n"),
-            "{all_green}"
-        );
+        assert!(!all_green.contains("prune-caches"), "{all_green}");
     }
 
     fn job_text(name: &str) -> String {

@@ -770,22 +770,22 @@ the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows
 120 s (clippy 50 s, `fetch-native` 15 s), `windows-test` 165 s (tests 93 s), `all-green` 3 s;
 `pr-meta` 21 s. Against `wp0/stubs`' cold run each Windows job took about 69 percent less time.
 
-The cache, measured on 2026-11-01 over the week's runs (131 pull request runs with the Rust
-lanes, 27 `windows-test` logs read in full): a run whose cache key matched in full took a median of
-3.0 minutes, and `windows-test` compiled only the 47 workspace crates; the 6 runs whose partial
-restore purged week-old artifacts compiled 152 to 245 crates and took 5.7 to 10 minutes. One of
-them, after `d19fbe6` added no crates.io package at all, still rebuilt 107. The cache held 11.1 GB
-in 28 entries, over GitHub's 10 GB limit. `wp0/ci-cache-fresh` answers both. Its own run
-41310530260 found no Windows cache, as expected once: the Windows images carry stable 1.99.1
-beside the pinned 1.99.0, so dropping it moved the Windows key from `d502fb97` to `d199978c`, and
-`main`'s first run after the merge saves the new entries. On Linux, `main`'s current key
-(`a820fa96`) also hashes the image's 1.99.1; the pull request restored an older `df0daf48` entry,
-saved before the image moved, as a partial match. To confirm the fix, read the `windows-test` log of
-the first pull request after that which edits a `Cargo.toml` or the lockfile, at least a week
-after `main` first saved the new entries: rust-cache logs `full match: false`, yet the tests step
-compiles only the workspace crates and the changed dependencies, not the 107 to 245 crates of
-before. The step that dates the artifacts prints how many files and folders it dated in each
-folder in `main`'s logs, and `prune-caches` names each entry it deletes.
+The cache, measured on 2026-11-01 over the week's runs (131 pull request runs with the Rust lanes,
+27 `windows-test` logs read in full): a run whose cache key matched in full took a median of 3.0
+minutes, and `windows-test` compiled only the 47 workspace crates; the 6 runs whose partial restore
+purged week-old artifacts compiled 152 to 245 crates and took 5.7 to 10 minutes. One of them, after
+`d19fbe6` added no crates.io package at all, still rebuilt 107. The cache held 11.1 GB in 28
+entries, over GitHub's 10 GB limit. `wp0/ci-cache-fresh` answers both. Its own run 41310530260 found
+no Windows cache, as expected once: the Windows images carry stable 1.99.1 beside the pinned 1.99.0,
+so dropping it moved the Windows key from `d502fb97` to `d199978c`, and `main`'s first run after the
+merge saves the new entries. On Linux, `main`'s current key (`a820fa96`) also hashes the image's
+1.99.1; the pull request restored an older `df0daf48` entry, saved before the image moved, as a
+partial match. To confirm the fix, read the `windows-test` log of a pull request that edits a
+`Cargo.toml` or the lockfile and restores an entry `main` saved less than a week before, while that
+entry holds dependencies first built more than a week earlier: rust-cache logs `full match: false`,
+yet the tests step compiles only the workspace crates and the changed dependencies, not the 107 to
+245 crates of before. The step that dates the artifacts prints how many files and folders it dated
+in each folder in `main`'s logs, and `prune-caches` names each entry it deletes.
 
 The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
 the owner's PC writes its percentiles between these markers and its thresholds to
