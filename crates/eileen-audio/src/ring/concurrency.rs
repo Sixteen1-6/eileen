@@ -63,8 +63,8 @@ fn drain(ring: &mut SpeechRing, into: &mut Vec<Written>) -> u64 {
 }
 
 /// As [`drain`], but confirms each frame once written, as the speech process's `Pong` would, so
-/// however long the writer keeps the reader draining, the store never fills and drops a frame
-/// already written.
+/// however long the writer keeps the reader draining, the store never drops a frame already
+/// written, which would count it twice.
 #[cfg(not(loom))]
 fn drain_confirming(ring: &mut SpeechRing, into: &mut Vec<Written>) -> u64 {
     while let Some(frame) = ring.next_frame() {
@@ -186,6 +186,12 @@ fn a_reader_draining_beside_a_writer_that_wraps_the_handoff_keeps_every_rule() {
     dropped += drain_confirming(&mut ring, &mut written);
 
     check_written(&written, 0, false);
-    assert_eq!(count(&written), handed);
-    assert_eq!(handed + dropped, u64::try_from(PUSHED).unwrap(), "every frame written or counted");
+    // A reader slower than the writer can also overrun the store, which drops frames handed but
+    // not yet written; each of those is counted too.
+    assert!(count(&written) <= handed, "only frames the handoff took are written");
+    assert_eq!(
+        count(&written) + dropped,
+        u64::try_from(PUSHED).unwrap(),
+        "every frame written or counted once"
+    );
 }
