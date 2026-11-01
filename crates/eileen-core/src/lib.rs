@@ -8,8 +8,11 @@
 //! - [`Core`]: turn-taking and barge-in (pause, then decide, then resume or stop), the addressee
 //!   gate's minimal form (the name, the conversation window, a full built-in command), fast-path
 //!   dispatch of mute, unmute, stop, cancel, "go on" and "what time is it", one brain turn at a
-//!   time spoken clause by clause, one job with a cold worker session, mute, and the completion
-//!   announcement. Later: the rest of section 6.3's list.
+//!   time spoken clause by clause, one job with a cold worker session, mute, the completion
+//!   announcement, the speech process's life (`life`: started on the first step, hang-dumped,
+//!   killed and restarted with a bounded backoff when it stops answering) and the HUD's
+//!   microphone state and reply line (`hud`). Later: the rest of section 6.3's list, turns heard
+//!   late first (`wp1/speech-late`).
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
 //! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start, with
 //!   [`LocalTime`], the PC's offsets from UTC and when they change.
@@ -33,14 +36,21 @@
 //! - No unaddressed speech becomes a bus event, and `Heard` follows `TurnRouted` (invariant 6).
 //! - Barge-in ducks at the first window, pauses at the third consecutive one and resolves within
 //!   600 ms of the pause (invariant 2); the brain is told exactly the heard prefix (invariant 3).
-//! - Nothing is spoken and no earcon plays while muted (invariant 9).
+//! - Nothing is spoken and no earcon plays while muted (invariant 9); a reply that cannot be
+//!   spoken, because the microphone is muted or speech is down, goes to the HUD instead, and
+//!   announcements wait.
+//! - The speech process is started on the core's first step. A missed heartbeat (none for 5 s
+//!   from its `Ready` or the latest `Heartbeat`) or no `Ready` within 120 s of a `Start` or
+//!   `Restart` gets `HangDumpThenKill`; every `Restart` waits a backoff step of 1 s doubling to
+//!   60 s, never more (simulator invariant 8).
 //! - A worker's `PreToolUse` is never allowed: no decision only for its kind's file tools when
 //!   every path is in the job's folders and outside any git component, a deny with a
 //!   do-not-retry reason for everything else, until W2's permission gate replaces this.
 //! - A job starts only from the brain's own shim, for the brain turn in flight, with the
 //!   authority the core sent that turn with; an ambient turn starts none (section 2.3).
 //! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
-//! - A speech turn is routed once, however often its `EndOfTurn` arrives.
+//! - A speech turn is routed once, however often its `EndOfTurn` arrives, and a turn open when
+//!   speech went down is never routed: its audio is replayed under a new turn.
 //! - The span-parent table holds for every span (invariant 13).
 //!
 //! # Boundaries
@@ -75,6 +85,17 @@
 //!   daylight-saving change is followed with no restart, a change of time zone only from the
 //!   next start.
 //! - Effects carry the core's own `seq`, one counter for every effect, kept in the snapshot.
+//! - An `Exited` carries no generation. After `HangDumpThenKill` the core sends `Restart` only
+//!   once the killed process's `Exited` came and the backoff step passed, or 10 s after the
+//!   kill if the exit is never reported; only an `Exited` that comes later still is taken for
+//!   the new process.
+//! - The speech process's life and the HUD's line are not in the snapshot: a resumed core
+//!   starts the process again on its first step, with the backoff from its first step. A core
+//!   restored from a checkpoint taken while speech was up therefore emits `Start` and treats
+//!   speech as loading, so strict replay can start only from a checkpoint taken at the core's
+//!   start until the snapshot carries them (section 3.3.16).
+//! - The HUD's line holds at most 4 KiB: model text has no bound, and the whole HUD state must
+//!   fit one line of the HUD pipe. A line cut at the limit ends with " ..." and takes no more.
 //!
 //! # Logs and tracing
 //!
@@ -96,7 +117,9 @@ mod clauses;
 mod clock;
 #[doc(hidden)]
 pub mod fuzz_entry;
+mod hud;
 mod job;
+mod life;
 mod route;
 mod spans;
 mod speech;
@@ -120,7 +143,9 @@ pub use crate::clock::{LocalOffset, LocalTime};
 use crate::addressee::Window;
 use crate::announce::Queue;
 use crate::brain::Brain;
+use crate::hud::Hud;
 use crate::job::Jobs;
+use crate::life::SpeechLife;
 use crate::route::Handled;
 use crate::spans::Spans;
 use crate::turn::Turns;
@@ -168,6 +193,8 @@ enum TimerKind {
     Window,
     /// An announcement's second of quiet.
     Announce,
+    /// The speech process: its load deadline, its heartbeat check, or its restart.
+    Speech,
 }
 
 /// The core's timers.
@@ -281,6 +308,10 @@ pub struct Core {
     spans: Spans,
     /// The speech turns already routed, so a repeated `EndOfTurn` is dropped.
     handled: Handled,
+    /// The speech process's life.
+    life: SpeechLife,
+    /// The HUD's line and the state last sent.
+    hud: Hud,
     seq: u64,
     /// The snapshot the core started from, for the fields it does not run yet.
     resumed: CoreSnapshotV1,
@@ -317,12 +348,15 @@ impl Core {
             timers,
             spans: Spans::default(),
             handled: Handled::default(),
+            life: SpeechLife::default(),
+            hud: Hud::default(),
             seq: counter(COUNTER_SEQ),
             resumed,
         }
     }
 
-    /// Takes one input at `now` and appends the effects it causes.
+    /// Takes one input at `now` and appends the effects it causes. The first step, whatever its
+    /// input, also starts the speech process.
     pub fn step(
         &mut self,
         now: MonoTime,
@@ -332,6 +366,9 @@ impl Core {
     ) {
         let Envelope { at, ctx, body, .. } = input;
         let mut cx = Cx { now, at, rng, effects, seq: self.seq };
+        if !self.life.started() {
+            self.boot(&mut cx);
+        }
         match body {
             Input::Voice(event) => self.voice(&mut cx, event),
             Input::Playback(event) => self.playback(&mut cx, event),
@@ -341,8 +378,8 @@ impl Core {
             Input::ToolCall(request) => self.tool_call(&mut cx, ctx, request),
             Input::User(input) => self.user(&mut cx, input),
             Input::Timer(id) => self.timer(&mut cx, id),
+            Input::Sidecar(which, event) => self.sidecar(&mut cx, which, &event),
             Input::ToolResult(..)
-            | Input::Sidecar(..)
             | Input::Learn(_)
             | Input::Activity(_)
             | Input::Memory(_)
@@ -350,6 +387,7 @@ impl Core {
             | Input::Store(_) => {}
         }
         self.announce(&mut cx);
+        self.refresh_hud(&mut cx);
         self.seq = cx.seq;
     }
 
@@ -374,6 +412,9 @@ impl Core {
 
     fn voice(&mut self, cx: &mut Cx<'_>, event: VoiceEvent) {
         match event {
+            // A turn already handled, or dropped when speech went down, is not heard again.
+            VoiceEvent::SpeechStarted { turn, .. } | VoiceEvent::Partial { turn, .. }
+                if self.handled.contains(turn) => {}
             VoiceEvent::SpeechStarted { turn, .. } => self.turns.speech_started(turn),
             VoiceEvent::Partial { turn, text, .. } => {
                 if !self.turns.muted() {
@@ -447,6 +488,7 @@ impl Core {
         match self.timers.fired(id) {
             Some(TimerKind::BargeIn) => self.barge_in_deadline(cx),
             Some(TimerKind::Window) => self.window_deadline(cx),
+            Some(TimerKind::Speech) => self.speech_timer(cx),
             Some(TimerKind::Announce) | None => {}
         }
     }

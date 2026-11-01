@@ -3,8 +3,9 @@
 //! Each step takes one input, wraps it in an [`Envelope`] with the next `seq` and the virtual
 //! time, calls `Core::step`, applies the effects to the simulated parts, checks every
 //! invariant, writes one line of the step log and feeds the trace hash. The parts: timers the
-//! core set, the speech process and the playback device, a scripted brain and scripted worker
-//! sessions ([`crate::parts`]), the bus with one slow subscriber, and the span collector
+//! core set, the speech process with its life and the playback device, a scripted brain and
+//! scripted worker sessions ([`crate::parts`]), the bus with one slow subscriber, the HUD's
+//! last state, the supervised children's lives (invariant 8), and the span collector
 //! ([`crate::collect`]), which keeps every span and log line the core produces on the
 //! simulator's thread for invariant 13.
 //! What the parts answer is scheduled at virtual times, and [`World::advance`] delivers it,
@@ -15,7 +16,9 @@ use std::fmt::{self, Write as _};
 
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
+use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId};
+use eileen_contracts::hud::HudState;
 use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime};
 use eileen_contracts::ports::SettingsValidator;
 use eileen_contracts::record::InputRecord;
@@ -28,9 +31,9 @@ use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::collect::Collector;
 use crate::hash::TraceHash;
-use crate::invariants::{self, Delivery, Violation};
+use crate::invariants::{self, ChildEvent, ChildRecord, Delivery, Violation};
 use crate::parts::Brain as BrainPart;
-use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Speech, Workers};
+use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Process, Speech, Workers};
 use crate::profile::Profile;
 use crate::resolver::SimResolver;
 
@@ -135,6 +138,10 @@ pub struct World {
     workers: Workers,
     /// The utterances the speech process holds, which playback events may name (invariant 10).
     speech_queue: Vec<SpeakId>,
+    /// The supervised children's lives (invariant 8).
+    children: Vec<ChildRecord>,
+    /// The HUD state the core sent last.
+    hud: Option<HudState>,
     effects: Vec<Envelope<Effect>>,
     published: Vec<Envelope<BusEvent>>,
     bus: Bus,
@@ -201,6 +208,8 @@ impl World {
             brain: BrainPart::default(),
             workers: Workers::default(),
             speech_queue: Vec::new(),
+            children: Vec::new(),
+            hud: None,
             effects: Vec::new(),
             published: Vec::new(),
             bus,
@@ -252,6 +261,61 @@ impl World {
     #[must_use]
     pub const fn device(&self) -> &Device {
         &self.device
+    }
+
+    /// The simulated speech process.
+    #[must_use]
+    pub const fn speech(&self) -> &Speech {
+        &self.speech
+    }
+
+    /// The HUD state the core sent last.
+    #[must_use]
+    pub const fn hud(&self) -> Option<&HudState> {
+        self.hud.as_ref()
+    }
+
+    /// The supervised children's lives so far.
+    #[must_use]
+    pub fn children(&self) -> &[ChildRecord] {
+        &self.children
+    }
+
+    /// The speech process hangs: it sends nothing more until the core has it killed.
+    pub fn hang_speech(&mut self) {
+        let event = match self.speech.process() {
+            Process::Up => ChildEvent::Hung,
+            Process::Loading => ChildEvent::Stuck,
+            Process::Off | Process::Hung | Process::Dead => return,
+        };
+        self.speech.hang(&mut self.due);
+        self.child(SidecarId::Speech, event);
+    }
+
+    /// The speech process crashes: the supervisor reports its exit now, and the utterances it
+    /// held that never reached the device are gone with it.
+    pub fn crash_speech(&mut self) {
+        self.speech.crash(self.now_ms, &mut self.due);
+        self.speech_gone();
+    }
+
+    /// Makes every later load of the speech process never send `Ready` (`true`), or finish
+    /// again (`false`).
+    pub const fn stick_speech_loads(&mut self, stuck: bool) {
+        self.speech.stick_loads(stuck);
+    }
+
+    /// Makes the supervisor report each later kill of the speech process `ms` after it, as a
+    /// slow hang dump would.
+    pub const fn slow_speech_exits(&mut self, ms: u64) {
+        self.speech.slow_exits(ms);
+    }
+
+    /// The speech process ended: it holds no utterance now, and the device plays on only what
+    /// it was given.
+    fn speech_gone(&mut self) {
+        let playing = self.device.speaking();
+        self.speech_queue.retain(|queued| playing.contains(queued));
     }
 
     /// Queues the scripted brain's reply to the next turn it is sent.
@@ -390,14 +454,51 @@ impl World {
     }
 
     /// What an input does to the parts before the core sees it: a clause's samples reach the
-    /// device, and a drained utterance leaves the speech process and the device.
+    /// device, a drained utterance (or one done with no clause) leaves the speech process and
+    /// the device, a child's exit is noted, and the speech process hears of its own `Ready` and
+    /// heartbeats.
     fn apply_input(&mut self, input: &Input) {
-        if let Input::Playback(PlaybackEvent::Drained { speak }) = input {
-            self.speech_queue.retain(|queued| queued != speak);
-            self.device.forget(*speak);
-        } else if let Input::Voice(VoiceEvent::ClauseReady { speak, clause, samples, .. }) = input {
-            self.device.clause_ready(*speak, *clause, *samples);
+        match input {
+            Input::Playback(PlaybackEvent::Drained { speak }) => {
+                self.speech_queue.retain(|queued| queued != speak);
+                self.device.forget(*speak);
+            }
+            Input::Voice(VoiceEvent::ClauseReady { speak, clause, samples, .. }) => {
+                self.device.clause_ready(*speak, *clause, *samples);
+            }
+            Input::Voice(VoiceEvent::SpeakDone { speak })
+                if !self.device.speaking().contains(speak) =>
+            {
+                // Done with no clause on the device: nothing of it will ever play.
+                self.speech_queue.retain(|queued| queued != speak);
+            }
+            Input::Sidecar(child, SidecarEvent::Exited { .. }) => {
+                self.child(*child, ChildEvent::Down);
+            }
+            Input::Sidecar(SidecarId::Speech, _) => {
+                self.speech.delivered(self.now_ms, input, &mut self.due);
+            }
+            Input::Playback(_)
+            | Input::Voice(_)
+            | Input::Sidecar(..)
+            | Input::Brain(_)
+            | Input::Worker(..)
+            | Input::Hook(..)
+            | Input::ToolCall(_)
+            | Input::ToolResult(..)
+            | Input::Learn(_)
+            | Input::User(_)
+            | Input::Activity(_)
+            | Input::Memory(_)
+            | Input::Settings(_)
+            | Input::Store(_)
+            | Input::Timer(_) => {}
         }
+    }
+
+    /// Notes an event in a child's life.
+    fn child(&mut self, child: SidecarId, event: ChildEvent) {
+        self.children.push(ChildRecord { at_ms: self.now_ms, child, event });
     }
 
     fn apply_effect(&mut self, effect: Envelope<Effect>) {
@@ -430,19 +531,35 @@ impl World {
             Effect::Worker(session, cmd) => {
                 self.workers.command(now, *session, cmd, &mut self.due);
             }
+            Effect::Sidecar(child, cmd) => {
+                let event = match cmd {
+                    SidecarCmd::Start => ChildEvent::Started,
+                    SidecarCmd::Restart => ChildEvent::Restarted,
+                    SidecarCmd::HangDumpThenKill => ChildEvent::Down,
+                };
+                self.child(*child, event);
+                if *child == SidecarId::Speech {
+                    if *cmd != SidecarCmd::HangDumpThenKill && self.speech.loads_stuck() {
+                        self.child(*child, ChildEvent::Stuck);
+                    }
+                    self.speech.sidecar(now, *cmd, &mut self.due);
+                    if *cmd == SidecarCmd::HangDumpThenKill {
+                        self.speech_gone();
+                    }
+                }
+            }
+            Effect::Hud(state) => self.hud = Some((**state).clone()),
             Effect::SetTimer { id, at } => {
                 self.timers.insert(id.0, *at);
             }
             Effect::CancelTimer(id) => {
                 self.timers.remove(&id.0);
             }
-            // The parts that answer the rest (sidecars, the store, the learning store, the
-            // HUD) arrive with the full core; their effects are recorded and hashed only.
+            // The parts that answer the rest (the other sidecars, the store, the learning store)
+            // arrive with the full core; their effects are recorded and hashed only.
             Effect::Hook(..)
             | Effect::ToolForward { .. }
             | Effect::ToolReply { .. }
-            | Effect::Sidecar(..)
-            | Effect::Hud(_)
             | Effect::Learn(_)
             | Effect::Settings(_)
             | Effect::Persist(_)
@@ -456,6 +573,9 @@ impl World {
     fn check(&self) -> Option<Violation> {
         let queue_max = usize::try_from(self.profile.speech_queue_max).unwrap_or(usize::MAX);
         invariants::bus_events_are_attributed(&self.published, &self.bus.delivered)
+            .and_then(|()| {
+                invariants::children_restart_with_bounded_backoff(&self.children, self.now_ms)
+            })
             .and_then(|()| {
                 invariants::utterances_do_not_overlap(
                     &self.published,

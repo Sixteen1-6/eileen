@@ -3,14 +3,18 @@
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
-use eileen_contracts::connectors::{AppCapability, ConnectorManifest};
+use eileen_contracts::connectors::{
+    AppCapability, ConnectorManifest, Platform, RunsIn, SidecarEvent, SidecarId,
+};
 use eileen_contracts::core_io::{
     AudioCmd, Earcon, Effect, Input, PlaybackEvent, TimerId, UserInput,
 };
 use eileen_contracts::desktop::FieldCategory;
 use eileen_contracts::harness::{BrainCmd, BrainEvent, BrainSlot};
+use eileen_contracts::hud::{HudState, MicState};
 use eileen_contracts::ids::{
-    Envelope, MonoTime, Personal, SkillId, SpeakId, TraceCtx, TurnId, Untrusted, WallTime,
+    ConnectorId, Envelope, MonoTime, Personal, SkillId, SpeakId, TraceCtx, TurnId, Untrusted,
+    WallTime,
 };
 use eileen_contracts::intent::{
     Capabilities, CoreCommand, FollowUp, Resolution, ResolveCtx, SlotValues,
@@ -139,13 +143,17 @@ fn ports(follow_ups: Vec<&'static str>) -> CorePorts {
     }
 }
 
-/// A core with a virtual clock.
+/// A core with a virtual clock, whose speech process is up: the HUD states it sends are kept
+/// apart from the other effects, in `hud`.
 struct Harness {
     core: Core,
     rng: CoreRng,
     seq: u64,
     now_ms: u64,
     turns: u64,
+    hud: Option<HudState>,
+    /// How many HUD states the core has sent.
+    hud_sent: usize,
 }
 
 impl Harness {
@@ -154,15 +162,26 @@ impl Harness {
     }
 
     fn with(config: CoreConfig, follow_ups: Vec<&'static str>) -> Self {
+        let mut h = Self::booting(config, follow_ups);
+        h.step(Input::User(UserInput::SetMute(false)));
+        h.step(speech(ready()));
+        h
+    }
+
+    /// A core that has taken no step yet.
+    fn booting(config: CoreConfig, follow_ups: Vec<&'static str>) -> Self {
         Self {
             core: Core::new(config, ports(follow_ups), None),
             rng: CoreRng::from_seed(3),
             seq: 0,
             now_ms: 1_000,
             turns: 0,
+            hud: None,
+            hud_sent: 0,
         }
     }
 
+    /// One step; the HUD state it sends, if any, goes to `hud`.
     fn step(&mut self, body: Input) -> Vec<Effect> {
         self.seq += 1;
         let mono = MonoTime(self.now_ms * 1_000_000);
@@ -170,7 +189,26 @@ impl Harness {
         let input = Envelope { seq: self.seq, at, mono, ctx: TraceCtx::default(), body };
         let mut effects = Vec::new();
         self.core.step(mono, &mut self.rng, input, &mut effects);
-        effects.into_iter().map(|effect| effect.body).collect()
+        let mut rest = Vec::new();
+        for effect in effects {
+            if let Effect::Hud(state) = effect.body {
+                self.hud = Some(*state);
+                self.hud_sent += 1;
+            } else {
+                rest.push(effect.body);
+            }
+        }
+        rest
+    }
+
+    /// What the HUD shows instead of Eileen saying it.
+    fn hud_line(&self) -> Option<&str> {
+        self.hud.as_ref().and_then(|state| state.speaking.as_deref())
+    }
+
+    /// The microphone as the HUD shows it.
+    fn mic(&self) -> Option<&MicState> {
+        self.hud.as_ref().map(|state| &state.mic)
     }
 
     fn wait(&mut self, ms: u64) {
@@ -184,6 +222,28 @@ impl Harness {
         self.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
         self.wait(400);
         self.step(Input::Voice(end_of_turn(turn, text)))
+    }
+}
+
+/// From the speech process's sidecar client.
+const fn speech(event: SidecarEvent) -> Input {
+    Input::Sidecar(SidecarId::Speech, event)
+}
+
+/// The speech process's `Ready`, which serves no tools.
+fn ready() -> SidecarEvent {
+    SidecarEvent::Ready {
+        manifest: Box::new(ConnectorManifest {
+            id: ConnectorId::new("pc.speech").unwrap(),
+            version: "0.1.0".to_owned(),
+            runs: RunsIn::Sidecar { binary: "eileen-speech".to_owned() },
+            platforms: vec![Platform::Windows],
+            tools: Vec::new(),
+            events: Vec::new(),
+            checks: Vec::new(),
+            senses_room: false,
+            requires_opt_in: false,
+        }),
     }
 }
 
@@ -289,7 +349,8 @@ fn a_core_resumes_muted_with_its_counters() {
         effects.contains(&Effect::Audio(AudioCmd::SetCapture(true))),
         "unmuting starts capture"
     );
-    assert_eq!(h.core.snapshot().counters.get("effect_seq"), Some(&43), "seq continues from 40");
+    // The first step also starts speech: `Start`, its load deadline and the HUD's state.
+    assert_eq!(h.core.snapshot().counters.get("effect_seq"), Some(&46), "seq continues from 40");
 }
 
 #[test]
@@ -716,3 +777,4 @@ fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
 }
 
 mod jobs;
+mod life;

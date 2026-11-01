@@ -1,6 +1,7 @@
 //! Eileen speaking (BUILD.md sections 2.2 and 2.8): starting an utterance, carrying out what the
 //! turn-taking machine asks for, the conversation window that opens when she stops, mute, and
-//! the announcements that wait for a quiet moment.
+//! the announcements that wait for a quiet moment. What she cannot say aloud, while muted or
+//! while speech is down, goes to the HUD's line instead (section 6.3).
 
 use eileen_contracts::bus::{BusEvent, SpeakCause};
 use eileen_contracts::core_io::Effect;
@@ -53,8 +54,9 @@ struct Ended {
 }
 
 impl Core {
-    /// Says `text` whole: it is cut into clauses and closed at once. Nothing is said while
-    /// muted or while another utterance holds the floor.
+    /// Says `text` whole: it is cut into clauses and closed at once. While Eileen cannot speak
+    /// (muted, or speech is down) it goes to the HUD instead; nothing is said while another
+    /// utterance holds the floor.
     pub(crate) fn say(
         &mut self,
         cx: &mut Cx<'_>,
@@ -62,6 +64,10 @@ impl Core {
         cause: SpeakCause,
         text: &str,
     ) -> Option<SpeakId> {
+        if !self.can_speak() {
+            self.hud.show(owner, text);
+            return None;
+        }
         let speak = self.start_speaking(cx, owner, cause, clauses_of(text))?;
         let mut out = Vec::new();
         self.turns.close(speak, &mut out);
@@ -84,6 +90,7 @@ impl Core {
         if !self.turns.speak(speak, cause, &voice, clauses, &mut out) {
             return None;
         }
+        self.hud.clear();
         self.current = Some(Current { speak, turn: owner.turn, job: owner.job });
         let parent = owner.turn.map_or(SpeakParent::Root, SpeakParent::Turn);
         self.spans.open_speak(speak, parent, cause, chars);
@@ -108,6 +115,13 @@ impl Core {
         chosen.cloned().unwrap_or_default()
     }
 
+    /// What the utterance `speak` belongs to, while it holds the floor.
+    fn owner_of(&self, speak: SpeakId) -> Owner {
+        self.current
+            .filter(|current| current.speak == speak)
+            .map_or_else(Owner::default, |current| Owner { turn: current.turn, job: current.job })
+    }
+
     /// The correlation of the utterance holding the floor.
     fn current_ctx(&self) -> TraceCtx {
         self.current.map_or_else(TraceCtx::default, |current| TraceCtx {
@@ -129,6 +143,10 @@ impl Core {
                 }
                 Out::Stopped { speak, text, heard_chars, interrupted, resumed } => {
                     self.spoke(cx, Ended { speak, text, heard_chars, interrupted, resumed });
+                }
+                Out::Unspoken { speak, text } => {
+                    self.hud.show(self.owner_of(speak), &text);
+                    self.brain_reply_on_hud(speak);
                 }
                 Out::BargeIn { speak } => self.spans.open_barge_in(speak),
                 Out::BargeInEnded { speak } => self.spans.close_barge_in(speak),
@@ -180,20 +198,32 @@ impl Core {
     }
 
     /// Mutes or unmutes: capture stops or starts, an earcon plays at the change, and nothing is
-    /// spoken while muted.
+    /// spoken while muted. What the user had not heard of an utterance muting stopped goes to
+    /// the HUD, and when it was the reply in flight, the rest of the reply follows it there.
     pub(crate) fn set_mute(&mut self, cx: &mut Cx<'_>, muted: bool) {
+        let stopped = self.turns.speaking().filter(|_| muted);
+        let owner = stopped.map_or_else(Owner::default, |speak| self.owner_of(speak));
         let mut out = Vec::new();
-        self.turns.set_mute(muted, &mut out);
+        let changed = self.turns.set_mute(muted, &mut out);
         if muted {
             self.partial = None;
         }
         self.apply(cx, out);
+        if changed && let Some(speak) = stopped {
+            // Text of it already on the HUD, lost when speech went down, follows what was not
+            // heard.
+            if let Some(rest) = self.turns.rest() {
+                self.hud.lead(owner, rest);
+            }
+            self.brain_reply_on_hud(speak);
+        }
     }
 
     /// After every step: speaks the next announcement once the conversation has been quiet for
-    /// a second, or sets the timer that brings the step that will.
+    /// a second, or sets the timer that brings the step that will. Announcements wait while
+    /// Eileen cannot speak, muted or with speech down.
     pub(crate) fn announce(&mut self, cx: &mut Cx<'_>) {
-        let quiet = self.turns.quiet() && !self.turns.muted();
+        let quiet = self.turns.quiet() && self.can_speak();
         self.announcements.note_quiet(quiet, cx.now);
         match self.announcements.due(cx.now) {
             Due::Never => {}

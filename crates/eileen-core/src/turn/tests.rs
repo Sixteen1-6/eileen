@@ -212,9 +212,51 @@ fn a_speak_done_with_no_clause_frees_the_floor() {
     turns.speak_done(speak(1), &mut out);
     assert_eq!(turns.speaking(), None, "speech was down: nothing will play");
     assert_eq!(stopped(&out), Some((0, false, false)), "ended unheard");
+    assert!(
+        out.contains(&Out::Unspoken { speak: speak(1), text: "Hi.".to_owned() }),
+        "its text goes to the HUD: {out:?}"
+    );
     let mut ready = speaking(&["Played."]);
     ready.speak_done(speak(1), &mut out);
     assert_eq!(ready.speaking(), Some(speak(1)), "with its clauses ready it plays on");
+}
+
+#[test]
+fn speech_lost_keeps_the_synthesized_clauses_and_sends_the_rest_to_the_hud() {
+    let mut turns = Turns::new(false);
+    let mut out = Vec::new();
+    let clauses = vec!["One.".to_owned(), "Two.".to_owned(), "Three.".to_owned()];
+    assert!(turns.speak(speak(1), SpeakCause::Reply, "", clauses, &mut out), "it starts");
+    turns.clause_ready(speak(1), 0, 1_000);
+    turns.clause_ready(speak(1), 2, 1_000);
+    out.clear();
+    turns.speech_lost(&mut out);
+    assert_eq!(
+        out,
+        [Out::Unspoken { speak: speak(1), text: "Two. Three.".to_owned() }],
+        "clause 2 was ready but plays only after clause 1, which never comes"
+    );
+    assert_eq!(turns.speaking(), Some(speak(1)), "the first clause still plays");
+    out.clear();
+    turns.drained(speak(1), &mut out);
+    assert_eq!(stopped(&out), Some((4, false, false)), "it ends once the first clause played");
+}
+
+#[test]
+fn speech_lost_before_any_clause_ends_the_utterance_unheard() {
+    let mut turns = Turns::new(false);
+    let mut out = Vec::new();
+    assert!(turns.speak(speak(1), SpeakCause::Reply, "", vec!["Hi.".to_owned()], &mut out));
+    out.clear();
+    turns.speech_lost(&mut out);
+    assert_eq!(turns.speaking(), None, "nothing will play");
+    assert_eq!(stopped(&out), Some((0, false, false)), "ended unheard");
+    assert!(out.contains(&Out::Unspoken { speak: speak(1), text: "Hi.".to_owned() }), "{out:?}");
+    let mut drained = speaking(&["Done."]);
+    drained.drained(speak(1), &mut out);
+    out.clear();
+    drained.speech_lost(&mut out);
+    assert_eq!(stopped(&out), Some((5, false, false)), "every sample played: it ends");
 }
 
 #[test]

@@ -78,7 +78,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-- `wp1/minimal-core` (open): the minimal core slice S1 wires. `eileen-core` gains `turn` (a
+- `wp1/minimal-core` (#130, merged): the minimal core slice S1 wires. `eileen-core` gains `turn` (a
   pure, cloneable turn-taking machine), barge-in with pause-then-decide, the addressee gate's
   rules 1, 3 and 4 in minimal form, fast-path dispatch through `IntentResolver::resolve` with
   mute, unmute, stop, cancel, "go on" and "what time is it" answered by the core, one brain turn
@@ -96,13 +96,40 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `eileen-core::clock::tests::the_hour_moves_at_a_daylight_saving_change`. The crate keeps
   `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
   (check 24 as #134 amended it, D84). It follows #134 and builds on it.
-- Next: `wp1/speech-life`, the speech process's life of section 6.3 (start on the first step, a
-  missed heartbeat or a late `Ready`, an exit, the backoff, and replies on the HUD while speech
-  is down or the microphone is muted), which merges before WP2's `wp2/speech-transport` (D83).
-  #130 already ends an utterance that gets `SpeakDone` with no clause, as the audio component
-  answers while speech is down.
+- `wp1/speech-life` (open): the core's half of the speech process's life (section 6.3 as #134
+  amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
+  `life`: `Sidecar(Speech, Start)` on the first step; `HangDumpThenKill` then `Restart` when no
+  `Ready` comes within 120 s of a `Start` or `Restart`, or no `Heartbeat` for 5 s from that
+  `Ready` or the latest `Heartbeat`; `Restart` alone after an `Exited`; after a kill, `Restart`
+  waits for the killed process's `Exited` as well as the step, for at most 10 s; each `Restart` after a
+  backoff step of 1 s doubling to 60 s, back to 1 s once the process stayed up a minute after
+  its `Ready`; and `SidecarRestarted` on the bus with the reason. It gains `hud`: the HUD state
+  with `MicState::LoadingSpeech`, `SpeechRestarting`, `Muted` or `Listening`, sent when it
+  changes, and the line that carries every reply Eileen cannot say aloud (speech down, the
+  microphone muted, a `SpeakDone` with no clause, the part of an utterance not synthesized when
+  speech went down, what the user had not heard of an utterance muting stopped, and the rest of
+  a brain reply after any of these), at most 4 KiB, added to only by the message it belongs to.
+  A turn open when speech goes down is dropped and its late `EndOfTurn` never routed, and
+  announcements wait while Eileen cannot speak. `eileen-sim`'s speech
+  part answers `Start` and `Restart` with `Ready` after a 2 s load and pings with a `Heartbeat`
+  every second, and takes injected hangs, crashes and loads that never finish; invariant 8,
+  `children_restart_with_bounded_backoff`, is checked after every step. Tests:
+  `eileen-core::life::tests::*` (the backoff sequence), `eileen-core::tests::life::*` (the two
+  deadlines, an exit, the backoff's reset, replies on the HUD), `eileen-core::turn::tests::*`
+  (`speech_lost`), `eileen-sim::invariants::tests::invariant_8_*` and five
+  `eileen-sim::it::slice` tests plus a load that never finishes and a crash mid-answer.
+- Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
+  `SpeechStarted.replayed` (it has, #136); then `wp1/turn-exhaustive`.
 
 ## Surprises
+
+- The minimal core orders no reload that stops recognition, so the suspension of the 5 s
+  heartbeat count from such a reload to its first `Heartbeat` has nothing to start it yet. #146
+  amends section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
+  comes within 120 s, to the machine profile's core part, which orders the first such reload.
+- The speech process's life and the HUD's line are not in `CoreSnapshotV1`, so strict replay of
+  the minimal core starts from the checkpoint taken at the core's start (section 3.3.16 as #146
+  amends it) until a contracts amendment adds them with the full `Core::step`.
 
 - A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
   commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
@@ -142,6 +169,23 @@ Every pull request also meets the rules section 6.1 sets for every package.
   file tools the minimal hook can check. `Glob` is left out: its pattern can reach outside the
   job's folder while only its `path` carries a path fact. `--allowedTools` repeats them with
   `mcp__eileen__*`.
+
+- The backoff resets when the process goes down after a minute up, measured from its `Ready`
+  to its last `Heartbeat` for a hang and to the `Exited` for an exit, rather than on a
+  heartbeat a minute in: the reset needs no input of its own, and a hang is not credited with
+  the 5 s it took to notice.
+- The HUD's line keeps its start and is cut at 4 KiB with " ..." rather than keeping the
+  newest text: a full line takes no more, so a long reply stops resending the HUD state, and
+  the start of a reply is what the user reads first.
+- Muting while Eileen speaks a reply puts what the user had not heard on the HUD and the rest of
+  the reply after it, since section 6.3 shows every reply on the HUD while muted; the unheard
+  rest is still kept for "go on".
+- While speech is down announcements wait in their bounded queue, as they do while muted,
+  rather than going to the HUD; a reply goes to the HUD because the user is waiting for it.
+- Simulator invariant 8 bounds each restart to 1 to 60 s after the child went down (its kill or
+  its exit, whichever came first), at most six restarts of one child in any 60 s, and no child
+  left down past 60 s. Five restarts fit in the first minute of a child that crashes at once
+  (1, 2, 4, 8 and 16 s steps), so six leaves one of margin.
 
 ## Outcome
 

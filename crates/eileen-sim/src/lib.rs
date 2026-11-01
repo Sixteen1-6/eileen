@@ -7,8 +7,10 @@
 //!
 //! - [`World`], the TOML [`Profile`]s with their schema, seeded and byte-driven runs, the
 //!   fixed-column step log, `--doublecheck`, `SimRegression` replay and the invariants.
-//! - The parts that answer the core ([`parts`]): the speech process, the playback device in
-//!   10 ms callbacks, a scripted brain ([`BrainReply`]) and scripted worker sessions; and
+//! - The parts that answer the core ([`parts`]): the speech process with its life (a load,
+//!   `Ready`, a heartbeat a second, and the hangs, crashes and loads that never finish a test
+//!   injects), the playback device in 10 ms callbacks, a scripted brain ([`BrainReply`]) and
+//!   scripted worker sessions; and
 //!   [`SimResolver`], the scripted intent resolver beside its own settings validator.
 //! - The `eileen-sim` binary ([`cli`]) and the `sim` fuzz target's entry (`fuzz_entry`).
 //!
@@ -45,7 +47,7 @@
 //! - Fast command: `cargo xtask sim` (the pull request seed set, [`run::PR_SEEDS`]).
 //! - Layers: unit tests per module, one test per pull request seed
 //!   (`it::pr_seeds`), every stored regression (`it::regressions`), and slice S1's flows
-//!   through the minimal core (`it::slice`).
+//!   through the minimal core, the speech process's life among them (`it::slice`).
 //! - A bug here starts as a seed that fails only on one OS.
 //!
 //! # Traps
