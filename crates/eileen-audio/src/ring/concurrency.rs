@@ -62,6 +62,19 @@ fn drain(ring: &mut SpeechRing, into: &mut Vec<Written>) -> u64 {
     ring.take_dropped()
 }
 
+/// As [`drain`], but confirms each frame once written, as the speech process's `Pong` would, so
+/// however long the writer keeps the reader draining, the store never fills and drops a frame
+/// already written.
+#[cfg(not(loom))]
+fn drain_confirming(ring: &mut SpeechRing, into: &mut Vec<Written>) -> u64 {
+    while let Some(frame) = ring.next_frame() {
+        let seq = frame.seq;
+        into.push((seq, frame.samples[0], frame.flags));
+        ring.confirm_through(seq);
+    }
+    ring.take_dropped()
+}
+
 /// The frames written on one connection after the frame `before`: in order, each with its own
 /// samples, and with the break flag exactly where frames are missing, and on the first when
 /// capture had stopped before it.
@@ -163,18 +176,14 @@ fn a_reader_draining_beside_a_writer_that_wraps_the_handoff_keeps_every_rule() {
     loop {
         // Read before draining, so the last pass sees every frame the writer handed.
         let finished = capture.is_finished();
-        dropped += drain(&mut ring, &mut written);
-        // The speech process confirms what it read, as its Pong would, so the store never fills.
-        if let Some(&(seq, _, _)) = written.last() {
-            ring.confirm_through(seq);
-        }
+        dropped += drain_confirming(&mut ring, &mut written);
         if finished {
             break;
         }
         std::thread::yield_now();
     }
     let handed = capture.join().unwrap();
-    dropped += drain(&mut ring, &mut written);
+    dropped += drain_confirming(&mut ring, &mut written);
 
     check_written(&written, 0, false);
     assert_eq!(count(&written), handed);
