@@ -4,17 +4,17 @@ source: crates/eileen-contracts/tests/it/schemas.rs
 {
   "definitions": {
     "Approve": {
-      "description": "`approve`: only if WP3's contract test picks the permission-prompt-tool route; accepted only\nfor a pending ask with this `tool_use_id`. The reply's shape is recorded from the real CLI by\nWP3.",
+      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat id and that exact input; held up to `approvals.hook_hold_s` while the user decides;\nanswered with an `ApproveReply`.",
       "properties": {
         "input": {
-          "description": "Its input."
+          "description": "Its input, as the CLI sends it."
         },
         "tool_name": {
           "description": "The tool asking.",
           "type": "string"
         },
         "tool_use_id": {
-          "description": "The vendor's id for the use.",
+          "description": "The vendor's id for the use, the one the guard saw.",
           "type": "string"
         }
       },
@@ -24,6 +24,47 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         "tool_use_id"
       ],
       "type": "object"
+    },
+    "ApproveReply": {
+      "description": "What `approve` answers: one text block holding this as JSON, in one of the two shapes the CLI\naccepts. `allow` carries the input the guard stored with the ask, never one built from the\ncall, because the CLI runs `updatedInput` without calling the guard again.",
+      "oneOf": [
+        {
+          "description": "Run the call; only with an `ApprovalId` that came from `UserInput`.",
+          "properties": {
+            "behavior": {
+              "const": "allow",
+              "type": "string"
+            },
+            "updatedInput": {
+              "description": "The input the guard stored with the ask.",
+              "x-eileen-text": "untrusted"
+            }
+          },
+          "required": [
+            "behavior",
+            "updatedInput"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Do not run it.",
+          "properties": {
+            "behavior": {
+              "const": "deny",
+              "type": "string"
+            },
+            "message": {
+              "description": "One sentence for the model, written by Eileen's code.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "behavior",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RegistryPackage": {
       "description": "One package of a registry entry.",
@@ -230,17 +271,17 @@ source: crates/eileen-contracts/tests/it/schemas.rs
   "tool_inputs": {
     "approve": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "description": "`approve`: only if WP3's contract test picks the permission-prompt-tool route; accepted only\nfor a pending ask with this `tool_use_id`. The reply's shape is recorded from the real CLI by\nWP3.",
+      "description": "`approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier\nguard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with\nthat id and that exact input; held up to `approvals.hook_hold_s` while the user decides;\nanswered with an `ApproveReply`.",
       "properties": {
         "input": {
-          "description": "Its input."
+          "description": "Its input, as the CLI sends it."
         },
         "tool_name": {
           "description": "The tool asking.",
           "type": "string"
         },
         "tool_use_id": {
-          "description": "The vendor's id for the use.",
+          "description": "The vendor's id for the use, the one the guard saw.",
           "type": "string"
         }
       },
