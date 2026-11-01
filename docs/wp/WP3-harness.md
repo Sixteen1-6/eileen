@@ -81,7 +81,7 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   (refused and logged as a security event, never answered `allow`). The weekly contract test's
   case of an `updatedInput` that differs from the stored input (section 2.5) is the CLI's side
   of the same rule.
-- `wp3/approval-amendment` (draft, `type: amendment`, for the owner's review): brings BUILD.md
+- `wp3/approval-amendment` (#131, draft, `type: amendment`, for the owner's review): brings BUILD.md
   in line with #126 and the contract report. Section 3.3.3 writes
   `HookRequest::PermissionRequest.tool_use_id` as `Option<String>`, as the crate already has
   it, and section 6.5's "when WP3 next changes the contracts" clause is marked done. Section
