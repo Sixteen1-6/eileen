@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: Eileen: awaiting user approval appr_01TEST; do not retry until told","is_error":true,"tool_use_id":"toolu_0163dMg5u8Ngf1kgRQuP4DrT"}]}}

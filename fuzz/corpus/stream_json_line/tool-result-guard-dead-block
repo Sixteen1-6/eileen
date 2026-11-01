@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: [http://127.0.0.1:51439/v1/hooks/claude/pre-tool-use]: failed; blocking because onFailure is \"block\"\nconnect ECONNREFUSED 127.0.0.1:51439","is_error":true,"tool_use_id":"toolu_017Sfdzgv6YtkX1sdQ6Fs8Us"}]}}
