@@ -142,7 +142,7 @@ impl SpeechConnection {
 
     /// Its halves, so that one task can read while another writes.
     #[must_use]
-    pub const fn split(self) -> (SpeechReader, SpeechWriter) {
+    pub fn split(self) -> (SpeechReader, SpeechWriter) {
         (self.reader, self.writer)
     }
 
