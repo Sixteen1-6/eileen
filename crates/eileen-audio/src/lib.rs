@@ -18,8 +18,8 @@
 //!
 //! # Invariants
 //!
-//! - The capture callback allocates nothing and logs nothing (WP4 adds the counting allocator
-//!   that checks it in debug builds).
+//! - The audio callbacks allocate, free and log nothing (WP4's tests check it in test builds with
+//!   `allocation-counter`, a dev-dependency; product builds carry no check, decision D82).
 //! - Mute stops the capture stream within one buffer (WP4 acceptance 9 tests it).
 //! - The ring buffer is safe under concurrent use by the callback and its reader (WP4 adds its
 //!   loom tests, under `cfg(loom)`).
