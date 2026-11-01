@@ -11,7 +11,8 @@
 //!   time spoken clause by clause, one job with a cold worker session, mute, and the completion
 //!   announcement. Later: the rest of section 6.3's list.
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
-//! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start.
+//! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start, with
+//!   [`LocalTime`], the PC's offsets from UTC and when they change.
 //! - The `shell_command` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
@@ -23,8 +24,8 @@
 //! # Invariants
 //!
 //! - No IO: the crate depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace` among
-//!   Eileen's crates (check 24), plus `tracing` for spans and `serde_json` for tool arguments;
-//!   time comes in as [`MonoTime`] and randomness as [`CoreRng`] (`disallowed-methods` bans the
+//!   Eileen's crates (check 24), plus `tracing` for spans and `serde_json` for tool arguments,
+//!   and has no build dependencies (decision D84); time comes in as [`MonoTime`] and randomness as [`CoreRng`] (`disallowed-methods` bans the
 //!   system clock and generated IDs). IDs are minted from `MonoTime` and the RNG.
 //! - Maps that can reach an effect are ordered (`disallowed-types` in
 //!   `crates/eileen-core/clippy.toml` bans `HashMap`).
@@ -65,6 +66,10 @@
 //! - A worker session's `SessionSpec` leaves its hook and shim endpoints empty: the runtime
 //!   mints their tokens at spawn. Its working folder is `run/<session>/cwd`, relative to the
 //!   data directory.
+//! - The local time is the offset in force at each step's wall time, from [`LocalTime`]'s
+//!   changes, which the runtime reads at start for the current year and the next: a
+//!   daylight-saving change is followed with no restart, a change of time zone only from the
+//!   next start.
 //! - Effects carry the core's own `seq`, one counter for every effect, kept in the snapshot.
 //!
 //! # Logs and tracing
@@ -106,6 +111,8 @@ use eileen_contracts::record::CoreSnapshotV1;
 use eileen_contracts::speech::{VoiceCalibration, VoiceEvent};
 use eileen_stdx::rng::CoreRng;
 
+pub use crate::clock::{LocalOffset, LocalTime};
+
 use crate::addressee::Window;
 use crate::announce::Queue;
 use crate::brain::Brain;
@@ -141,9 +148,10 @@ pub struct CoreConfig {
     pub calibration: Option<VoiceCalibration>,
     /// The measured peak working set per job kind, in MB (section 2.5).
     pub cost_estimates: BTreeMap<JobKind, u32>,
-    /// The PC's local time zone, minutes east of UTC, as the runtime read it at start: the
-    /// fast path's "what time is it" answers in local time.
-    pub local_offset_min: i32,
+    /// The PC's offsets from UTC and when they change, which the runtime read from the time
+    /// zone's rules at start: the fast path's "what time is it" speaks the offset in force at
+    /// the turn's wall time.
+    pub local_time: LocalTime,
 }
 
 /// The kinds of timer the core sets; each has at most one live timer.

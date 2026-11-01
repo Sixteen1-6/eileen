@@ -205,7 +205,7 @@ impl Core {
             Fast::GoOn => self.go_on(cx, routed.turn),
             Fast::WhatTime => {
                 self.stop_speaking(cx, true);
-                let line = clock::spoken_time(cx.at, self.config.local_offset_min);
+                let line = clock::spoken_time(cx.at, &self.config.local_time);
                 self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, &line);
             }
         }
