@@ -446,6 +446,17 @@ impl Turns {
         }
     }
 
+    /// The speech process finished what `speak` was sent. An utterance it made no clause for
+    /// (speech is down, section 6.6) ends here, unheard, rather than holding the floor.
+    pub fn speak_done(&mut self, speak: SpeakId, out: &mut Vec<Out>) {
+        let unsynthesized = self.utterance.as_ref().is_some_and(|utterance| {
+            utterance.speak == speak && utterance.clauses.iter().all(|c| c.samples.is_none())
+        });
+        if unsynthesized {
+            self.end(false, out);
+        }
+    }
+
     /// The device stopped taking samples: the utterance is stopped rather than left holding
     /// the floor.
     pub fn stalled(&mut self, out: &mut Vec<Out>) {

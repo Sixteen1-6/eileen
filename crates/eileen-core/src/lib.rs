@@ -374,8 +374,12 @@ impl Core {
             VoiceEvent::ClauseReady { speak, clause, samples, .. } => {
                 self.turns.clause_ready(speak, clause, samples);
             }
+            VoiceEvent::SpeakDone { speak } => {
+                let mut out = Vec::new();
+                self.turns.speak_done(speak, &mut out);
+                self.apply(cx, out);
+            }
             VoiceEvent::SpeechEnded { .. }
-            | VoiceEvent::SpeakDone { .. }
             | VoiceEvent::Embedding { .. }
             | VoiceEvent::CheckResult { .. }
             | VoiceEvent::SpeakerMatch { .. }

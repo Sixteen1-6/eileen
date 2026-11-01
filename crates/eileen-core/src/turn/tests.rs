@@ -204,6 +204,20 @@ fn an_utterance_waits_while_synthesis_is_behind() {
 }
 
 #[test]
+fn a_speak_done_with_no_clause_frees_the_floor() {
+    let mut turns = Turns::new(false);
+    let mut out = Vec::new();
+    assert!(turns.speak(speak(1), SpeakCause::Reply, "", vec!["Hi.".to_owned()], &mut out), "ok");
+    out.clear();
+    turns.speak_done(speak(1), &mut out);
+    assert_eq!(turns.speaking(), None, "speech was down: nothing will play");
+    assert_eq!(stopped(&out), Some((0, false, false)), "ended unheard");
+    let mut ready = speaking(&["Played."]);
+    ready.speak_done(speak(1), &mut out);
+    assert_eq!(ready.speaking(), Some(speak(1)), "with its clauses ready it plays on");
+}
+
+#[test]
 fn a_second_utterance_is_refused_while_one_holds_the_floor() {
     let mut turns = speaking(&["Busy."]);
     let mut out = Vec::new();

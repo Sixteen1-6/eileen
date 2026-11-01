@@ -171,7 +171,7 @@ fn hooks_pass_only_file_tools_in_the_job_folder_and_never_allow() {
             request: 8,
             tool_name: "Write".to_owned(),
             tool_input: Untrusted::new(json!({})),
-            tool_use_id: "toolu_8".to_owned(),
+            tool_use_id: Some("toolu_8".to_owned()),
         },
     ));
     assert!(
