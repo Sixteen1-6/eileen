@@ -214,8 +214,8 @@ impl AudioFlags {
 impl BitOr for AudioFlags {
     type Output = Self;
 
-    fn bitor(self, other: Self) -> Self {
-        self.union(other)
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
     }
 }
 
