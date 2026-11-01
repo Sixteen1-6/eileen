@@ -764,6 +764,7 @@ dependencies = [
  "cpal",
  "eileen-contracts",
  "eileen-rt",
+ "eileen-stdx",
  "loom",
  "rtrb",
  "thiserror 2.0.21",

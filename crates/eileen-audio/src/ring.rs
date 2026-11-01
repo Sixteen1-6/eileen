@@ -82,7 +82,7 @@ impl CaptureFlags {
 
 /// A frame as the capture side numbered it.
 #[derive(Debug, Clone, Copy)]
-struct Captured {
+struct RingFrame {
     seq: u64,
     captured_at: Duration,
     flags: CaptureFlags,
@@ -101,7 +101,7 @@ struct Shared {
 
 /// The capture side: the audio callback's end of the handoff, one per capture stream.
 pub(crate) struct CaptureWriter {
-    handoff: rtrb::Producer<Captured>,
+    handoff: rtrb::Producer<RingFrame>,
     shared: Arc<Shared>,
 }
 
@@ -119,7 +119,7 @@ impl CaptureWriter {
         // newest value, so no two frames share a number. The frame itself reaches the reader
         // through rtrb's release and acquire.
         let seq = self.shared.next_seq.fetch_add(1, Ordering::Relaxed);
-        let frame = Captured { seq, captured_at, flags, samples: *samples };
+        let frame = RingFrame { seq, captured_at, flags, samples: *samples };
         if self.handoff.push(frame).is_ok() {
             true
         } else {
@@ -145,11 +145,11 @@ pub(crate) struct Outgoing<'a> {
 /// The reader side: the handoff's consumer and the replay store.
 pub(crate) struct SpeechRing {
     /// The current capture stream's handoff; `None` while capture is stopped.
-    handoff: Option<rtrb::Consumer<Captured>>,
+    handoff: Option<rtrb::Consumer<RingFrame>>,
     handoff_frames: usize,
     shared: Arc<Shared>,
     /// Every frame not confirmed, oldest first, in `seq` order; at most `store_frames`.
-    store: VecDeque<Captured>,
+    store: VecDeque<RingFrame>,
     store_frames: usize,
     /// The newest capture time the store has seen, which a frame's age is measured against.
     newest_at: Duration,
@@ -287,8 +287,8 @@ impl SpeechRing {
     }
 }
 
-#[cfg(all(test, not(loom)))]
-mod tests;
-
 #[cfg(test)]
 mod concurrency;
+
+#[cfg(all(test, not(loom)))]
+mod tests;
