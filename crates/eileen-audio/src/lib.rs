@@ -30,6 +30,10 @@
 //!   explore every order of those two under `cfg(loom)`; rtrb's own tests cover the handoff, and
 //!   a test on real threads in the same module drives a 4-frame handoff through 10 000 frames.
 //!   Its capture side allocates nothing (`allocation_counter::measure` in `ring::tests`).
+//! - Every resampler conversion meets BUILD.md section 6.6's bar (capture flat within 0.1 dB to
+//!   7 kHz and 60 dB down from 9 kHz; synthesis flat within 0.1 dB to 10 kHz, its images 60 dB
+//!   down from 14 kHz), measured through `realfft` in `resample::tests`, which also check that
+//!   buffers of any size lose no sample and that the downmix and conversions allocate nothing.
 //! - The ring keeps every frame the speech process has not confirmed, up to 180 s, numbered from
 //!   the core's start (decision D81); a mute empties it, so nothing captured before a mute is
 //!   written after it (`ring::tests`).
@@ -44,8 +48,8 @@
 //!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
 //!   target table; `rtrb` for the ring's handoff, and `loom` only under `cfg(loom)`. Today
 //!   `eileen-rt` is used only by `fake`, so it is optional and the feature turns it on, and a
-//!   dev-dependency for this crate's own tests, as are `eileen-stdx` and `allocation-counter`
-//!   (decision D82: never outside `[dev-dependencies]`).
+//!   dev-dependency for this crate's own tests, as are `eileen-stdx`, `realfft` (the resamplers'
+//!   measurements) and `allocation-counter` (decision D82: never outside `[dev-dependencies]`).
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -73,6 +77,9 @@
 //! - A frame's replayed flag is its age on the capture clock, which the ring estimates from the
 //!   newest frame pulled plus 32 ms per number taken since; a mute forgets that clock, since the
 //!   next source may start its own at zero.
+//! - cpal opens a WASAPI capture stream only at the endpoint's own rate, so an endpoint mixing at
+//!   44.1 kHz is captured at 44.1 kHz and resampled by Eileen (up 160, down 441); only render
+//!   streams get Windows' own converter, and the synthesis path keeps its own 147:80 as well.
 //! - A speech connection's halves need a tokio runtime with its timer; a failed write leaves the
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
 //!
@@ -102,6 +109,13 @@ pub mod fake;
     expect(dead_code, reason = "the component wires the ring in a later part")
 )]
 mod ring;
+// The component converts its capture and synthesis with these in a later part; until then only
+// their tests use them.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the component wires the resamplers in a later part")
+)]
+mod resample;
 pub mod stream;
 pub mod transport;
 
