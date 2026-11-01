@@ -108,6 +108,18 @@ The parts of the audio series, in merge order, as each opens:
    in `eileen-speech`, as BUILD.md section 4.7's table gives the target to WP4, though the parser
    is in `eileen-contracts`; `fuzz/AGENTS.md` says "the neutral crate that owns the parser", and
    pull request #136 proposes the wording under "Suggested guidance changes".
+2. `wp4/s1-audio-transport` (draft): defines what WP2's `wp2/speech-transport` builds against, so it
+   merges early. In `eileen-audio`: the `SpeechTransport` trait (`accept` a verified connection
+   within a deadline, `close` one the component is done with), with std types only, as section
+   3.3.15's ports use; `SpeechConnection`, a byte duplex over two std-only byte traits (`ByteRead`,
+   `ByteWrite`) whose read and write halves give every read and write a deadline, and whose writer
+   refuses every write after one fails part way; the in-memory transport under the `fake` feature
+   (`fake::memory_transport`), whose `StandIns` side connects a stand-in late, kills it by dropping
+   its end, connects a new one and sees each connection handed back, with every queue bounded;
+   `AudioSource`, `AudioSink` and `AudioStream`, callback-driven as cpal's streams are, each
+   callback told when its buffer was captured or will play on the source's or sink's own clock; and
+   `AudioConfig::speech`, the transport the later parts read. Evidence: the unit tests in
+   `eileen_audio::fake::tests` and `eileen_audio::transport::tests`.
 
 The speech series has not opened yet.
 
@@ -122,6 +134,9 @@ The speech series has not opened yet.
   cannot run in product debug builds without a feature in `eileen.exe`; D82 checks the real
   callbacks in an `owner_pc::` device test instead.
 
+- `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
+  first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
+
 ## Decisions
 
 - D81: the audio component owns every frame of the speech pipe, WP2 the transport, and the core
@@ -132,6 +147,22 @@ The speech series has not opened yet.
   `eileen-audio` take the crate, and check 15 keeps it under `[dev-dependencies]` once WP0's
   phase B builds it; until then the `bans` entry holds it to `eileen-audio`, whose manifest WP4
   owns.
+- The speech connection: the transport supplies two std-only byte traits and `eileen-audio`
+  wraps them in `SpeechConnection`, whose halves add the deadlines with tokio's timer. So every
+  transport gets the same deadlines, the bytes go straight from the ring to the pipe with no pump
+  task between them, and the trait never names a tokio type. A read must be cancel safe, so a
+  read that misses its deadline loses nothing; a write that fails can leave half a frame, so the
+  writer then refuses every write until the connection goes back.
+- `SpeechTransport::accept` takes a deadline, as rule 7 asks of every wait on another process,
+  and returns `AcceptError::TimedOut` when it passes, with the transport still usable. The core's
+  120 s load deadline lives in another process's state machine, so it cannot stand in for one at
+  this layer; the component loops on the timeout and reports there that speech is still not
+  connected.
+- The capture and render callbacks receive `CaptureInfo { captured_at }` and
+  `RenderInfo { plays_at }` from the source's or sink's own clock, as cpal's callback infos do.
+  The replayed flag (D81) and playback accounting need those times, and a callback that read a
+  clock itself would read the real one on the audio thread, which no test can pace. A test source
+  derives them from its sample position, so WP4 acceptance 15 runs in virtual time.
 - Resampling: the bar of BUILD.md section 6.6 (the decimator flat within 0.1 dB to 7 kHz and
   60 dB down from 9 kHz, the interpolator flat to 10 kHz with its images 60 dB down from 14 kHz,
   each at most 25 us per 10 ms buffer). At the 48 kHz endpoint rate both ratios are integers (3:1
