@@ -27,6 +27,7 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
+| 7 | `wp0/ci-pending-snapshots` | Phase B's first. Pull request #133, opened 2026-10-31. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -120,6 +121,27 @@ vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRI
 third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
 and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
 in the workspace.
+
+`wp0/ci-pending-snapshots` lets a lane take a changed snapshot from CI instead of building on the
+owner's PC. insta writes no pending snapshot when it detects CI, so the nextest and doc-test steps
+of `logic-linux` and `windows-test` set `INSTA_UPDATE=new`, and `INSTA_PENDING_DIR` to
+`target/insta-pending` under the workspace (an absolute path, because nextest runs each test binary
+from its crate's folder). insta then writes each pending file in that folder at the path it would
+take in the repository, so none lands in the tree, and each job's on-failure artifact
+(`logic-linux-junit`, `windows-test-junit`) keeps the folder beside the JUnit report, hidden files
+included, because insta names an inline snapshot's pending file `.<file>.pending-snap`. The
+`hygiene` job, which runs on every pull request, fails on a `*.snap.new` or `*.pending-snap`
+committed to the tree, and the xtask test `ci_keeps_pending_snapshots` holds `ci.yml` to all of it.
+To take a snapshot from a failed run,
+`gh run download <run-id> -n logic-linux-junit -D <scratch folder>` gives `nextest/ci/junit.xml` and
+`insta-pending/<repository path>`; move the `.snap.new` over the `.snap` it names and remove its
+`assertion_line:` header line, which insta writes only in pending files and `cargo insta accept`
+drops. An inline snapshot's `.pending-snap` holds the new value as JSON, for the literal in the
+test. Read the diff before committing it. AGENTS.md's Testing section gives the same route, which
+counts as regenerating the snapshot. Pending files kept beside the snapshots would also fail the
+contracts' `no_snapshot_file_is_unreferenced` whenever it ran after a failing snapshot test (a probe
+run showed it failing on Linux and passing on Windows, by test order alone); under `target/` they
+leave that check strict.
 
 ## Acceptance records
 

@@ -3,7 +3,9 @@
 //!
 //! The `plan` job in `.github/workflows/ci.yml` computes the same classes with
 //! `dorny/paths-filter`; the test `ci_filters_match_the_classifier` reads that job's filters,
-//! evaluates them and holds the two together.
+//! evaluates them and holds the two together. Beside it, `ci_keeps_pending_snapshots` reads the
+//! same workflow's test jobs and holds them to keeping insta's pending snapshots from a failed run
+//! out of the tree and in the run's artifact.
 
 /// A change to one of these selects every class, and so every lane: any `Cargo.toml`,
 /// `Cargo.lock` or `rust-toolchain.toml`, and anything under `.cargo/`, `.config/` or `.github/`.
@@ -173,6 +175,142 @@ mod tests {
                 patterns.iter().any(|pattern| predicate(path, pattern))
             }
         })
+    }
+
+    /// One job of a workflow: its name and its steps, each step as its trimmed lines.
+    #[derive(Debug)]
+    struct Job<'a> {
+        name: &'a str,
+        steps: Vec<Vec<&'a str>>,
+    }
+
+    /// The jobs of a workflow, read from the block under `jobs:`: a job starts at a `<name>:`
+    /// line indented two spaces, and a step at a `- ` line indented six.
+    fn jobs(workflow: &str) -> Vec<Job<'_>> {
+        let (_, block) = workflow.split_once("\njobs:\n").expect("the workflow has jobs");
+        let mut jobs: Vec<Job<'_>> = Vec::new();
+        for line in block.lines() {
+            let (indent, trimmed) = (indent_of(line), line.trim());
+            if indent == 2
+                && !trimmed.starts_with('#')
+                && let Some(name) = trimmed.strip_suffix(':')
+            {
+                jobs.push(Job { name, steps: Vec::new() });
+            } else if let Some(job) = jobs.last_mut() {
+                if indent == 6 && trimmed.starts_with("- ") {
+                    job.steps.push(vec![trimmed]);
+                } else if indent > 6
+                    && let Some(step) = job.steps.last_mut()
+                {
+                    step.push(trimmed);
+                }
+            }
+        }
+        jobs
+    }
+
+    /// Whether a step runs tests: `cargo nextest run` or `cargo test` on any line of it that is
+    /// neither a comment nor its name, so a command inside a `run: |` or `run: >-` block counts
+    /// too, while a build-only `--no-run` does not.
+    fn runs_tests(step: &[&str]) -> bool {
+        step.iter()
+            .map(|line| line.strip_prefix("- ").unwrap_or(line))
+            .map(|line| line.strip_prefix("run: ").unwrap_or(line))
+            .any(|line| {
+                !line.starts_with('#')
+                    && !line.starts_with("name: ")
+                    && (line.contains("cargo nextest run") || line.contains("cargo test"))
+                    && !line.contains("--no-run")
+            })
+    }
+
+    #[test]
+    fn a_test_step_is_found_in_every_run_form() {
+        let workflow = "name: example
+jobs:
+  inline:
+    steps:
+      - name: Tests
+        run: cargo nextest run --workspace
+  folded:
+    steps:
+      - name: Build the tests
+        run: cargo nextest run --workspace --no-run
+      - name: The tests, inside a session
+        run: >-
+          bash session.sh
+          cargo nextest run --workspace
+  literal:
+    steps:
+      - name: Doc tests
+        run: |
+          echo first
+          cargo test --workspace --doc
+  elsewhere:
+    steps:
+      - name: Lint, as cargo test would build it
+        # cargo test is only named in this comment
+        run: cargo clippy --workspace --all-targets
+";
+        let found: Vec<(&str, Vec<bool>)> = jobs(workflow)
+            .iter()
+            .map(|job| (job.name, job.steps.iter().map(|step| runs_tests(step)).collect()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("inline", vec![true]),
+                ("folded", vec![false, true]),
+                ("literal", vec![true]),
+                ("elsewhere", vec![false]),
+            ]
+        );
+    }
+
+    #[test]
+    fn ci_keeps_pending_snapshots() {
+        const PENDING_DIR: &str = "INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending";
+        let ci = include_str!("../../../.github/workflows/ci.yml").replace("\r\n", "\n");
+        let workflow = jobs(&ci);
+        let mut testing = Vec::new();
+        for job in &workflow {
+            let tests: Vec<&Vec<&str>> = job.steps.iter().filter(|step| runs_tests(step)).collect();
+            if tests.is_empty() {
+                continue;
+            }
+            testing.push(job.name);
+            // With `INSTA_UPDATE=new`, insta writes a failing or new snapshot as `.snap.new`, and
+            // an inline one as `.<file>.pending-snap`, a hidden file, even when it detects CI.
+            // `INSTA_PENDING_DIR` puts both under `target/`, at their repository paths, so none
+            // lands in the tree, and the job's upload on failure keeps the folder.
+            for step in tests {
+                let name = job.name;
+                for line in ["INSTA_UPDATE: new", PENDING_DIR] {
+                    assert!(step.contains(&line), "{name} sets `{line}`: {step:#?}");
+                }
+            }
+            let upload = job
+                .steps
+                .iter()
+                .find(|step| step.iter().any(|l| l.starts_with("uses: actions/upload-artifact@")))
+                .unwrap_or_else(|| panic!("{} keeps what a failed run leaves", job.name));
+            for line in ["if: failure()", "target/insta-pending/", "include-hidden-files: true"] {
+                assert!(upload.contains(&line), "{} keeps `{line}`: {upload:#?}", job.name);
+            }
+        }
+        for name in ["logic-linux", "windows-test"] {
+            assert!(testing.contains(&name), "{name} runs tests: {testing:?}");
+        }
+        // A pending file in the tree came from a hand copy, and no test notices it, so the
+        // `hygiene` job, which runs on every pull request, rejects it.
+        let hygiene =
+            workflow.iter().find(|job| job.name == "hygiene").expect("ci.yml has `hygiene`");
+        assert!(
+            hygiene.steps.iter().flatten().any(|line| {
+                line.contains("git ls-files -- '*.snap.new' '*.pending-snap' | grep .")
+            }),
+            "hygiene rejects a committed pending snapshot: {hygiene:#?}"
+        );
     }
 
     #[test]
