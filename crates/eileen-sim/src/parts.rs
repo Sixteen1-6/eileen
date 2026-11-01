@@ -276,13 +276,10 @@ impl Playing {
     fn take(&mut self, mut budget: u32) -> bool {
         let mut took = false;
         while budget > 0 {
-            let (clause, total, played) = match self.current {
-                Some(current) => current,
-                None => match self.queued.pop_front() {
-                    Some((clause, total)) => (clause, total, 0),
-                    None => break,
-                },
-            };
+            let next = self
+                .current
+                .or_else(|| self.queued.pop_front().map(|(clause, total)| (clause, total, 0)));
+            let Some((clause, total, played)) = next else { break };
             let step = budget.min(total.saturating_sub(played));
             budget -= step;
             let played = played.saturating_add(step);
@@ -516,7 +513,7 @@ mod tests {
 
     use super::{CALLBACK_MS, Device, Due, Speech};
 
-    fn speak() -> SpeakId {
+    const fn speak() -> SpeakId {
         SpeakId::from_parts(1, 1)
     }
 

@@ -34,7 +34,7 @@ pub(crate) fn words(text: &str) -> Vec<String> {
 
 /// An utterance with the assistant's name taken off.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Named {
+pub(crate) struct Stripped {
     /// Whether it began or ended with the name (rule 1).
     pub(crate) named: bool,
     /// Its other words, lower case, for the resolver.
@@ -42,7 +42,7 @@ pub(crate) struct Named {
 }
 
 /// Takes the name, or one of its aliases, off the start or the end of `text`.
-pub(crate) fn strip_name(text: &str, names: &[String]) -> Named {
+pub(crate) fn strip_name(text: &str, names: &[String]) -> Stripped {
     let said = words(text);
     for name in names {
         let name_words = words(name);
@@ -52,15 +52,18 @@ pub(crate) fn strip_name(text: &str, names: &[String]) -> Named {
         }
         let lead = said.get(..count).is_some_and(|lead| matches_name(lead, &name_words));
         if lead {
-            return Named { named: true, rest: said.get(count..).unwrap_or_default().join(" ") };
+            return Stripped { named: true, rest: said.get(count..).unwrap_or_default().join(" ") };
         }
         let tail_at = said.len() - count;
         let tail = said.get(tail_at..).is_some_and(|tail| matches_name(tail, &name_words));
         if tail {
-            return Named { named: true, rest: said.get(..tail_at).unwrap_or_default().join(" ") };
+            return Stripped {
+                named: true,
+                rest: said.get(..tail_at).unwrap_or_default().join(" "),
+            };
         }
     }
-    Named { named: false, rest: said.join(" ") }
+    Stripped { named: false, rest: said.join(" ") }
 }
 
 fn matches_name(said: &[String], name: &[String]) -> bool {

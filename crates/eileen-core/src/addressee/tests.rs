@@ -9,7 +9,7 @@ fn names() -> Vec<String> {
     vec!["Eileen".to_owned()]
 }
 
-fn s(n: u64) -> MonoTime {
+const fn s(n: u64) -> MonoTime {
     MonoTime(n * 1_000_000_000)
 }
 

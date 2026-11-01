@@ -13,7 +13,7 @@ fn turn(n: u64) -> TurnId {
     TurnId::from_parts(n, u128::from(n))
 }
 
-fn ms(n: u64) -> MonoTime {
+const fn ms(n: u64) -> MonoTime {
     MonoTime(n * 1_000_000)
 }
 

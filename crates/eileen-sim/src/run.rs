@@ -169,10 +169,9 @@ pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunRe
     let mut failure = None;
     while world.steps() < steps {
         let elapsed = bytes.int_in_range(1..=max_step_ms).unwrap_or(1);
-        let input = match world.advance(elapsed) {
-            Some(due) => due,
-            None => draw(&mut world, &mut generator, &mut bytes, profile),
-        };
+        let input = world
+            .advance(elapsed)
+            .unwrap_or_else(|| draw(&mut world, &mut generator, &mut bytes, profile));
         let outcome = world.step(input);
         if let Some(violation) = outcome.violation {
             failure = Some((world.steps(), violation));

@@ -145,13 +145,11 @@ impl Core {
         let Some(live) = self.brain.live.as_mut().filter(|live| live.turn == turn) else {
             return false;
         };
-        match live.instance {
-            Some(sent) => sent == instance,
-            None => {
-                live.instance = Some(instance);
-                true
-            }
+        if let Some(sent) = live.instance {
+            return sent == instance;
         }
+        live.instance = Some(instance);
+        true
     }
 
     /// The turn ended: the last clause is spoken and the reply closed.
@@ -194,24 +192,23 @@ impl Core {
                 self.stop_speaking(cx, false);
                 let started =
                     self.start_speaking(cx, Owner::turn(turn), SpeakCause::Reply, clauses);
-                match started {
-                    Some(speak) => {
-                        if let Some(live) = self.brain.live.as_mut() {
-                            live.speak = Some(speak);
-                        }
-                        if close {
-                            let mut out = Vec::new();
-                            self.turns.close(speak, &mut out);
-                            self.apply(cx, out);
-                        }
-                    }
-                    None => self.silence_reply(),
+                let Some(speak) = started else {
+                    self.silence_reply();
+                    return;
+                };
+                if let Some(live) = self.brain.live.as_mut() {
+                    live.speak = Some(speak);
+                }
+                if close {
+                    let mut out = Vec::new();
+                    self.turns.close(speak, &mut out);
+                    self.apply(cx, out);
                 }
             }
         }
     }
 
-    fn silence_reply(&mut self) {
+    const fn silence_reply(&mut self) {
         if let Some(live) = self.brain.live.as_mut() {
             live.silenced = true;
         }

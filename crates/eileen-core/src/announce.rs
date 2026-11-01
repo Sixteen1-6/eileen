@@ -118,10 +118,7 @@ fn first_sentence(text: &str) -> String {
     let mut sentence: String = sentence.trim().to_owned();
     if sentence.chars().count() > SUMMARY_CHARS {
         let cut: String = sentence.chars().take(SUMMARY_CHARS).collect();
-        sentence = match cut.rsplit_once(' ') {
-            Some((head, _)) => head.to_owned(),
-            None => cut,
-        };
+        sentence = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head).to_owned();
     }
     if !sentence.is_empty() && !sentence.ends_with(['.', '!', '?']) {
         sentence.push('.');

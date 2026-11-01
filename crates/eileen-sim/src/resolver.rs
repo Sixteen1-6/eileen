@@ -63,12 +63,9 @@ impl IntentResolver for SimResolver {
     fn resolve(&self, utterance: &str, _: &ResolveCtx) -> Resolution {
         let utterance = normalise(utterance);
         let known = self.commands.iter().find(|(phrase, _)| *phrase == utterance);
-        match known {
-            Some((_, command)) => {
-                Resolution::Command { command: command.clone(), slots: SlotValues::new() }
-            }
-            None => Resolution::Brain { depth: None, addressee_unsure: false },
-        }
+        known.map_or(Resolution::Brain { depth: None, addressee_unsure: false }, |(_, command)| {
+            Resolution::Command { command: command.clone(), slots: SlotValues::new() }
+        })
     }
 
     fn resolve_semantic(&self, utterance: &str, _: &[f32], ctx: &ResolveCtx) -> Resolution {

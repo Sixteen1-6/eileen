@@ -161,7 +161,7 @@ impl Utterance {
                 }
             }
         }
-        (join(&heard), join(&rest))
+        (join(heard), join(rest))
     }
 }
 

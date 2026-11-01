@@ -179,9 +179,10 @@ impl Core {
 
     /// The fast path for the commands the minimal core answers, the brain for the rest.
     fn route(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>, resolution: &Resolution) {
-        match Fast::of(resolution) {
-            Some(fast) => self.fast_path(cx, routed, fast),
-            None => self.to_brain(cx, routed),
+        if let Some(fast) = Fast::of(resolution) {
+            self.fast_path(cx, routed, fast);
+        } else {
+            self.route_to_brain(cx, routed);
         }
     }
 
@@ -210,7 +211,7 @@ impl Core {
         }
     }
 
-    fn to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
+    fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
         emit_routed(cx, routed, TurnRoute::Brain, "brain");
         self.spans.router(routed.turn, "brain", "not a core command");
         self.stop_speaking(cx, true);
