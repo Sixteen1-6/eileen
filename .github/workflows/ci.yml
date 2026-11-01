@@ -365,58 +365,6 @@ jobs:
             done <<< "$superseded"
           done
 
-  probe-cache-steps: # TEMPORARY: exercises the main-only steps on this pull request, then removed
-    name: probe-cache-steps (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    permissions:
-      actions: read
-    steps:
-      - name: Date entries older than a week, as the main-only step does
-        shell: bash
-        run: |
-          mkdir -p target/debug/build/dep-1 target/debug/.fingerprint/dep-1 target/debug/deps
-          touch target/debug/build/dep-1/output target/debug/deps/libdep-1.rlib
-          touch -d '10 days ago' target/debug/build/dep-1 target/debug/.fingerprint/dep-1 \
-            target/debug/deps/libdep-1.rlib target/debug/build/dep-1/output
-          echo "older than 7 days before:"; find target/debug -mindepth 2 -maxdepth 2 -mtime +7
-          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
-            if [ -d "$dir" ]; then
-              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
-              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
-            fi
-          done
-          stale="$(find target/debug -mindepth 2 -maxdepth 2 -mtime +7)"
-          echo "older than 7 days after: ${stale:-none}"
-          test -z "$stale"
-          ls -la --time-style=full-iso target/debug/build target/debug/deps
-      - name: List what the prune would delete, without deleting
-        if: runner.os == 'Linux'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          for shared in linux win-clippy win-test; do
-            superseded="$(gh cache list --ref refs/heads/main --key "v0-rust-$shared-" \
-              --sort created_at --order desc --limit 1000 --json id,key \
-              --jq '.[1:][] | "\(.id) \(.key)"')"
-            kept="$(gh cache list --ref refs/heads/main --key "v0-rust-$shared-" \
-              --sort created_at --order desc --limit 1 --json key --jq '.[].key')"
-            echo "$shared: keep $kept"
-            if [ -z "$superseded" ]; then
-              echo "$shared: nothing superseded"
-              continue
-            fi
-            while read -r id key; do
-              echo "$shared: would delete $id $key"
-            done <<< "$superseded"
-          done
-          echo "every cache, for comparison:"
-          gh cache list --limit 1000 --json key --jq '.[].key'
-
   all-green:
     name: all-green
     needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]
