@@ -175,6 +175,80 @@ mod tests {
         })
     }
 
+    /// One job of a workflow: its name and its steps, each step as its trimmed lines.
+    #[derive(Debug)]
+    struct Job<'a> {
+        name: &'a str,
+        steps: Vec<Vec<&'a str>>,
+    }
+
+    /// The jobs of a workflow, read from the block under `jobs:`: a job starts at a `<name>:`
+    /// line indented two spaces, and a step at a `- ` line indented six.
+    fn jobs(workflow: &str) -> Vec<Job<'_>> {
+        let (_, block) = workflow.split_once("\njobs:\n").expect("the workflow has jobs");
+        let mut jobs: Vec<Job<'_>> = Vec::new();
+        for line in block.lines() {
+            let (indent, trimmed) = (indent_of(line), line.trim());
+            if indent == 2
+                && !trimmed.starts_with('#')
+                && let Some(name) = trimmed.strip_suffix(':')
+            {
+                jobs.push(Job { name, steps: Vec::new() });
+            } else if let Some(job) = jobs.last_mut() {
+                if indent == 6 && trimmed.starts_with("- ") {
+                    job.steps.push(vec![trimmed]);
+                } else if indent > 6
+                    && let Some(step) = job.steps.last_mut()
+                {
+                    step.push(trimmed);
+                }
+            }
+        }
+        jobs
+    }
+
+    #[test]
+    fn ci_keeps_pending_snapshots() {
+        fn runs(step: &[&str], command: &str) -> bool {
+            step.iter().any(|line| {
+                let line = line.strip_prefix("- ").unwrap_or(line);
+                line.strip_prefix("run: ").is_some_and(|run| run.starts_with(command))
+            })
+        }
+        let ci = include_str!("../../../.github/workflows/ci.yml").replace("\r\n", "\n");
+        let mut testing = Vec::new();
+        for job in jobs(&ci) {
+            let tests: Vec<&Vec<&str>> = job
+                .steps
+                .iter()
+                .filter(|step| runs(step, "cargo nextest run") || runs(step, "cargo test "))
+                .collect();
+            if tests.is_empty() {
+                continue;
+            }
+            testing.push(job.name);
+            // insta then writes a failing or new snapshot beside its `.snap` as `.snap.new`, and
+            // an inline one as `.<file>.pending-snap`, a hidden file, even when it detects CI.
+            for step in tests {
+                assert!(step.contains(&"INSTA_UPDATE: new"), "{} sets it: {step:#?}", job.name);
+            }
+            let upload = job
+                .steps
+                .iter()
+                .find(|step| step.iter().any(|l| l.starts_with("uses: actions/upload-artifact@")))
+                .unwrap_or_else(|| panic!("{} keeps what a failed run leaves", job.name));
+            for line in [
+                "if: failure()",
+                "**/*.snap.new",
+                "**/*.pending-snap",
+                "include-hidden-files: true",
+            ] {
+                assert!(upload.contains(&line), "{} keeps `{line}`: {upload:#?}", job.name);
+            }
+        }
+        assert_eq!(testing, ["logic-linux", "windows-test"], "the jobs that run tests");
+    }
+
     #[test]
     fn ci_filters_match_the_classifier() {
         let ci = include_str!("../../../.github/workflows/ci.yml").replace("\r\n", "\n");
