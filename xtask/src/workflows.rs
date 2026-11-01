@@ -159,7 +159,8 @@ mod tests {
         // The aggregate does not wait for maintenance, and its list is unchanged.
         let all_green = job_text("all-green");
         assert!(
-            all_green.contains("needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]\n"),
+            all_green
+                .contains("needs: [plan, hygiene, logic-linux, windows-clippy, windows-test]\n"),
             "{all_green}"
         );
     }
