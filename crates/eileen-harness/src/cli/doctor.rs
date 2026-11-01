@@ -477,11 +477,13 @@ impl fmt::Display for VersionCheck {
             }
             Self::NewerThanTested(version) => write!(
                 f,
-                "{version}, newer than the tested {TESTED_CLI}; the nightly drift job checks each                  release"
+                "{version}, newer than the tested {TESTED_CLI}; the nightly drift job checks each \
+                 release"
             ),
             Self::BelowFloor(version) => write!(
                 f,
-                "{version}, below the floor of {MIN_CLI} that Eileen needs. Update the CLI, then                  run `eileen doctor claude` again."
+                "{version}, below the floor of {MIN_CLI} that Eileen needs. Update the CLI, then \
+                 run `eileen doctor claude` again."
             ),
             Self::Unknown => f.write_str("not known"),
         }
@@ -498,7 +500,8 @@ impl fmt::Display for RunningCheck {
                 let list: Vec<String> = versions.iter().map(ToString::to_string).collect();
                 write!(
                     f,
-                    "sessions on {} differ from the installed version; `eileen claude                      update-window` restarts them",
+                    "sessions on {} differ from the installed version; `eileen claude \
+                     update-window` restarts them",
                     list.join(", ")
                 )
             }
@@ -511,7 +514,8 @@ impl fmt::Display for AuthCheck {
         match self {
             Self::SignedIn => f.write_str("yes"),
             Self::SignedOut => f.write_str(
-                "no. Please run `claude auth login` yourself, then run `eileen doctor claude`                  again. Eileen never runs the login.",
+                "no. Please run `claude auth login` yourself, then run `eileen doctor claude` \
+                 again. Eileen never runs the login.",
             ),
             Self::Unclear { exit_code: Some(code) } => {
                 write!(f, "not clear: `claude auth status` exited with code {code}")

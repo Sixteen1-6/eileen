@@ -58,12 +58,14 @@ impl ProbeRunner for FakeRunner {
     }
 }
 
-fn exit(code: i32) -> Result<ProbeOutput, ProbeError> {
-    Ok(ProbeOutput { exit_code: Some(code), stdout: String::new() })
+/// A probe that exited with `code` and printed nothing.
+fn exit(code: i32) -> ProbeOutput {
+    printed(code, "")
 }
 
-fn printed(code: i32, stdout: &str) -> Result<ProbeOutput, ProbeError> {
-    Ok(ProbeOutput { exit_code: Some(code), stdout: stdout.to_owned() })
+/// A probe that exited with `code` and printed `stdout`.
+fn printed(code: i32, stdout: &str) -> ProbeOutput {
+    ProbeOutput { exit_code: Some(code), stdout: stdout.to_owned() }
 }
 
 fn version(text: &str) -> ClaudeVersion {
@@ -84,7 +86,7 @@ fn npm_inputs(scratch: &Scratch) -> DoctorInputs {
 fn a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs() {
     let scratch = Scratch::new();
     let (shim, exe) = npm_layout(&scratch, "2.1.304");
-    let mut runner = FakeRunner::new([exit(super::SIGNED_OUT_EXIT)]);
+    let mut runner = FakeRunner::new([Ok(exit(super::SIGNED_OUT_EXIT))]);
 
     let report = doctor(&npm_inputs(&scratch), &mut runner).unwrap();
 
@@ -107,7 +109,7 @@ fn a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs() {
 fn a_version_under_the_floor_is_reported_below_it() {
     let scratch = Scratch::new();
     npm_layout(&scratch, "2.1.200");
-    let mut runner = FakeRunner::new([exit(0)]);
+    let mut runner = FakeRunner::new([Ok(exit(0))]);
 
     let report = doctor(&npm_inputs(&scratch), &mut runner).unwrap();
 
@@ -121,7 +123,7 @@ fn a_version_under_the_floor_is_reported_below_it() {
 fn a_newer_version_than_the_tested_one_passes_with_a_note() {
     let scratch = Scratch::new();
     npm_layout(&scratch, "2.1.310");
-    let mut runner = FakeRunner::new([exit(0)]);
+    let mut runner = FakeRunner::new([Ok(exit(0))]);
 
     let report = doctor(&npm_inputs(&scratch), &mut runner).unwrap();
 
@@ -146,7 +148,8 @@ fn a_signed_in_cli_reports_the_toolchains_a_worker_sees() {
         vswhere: Some(vswhere.clone()),
         ..npm_inputs(&scratch)
     };
-    let mut runner = FakeRunner::new([exit(0), printed(0, "C:\\VS\\2022\\BuildTools\r\n")]);
+    let installation = printed(0, "C:\\VS\\2022\\BuildTools\r\n");
+    let mut runner = FakeRunner::new([Ok(exit(0)), Ok(installation)]);
 
     let report = doctor(&inputs, &mut runner).unwrap();
 
@@ -201,7 +204,7 @@ fn auth_status_runs_in_the_worker_environment_with_a_deadline() {
         ],
         ..npm_inputs(&scratch)
     };
-    let mut runner = FakeRunner::new([exit(0)]);
+    let mut runner = FakeRunner::new([Ok(exit(0))]);
 
     doctor(&inputs, &mut runner).unwrap();
 
@@ -243,7 +246,7 @@ fn an_unknown_layout_version_is_asked_of_the_cli_once_signed_in() {
         locate: LocateEnv { home: Some(scratch.path().join("home")), ..windows_env(&[]) },
         ..npm_inputs(&scratch)
     };
-    let mut runner = FakeRunner::new([exit(0), printed(0, "2.1.304 (Claude Code)\n")]);
+    let mut runner = FakeRunner::new([Ok(exit(0)), Ok(printed(0, "2.1.304 (Claude Code)\n"))]);
 
     let report = doctor(&inputs, &mut runner).unwrap();
 
@@ -260,7 +263,7 @@ fn running_sessions_on_another_version_are_named() {
         running: Some(vec![version("2.1.300"), version("2.1.304"), version("2.1.300")]),
         ..npm_inputs(&scratch)
     };
-    let mut runner = FakeRunner::new([exit(0)]);
+    let mut runner = FakeRunner::new([Ok(exit(0))]);
 
     let report = doctor(&inputs, &mut runner).unwrap();
 
