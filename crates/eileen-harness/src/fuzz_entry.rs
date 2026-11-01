@@ -5,9 +5,8 @@
 //! for every input that keeps the invariants it guards and `Err` naming the broken one; it never
 //! panics, because the harness runs in the core.
 
-use std::sync::Arc;
-
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use eileen_contracts::harness::{BrainEvent, BrainSlot, WorkerEvent};
 use eileen_contracts::ids::{TurnId, WallTime};
@@ -170,8 +169,13 @@ fn input_holds(input: &Value, redactor: &Redactor) -> Result<(), &'static str> {
     }
     match input {
         Value::String(text) => keeps_no_token(text, redactor),
-        input if redacted_already(input, redactor) => Ok(()),
-        _ => Err("a tool input keeps a match the redactor finds"),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+            if redacted_already(input, redactor) {
+                Ok(())
+            } else {
+                Err("a tool input keeps a match the redactor finds")
+            }
+        }
     }
 }
 
