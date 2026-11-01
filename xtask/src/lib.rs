@@ -27,6 +27,8 @@
 //!   job's filters (test `ci_filters_match_the_classifier`).
 //! - The desktop group's filter equals `.config/nextest.toml`'s (test
 //!   `cargo_run::tests::the_desktop_filter_is_nextests`).
+//! - `ci.yml`'s cache-saving jobs keep only the pinned toolchain and date their artifacts before
+//!   `main` saves, and only `main` prunes superseded caches (tests in `workflows::tests`).
 //! - Every failure names its check or step, where it is, the fix and the command to rerun.
 //!
 //! # Boundaries
@@ -73,6 +75,7 @@ mod machine;
 mod pr_meta;
 mod repo;
 mod sha256;
+mod workflows;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
