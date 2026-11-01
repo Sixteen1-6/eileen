@@ -27,8 +27,10 @@
 //! - The CLI writes `system/init` again at the start of every user turn, so the mappings give an
 //!   `Init` or a `Ready` for each one; the driver passes on the first and checks the rest.
 //! - The stdio control protocol's lines (`control_request`, `control_response`,
-//!   `control_cancel_request`) are [`Line::Unknown`] here; their parser is the `control_message`
-//!   half of this work, in a pull request of its own.
+//!   `control_cancel_request`) travel on the same stdout and are [`Line::Control`], parsed by
+//!   [`control`].
+
+pub mod control;
 
 use std::borrow::Cow;
 
@@ -96,6 +98,8 @@ pub enum Line {
     PermissionDenied(Denial),
     /// The `result` that ends a turn.
     Result(Box<TurnResult>),
+    /// A line of the stdio control protocol.
+    Control(control::Message),
     /// A `type`, a `system/<subtype>` or a `rate_limit_event/<rateLimitType>` this parser does
     /// not know.
     Unknown {
@@ -358,6 +362,7 @@ impl Line {
             | Self::RateLimit(_)
             | Self::HookStarted(_)
             | Self::HookResponse(..)
+            | Self::Control(_)
             | Self::Unknown { .. }
             | Self::Malformed { .. } => Vec::new(),
         }
@@ -384,16 +389,19 @@ pub fn parse(line: &[u8], redactor: &Redactor) -> Line {
         "stream_event" => Ok(partial(&value)),
         "rate_limit_event" => rate_limit(&value),
         "result" => result(&value),
+        "control_request" | "control_response" | "control_cancel_request" => {
+            control::from_value(&value, redactor).map(Line::Control)
+        }
         other => Ok(Line::Unknown { kind: cut(other, MAX_KIND_BYTES).to_owned() }),
     };
     parsed.unwrap_or_else(|reason| Line::Malformed { line_len, reason })
 }
 
 /// The worker events a line gives (the Claude column of section 3.3.8's mapping table). Partial
-/// messages give none, because the whole message follows them; hook events, unknown lines and
-/// denials have no worker event of their own (read denials first with [`Line::denials`]), and a
-/// rate-limit line goes through [`PlanWindows`] first. `ToolResult.observed` waits for WP1's
-/// table of observed reads.
+/// messages give none, because the whole message follows them; hook events, control lines,
+/// unknown lines and denials have no worker event of their own (read denials first with
+/// [`Line::denials`]), and a rate-limit line goes through [`PlanWindows`] first.
+/// `ToolResult.observed` waits for WP1's table of observed reads.
 #[must_use]
 pub fn worker_events(line: Line, pid: u32) -> Vec<WorkerEvent> {
     match line {
@@ -438,6 +446,7 @@ pub fn worker_events(line: Line, pid: u32) -> Vec<WorkerEvent> {
         | Line::HookStarted(_)
         | Line::HookResponse(..)
         | Line::PermissionDenied(_)
+        | Line::Control(_)
         | Line::Unknown { .. } => Vec::new(),
     }
 }
@@ -496,6 +505,7 @@ pub fn brain_events(line: Line, at: BrainAt) -> Vec<BrainEvent> {
         | Line::HookStarted(_)
         | Line::HookResponse(..)
         | Line::PermissionDenied(_)
+        | Line::Control(_)
         | Line::Unknown { .. }
         | Line::Malformed { .. } => Vec::new(),
     }
