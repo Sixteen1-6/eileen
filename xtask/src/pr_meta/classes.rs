@@ -3,7 +3,8 @@
 //!
 //! The `plan` job in `.github/workflows/ci.yml` computes the same classes with
 //! `dorny/paths-filter`; the test `ci_filters_match_the_classifier` reads that job's filters,
-//! evaluates them and holds the two together.
+//! evaluates them and holds the two together. Beside it, `ci_keeps_pending_snapshots` reads the
+//! same workflow's test jobs and holds them to keeping insta's pending snapshots from a failed run.
 
 /// A change to one of these selects every class, and so every lane: any `Cargo.toml`,
 /// `Cargo.lock` or `rust-toolchain.toml`, and anything under `.cargo/`, `.config/` or `.github/`.
@@ -227,10 +228,12 @@ mod tests {
                 continue;
             }
             testing.push(job.name);
-            // insta then writes a failing or new snapshot beside its `.snap` as `.snap.new`, and
-            // an inline one as `.<file>.pending-snap`, a hidden file, even when it detects CI.
+            // With `INSTA_UPDATE=new`, insta writes a failing or new snapshot beside its `.snap` as
+            // `.snap.new`, and an inline one as `.<file>.pending-snap`, a hidden file, even when
+            // it detects CI; the job's upload on failure keeps both.
             for step in tests {
-                assert!(step.contains(&"INSTA_UPDATE: new"), "{} sets it: {step:#?}", job.name);
+                let name = job.name;
+                assert!(step.contains(&"INSTA_UPDATE: new"), "{name} sets INSTA_UPDATE: {step:#?}");
             }
             let upload = job
                 .steps
