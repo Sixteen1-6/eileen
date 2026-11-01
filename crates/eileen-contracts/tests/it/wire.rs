@@ -1,7 +1,8 @@
 //! The wire forms BUILD.md writes out, checked against the types: the dispatcher's rebuilt
 //! tool arguments and the shim's pipe lines (section 3.3.9), the `approve` call and reply as
-//! the real CLI sent and accepted them (2.5), the HUD's lines (3.3.6), a speech command frame
-//! (3.3.7), an enveloped input (3.3.3) and a recording line (3.3.16).
+//! the real CLI sent and accepted them and its `PermissionRequest` hook body (2.5), the HUD's
+//! lines (3.3.6), a speech command frame (3.3.7), an enveloped input (3.3.3) and a recording
+//! line (3.3.16).
 
 use eileen_contracts::core_io::{Content, Input, ShimRole, UserInput};
 use eileen_contracts::harness::{HookDecision, HookReply, HookRequest, SessionToken};
@@ -295,6 +296,69 @@ fn only_a_pre_tool_use_request_makes_a_pending_ask() {
     let ask = PendingAsk::from_guard_ask(&guard_ask()).unwrap();
     assert_eq!(ask.tool_name(), "Bash", "the stored tool");
     assert_eq!(ask.input().get(), &call.input, "the stored input");
+}
+
+/// The `PermissionRequest` body the CLI sent in the contract test (the report's section 2.3)
+/// has no `tool_use_id`, so the request the core sees has none: written without the field, it
+/// parses as `None`, and `None` writes back as null.
+#[test]
+fn a_permission_request_without_a_tool_use_id_parses() {
+    let hooks: Value = serde_json::from_str(HOOKS).unwrap();
+    let body = &hooks["permission_request"]["body"];
+    assert_eq!(body["hook_event_name"], "PermissionRequest", "a PermissionRequest body");
+    assert!(body.get("tool_use_id").is_none(), "the CLI sent no tool_use_id");
+    let expected = HookRequest::PermissionRequest {
+        request: 4,
+        tool_name: body["tool_name"].as_str().unwrap().to_owned(),
+        tool_input: Untrusted::new(body["tool_input"].clone()),
+        tool_use_id: None,
+    };
+    let without_field = json!({
+        "permission_request": {
+            "request": 4,
+            "tool_name": body["tool_name"],
+            "tool_input": body["tool_input"]
+        }
+    });
+    assert_eq!(
+        serde_json::from_value::<HookRequest>(without_field).unwrap(),
+        expected,
+        "no field is no id"
+    );
+    round_trip(
+        &expected,
+        &json!({
+            "permission_request": {
+                "request": 4,
+                "tool_name": body["tool_name"],
+                "tool_input": body["tool_input"],
+                "tool_use_id": null
+            }
+        }),
+    );
+}
+
+/// A `PermissionRequest` that does carry an id keeps it both ways, so a later CLI that sends one
+/// loses nothing.
+#[test]
+fn a_permission_request_with_a_tool_use_id_round_trips() {
+    let request = HookRequest::PermissionRequest {
+        request: 5,
+        tool_name: "Bash".to_owned(),
+        tool_input: Untrusted::new(json!({ "command": "mkdir tier0-unlisted" })),
+        tool_use_id: Some("toolu_01PERMISSIONREQUEST".to_owned()),
+    };
+    round_trip(
+        &request,
+        &json!({
+            "permission_request": {
+                "request": 5,
+                "tool_name": "Bash",
+                "tool_input": { "command": "mkdir tier0-unlisted" },
+                "tool_use_id": "toolu_01PERMISSIONREQUEST"
+            }
+        }),
+    );
 }
 
 /// The reply, built from the guard's ask, is the text the CLI accepted: one block holding
