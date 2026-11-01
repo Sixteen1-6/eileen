@@ -506,9 +506,12 @@ fn no_generated_path_lies_under_the_users_claude_folder() {
     );
 }
 
+/// Empties one of a spec's endpoint fields.
+type Emptier = fn(&mut SessionSpec);
+
 #[test]
 fn a_session_without_its_endpoints_does_not_start() {
-    let cases: [(&str, fn(&mut SessionSpec)); 4] = [
+    let cases: [(&str, Emptier); 4] = [
         ("hook port", |spec| spec.hook_endpoint.port = 0),
         ("hook token", |spec| spec.hook_endpoint.token = SessionToken::new(String::new())),
         ("shim pipe", |spec| spec.shim.pipe.clear()),
