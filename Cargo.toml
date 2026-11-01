@@ -73,10 +73,10 @@ serde_json = "1.0.154"
 schemars = "1.2.3"
 ulid = { version = "3.0.0", default-features = false, features = ["std", "serde"] }
 toml = "1.1.8"
-# toml 1.1.8 does not depend on toml_edit. 0.25.15 (2026-09-11) is the newest release at least
-# 14 days old on 2026-10-21, and its toml_datetime, toml_parser, toml_writer, serde_spanned and
-# winnow requirements accept the versions toml 1.1.8 locks, so the tree holds one copy of each.
-# Exact, so the first lock cannot take 0.25.16 or 0.25.17, both inside the cooling-off period.
+# toml 1.1.8 does not depend on toml_edit. 0.25.17 (2026-10-09) is the newest release, 22 days
+# old on 2026-10-31 and past the cooling-off period, and its toml_datetime, toml_parser,
+# toml_writer, serde_spanned and winnow requirements accept the versions toml 1.1.8 locks, so the
+# tree still holds one copy of each. Exact, so a lock never takes a release newer than this one.
 toml_edit = "=0.25.17"
 
 # Errors, tracing, secrets
@@ -139,7 +139,7 @@ rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"]
 # executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
 # releases from 2026-10-09 to 2026-10-16 for five crates of its tree, so the pull request whose
 # member first uses zbus locks them with `cargo update --precise` at zbus_names 4.3.4, zvariant and
-# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.15, the workspace's own pin.
+# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.17, the workspace's own pin.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 # quick-xml 0.42.0 (2026-08-22, MIT) reads GTK's recently-used.xbel; it has no default features.
 quick-xml = "0.42.0"
