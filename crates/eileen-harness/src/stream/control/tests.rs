@@ -31,15 +31,14 @@ fn init(capabilities: &[&str]) -> Init {
 
 /// The CLI's `control_response` line to `request_id`, `success` or, with `error`, `error`.
 fn response_line(request_id: &str, error: Option<&str>) -> String {
-    let line = match error {
+    match error {
         None => format!(
             r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{request_id}"}}}}"#
         ),
         Some(error) => format!(
             r#"{{"type":"control_response","response":{{"subtype":"error","request_id":"{request_id}","error":"{error}"}}}}"#
         ),
-    };
-    line
+    }
 }
 
 /// Parses the CLI's `control_response` to `request_id` and settles it on `requests`.
