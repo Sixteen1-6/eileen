@@ -1,9 +1,8 @@
 //! The entry points of the fuzz targets this crate owns (BUILD.md section 4.7):
-//! `stream_json_line` and `control_message`, lines from `claude -p`. The seed corpus under
-//! `fuzz/corpus/stream_json_line/` replays through its function as an ordinary test
-//! (`it::fuzz_corpus`); `control_message` is a stub until its parser lands. Each returns `Ok`
-//! for every input that keeps the invariants it guards and `Err` naming the broken one; it never
-//! panics, because the harness runs in the core.
+//! `stream_json_line` and `control_message`, lines from `claude -p`. The seed corpora under
+//! `fuzz/corpus/<target>/` replay through these functions as ordinary tests
+//! (`it::fuzz_corpus`). Each returns `Ok` for every input that keeps the invariants it guards and
+//! `Err` naming the broken one; it never panics, because the harness runs in the core.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -13,6 +12,7 @@ use eileen_contracts::ids::{TurnId, WallTime};
 use eileen_trace::Redactor;
 use serde_json::Value;
 
+use crate::stream::control::{self, MAX_REQUEST_ID_BYTES, Message, Requests};
 use crate::stream::{
     self, Block, BrainAt, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES,
     NARRATION_PREFIX, PlanWindows,
@@ -72,14 +72,49 @@ pub fn stream_json_line(data: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// One control message from `claude -p`. The stub accepts every input until the
-/// `control_message` half of the parser lands in its own pull request.
-#[expect(
-    clippy::missing_const_for_fn,
-    clippy::unnecessary_wraps,
-    reason = "a stub until the control protocol's parser, whose checks can fail"
-)]
-pub fn control_message(_data: &[u8]) -> Result<(), &'static str> {
+/// One control message from `claude -p`: a parsed request or response has its id within the
+/// cap, a `can_use_tool` input keeps the tool input invariants, the error text and the reason
+/// keep no registered secret, the stream parser reads the line the same, an interrupt with the
+/// same id parses back as that interrupt, and a response settles no request Eileen did not send.
+pub fn control_message(data: &[u8]) -> Result<(), &'static str> {
+    let redactor = Arc::new(Redactor::new());
+    let _secret = redactor.add_literal(SECRET).map_err(|_| "the redactor refused the secret")?;
+    let Ok(message) = control::parse(data, &redactor) else {
+        if matches!(stream::parse(data, &redactor), Line::Control(_)) {
+            return Err("the stream parser read a line the control parser refused");
+        }
+        return Ok(());
+    };
+    let request_id = match &message {
+        Message::CanUseTool(ask) => {
+            input_holds(ask.input.get(), &redactor)?;
+            if ask.reason.as_ref().is_some_and(|reason| reason.get().contains(SECRET)) {
+                return Err("a can_use_tool reason keeps a registered secret");
+            }
+            &ask.request_id
+        }
+        Message::Response { error: Some(error), .. } if error.get().contains(SECRET) => {
+            return Err("a control_response error keeps a registered secret");
+        }
+        Message::Interrupt { request_id }
+        | Message::Request { request_id, .. }
+        | Message::Response { request_id, .. }
+        | Message::Cancel { request_id } => request_id,
+    };
+    if request_id.is_empty() || request_id.len() > MAX_REQUEST_ID_BYTES {
+        return Err("a control message parsed with no request_id, or one over the cap");
+    }
+    let written = control::interrupt(request_id);
+    let read_back = control::parse(written.as_bytes(), &redactor);
+    if !matches!(&read_back, Ok(Message::Interrupt { request_id: back }) if back == request_id) {
+        return Err("the interrupt line did not parse back as the same interrupt");
+    }
+    if !matches!(stream::parse(data, &redactor), Line::Control(same) if same == message) {
+        return Err("the stream parser read the control line differently");
+    }
+    if Requests::default().settle(message).is_ok() {
+        return Err("a control message settled a request that was never sent");
+    }
     Ok(())
 }
 
