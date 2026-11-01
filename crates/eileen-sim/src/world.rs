@@ -442,7 +442,9 @@ impl World {
     }
 
     /// What an input does to the parts before the core sees it: a clause's samples reach the
-    /// device, and a drained utterance leaves the speech process and the device.
+    /// device, a drained utterance (or one done with no clause) leaves the speech process and
+    /// the device, a child's exit is noted, and the speech process hears of its own `Ready` and
+    /// heartbeats.
     fn apply_input(&mut self, input: &Input) {
         match input {
             Input::Playback(PlaybackEvent::Drained { speak }) => {
@@ -464,7 +466,21 @@ impl World {
             Input::Sidecar(SidecarId::Speech, _) => {
                 self.speech.delivered(self.now_ms, input, &mut self.due);
             }
-            _ => {}
+            Input::Playback(_)
+            | Input::Voice(_)
+            | Input::Sidecar(..)
+            | Input::Brain(_)
+            | Input::Worker(..)
+            | Input::Hook(..)
+            | Input::ToolCall(_)
+            | Input::ToolResult(..)
+            | Input::Learn(_)
+            | Input::User(_)
+            | Input::Activity(_)
+            | Input::Memory(_)
+            | Input::Settings(_)
+            | Input::Store(_)
+            | Input::Timer(_) => {}
         }
     }
 

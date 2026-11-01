@@ -668,11 +668,12 @@ fn of_session(input: &Input, session: WorkerSessionId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
     use eileen_contracts::core_io::{AudioCmd, Input, PlaybackEvent};
     use eileen_contracts::ids::SpeakId;
     use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 
-    use super::{CALLBACK_MS, Device, Due, Speech};
+    use super::{CALLBACK_MS, Device, Due, HEARTBEAT_MS, LOAD_MS, Process, Speech};
 
     const fn speak() -> SpeakId {
         SpeakId::from_parts(1, 1)
@@ -682,10 +683,85 @@ mod tests {
         std::iter::from_fn(|| due.pop(now_ms)).collect()
     }
 
+    /// Delivers what is due by `now_ms` back to the speech process, as the world does.
+    fn deliver(speech: &mut Speech, due: &mut Due, now_ms: u64) -> Vec<Input> {
+        let inputs = drain(due, now_ms);
+        for input in &inputs {
+            speech.delivered(now_ms, input, due);
+        }
+        inputs
+    }
+
+    /// A speech process that loaded and is ready, with nothing scheduled.
+    fn ready(due: &mut Due) -> Speech {
+        let mut speech = Speech::default();
+        speech.sidecar(0, SidecarCmd::Start, due);
+        deliver(&mut speech, due, LOAD_MS);
+        due.drop_where(|_| true);
+        speech
+    }
+
+    const fn beat() -> Input {
+        Input::Sidecar(SidecarId::Speech, SidecarEvent::Heartbeat)
+    }
+
     #[test]
-    fn the_speech_process_reports_each_clause_then_done() {
+    fn the_speech_process_loads_beats_hangs_and_is_killed() {
         let mut speech = Speech::default();
         let mut due = Due::default();
+        let say = SpeechCmd::Speak {
+            speak: speak(),
+            voice: String::new(),
+            clauses: vec!["One.".to_owned()],
+            whole_line: String::new(),
+        };
+        speech.command(0, &say, &mut due);
+        assert_eq!(
+            drain(&mut due, 0),
+            [Input::Voice(VoiceEvent::SpeakDone { speak: speak() })],
+            "before it is started, a `Speak` is done with no clause"
+        );
+        speech.sidecar(0, SidecarCmd::Start, &mut due);
+        assert!(deliver(&mut speech, &mut due, LOAD_MS - 1).is_empty(), "still loading");
+        let ready = deliver(&mut speech, &mut due, LOAD_MS);
+        assert!(
+            matches!(
+                ready.as_slice(),
+                [Input::Sidecar(SidecarId::Speech, SidecarEvent::Ready { .. })]
+            ),
+            "{ready:?}"
+        );
+        assert_eq!(speech.process(), Process::Up);
+        let first = LOAD_MS + HEARTBEAT_MS;
+        assert_eq!(deliver(&mut speech, &mut due, first), [beat()], "a second later");
+        assert_eq!(deliver(&mut speech, &mut due, first + HEARTBEAT_MS), [beat()], "and on");
+        speech.hang(&mut due);
+        assert!(due.is_empty(), "a hung process sends nothing");
+        speech.command(5_000, &say, &mut due);
+        assert!(due.is_empty(), "not even `SpeakDone`");
+        speech.sidecar(9_000, SidecarCmd::HangDumpThenKill, &mut due);
+        assert_eq!(
+            drain(&mut due, 9_050),
+            [Input::Sidecar(SidecarId::Speech, SidecarEvent::Exited { code: None })],
+            "the supervisor reports the kill's exit"
+        );
+        speech.stick_loads(true);
+        speech.sidecar(10_000, SidecarCmd::Restart, &mut due);
+        assert!(due.is_empty(), "a stuck load never sends `Ready`");
+        speech.crash(11_000, &mut due);
+        assert!(
+            matches!(
+                drain(&mut due, 11_000).as_slice(),
+                [Input::Sidecar(SidecarId::Speech, SidecarEvent::Exited { code: Some(_) })]
+            ),
+            "a crash exits at once"
+        );
+    }
+
+    #[test]
+    fn the_speech_process_reports_each_clause_then_done() {
+        let mut due = Due::default();
+        let mut speech = ready(&mut due);
         let cmd = SpeechCmd::Speak {
             speak: speak(),
             voice: String::new(),
