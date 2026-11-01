@@ -118,15 +118,18 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   `system` subtype, keeps what `system/init` reports for feature detection (session id, model,
   tools, MCP servers with status, plugins, capabilities, `permissionMode`, `memory_paths.auto`
   as `Personal`, the CLI version), splits assistant text into text and `> ` narration, redacts a
-  tool input with the `Redactor` and caps it at 2 KB, turns a `Skill` call into `SkillInvoked`,
+  tool input with the `Redactor` and caps it at 2 KB as JSON text (a cut input is a JSON string
+  whose quotes and escapes count), turns a `Skill` call into `SkillInvoked` with its name
+  redacted and capped at 256 bytes,
   and types tool results, partial text deltas, rate-limit events (as `PlanUsage`), hook events,
   `system/permission_denied` and `result` (cost, context tokens, `permission_denials`, a failed
   sign-in). `Line::denials` reads the three denial sources of section 2.5 and counts a failed
   `approve` call as a denial. `worker_events` and `brain_events` map a line into the contracts'
   events. `SUBAGENT_TOOLS` names `Task` and `Agent`. Unit tests in `stream::tests` run against
   copies of the contract test's runs (`crates/eileen-harness/tests/fixtures/wp3-approval/`);
-  `fuzz_entry::stream_json_line` checks the caps and the narration split, and its 50 seeds (from
-  those runs, plus hand-written lines for the shapes they leave out) replay in
+  `fuzz_entry::stream_json_line` checks the caps, the narration split and that a literal
+  registered with the `Redactor` never survives in a tool input or skill call, and its 51 seeds
+  (from those runs, plus hand-written lines for the shapes they leave out) replay in
   `eileen-harness::it::fuzz_corpus` on Windows and Linux, which is acceptance 7's Windows
   replay. Its 10-minute `long.yml` run waits for WP0 phase B's `long.yml`.
 - The `control_message` half (the stdio control protocol: `interrupt` and `can_use_tool`

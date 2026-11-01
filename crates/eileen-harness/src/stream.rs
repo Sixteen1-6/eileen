@@ -36,9 +36,14 @@ use serde_json::Value;
 /// tool result can carry a screenshot as a base64 image block.
 pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
-/// The most a tool's input keeps once redacted (section 3.3.3): its compact JSON text, or the
-/// first bytes of that text as a JSON string when the whole is longer.
+/// The most a tool's input keeps once redacted (section 3.3.3), counted as JSON text, quotes
+/// and escapes included: the input itself when its compact text fits, else the longest start of
+/// that text whose JSON string fits.
 pub const MAX_TOOL_INPUT_BYTES: usize = 2048;
+
+/// The most a `Skill` call keeps of the skill's name, once redacted. The name is the model's
+/// text like any other input, so it is bounded on its own.
+pub const MAX_SKILL_NAME_BYTES: usize = 256;
 
 /// The most an unknown `type` or `subtype` keeps of its name.
 pub const MAX_KIND_BYTES: usize = 64;
@@ -150,7 +155,7 @@ pub enum Block {
     ToolUse(ToolUse),
     /// A `Skill` call.
     SkillInvoked {
-        /// The skill's name.
+        /// The skill's name, redacted, at most [`MAX_SKILL_NAME_BYTES`].
         name: String,
         /// Its arguments, redacted, at most [`MAX_TOOL_INPUT_BYTES`].
         args: Untrusted<String>,
@@ -530,7 +535,7 @@ fn tool_use(block: &Value, redactor: &Redactor) -> Result<Block, &'static str> {
         });
         let args = redactor.redact(&args);
         return Ok(Block::SkillInvoked {
-            name: skill.to_owned(),
+            name: cut(&redactor.redact(skill), MAX_SKILL_NAME_BYTES).to_owned(),
             args: Untrusted::new(cut(&args, MAX_TOOL_INPUT_BYTES).to_owned()),
         });
     }
@@ -539,8 +544,8 @@ fn tool_use(block: &Value, redactor: &Redactor) -> Result<Block, &'static str> {
 }
 
 /// A tool's input, redacted and capped: the redacted value when its compact text fits in
-/// [`MAX_TOOL_INPUT_BYTES`], else the first bytes of the redacted text as a JSON string. It is
-/// redacted whole before it is cut, so a cut never leaves part of a secret behind.
+/// [`MAX_TOOL_INPUT_BYTES`], else the start of the redacted text as a JSON string that fits. It
+/// is redacted whole before it is cut, so a cut never leaves part of a secret behind.
 fn redacted_input(input: &Value, redactor: &Redactor) -> Value {
     let text = input.to_string();
     let redacted = redactor.redact(&text);
@@ -550,7 +555,27 @@ fn redacted_input(input: &Value, redactor: &Redactor) -> Value {
     {
         return value;
     }
-    Value::String(cut(&redacted, MAX_TOOL_INPUT_BYTES).to_owned())
+    json_string_within(&redacted, MAX_TOOL_INPUT_BYTES)
+}
+
+/// The longest start of `text`, ending on a character boundary, whose JSON string is at most
+/// `max` bytes: its quotes and serde_json's escapes count, so the cap holds on the wire. A cut
+/// input is JSON text full of quotes, each of which takes two bytes as a string.
+fn json_string_within(text: &str, max: usize) -> Value {
+    let mut used = 2;
+    let mut end = 0;
+    for (at, ch) in text.char_indices() {
+        used += match ch {
+            '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+            ch if ch < ' ' => 6,
+            ch => ch.len_utf8(),
+        };
+        if used > max {
+            break;
+        }
+        end = at + ch.len_utf8();
+    }
+    Value::String(text.get(..end).unwrap_or_default().to_owned())
 }
 
 /// A `user` line: its tool results.

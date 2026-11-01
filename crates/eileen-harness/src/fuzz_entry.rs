@@ -5,25 +5,34 @@
 //! for every input that keeps the invariants it guards and `Err` naming the broken one; it never
 //! panics, because the harness runs in the core.
 
+use std::sync::Arc;
+
 use eileen_contracts::harness::{BrainEvent, BrainSlot, WorkerEvent};
 use eileen_contracts::ids::TurnId;
 use eileen_trace::Redactor;
 use serde_json::Value;
 
 use crate::stream::{
-    self, Block, BrainAt, Line, MAX_LINE_BYTES, MAX_TOOL_INPUT_BYTES, NARRATION_PREFIX,
+    self, Block, BrainAt, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES,
+    NARRATION_PREFIX,
 };
 
 /// The process id the worker mapping is given.
 const PID: u32 = 4242;
 /// The instance the brain mapping is given.
 const INSTANCE: u32 = 7;
+/// A literal registered with the redactor, as a session's hook token is: no tool input, skill
+/// name or skill arguments may keep it. The seed `hand-assistant-secret` holds it.
+const SECRET: &str = "fuzz-secret-7c1e";
 
 /// One stream-json line from `claude -p`: the parser's typed line, its denials and both
-/// mappings must keep the line cap, the tool input cap and the narration split.
+/// mappings must keep the line cap, the caps on tool inputs and skill calls, the redaction of a
+/// registered secret and the narration split.
 pub fn stream_json_line(data: &[u8]) -> Result<(), &'static str> {
     let line_len = u32::try_from(data.len()).unwrap_or(u32::MAX);
-    let line = stream::parse(data, &Redactor::new());
+    let redactor = Arc::new(Redactor::new());
+    let _secret = redactor.add_literal(SECRET).map_err(|_| "the redactor refused the secret")?;
+    let line = stream::parse(data, &redactor);
     let malformed = matches!(line, Line::Malformed { line_len: len, .. } if len == line_len);
     if !malformed && matches!(line, Line::Malformed { .. }) {
         return Err("a malformed line names the wrong length");
@@ -84,16 +93,8 @@ fn block_holds(block: &Block) -> Result<(), &'static str> {
                 return Err("a narration line is empty, spans lines or is not trimmed");
             }
         }
-        Block::ToolUse(call) => {
-            if !input_fits(call.input.get()) {
-                return Err("a tool input is over the cap");
-            }
-        }
-        Block::SkillInvoked { args, .. } => {
-            if args.get().len() > MAX_TOOL_INPUT_BYTES {
-                return Err("a skill's arguments are over the cap");
-            }
-        }
+        Block::ToolUse(call) => input_holds(call.input.get())?,
+        Block::SkillInvoked { name, args } => skill_holds(name, args.get())?,
     }
     Ok(())
 }
@@ -111,10 +112,11 @@ fn worker_event_holds(
             "a worker event says malformed for a line that parsed, or names another length",
         );
     }
-    if let WorkerEvent::ToolUse { input, .. } = event
-        && !input_fits(input.get())
-    {
-        return Err("a worker tool input is over the cap");
+    if let WorkerEvent::ToolUse { input, .. } = event {
+        input_holds(input.get())?;
+    }
+    if let WorkerEvent::SkillInvoked { name, args } = event {
+        skill_holds(name, args.get())?;
     }
     Ok(())
 }
@@ -140,12 +142,29 @@ fn brain_event_holds(event: &BrainEvent) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// True when a redacted tool input keeps the cap: a JSON string of at most
-/// [`MAX_TOOL_INPUT_BYTES`], or any other value whose compact text is no longer.
-fn input_fits(input: &Value) -> bool {
-    if let Value::String(text) = input {
-        text.len() <= MAX_TOOL_INPUT_BYTES
-    } else {
-        input.to_string().len() <= MAX_TOOL_INPUT_BYTES
+/// A tool input's compact JSON text, a cut input's quotes and escapes included, is at most
+/// [`MAX_TOOL_INPUT_BYTES`] and does not hold the registered secret.
+fn input_holds(input: &Value) -> Result<(), &'static str> {
+    let text = input.to_string();
+    if text.len() > MAX_TOOL_INPUT_BYTES {
+        return Err("a tool input is over the cap");
     }
+    if text.contains(SECRET) {
+        return Err("a tool input keeps a registered secret");
+    }
+    Ok(())
+}
+
+/// A skill call's name and arguments keep their caps and do not hold the registered secret.
+fn skill_holds(name: &str, args: &str) -> Result<(), &'static str> {
+    if name.len() > MAX_SKILL_NAME_BYTES {
+        return Err("a skill's name is over the cap");
+    }
+    if args.len() > MAX_TOOL_INPUT_BYTES {
+        return Err("a skill's arguments are over the cap");
+    }
+    if name.contains(SECRET) || args.contains(SECRET) {
+        return Err("a skill call keeps a registered secret");
+    }
+    Ok(())
 }
