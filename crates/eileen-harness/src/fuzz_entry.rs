@@ -12,9 +12,9 @@ use eileen_contracts::ids::{TurnId, WallTime};
 use eileen_trace::Redactor;
 use serde_json::Value;
 
-use crate::stream::control::{self, MAX_REQUEST_ID_BYTES, Message, Requests};
+use crate::stream::control::{self, INTERRUPT_CAPABILITY, MAX_REQUEST_ID_BYTES, Message, Requests};
 use crate::stream::{
-    self, Block, BrainAt, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES,
+    self, Block, BrainAt, Init, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES,
     NARRATION_PREFIX, PlanWindows,
 };
 
@@ -23,7 +23,8 @@ const PID: u32 = 4242;
 /// The instance the brain mapping is given.
 const INSTANCE: u32 = 7;
 /// A literal registered with the redactor, as a session's hook token is: no tool input, skill
-/// name or skill arguments may keep it. The seed `hand-assistant-secret` holds it.
+/// name, skill arguments, `can_use_tool` reason or `control_response` error may keep it. The
+/// seeds `hand-assistant-secret`, `hand-reason-secret` and `hand-error-secret` hold it.
 const SECRET: &str = "fuzz-secret-7c1e";
 /// The marks of the token kinds a cut cannot make: a prefix and a run of token bytes, with no
 /// rule on what ends it. A cut text that the redactor would mark again kept one of these.
@@ -75,7 +76,9 @@ pub fn stream_json_line(data: &[u8]) -> Result<(), &'static str> {
 /// One control message from `claude -p`: a parsed request or response has its id within the
 /// cap, a `can_use_tool` input keeps the tool input invariants, the error text and the reason
 /// keep no registered secret, the stream parser reads the line the same, an interrupt with the
-/// same id parses back as that interrupt, and a response settles no request Eileen did not send.
+/// same id parses back as that interrupt, and with one interrupt open (`eileen_1`) only a response
+/// to `eileen_1` settles it, which closes it, and anything else leaves it open. The seed
+/// `hand-response-eileen-1` takes the settling branch.
 pub fn control_message(data: &[u8]) -> Result<(), &'static str> {
     let redactor = Arc::new(Redactor::new());
     let _secret = redactor.add_literal(SECRET).map_err(|_| "the redactor refused the secret")?;
@@ -112,10 +115,37 @@ pub fn control_message(data: &[u8]) -> Result<(), &'static str> {
     if !matches!(stream::parse(data, &redactor), Line::Control(same) if same == message) {
         return Err("the stream parser read the control line differently");
     }
-    if Requests::default().settle(message).is_ok() {
-        return Err("a control message settled a request that was never sent");
+    settles_only_its_request(message)
+}
+
+/// With one interrupt open, `message` settles it exactly when it is a response to its id.
+fn settles_only_its_request(message: Message) -> Result<(), &'static str> {
+    let mut requests = Requests::default();
+    let offered = Init {
+        session_id: String::new(),
+        model: String::new(),
+        tools: Vec::new(),
+        mcp_servers: Vec::new(),
+        plugins: Vec::new(),
+        capabilities: vec![INTERRUPT_CAPABILITY.to_owned()],
+        permission_mode: None,
+        memory_path: None,
+        cli_version: None,
+    };
+    requests.interrupt(&offered).map_err(|_| "an interrupt was refused on an offering session")?;
+    let Message::Response { request_id, error } = message else {
+        return Ok(());
+    };
+    let answers_it = request_id == "eileen_1";
+    match requests.settle(&request_id, error) {
+        Ok(reply) if !answers_it || reply.request_id != request_id => {
+            Err("a response settled a request Eileen did not send")
+        }
+        Ok(_) if requests.open() != 0 => Err("a settled request stayed open"),
+        Err(_) if answers_it => Err("the response to the open request did not settle it"),
+        Err(_) if requests.open() != 1 => Err("a response that settled nothing closed a request"),
+        Ok(_) | Err(_) => Ok(()),
     }
-    Ok(())
 }
 
 /// The invariants of one assistant block.
