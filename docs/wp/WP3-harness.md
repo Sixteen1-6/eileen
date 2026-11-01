@@ -189,6 +189,25 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   and that no path lies under a `.claude` folder. This is the environment half of acceptance 4
   and the CI half of acceptance 8 ("every session spawns with vendor memory off").
 
+- `wp3/claude-locate`: the CLI's location and `eileen doctor claude`. `eileen_harness::locate`
+  walks the worker's `PATH` in order, then npm's folder under `%APPDATA%` and the native
+  installer's `~/.local/bin`. An npm shim (`claude.cmd`, `claude.ps1`, or npm's link on Unix)
+  is read for the package's `bin\claude.exe`; a shim that runs `cli.js` through node, the
+  Claude desktop app's bundled copy (its `Claude-Data`, `AnthropicClaude` and MSIX folders, or
+  any `claude-code\<version>` folder) and a folder under `.claude` are passed over and named.
+  The version comes from the layout: the package's `package.json`, or the newest entry of
+  `~/.local/share/claude/versions`. `cli::doctor_claude` runs `claude auth status` through
+  `eileen_supervisor` in the worker environment with a 20 s deadline, reading its exit code
+  only (0 signed in, 1 signed out). Signed out, it prints the `claude auth login` suggestion and
+  starts nothing else; signed in, it asks `claude --version` when the layout gave no version
+  and looks for `cargo` and `node` on the worker's `PATH` and the MSVC tools through vswhere.
+  It reports the version against the floor (`MIN_CLI`, 2.1.284) and the tested release
+  (`TESTED_CLI`, 2.1.304), names the npm shim and the executable behind it, and compares the
+  running sessions' versions with the installed one once WP2's status endpoint can report
+  them (until then it says it did not check). The tests run against fake npm and native
+  layouts in a temporary folder and a scripted probe runner. This is acceptance 5 and the
+  doctor half of the D77 floor; the owner-PC run against the signed-in CLI is still to do.
+
 ## Surprises
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
@@ -214,6 +233,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   match before it becomes a `]`-ended mark. The parser redacts each string until it settles,
   at most 8 times, and a string still changing then becomes `[redacted:unsettled]`. The
   trace's log writer redacts once, so a log can keep such a token.
+
+- npm's shim names the real binary relative to its own folder (`"%dp0%\node_modules\..."`
+  in the `.cmd`, `"$basedir/node_modules/..."` in the `.ps1`), so reading the shim finds the
+  binary without running node. The desktop app keeps each bundled CLI in a
+  `claude-code\<version>` folder, which no npm or native layout uses.
 
 ## Decisions
 
