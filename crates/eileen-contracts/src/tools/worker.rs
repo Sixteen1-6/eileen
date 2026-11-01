@@ -1,6 +1,10 @@
 //! The worker toolset's arguments and results (`ask_user` is the brain toolset's).
 //!
-//! Provisional: WP3 pins this module in its first pull request (BUILD.md section 3.3).
+//! `approve` is the permission-prompt tool of BUILD.md section 2.5, the route WP3's contract
+//! test picked: after the tier guard answers `ask`, the CLI calls it with [`Approve`] and keeps
+//! it out of the model's tool list. The dispatcher answers with an [`ApproveReply`] in one text
+//! block, in one of the two shapes the CLI accepted in that test
+//! (`docs/research/fixtures/wp3-approval/mcp-approve.json`).
 
 use std::collections::BTreeMap;
 
@@ -9,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{ToolInput, input};
+use crate::core_io::Content;
 use crate::ids::Untrusted;
 use crate::learn::RouteKind;
 use crate::schema::Registry;
@@ -110,17 +115,115 @@ pub struct RoutesPropose {
     pub why: String,
 }
 
-/// `approve`: only if WP3's contract test picks the permission-prompt-tool route; accepted only
-/// for a pending ask with this `tool_use_id`. The reply's shape is recorded from the real CLI by
-/// WP3.
+/// `approve`: the permission-prompt tool (section 2.5, route 2). The CLI calls it after the tier
+/// guard answers `ask`, with the guard's `tool_use_id`. Accepted only for a pending ask with
+/// that id and that exact input; held up to `approvals.hook_hold_s` while the user decides;
+/// answered with an `ApproveReply`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Approve {
     /// The tool asking.
     pub tool_name: String,
-    /// Its input.
+    /// Its input, as the CLI sends it.
     pub input: Value,
-    /// The vendor's id for the use.
+    /// The vendor's id for the use, the one the guard saw.
     pub tool_use_id: String,
+}
+
+impl Approve {
+    /// Whether this call answers the pending ask the guard issued for `tool_use_id`, whose input
+    /// it stored as `stored`: the same id, and an input equal to the stored one as JSON (so key
+    /// order does not count and any changed value does). The dispatcher refuses any other call
+    /// and logs it as a security event.
+    #[must_use]
+    pub fn matches_ask(&self, tool_use_id: &str, stored: &Untrusted<Value>) -> bool {
+        self.tool_use_id == tool_use_id && self.input == *stored.get()
+    }
+}
+
+/// What `approve` answers: one text block holding this as JSON, in one of the two shapes the CLI
+/// accepts. `allow` carries the input the guard stored with the ask, never one built from the
+/// call, because the CLI runs `updatedInput` without calling the guard again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "behavior", rename_all = "snake_case")]
+pub enum ApproveReply {
+    /// Run the call; only with an `ApprovalId` that came from `UserInput`.
+    Allow {
+        /// The input the guard stored with the ask.
+        #[serde(rename = "updatedInput")]
+        updated_input: Untrusted<Value>,
+    },
+    /// Do not run it.
+    Deny {
+        /// One sentence for the model, written by Eileen's code.
+        message: String,
+    },
+}
+
+/// The text of a reply `serde_json` could not write: a denial, so a failure never allows.
+const UNWRITTEN_REPLY: &str =
+    r#"{"behavior":"deny","message":"Eileen could not write its answer, so this call is denied."}"#;
+
+impl ApproveReply {
+    /// Allows the pending ask with the input the guard stored when it answered `ask`: the
+    /// `tool_input` of that `PreToolUse` request, an `Untrusted<Value>` as the request carries
+    /// it. [`Approve::input`] is a plain `Value`, so the call's own input cannot be passed here
+    /// by accident; the CLI would run it unchecked (the approval contract test's finding 7).
+    ///
+    /// ```
+    /// use eileen_contracts::ids::Untrusted;
+    /// use eileen_contracts::tools::worker::{Approve, ApproveReply};
+    /// use serde_json::json;
+    ///
+    /// let stored = Untrusted::new(json!({ "command": "git push" }));
+    /// let call = Approve {
+    ///     tool_name: "Bash".to_owned(),
+    ///     input: json!({ "command": "git push" }),
+    ///     tool_use_id: "toolu_01".to_owned(),
+    /// };
+    /// assert!(call.matches_ask("toolu_01", &stored));
+    /// let reply = ApproveReply::allow(stored);
+    /// assert_eq!(reply.text(), r#"{"behavior":"allow","updatedInput":{"command":"git push"}}"#);
+    /// ```
+    ///
+    /// The call's input does not type-check:
+    ///
+    /// ```compile_fail
+    /// use eileen_contracts::tools::worker::{Approve, ApproveReply};
+    /// use serde_json::json;
+    ///
+    /// let call = Approve {
+    ///     tool_name: "Bash".to_owned(),
+    ///     input: json!({ "command": "git push" }),
+    ///     tool_use_id: "toolu_01".to_owned(),
+    /// };
+    /// let reply = ApproveReply::allow(call.input);
+    /// ```
+    #[must_use]
+    pub const fn allow(stored: Untrusted<Value>) -> Self {
+        Self::Allow { updated_input: stored }
+    }
+
+    /// Denies the call, with one sentence the model reads.
+    #[must_use]
+    pub fn deny(message: impl Into<String>) -> Self {
+        Self::Deny { message: message.into() }
+    }
+
+    /// The JSON the text block holds, compact: `{"behavior":"allow","updatedInput":...}` or
+    /// `{"behavior":"deny","message":"..."}`. `serde_json` cannot fail on these types (every map
+    /// key is a string); if it ever did, the text would deny.
+    #[must_use]
+    pub fn text(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| UNWRITTEN_REPLY.to_owned())
+    }
+
+    /// The one block the dispatcher answers `approve` with, which the shim writes as MCP's
+    /// `{"type":"text","text":...}`. Its result is never an error, a denial included: the CLI
+    /// reads an `approve` call that errors as a failed tool, not as a denial.
+    #[must_use]
+    pub fn content(&self) -> Content {
+        Content::Text(Untrusted::new(self.text()))
+    }
 }
 
 pub(super) fn inputs(out: &mut BTreeMap<&'static str, ToolInput>) {
@@ -139,4 +242,5 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<RegistryPackage>();
     r.add::<RoutesPropose>();
     r.add::<Approve>();
+    r.add::<ApproveReply>();
 }

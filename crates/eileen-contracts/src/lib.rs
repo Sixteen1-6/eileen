@@ -15,8 +15,9 @@
 //! # Does not own
 //!
 //! - Behaviour. The few functions here are pure helpers over the types (ID text forms, dates,
-//!   the scenario expiry rule, `sanitize`), plus [`ports::IdleComponent`], the component that
-//!   does nothing; every decision lives in `eileen-core` and the crates behind the ports.
+//!   the scenario expiry rule, `sanitize`, the `approve` reply's text and its match rule), plus
+//!   [`ports::IdleComponent`], the component that does nothing; every decision lives in
+//!   `eileen-core` and the crates behind the ports.
 //! - Types that appear only in another crate's own signatures (driver errors, harness and
 //!   platform handles, the platform traits of section 3.4): those crates define them.
 //!
@@ -33,7 +34,9 @@
 //!   or listed in `text-allowlist.toml` with a reason (test
 //!   `it::text::free_text_is_wrapped_or_allowlisted`).
 //! - `modules.toml` lists exactly the modules here, and a provisional module says so in its doc
-//!   (test `it::modules::modules_toml_matches_the_crate`).
+//!   (test `it::modules::modules_toml_matches_the_crate`); WP0 pinned exactly the modules on
+//!   slice S1's path, and every other module names the package that pins it (test
+//!   `it::modules::wp0_pinned_exactly_the_slice_modules`).
 //!
 //! # Boundaries
 //!
