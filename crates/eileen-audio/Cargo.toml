@@ -46,6 +46,8 @@ allocation-counter.workspace = true
 eileen-stdx.workspace = true
 # This crate's own tests compile `fake` under `cfg(test)`, without the feature.
 eileen-rt.workspace = true
+# The resamplers' tests measure each conversion's spectrum against BUILD.md section 6.6's bar.
+realfft.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
