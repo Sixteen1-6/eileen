@@ -342,9 +342,8 @@ jobs:
     # to 1.25 GB) until it goes seven days unread, which kept the repository over its 10 GB
     # cache limit, where GitHub evicts. After main's three jobs have saved, keep the newest
     # entry of each shared key and delete the rest. The Linux desktop lane restores the `linux`
-    # entry, so the older entry it matched while it kept the image's stable toolchain goes too;
-    # it matches again once it keeps only the pinned one (FIXME(#144), tracked by
-    # xtask::workflows::tests). Other caches, such as that lane's packages, are never touched.
+    # entry kept here, and computes its key the same way (xtask::workflows::tests). Other
+    # caches, such as that lane's packages, are never touched.
     # Not an all-green need: it is upkeep, and only runs where nothing waits for it.
     needs: [logic-linux, windows-clippy, windows-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
