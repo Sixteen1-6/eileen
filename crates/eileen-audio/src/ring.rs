@@ -22,17 +22,21 @@
 //!   when its `seq` is not one more than the frame written before it on the connection (or, first
 //!   on a connection, than the newest confirmed frame).
 //! - A mute (`SetCapture(false)`) stops the stream, then [`SpeechRing::capture_stopped`] empties
-//!   the store and drops the handoff, so no frame captured before a mute is written after it, and
-//!   the first frame after capture resumes carries the break flag.
-//! - A frame written more than 250 ms after capture carries the replayed flag. Its age is the
-//!   newest captured frame's time less its own, both on the source's clock, so the ring reads no
-//!   clock.
+//!   the store and drops the handoff, so no frame captured before a mute is written after it. The
+//!   first frame captured after it is marked in the store, so it carries the break flag on every
+//!   connection that writes it, a replay included, though no number was skipped.
+//! - A frame written more than 250 ms after capture carries the replayed flag. Its age is measured
+//!   on the source's clock, so the ring reads no clock: the capture side's now is the newest frame
+//!   pulled from the handoff plus 32 ms for each number taken since, so frames the handoff lost
+//!   still count as time passing. Frames of an earlier stream, whose clock the newest stream's may
+//!   not share, count as replayed.
 //!
-//! Only one capture stream runs at a time, and the component calls [`SpeechRing::capture_stopped`]
-//! only once the stream has stopped, so its callback, and with it the writer, is never called
-//! again. The two atomics both sides share, the next `seq` and the count of frames the handoff
-//! lost, come from loom under `--cfg loom`, so the loom tests explore every order of them; rtrb's
-//! own atomics are outside loom's view and rely on rtrb's tests.
+//! Only one capture stream runs at a time, and the component calls [`SpeechRing::open_capture`]
+//! and [`SpeechRing::capture_stopped`] only once the earlier stream has stopped, so its callback,
+//! and with it its writer, is never called again. The two atomics both sides share, the next
+//! `seq` and the count of frames the handoff lost, come from loom under `--cfg loom`, so the loom
+//! tests explore every order of them; rtrb's own atomics are outside loom's view and rely on
+//! rtrb's tests, and a test on real threads drives the handoff through many wraps.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -56,6 +60,10 @@ pub(crate) const HANDOFF_FRAMES: usize = 64;
 
 /// A frame written more than this long after capture carries the replayed flag (D81).
 pub(crate) const REPLAYED_AFTER: Duration = Duration::from_millis(250);
+
+/// The audio one frame holds: 512 samples at 16 kHz. Each `seq` is one frame, so each number
+/// taken is this much capture time passed.
+pub(crate) const FRAME_TIME: Duration = Duration::from_millis(32);
 
 /// What was true while a frame was captured, which it carries to the speech process.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -84,9 +92,22 @@ impl CaptureFlags {
 #[derive(Debug, Clone, Copy)]
 struct RingFrame {
     seq: u64,
+    /// The capture stream it came from, whose clock `captured_at` is on.
+    stream: u64,
     captured_at: Duration,
     flags: CaptureFlags,
+    /// The first frame pulled after capture stopped, so frames are missing before it. The reader
+    /// sets it; the writer always leaves it false.
+    break_before: bool,
     samples: [i16; AUDIO_FRAME_SAMPLES],
+}
+
+/// The newest frame pulled from the handoff, which a frame's age is measured against.
+#[derive(Debug, Clone, Copy)]
+struct Newest {
+    seq: u64,
+    stream: u64,
+    captured_at: Duration,
 }
 
 /// What both sides share.
@@ -103,6 +124,7 @@ struct Shared {
 pub(crate) struct CaptureWriter {
     handoff: rtrb::Producer<RingFrame>,
     shared: Arc<Shared>,
+    stream: u64,
 }
 
 impl CaptureWriter {
@@ -119,7 +141,14 @@ impl CaptureWriter {
         // newest value, so no two frames share a number. The frame itself reaches the reader
         // through rtrb's release and acquire.
         let seq = self.shared.next_seq.fetch_add(1, Ordering::Relaxed);
-        let frame = RingFrame { seq, captured_at, flags, samples: *samples };
+        let frame = RingFrame {
+            seq,
+            stream: self.stream,
+            captured_at,
+            flags,
+            break_before: false,
+            samples: *samples,
+        };
         if self.handoff.push(frame).is_ok() {
             true
         } else {
@@ -151,14 +180,16 @@ pub(crate) struct SpeechRing {
     /// Every frame not confirmed, oldest first, in `seq` order; at most `store_frames`.
     store: VecDeque<RingFrame>,
     store_frames: usize,
-    /// The newest capture time the store has seen, which a frame's age is measured against.
-    newest_at: Duration,
+    /// The newest capture stream's number, counted from 1.
+    stream: u64,
+    /// The newest frame pulled since capture last stopped.
+    newest: Option<Newest>,
     /// The newest frame confirmed; the store holds only later frames.
     confirmed: u64,
     /// The newest frame written on the current connection, or `confirmed` before the first.
     written: u64,
-    /// Capture stopped since the last frame written, so the next one carries the break flag.
-    break_pending: bool,
+    /// Capture stopped since the last frame pulled, so the next frame pulled breaks.
+    break_next: bool,
     /// Frames the store dropped on overrun since the count was last taken.
     evicted: u64,
 }
@@ -175,30 +206,38 @@ impl SpeechRing {
             shared: Arc::new(Shared { next_seq: AtomicU64::new(1), lost: AtomicU64::new(0) }),
             store: VecDeque::with_capacity(store_frames),
             store_frames,
-            newest_at: Duration::ZERO,
+            stream: 0,
+            newest: None,
             confirmed: 0,
             written: 0,
-            break_pending: false,
+            break_next: false,
             evicted: 0,
         }
     }
 
     /// A writer for a new capture stream, which the component moves into its capture callback.
-    /// Frames still in an earlier stream's handoff move into the store first.
+    /// Any earlier stream must have stopped, so its writer is never called again: a frame it
+    /// pushed after this would reach no reader and no count. Frames still in that stream's
+    /// handoff move into the store first and keep their numbers; once the new stream's first
+    /// frame is pulled, those not yet written carry the replayed flag, since their capture times
+    /// are on a clock the new stream's may not share.
     pub(crate) fn open_capture(&mut self) -> CaptureWriter {
         self.pull();
+        self.stream = self.stream.wrapping_add(1);
         let (producer, consumer) = rtrb::RingBuffer::new(self.handoff_frames);
         self.handoff = Some(consumer);
-        CaptureWriter { handoff: producer, shared: Arc::clone(&self.shared) }
+        CaptureWriter { handoff: producer, shared: Arc::clone(&self.shared), stream: self.stream }
     }
 
     /// Capture has stopped (a mute): its stream will not call the writer again. Drops the
     /// handoff and every frame in the store, written or not, so nothing captured before the mute
-    /// is written or replayed after it, and marks the next frame written with the break flag.
+    /// is written or replayed after it; forgets the newest capture time, since the next stream
+    /// may run on another source's clock; and marks the next frame pulled with the break flag.
     pub(crate) fn capture_stopped(&mut self) {
         self.handoff = None;
         self.store.clear();
-        self.break_pending = true;
+        self.newest = None;
+        self.break_next = true;
     }
 
     /// Moves every frame waiting in the handoff into the store, dropping the store's oldest frames
@@ -208,12 +247,17 @@ impl SpeechRing {
         let Some(handoff) = self.handoff.as_mut() else {
             return;
         };
-        while let Ok(frame) = handoff.pop() {
+        while let Ok(mut frame) = handoff.pop() {
+            frame.break_before = std::mem::take(&mut self.break_next);
             if self.store.len() >= self.store_frames {
                 self.store.pop_front();
                 self.evicted = self.evicted.saturating_add(1);
             }
-            self.newest_at = self.newest_at.max(frame.captured_at);
+            self.newest = Some(Newest {
+                seq: frame.seq,
+                stream: frame.stream,
+                captured_at: frame.captured_at,
+            });
             self.store.push_back(frame);
         }
     }
@@ -226,21 +270,24 @@ impl SpeechRing {
 
     /// The next frame to write on the current connection, with its flags, or `None` when every
     /// frame in the store is written. The frame counts as written once returned; a write that
-    /// fails ends the connection, and the next [`SpeechRing::connected`] replays it.
+    /// fails ends the connection, and the next [`SpeechRing::connected`] replays it with the same
+    /// break flag when capture had stopped before it.
     pub(crate) fn next_frame(&mut self) -> Option<Outgoing<'_>> {
         self.pull();
+        // Relaxed: a count read stale by a frame or two only leaves out frames captured after
+        // the pull above, which make this frame no older than the next write will see it.
+        let taken = self.shared.next_seq.load(Ordering::Relaxed).saturating_sub(1);
         let written = self.written;
         let at = self.store.partition_point(|frame| frame.seq <= written);
         let frame = self.store.get(at)?;
         let mut flags = frame.flags.audio_flags();
-        if self.break_pending || frame.seq != written.saturating_add(1) {
+        if frame.break_before || frame.seq != written.saturating_add(1) {
             flags = flags | AudioFlags::BREAK;
         }
-        if self.newest_at.saturating_sub(frame.captured_at) > REPLAYED_AFTER {
+        if replayed(frame, self.newest, taken) {
             flags = flags | AudioFlags::REPLAYED;
         }
         self.written = frame.seq;
-        self.break_pending = false;
         Some(Outgoing {
             seq: frame.seq,
             captured_at: frame.captured_at,
@@ -285,6 +332,23 @@ impl SpeechRing {
         let lost = self.shared.lost.swap(0, Ordering::Relaxed);
         lost.saturating_add(std::mem::take(&mut self.evicted))
     }
+}
+
+/// Whether `frame`, written now, is more than [`REPLAYED_AFTER`] old. The capture side's now is
+/// the newest frame pulled plus [`FRAME_TIME`] for each number taken since (`taken` is the newest
+/// number taken), so a frame the handoff lost still counts as time captured. A frame of an
+/// earlier stream than the newest counts as replayed, since the two clocks may differ.
+fn replayed(frame: &RingFrame, newest: Option<Newest>, taken: u64) -> bool {
+    let Some(newest) = newest else {
+        // Never: every frame in the store was pulled after capture last stopped.
+        return true;
+    };
+    if frame.stream != newest.stream {
+        return true;
+    }
+    let since = u32::try_from(taken.saturating_sub(newest.seq)).unwrap_or(u32::MAX);
+    let now = newest.captured_at.saturating_add(FRAME_TIME.saturating_mul(since));
+    now.saturating_sub(frame.captured_at) > REPLAYED_AFTER
 }
 
 #[cfg(test)]

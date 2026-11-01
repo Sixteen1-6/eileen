@@ -9,7 +9,7 @@ use eileen_contracts::speech::{
     AUDIO_FRAME_SAMPLES, AudioFlags, Frame, FrameBody, SpeechEventFrame, TurnEndReason, VoiceEvent,
 };
 
-use super::{CaptureFlags, CaptureWriter, HANDOFF_FRAMES, STORE_FRAMES, SpeechRing};
+use super::{CaptureFlags, CaptureWriter, FRAME_TIME, HANDOFF_FRAMES, STORE_FRAMES, SpeechRing};
 
 /// A frame's samples, each `n` (below 30 000), so a frame read back shows which push it was.
 fn samples(n: u64) -> [i16; AUDIO_FRAME_SAMPLES] {
@@ -289,6 +289,85 @@ fn a_frame_exactly_250_ms_old_is_not_replayed() {
     assert!(writer.push(&samples(1), Duration::from_millis(251), CaptureFlags::default()));
     ring.connected();
     assert_eq!(flagged(&write_all(&mut ring), AudioFlags::REPLAYED), [1], "251 ms old");
+}
+
+#[test]
+fn a_frame_time_is_one_frame_of_samples_at_16_khz() {
+    let samples = u128::try_from(AUDIO_FRAME_SAMPLES).unwrap();
+    assert_eq!(FRAME_TIME.as_micros() * 16_000, samples * 1_000_000);
+}
+
+#[test]
+fn frames_the_handoff_lost_count_toward_the_age_of_the_frames_it_kept() {
+    let mut ring = SpeechRing::new(16, 2);
+    let mut writer = ring.open_capture();
+    // The reader stalls: the handoff keeps the frames of 0 and 32 ms and loses the next 18, so
+    // the capture side's now is 608 ms when the two are written.
+    let handed = capture(&mut writer, 0, 20);
+    assert_eq!(handed.iter().filter(|handed| **handed).count(), 2);
+    ring.connected();
+    let written = write_all(&mut ring);
+    assert_eq!(seqs(&written), [1, 2]);
+    assert_eq!(flagged(&written, AudioFlags::REPLAYED), [1, 2], "608 and 576 ms old");
+
+    assert!(writer.push(&samples(20), Duration::from_millis(640), CaptureFlags::default()));
+    let after = write_all(&mut ring);
+    assert_eq!(seqs(&after), [21]);
+    assert_eq!(after[0].1, AudioFlags::BREAK, "live, after the gap");
+}
+
+#[test]
+fn a_mute_forgets_the_capture_clock_so_a_source_starting_at_zero_is_live() {
+    let mut ring = SpeechRing::new(16, 16);
+    let mut writer = ring.open_capture();
+    capture(&mut writer, 600_000, 3);
+    ring.connected();
+    assert_eq!(seqs(&write_all(&mut ring)), [1, 2, 3]);
+    ring.capture_stopped();
+
+    // Another microphone, whose clock starts again at zero.
+    let mut other = ring.open_capture();
+    capture(&mut other, 0, 3);
+    let written = write_all(&mut ring);
+    assert_eq!(seqs(&written), [4, 5, 6]);
+    assert_eq!(flagged(&written, AudioFlags::REPLAYED), [0_u64; 0]);
+}
+
+#[test]
+fn a_stream_opened_without_a_stop_goes_on_and_replays_what_the_last_left_unwritten() {
+    let mut ring = SpeechRing::new(16, 16);
+    let mut first = ring.open_capture();
+    capture(&mut first, 600_000, 3);
+    // The device changes: the first stream has stopped, but no mute came between.
+    drop(first);
+    let mut second = ring.open_capture();
+    capture(&mut second, 0, 2);
+    ring.connected();
+    let written = write_all(&mut ring);
+    assert_eq!(seqs(&written), [1, 2, 3, 4, 5], "the first stream's handoff moved into the store");
+    assert_eq!(flagged(&written, AudioFlags::BREAK), [0_u64; 0], "no number was skipped");
+    assert_eq!(
+        flagged(&written, AudioFlags::REPLAYED),
+        [1, 2, 3],
+        "the first stream's clock is not the second's"
+    );
+    assert_eq!(ring.take_dropped(), 0);
+}
+
+#[test]
+fn a_replay_keeps_the_break_of_the_first_frame_after_a_mute() {
+    let (mut ring, _writer) = written_ring(3);
+    ring.confirm_through(3);
+    ring.capture_stopped();
+    let mut resumed = ring.open_capture();
+    capture(&mut resumed, 500, 1);
+    let first = ring.next_frame().map(|frame| (frame.seq, frame.flags));
+    assert_eq!(first, Some((4, AudioFlags::BREAK)));
+
+    // The write failed, so the connection ended before 4 was confirmed.
+    ring.connected();
+    let replay = write_all(&mut ring);
+    assert_eq!(replay, [(4, AudioFlags::BREAK)], "4 still follows the mute, though 3 was the last");
 }
 
 #[test]
