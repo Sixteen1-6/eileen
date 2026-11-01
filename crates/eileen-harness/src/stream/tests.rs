@@ -11,8 +11,9 @@ use eileen_trace::Redactor;
 use serde_json::{Value, json};
 
 use super::{
-    Block, BrainAt, Denial, DenialKind, HookOutcome, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES,
-    MAX_TOOL_INPUT_BYTES, ToolResult, brain_events, parse, worker_events,
+    Block, BrainAt, Denial, DenialKind, HookOutcome, Line, MAX_KIND_BYTES, MAX_LINE_BYTES,
+    MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES, PlanWindow, PlanWindows, RateLimit, ToolResult,
+    brain_events, parse, worker_events,
 };
 
 const EVENTS: &str = include_str!("../../tests/fixtures/wp3-approval/stream-events.json");
@@ -22,6 +23,11 @@ const STDIO_ALLOW: &str = include_str!("../../tests/fixtures/wp3-approval/stream
 
 /// The pid the worker mapping is given.
 const PID: u32 = 4242;
+
+/// For [`Line::denials`]: the guard asked about every call, as it did in the recorded runs.
+fn every_call_asked(_tool_use_id: &str) -> bool {
+    true
+}
 
 /// One recorded event, written as the line the CLI writes.
 fn parse_value(event: &Value) -> Line {
@@ -122,7 +128,10 @@ fn the_pt_allow_run_parses_to_its_event_sequence() {
     assert_eq!(init.permission_mode.as_deref(), Some("dontAsk"), "the pinned mode");
     assert_eq!(init.cli_version.as_deref(), Some("2.1.304"), "the recorded CLI");
     assert!(init.memory_path.is_none(), "auto memory was off for the run");
-    assert!(lines.iter().all(|line| line.denials().is_empty()), "an allowed ask is no denial");
+    assert!(
+        lines.iter().all(|line| line.denials(every_call_asked).is_empty()),
+        "an allowed ask is no denial"
+    );
 }
 
 #[test]
@@ -176,14 +185,14 @@ fn the_guard_deny_is_a_denial_in_the_tool_result_and_the_result() {
     assert!(result.is_error, "the call was refused");
     assert_eq!(result.denial, Some(DenialKind::Guard), "the guard refused it");
     let id = "toolu_01BUAWis45bYchXjZgxUTqVZ";
-    let listed = parse_value(&events()["results"]["guard-deny"][0]).denials();
+    let listed = parse_value(&events()["results"]["guard-deny"][0]).denials(every_call_asked);
     let expected = Denial {
         tool_use_id: Some(id.to_owned()),
         tool_name: Some("Bash".to_owned()),
         kind: DenialKind::Listed,
     };
     assert_eq!(listed, [expected], "the result lists the same call");
-    let from_result = tool_result_line("guard-deny").denials();
+    let from_result = tool_result_line("guard-deny").denials(every_call_asked);
     assert_eq!(from_result[0].tool_use_id.as_deref(), Some(id), "the same id, counted once");
 }
 
@@ -192,10 +201,28 @@ fn failed_approve_calls_count_as_denials() {
     for case in ["pt-iserror", "pt-exit", "pt-hang-mcptimeout", "pt-missing-server"] {
         let line = tool_result_line(case);
         assert_eq!(only_result(&line).denial, Some(DenialKind::ApproveFailed), "{case}");
-        assert_eq!(line.denials().len(), 1, "{case} counts as one denial");
+        assert_eq!(line.denials(every_call_asked).len(), 1, "{case} counts as one denial");
     }
     let result = parse_value(&events()["results"]["pt-iserror"][0]);
-    assert!(result.denials().is_empty(), "the CLI's result leaves the failed approve call out");
+    assert!(
+        result.denials(every_call_asked).is_empty(),
+        "the CLI's result leaves the failed approve call out"
+    );
+}
+
+#[test]
+fn a_failed_call_the_guard_did_not_ask_about_is_no_denial() {
+    let failed = json!({ "type": "user", "message": { "role": "user", "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_act", "is_error": true,
+          "content": "<tool_use_error>Error calling tool (mcp__eileen__act): Connection closed</tool_use_error>" },
+    ] } });
+    let line = parse_value(&failed);
+    assert_eq!(only_result(&line).denial, Some(DenialKind::ApproveFailed), "the text's wrapper");
+    assert!(line.denials(|_| false).is_empty(), "an MCP tool's own error, never sent to approve");
+    let asked = line.denials(|id| id == "toolu_act");
+    assert_eq!(asked.len(), 1, "the same text after an ask is a failed approve call");
+    let recorded = tool_result_line("pt-iserror");
+    assert!(recorded.denials(|_| false).is_empty(), "the recorded text, unasked");
 }
 
 #[test]
@@ -252,8 +279,12 @@ fn the_steer_run_s_second_turn_starts_with_init_again() {
     assert_eq!(inits, 2, "the CLI writes init at the start of each turn");
     let results: Vec<&Line> = lines.iter().filter(|line| matches!(line, Line::Result(_))).collect();
     assert_eq!(results.len(), 2, "one result per turn");
-    assert_eq!(results[0].denials().len(), 1, "the first turn's call waited for the user");
-    assert!(results[1].denials().is_empty(), "the steered retry ran");
+    assert_eq!(
+        results[0].denials(every_call_asked).len(),
+        1,
+        "the first turn's call waited for the user"
+    );
+    assert!(results[1].denials(every_call_asked).is_empty(), "the steered retry ran");
     let unknown = Line::Unknown { kind: "system/thinking_tokens".to_owned() };
     assert!(lines.contains(&unknown), "a system subtype the parser keeps nothing of");
     assert!(lines.iter().all(|line| !matches!(line, Line::Malformed { .. })), "every line parses");
@@ -268,7 +299,7 @@ fn an_unknown_type_is_unknown() {
     let Line::Unknown { kind } = parse(long.as_bytes(), &Redactor::new()) else {
         panic!("a long unknown type is still unknown")
     };
-    assert_eq!(kind.len(), super::MAX_KIND_BYTES, "its name is capped");
+    assert_eq!(kind.len(), MAX_KIND_BYTES, "its name is capped");
 }
 
 #[test]
@@ -380,12 +411,12 @@ fn a_tool_input_is_redacted_and_capped() {
 
 #[test]
 fn a_secret_across_the_cut_is_redacted_whole() {
-    // The token starts 2,032 bytes into the input's JSON text and ends 40 bytes later, so a cut
-    // made before the redaction would keep `ghp_` and the token's first characters, too few
-    // for the redactor to find them afterwards. The space before it is the word start the
-    // redactor looks for.
+    // The token starts 2,033 bytes into the input's JSON text (a newline before it is the two
+    // bytes of its escape there) and ends 40 bytes later, so a cut made before the redaction
+    // would keep `ghp_` and the token's first characters, too few for the redactor to find
+    // them afterwards.
     let command = format!(
-        "{} ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}",
+        "{}\nghp_abcdefghijklmnopqrstuvwxyz0123456789 {}",
         "x".repeat(2_019),
         "y".repeat(200)
     );
@@ -403,6 +434,78 @@ fn a_secret_across_the_cut_is_redacted_whole() {
     assert!(cut.starts_with(r#"{"command":"xxx"#), "it keeps the start");
     let wire = call.input.get().to_string().len();
     assert!(wire <= MAX_TOOL_INPUT_BYTES, "{wire} bytes as JSON");
+}
+
+/// Tokens of three kinds, each at the start of a line or after a tab, as a heredoc or a written
+/// file holds them.
+const LINE_START_TOKENS: &str = "cat <<EOF > .env\nghp_abcdefghijklmnopqrstuvwxyz0123456789\n\tsk-abcdefghijklmnopqrstuvwx\r\nAKIAIOSFODNN7EXAMPLE\nEOF";
+
+/// The token texts [`LINE_START_TOKENS`] holds.
+const LINE_START_SECRETS: [&str; 3] = ["ghp_abcdefghij", "sk-abcdefghij", "AKIAIOSFODNN7EXAMPLE"];
+
+#[test]
+fn a_token_at_the_start_of_a_line_in_an_input_is_redacted() {
+    // Serialized, the newline, tab or return before each token is the letter of its escape,
+    // after which the redactor's token rules see no word start; each string is redacted raw.
+    let long = format!("{}{LINE_START_TOKENS}{}", "x".repeat(1_800), "y".repeat(500));
+    let line = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": { "command": LINE_START_TOKENS } },
+        { "type": "tool_use", "id": "toolu_2", "name": "Write",
+          "input": { "file_path": r"C:\work\.env", "content": long } },
+        { "type": "tool_use", "id": "toolu_3", "name": "Skill",
+          "input": { "skill": "deploy", "args": { "env": LINE_START_TOKENS } } },
+        { "type": "tool_use", "id": "toolu_4", "name": "Edit",
+          "input": { LINE_START_TOKENS: 1 } },
+    ] } });
+    let Line::Assistant(blocks) = parse_value(&line) else { panic!("an assistant line") };
+    let [
+        Block::ToolUse(short),
+        Block::ToolUse(cut),
+        Block::SkillInvoked { args, .. },
+        Block::ToolUse(key),
+    ] = &blocks[..]
+    else {
+        panic!("{blocks:?}")
+    };
+    assert!(short.input.get().is_object(), "an input under the cap keeps its shape");
+    let Value::String(cut_text) = cut.input.get() else { panic!("an input over the cap is cut") };
+    assert!(cut.input.get().to_string().len() <= MAX_TOOL_INPUT_BYTES, "the cut input fits");
+    let kept = [
+        ("under the cap", short.input.get().to_string()),
+        ("over the cap", cut_text.clone()),
+        ("in a skill's arguments", args.get().clone()),
+        ("in an object key", key.input.get().to_string()),
+    ];
+    for (place, text) in kept {
+        for secret in LINE_START_SECRETS {
+            assert!(!text.contains(secret), "{secret} is gone {place}: {text}");
+        }
+        assert!(text.contains("[redacted:github_token]"), "and marked {place}: {text}");
+    }
+}
+
+#[test]
+fn a_token_right_after_another_match_is_redacted() {
+    // A token needs a word start. Right after another match it has none until that match is
+    // replaced, so one pass of the redactor leaves it and the next would find it.
+    let redactor = Arc::new(Redactor::new());
+    let _token = redactor.add_literal("hook-token-5f2a9c").unwrap();
+    let chained = "hook-token-5f2a9cAKIAIOSFODNN7EXAMPLEghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let line = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": { chained: chained } },
+        { "type": "tool_use", "id": "toolu_2", "name": "Skill",
+          "input": { "skill": chained, "args": chained } },
+    ] } });
+    let Line::Assistant(blocks) = parse(line.to_string().as_bytes(), &redactor) else {
+        panic!("an assistant line")
+    };
+    let [Block::ToolUse(call), Block::SkillInvoked { name, args }] = &blocks[..] else {
+        panic!("{blocks:?}")
+    };
+    let all = "[redacted:secret][redacted:aws_key][redacted:github_token]";
+    assert_eq!(call.input.get(), &json!({ all: all }), "a key and a value, in three passes");
+    assert_eq!(name, all, "a skill's name");
+    assert_eq!(args.get(), all, "and its arguments");
 }
 
 #[test]
@@ -434,26 +537,67 @@ fn an_auth_failure_in_the_result_becomes_auth_failed() {
 }
 
 #[test]
-fn rate_limit_events_become_plan_usage() {
+fn rate_limit_events_become_one_window_each() {
     let event = |info: Value| json!({ "type": "rate_limit_event", "rate_limit_info": info, "uuid": "u", "session_id": "s" });
     let five_hour = event(json!({ "status": "allowed_warning", "resetsAt": 1_761_055_200,
                                   "rateLimitType": "five_hour", "utilization": 0.83 }));
-    let expected = PlanUsage {
-        five_hour_pct: Some(83),
-        seven_day_pct: None,
+    let five = RateLimit {
+        window: PlanWindow::FiveHour,
+        pct: Some(83),
         resets_at: Some(WallTime(1_761_055_200_000_000)),
     };
-    assert_eq!(parse_value(&five_hour), Line::RateLimit(expected), "the five-hour window");
+    assert_eq!(parse_value(&five_hour), Line::RateLimit(five), "the five-hour window");
+    let seven_day = event(json!({ "status": "allowed", "resetsAt": 1_761_400_000,
+                                  "rateLimitType": "seven_day", "utilization": 0.4 }));
+    let seven = RateLimit {
+        window: PlanWindow::SevenDay,
+        pct: Some(40),
+        resets_at: Some(WallTime(1_761_400_000_000_000)),
+    };
+    assert_eq!(parse_value(&seven_day), Line::RateLimit(seven), "the seven-day window");
     let rejected = event(json!({ "status": "rejected", "rateLimitType": "seven_day" }));
-    let Line::RateLimit(usage) = parse_value(&rejected) else { panic!("a rate-limit line") };
-    assert_eq!(usage.seven_day_pct, Some(100), "a rejected window is full");
-    assert_eq!(
-        worker_events(Line::RateLimit(usage), PID),
-        [WorkerEvent::RateLimit(usage)],
-        "worker"
-    );
+    let Line::RateLimit(full) = parse_value(&rejected) else { panic!("a rate-limit line") };
+    assert_eq!(full.pct, Some(100), "a rejected window is full");
+    for window in ["seven_day_opus", "seven_day_sonnet", "overage", ""] {
+        let other = event(json!({ "status": "allowed_warning", "resetsAt": 1_761_055_200,
+                                  "rateLimitType": window, "utilization": 0.95 }));
+        let kind = format!("rate_limit_event/{window}");
+        assert_eq!(parse_value(&other), Line::Unknown { kind }, "{window:?} is no plan window");
+    }
+    let long = event(json!({ "status": "allowed", "rateLimitType": "w".repeat(500) }));
+    let Line::Unknown { kind } = parse_value(&long) else { panic!("an unknown window") };
+    assert_eq!(kind.len(), "rate_limit_event/".len() + MAX_KIND_BYTES, "its name is cut");
+    assert!(worker_events(Line::RateLimit(five), PID).is_empty(), "the worker mapping waits");
     let at = BrainAt { which: BrainSlot::Primary, instance: 3, turn: None };
-    assert_eq!(brain_events(Line::RateLimit(usage), at), [BrainEvent::RateLimit(usage)], "brain");
+    assert!(brain_events(Line::RateLimit(five), at).is_empty(), "and so does the brain's");
+}
+
+#[test]
+fn plan_windows_keep_both_windows_and_the_nearer_reset() {
+    let at = |seconds: i64| WallTime(seconds * 1_000_000);
+    let five =
+        RateLimit { window: PlanWindow::FiveHour, pct: Some(83), resets_at: Some(at(5_000)) };
+    let seven =
+        RateLimit { window: PlanWindow::SevenDay, pct: Some(40), resets_at: Some(at(9_000)) };
+    let mut plan = PlanWindows::default();
+    let usage = |five_hour_pct, seven_day_pct, resets_at| PlanUsage {
+        five_hour_pct,
+        seven_day_pct,
+        resets_at: Some(at(resets_at)),
+    };
+    assert_eq!(plan.update(five, at(1_000)), usage(Some(83), None, 5_000), "one window");
+    assert_eq!(
+        plan.update(seven, at(1_000)),
+        usage(Some(83), Some(40), 5_000),
+        "a seven-day event keeps the five-hour figure and the nearer reset"
+    );
+    let soon = RateLimit { resets_at: Some(at(2_000)), ..seven };
+    assert_eq!(plan.update(soon, at(1_000)), usage(Some(83), Some(40), 2_000), "the nearer one");
+    assert_eq!(
+        plan.update(seven, at(5_000)),
+        usage(None, Some(40), 9_000),
+        "a window past its reset has started again"
+    );
 }
 
 #[test]
