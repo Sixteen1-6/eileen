@@ -10,6 +10,7 @@ use eileen_contracts::jobs::{Cost, PlanUsage, Route};
 use eileen_trace::Redactor;
 use serde_json::{Value, json};
 
+use super::control::{self, CanUseTool, Message};
 use super::{
     Block, BrainAt, Denial, DenialKind, HookOutcome, Line, MAX_KIND_BYTES, MAX_LINE_BYTES,
     MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES, PlanWindow, PlanWindows, RateLimit, ToolResult,
@@ -20,6 +21,7 @@ const EVENTS: &str = include_str!("../../tests/fixtures/wp3-approval/stream-even
 const PT_ALLOW: &str = include_str!("../../tests/fixtures/wp3-approval/stream-pt-allow.json");
 const STEER: &str = include_str!("../../tests/fixtures/wp3-approval/stream-steer.json");
 const STDIO_ALLOW: &str = include_str!("../../tests/fixtures/wp3-approval/stream-stdio-allow.json");
+const STDIO_CONTROL: &str = include_str!("../../tests/fixtures/wp3-approval/stdio-control.json");
 
 /// The pid the worker mapping is given.
 const PID: u32 = 4242;
@@ -90,6 +92,7 @@ fn kind(line: &Line) -> &'static str {
         }
         Line::PermissionDenied(_) => "permission denied",
         Line::Result(_) => "result",
+        Line::Control(_) => "control",
         Line::Unknown { .. } => "unknown",
         Line::Malformed { .. } => "malformed",
     }
@@ -627,15 +630,32 @@ fn partial_text_reaches_the_brain_and_not_the_worker() {
 }
 
 #[test]
-fn every_line_of_the_stdio_run_parses() {
-    let lines: Vec<Line> = run(STDIO_ALLOW).iter().map(parse_value).collect();
-    let kinds: Vec<&str> = lines.iter().map(kind).collect();
+fn the_stdio_run_carries_a_can_use_tool_request() {
+    let kinds: Vec<&str> = run(STDIO_ALLOW).iter().map(|event| kind(&parse_value(event))).collect();
     assert!(!kinds.contains(&"malformed"), "every line parses: {kinds:?}");
-    // The control protocol's parser is the control_message half, in its own pull request; until
-    // it lands, the CLI's can_use_tool request is a line this parser does not know.
-    let control = Line::Unknown { kind: "control_request".to_owned() };
-    assert_eq!(lines.iter().filter(|line| **line == control).count(), 1, "the one control line");
+    assert_eq!(kinds.iter().filter(|name| **name == "control").count(), 1, "one control line");
     assert_eq!(kinds.iter().filter(|name| **name == "result").count(), 1, "one turn");
+    let control_line = run(STDIO_ALLOW)
+        .into_iter()
+        .find(|event| event["type"] == "control_request")
+        .expect("the stdio run records a control request");
+    let Line::Control(Message::CanUseTool(ask)) = parse_value(&control_line) else {
+        panic!("a can_use_tool request")
+    };
+    let CanUseTool { tool_name, tool_use_id, reason, input, .. } = *ask;
+    assert_eq!(tool_name, "Bash", "the tool");
+    assert_eq!(tool_use_id.as_deref(), Some("toolu_01YSZyCZJoHiAaZxpR6zJzNG"), "the guard's call");
+    assert_eq!(reason, Some(untrusted("Eileen: tier 2, asking the user (appr_01TEST)")), "why");
+    assert_eq!(input.get()["command"], "touch tier2-asked.txt", "the input");
+    let recorded: Value = serde_json::from_str(STDIO_CONTROL).unwrap();
+    for verdict in ["allow", "deny"] {
+        let answer = recorded[verdict][1]["sent_to_cli"].to_string();
+        let parsed = control::parse(answer.as_bytes(), &Redactor::new());
+        assert!(
+            matches!(parsed, Ok(Message::Response { error: None, .. })),
+            "{verdict}: {parsed:?}"
+        );
+    }
 }
 
 #[test]
