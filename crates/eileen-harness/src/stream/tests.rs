@@ -382,10 +382,11 @@ fn a_tool_input_is_redacted_and_capped() {
 fn a_secret_across_the_cut_is_redacted_whole() {
     // The token starts 2,032 bytes into the input's JSON text and ends 40 bytes later, so a cut
     // made before the redaction would keep `ghp_` and the token's first characters, too few
-    // for the redactor to find them afterwards.
+    // for the redactor to find them afterwards. The space before it is the word start the
+    // redactor looks for.
     let command = format!(
-        "{}ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}",
-        "x".repeat(2_020),
+        "{} ghp_abcdefghijklmnopqrstuvwxyz0123456789 {}",
+        "x".repeat(2_019),
         "y".repeat(200)
     );
     let line = json!({ "type": "assistant", "message": { "content": [

@@ -559,7 +559,7 @@ fn redacted_input(input: &Value, redactor: &Redactor) -> Value {
 }
 
 /// The longest start of `text`, ending on a character boundary, whose JSON string is at most
-/// `max` bytes: its quotes and serde_json's escapes count, so the cap holds on the wire. A cut
+/// `max` bytes: its quotes and `serde_json`'s escapes count, so the cap holds on the wire. A cut
 /// input is JSON text full of quotes, each of which takes two bytes as a string.
 fn json_string_within(text: &str, max: usize) -> Value {
     let mut used = 2;
