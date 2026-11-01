@@ -15,7 +15,7 @@ mod tests {
     const ON_MAIN: &str = "github.ref == 'refs/heads/main'";
     /// Jobs, by workflow file, that restore a saved key but still keep the runner image's other
     /// toolchains, so their key differs from the one `main` saves and they find no full match.
-    // FIXME(#141): the Linux desktop lane gains the step in its own pull request; this list then
+    // FIXME(#144): the Linux desktop lane gains the step in its own pull request; this list then
     // empties, and the test below fails until it does.
     const WITHOUT_THE_TOOLCHAIN_STEP: [(&str, &str); 1] = [("linux-desktop.yml", "session")];
 

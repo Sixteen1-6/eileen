@@ -179,17 +179,20 @@ jobs:
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
         # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
-        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
-        # save, and rust-cache saves after the last step, so this is the last step and runs only
-        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
-        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
         if: success() && github.ref == 'refs/heads/main'
         shell: bash
         run: |
+          stamp="$(date +%s)"
           for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
             if [ -d "$dir" ]; then
-              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
-              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
             fi
           done
 
@@ -240,17 +243,20 @@ jobs:
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
         # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
-        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
-        # save, and rust-cache saves after the last step, so this is the last step and runs only
-        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
-        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
         if: success() && github.ref == 'refs/heads/main'
         shell: bash
         run: |
+          stamp="$(date +%s)"
           for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
             if [ -d "$dir" ]; then
-              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
-              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
             fi
           done
 
@@ -313,17 +319,20 @@ jobs:
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
         # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
-        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
-        # save, and rust-cache saves after the last step, so this is the last step and runs only
-        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
-        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
         if: success() && github.ref == 'refs/heads/main'
         shell: bash
         run: |
+          stamp="$(date +%s)"
           for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
             if [ -d "$dir" ]; then
-              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
-              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
             fi
           done
 
@@ -332,9 +341,11 @@ jobs:
     # Each lockfile change leaves a superseded generation of the three rust-cache entries (1.0
     # to 1.25 GB) until it goes seven days unread, which kept the repository over its 10 GB
     # cache limit, where GitHub evicts. After main's three jobs have saved, keep the newest
-    # entry of each shared key and delete the rest. Other caches, such as the Linux desktop
-    # lane's packages, are never touched. Not an all-green need: it is upkeep, and only runs
-    # where nothing waits for it.
+    # entry of each shared key and delete the rest. The Linux desktop lane restores the `linux`
+    # entry, so the older entry it matched while it kept the image's stable toolchain goes too;
+    # it matches again once it keeps only the pinned one (FIXME(#144), tracked by
+    # xtask::workflows::tests). Other caches, such as that lane's packages, are never touched.
+    # Not an all-green need: it is upkeep, and only runs where nothing waits for it.
     needs: [logic-linux, windows-clippy, windows-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
