@@ -3,14 +3,16 @@
 //! [`CoreRng`]), the `sim` fuzz target (the fuzzer's bytes are the buffer) and later a
 //! minimiser (a shorter buffer is a smaller run).
 //!
-//! The skeleton draws a representative subset of [`Input`]: the speech process's turn events
-//! (speech start, partial, speech end, end of turn) over one turn at a time, the user's mute,
-//! unmute and toggle, typed and command-line text, the dictation key, playback accounting
-//! (an utterance drained, a device change, a stall) and timers. WP1 adds the rest with the
-//! world's parts that answer the core (the brain, workers, sidecars, memory).
+//! The generator draws what the user and the PC do: the speech process's turn events (speech
+//! start, partial, speech end, end of turn) over one turn at a time, some of them named, some
+//! room talk, barge-in windows while Eileen speaks, the user's mute, unmute and toggle, typed
+//! and command-line text, the dictation key, playback faults (an utterance drained early, a
+//! device change, a stall), and the passing of time to the core's next timer. What answers the
+//! core (the speech process's clauses, playback reports, the brain, workers) comes from the
+//! world's parts, not from here.
 
 use arbitrary::Unstructured;
-use eileen_contracts::core_io::{Input, KeyEdge, PlaybackEvent, TimerId, UserInput};
+use eileen_contracts::core_io::{Input, KeyEdge, PlaybackEvent, UserInput};
 use eileen_contracts::ids::{Personal, SpeakId, TurnId};
 use eileen_contracts::speech::{TurnEndReason, VoiceEvent};
 use eileen_stdx::rng::CoreRng;
@@ -27,7 +29,24 @@ const PHRASES: &[&str] = &[
     "mute",
     "never mind",
     "play the next one",
+    "Eileen, what time is it?",
+    "Eileen, tell me about rivers",
+    "Eileen, create a file called hello dot txt",
+    "mm-hm",
+    "yeah",
+    "want coffee?",
+    "Eileen, stop",
+    "cancel",
 ];
+
+/// What the generator drew.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Draw {
+    /// An input to deliver now.
+    Input(Input),
+    /// Let virtual time pass to the core's next timer.
+    NextTimer,
+}
 
 /// The kinds of input the generator draws, for the step log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +57,7 @@ pub enum InputKind {
     User,
     /// Playback accounting.
     Playback,
-    /// A timer firing.
+    /// Time passing to the core's next timer.
     Timer,
 }
 
@@ -48,7 +67,7 @@ pub enum InputKind {
 pub struct Generator {
     turn: Option<TurnId>,
     spoke: bool,
-    next_timer: u64,
+    window: u8,
 }
 
 impl Generator {
@@ -59,7 +78,8 @@ impl Generator {
     }
 
     /// Draws the next input. `now_ms` stamps any ID it mints; `rng` supplies IDs' random bits;
-    /// `speaking` lists utterances the world is playing, which playback events may name.
+    /// `speaking` lists utterances the world is playing, which playback events and barge-in
+    /// windows may name.
     pub fn next(
         &mut self,
         bytes: &mut Unstructured<'_>,
@@ -67,18 +87,15 @@ impl Generator {
         now_ms: u64,
         rng: &mut CoreRng,
         speaking: &[SpeakId],
-    ) -> arbitrary::Result<(InputKind, Input)> {
+    ) -> arbitrary::Result<(InputKind, Draw)> {
         let kind = pick_kind(bytes, mix)?;
-        let input = match kind {
-            InputKind::Voice => self.voice(bytes, now_ms, rng)?,
-            InputKind::User => user(bytes)?,
-            InputKind::Playback => playback(bytes, speaking)?,
-            InputKind::Timer => {
-                self.next_timer = self.next_timer.wrapping_add(1);
-                Input::Timer(TimerId(self.next_timer))
-            }
+        let draw = match kind {
+            InputKind::Voice => Draw::Input(self.voice(bytes, now_ms, rng, speaking)?),
+            InputKind::User => Draw::Input(user(bytes)?),
+            InputKind::Playback => Draw::Input(playback(bytes, speaking)?),
+            InputKind::Timer => Draw::NextTimer,
         };
-        Ok((kind, input))
+        Ok((kind, draw))
     }
 
     fn voice(
@@ -86,7 +103,21 @@ impl Generator {
         bytes: &mut Unstructured<'_>,
         now_ms: u64,
         rng: &mut CoreRng,
+        speaking: &[SpeakId],
     ) -> arbitrary::Result<Input> {
+        if let Some(speak) = speaking.first().copied()
+            && bytes.ratio(1_u8, 3)?
+        {
+            // Mostly consecutive windows, now and then a gap, as speech over Eileen comes.
+            let gap = if bytes.ratio(1_u8, 8)? { 2 } else { 1 };
+            self.window = self.window.wrapping_add(gap);
+            let prob_pct = bytes.int_in_range(50..=100)?;
+            return Ok(Input::Voice(VoiceEvent::BargeInWindow {
+                speak,
+                window: self.window,
+                prob_pct,
+            }));
+        }
         let Some(turn) = self.turn else {
             let turn = TurnId::from_parts(now_ms, rng.ulid_random());
             self.turn = Some(turn);
@@ -180,7 +211,7 @@ mod tests {
     use eileen_contracts::speech::VoiceEvent;
     use eileen_stdx::rng::CoreRng;
 
-    use super::{Generator, InputKind};
+    use super::{Draw, Generator, InputKind};
     use crate::profile::InputMix;
 
     const VOICE_ONLY: InputMix = InputMix { voice: 1, user: 0, playback: 0, timer: 0 };
@@ -194,10 +225,10 @@ mod tests {
         let mut generator = Generator::default();
         let mut open = None;
         for step in 0..500 {
-            let (kind, input) =
+            let (kind, draw) =
                 generator.next(&mut bytes, &VOICE_ONLY, step, &mut rng, &[]).unwrap();
             assert_eq!(kind, InputKind::Voice, "the mix allows only voice");
-            let Input::Voice(event) = input else { panic!("a voice input") };
+            let Draw::Input(Input::Voice(event)) = draw else { panic!("a voice input") };
             match event {
                 VoiceEvent::SpeechStarted { turn, .. } => {
                     assert!(open.is_none_or(|o| o == turn), "one turn at a time");

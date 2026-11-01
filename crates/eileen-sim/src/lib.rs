@@ -7,6 +7,9 @@
 //!
 //! - [`World`], the TOML [`Profile`]s with their schema, seeded and byte-driven runs, the
 //!   fixed-column step log, `--doublecheck`, `SimRegression` replay and the invariants.
+//! - The parts that answer the core ([`parts`]): the speech process, the playback device in
+//!   10 ms callbacks, a scripted brain ([`BrainReply`]) and scripted worker sessions; and
+//!   [`SimResolver`], the scripted intent resolver beside its own settings validator.
 //! - The `eileen-sim` binary ([`cli`]) and the `sim` fuzz target's entry (`fuzz_entry`).
 //!
 //! # Does not own
@@ -30,7 +33,8 @@
 //!   metadata; no repository check enforces it yet).
 //! - May depend on `eileen-core`, `eileen-record`, `eileen-replay`, `eileen-intent`,
 //!   `eileen-dictation`, `eileen-skills`, `eileen-contracts`, `eileen-stdx` and
-//!   `eileen-trace`; not on `eileen-config`, so it carries its own settings validator.
+//!   `eileen-trace`; not on `eileen-config`, so it carries its own settings validator, and
+//!   until WP7's resolver it scripts its own (`eileen-intent` is not a dependency today).
 //! - Must not depend on `eileen-runtime`, `eileen-harness` or `eileen-supervisor`, which its
 //!   `World` simulates, or on rmcp, nor know vendor CLI flags (section 3.1); nor on a `-win` or
 //!   `-linux` crate (check 15).
@@ -40,7 +44,8 @@
 //!
 //! - Fast command: `cargo xtask sim` (the pull request seed set, [`run::PR_SEEDS`]).
 //! - Layers: unit tests per module, one test per pull request seed
-//!   (`it::pr_seeds`), every stored regression (`it::regressions`).
+//!   (`it::pr_seeds`), every stored regression (`it::regressions`), and slice S1's flows
+//!   through the minimal core (`it::slice`).
 //! - A bug here starts as a seed that fails only on one OS.
 //!
 //! # Traps
@@ -53,9 +58,9 @@
 //!
 //! # Logs and tracing
 //!
-//! - The step log is the simulator's own output. The core's spans and log lines go to a
-//!   flight-recorder ring on the simulator's thread, which invariant 13 checks; replay a
-//!   failure with the `replay:` command it prints.
+//! - The step log is the simulator's own output. The core's spans and log lines go to the
+//!   span collector on the simulator's thread ([`collect`]), which invariant 13 checks after
+//!   every step; replay a failure with the `replay:` command it prints.
 //!
 //! # Do not change without a decision record
 //!
@@ -64,15 +69,20 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod collect;
 #[doc(hidden)]
 pub mod fuzz_entry;
 pub mod hash;
 pub mod inputs;
 pub mod invariants;
+pub mod parts;
 pub mod profile;
+pub mod resolver;
 pub mod run;
 pub mod world;
 
+pub use parts::BrainReply;
 pub use profile::Profile;
+pub use resolver::SimResolver;
 pub use run::{RunReport, run_seed};
 pub use world::World;
