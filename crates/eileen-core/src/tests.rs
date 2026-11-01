@@ -181,7 +181,7 @@ impl Harness {
     fn say(&mut self, text: &str) -> Vec<Effect> {
         self.turns += 1;
         let turn = TurnId::from_parts(self.turns, u128::from(self.turns) + 77);
-        self.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0 }));
+        self.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
         self.wait(400);
         self.step(Input::Voice(end_of_turn(turn, text)))
     }
@@ -635,7 +635,7 @@ fn eileen_say_cannot_unmute() {
 fn a_repeated_end_of_turn_is_routed_once() {
     let mut h = Harness::new();
     let turn = TurnId::from_parts(40, 40);
-    h.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0 }));
+    h.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
     h.wait(400);
     let first = h.step(Input::Voice(end_of_turn(turn, "what time is it")));
     let again = h.step(Input::Voice(end_of_turn(turn, "what time is it")));

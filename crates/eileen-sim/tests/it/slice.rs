@@ -35,7 +35,7 @@ fn settle(world: &mut World, ms: u64) {
 /// The user speaks `text` as turn `n`: speech starts, 400 ms later the turn ends.
 fn say(world: &mut World, n: u64, text: &str) -> TurnId {
     let turn = TurnId::from_parts(world.now_ms(), u128::from(n));
-    step(world, Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0 }));
+    step(world, Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
     settle(world, 400);
     step(
         world,
@@ -159,7 +159,10 @@ fn stop_while_eileen_speaks_ducks_pauses_and_stops_within_the_decision() {
     let mut world = world();
     let speak = speaking_a_long_answer(&mut world);
     let user = TurnId::from_parts(world.now_ms(), 2);
-    step(&mut world, Input::Voice(VoiceEvent::SpeechStarted { turn: user, source: 0 }));
+    step(
+        &mut world,
+        Input::Voice(VoiceEvent::SpeechStarted { turn: user, source: 0, replayed: false }),
+    );
     let onset = world.now_ms();
     let from = world.effects().len();
     barge_in(&mut world, speak, 1);
@@ -218,7 +221,10 @@ fn a_backchannel_resumes_from_the_paused_sample() {
     let mut world = world();
     let speak = speaking_a_long_answer(&mut world);
     let user = TurnId::from_parts(world.now_ms(), 3);
-    step(&mut world, Input::Voice(VoiceEvent::SpeechStarted { turn: user, source: 0 }));
+    step(
+        &mut world,
+        Input::Voice(VoiceEvent::SpeechStarted { turn: user, source: 0, replayed: false }),
+    );
     barge_in(&mut world, speak, 3);
     settle(&mut world, 20);
     let at_pause = *played(&world, speak).last().expect("the pause is reported");
