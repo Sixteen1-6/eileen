@@ -81,22 +81,36 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   (refused and logged as a security event, never answered `allow`). The weekly contract test's
   case of an `updatedInput` that differs from the stored input (section 2.5) is the CLI's side
   of the same rule.
-- `wp3/approval-amendment` (#131, draft, `type: amendment`, for the owner's review): brings BUILD.md
-  in line with #126 and the contract report. Section 3.3.3 writes
+- `wp3/approval-amendment` (#131, draft, `type: amendment`, for the owner's review): brings
+  BUILD.md in line with #126 and the contract report. Section 3.3.3 writes
   `HookRequest::PermissionRequest.tool_use_id` as `Option<String>`, as the crate already has
   it, and section 6.5's "when WP3 next changes the contracts" clause is marked done. Section
   3.3.16's `StubScriptLine::PermissionRequest`, and its doc comment in `record.rs`, say the stub
   plays it the way the CLI behaves under `dontAsk`: a tool use posted to the `PreToolUse` guard,
-  with an `ask` routed to the permission-prompt tool, never the `PermissionRequest` hook. A
+  with an `ask` routed to the permission-prompt tool, never the `PermissionRequest` hook.
+  Section 4.7 says how the stub reaches both: the guard over loopback HTTP, and `approve` by
+  spawning the shim from the MCP config and writing the JSON-RPC itself, without rmcp. A
   `PermissionRequest` with no id is keyed in scenario replay by its ordinal among the job's
-  permission requests. Tests in `eileen-contracts::it::wire` parse the recorded
-  `PermissionRequest` body (no id) and round-trip one with an id. No crate produces
-  `HookRequest` yet, so it never blocks slice S1.
+  permission requests. Tests in `eileen-contracts::it::wire` check that the recorded
+  `PermissionRequest` body has no `tool_use_id` and that the core's request built from it,
+  written without the field, parses as `None` and writes back as null, and they round-trip one
+  with an id. No crate produces `HookRequest` yet, so it never blocks slice S1.
 - For `eileen-stub-harness`: a `PermissionRequest` script line carries a tool and its input and
-  no id, so the stub mints the `tool_use_id`, posts the `PreToolUse` body to the guard's URL from
-  the session's settings file, and on `ask` calls `approve` through the session's MCP config
-  with the same id and input, then runs or refuses as the reply says. It never posts to the
-  `PermissionRequest` hook, which the CLI never calls on the approval route.
+  no id, so the stub mints the `tool_use_id` and posts the `PreToolUse` body to the guard's URL
+  from the session's settings file, with the bearer and session headers the settings file
+  fills in from the environment through `allowedEnvVars`. On no decision it plays the tool use
+  as allowed, and on `deny` it plays a refusal. On `ask` it calls `approve` through the
+  session's MCP config with the same id and input. It plays the tool use as allowed on `allow`,
+  a refusal listed in `permission_denials` on `deny` or a reply in neither shape, and a tool
+  error left out of `permission_denials` on a call that errors, outlives `MCP_TOOL_TIMEOUT` or
+  loses its server, as the CLI did in section 2.2 of the contract report (the harness counts
+  that tool error as a denial itself). With no approve server in the MCP config it ends the
+  session with exit code 1 at the first ask, as the CLI did. Like the CLI under
+  `onFailure: "block"`, it treats a dead endpoint, a timeout, an HTTP error, a body that is not
+  JSON or an invalid decision from the guard as a block. A tool use played as allowed is the
+  script's next lines, which hold the recorded result: the stub never executes a script's
+  input, and it never posts to the `PermissionRequest` hook, which the CLI never calls on the
+  approval route.
 
 ## Surprises
 
@@ -126,11 +140,12 @@ permission route, which section 6.5's amendment of that date records (see Goal).
 - An approve result is never an error, a denial included: the CLI reads an errored `approve`
   call as a failed tool, not a denial (the contract report's tool-error rows).
 - `HookRequest::PermissionRequest.tool_use_id` stays a plain `Option<String>` with no
-  `#[serde(default)]`: serde's derive already reads a missing `Option` field as `None`, no other
-  `Option` field in `eileen-contracts` carries the attribute, and schemars would add a default
-  to the pinned `harness` schema for no change in behaviour.
-  `a_permission_request_without_a_tool_use_id_parses` holds the behaviour instead, so a later
-  `with =` or `deserialize_with` on the field that made it required would fail there.
+  `#[serde(default)]`: serde's derive already reads a missing `Option` field as `None`, and
+  schemars would add a default to the pinned `harness` schema for no change in behaviour. The
+  one `Option` field in the crate that carries the attribute, `SimRegression::seed`, needs it
+  only because `with = "seed_text"` turns off serde's missing-field rule for `Option`. That rule
+  is also why `a_permission_request_without_a_tool_use_id_parses` holds the behaviour instead:
+  a later `with =` or `deserialize_with` on the field that made it required would fail there.
 
 ## Outcome
 
