@@ -8,7 +8,8 @@
 //!   window, onset to silence stays within [`ONSET_TO_SILENCE_MS`], and a pause is resumed or
 //!   stopped within [`PAUSE_RESOLVES_MS`].
 //! - 3, [`heard_prefix_matches_playback`]: what the brain is told the user heard equals the
-//!   text mapped from the samples handed to the device.
+//!   text mapped from the samples handed to the device. After a stop with no pause first the
+//!   core can still be a character short (#151).
 //! - 6, [`bus_events_are_attributed`]: every bus event carries a turn or job id where it
 //!   belongs, nothing is emitted for a job after its terminal event, order is kept, a slow
 //!   subscriber gets an explicit `Lagged` and never silent loss, and no unaddressed speech
@@ -19,9 +20,10 @@
 //!   [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most [`RESTARTS_PER_WINDOW`] times
 //!   in any [`RESTART_WINDOW_MS`]. That killed children leave no descendants waits for the
 //!   simulated Job Objects.
-//! - 9, [`nothing_sounds_while_muted`]: capture stops by the next callback after a mute, and
-//!   nothing is spoken, played or handed to the device while muted or while another app uses
-//!   the microphone. The call, cancel and input-lease parts wait for those features.
+//! - 9, [`nothing_sounds_while_muted`]: capture stops within one 10 ms frame of a mute the user
+//!   asks for, and nothing is spoken, played or handed to the device while muted or while
+//!   another app uses the microphone. The core does not act on the microphone part yet (#152).
+//!   The call, cancel and input-lease parts wait for those features.
 //! - 10, [`utterances_do_not_overlap`]: two utterances never overlap and the speech queue stays
 //!   bounded.
 //! - 13, [`spans_follow_the_table`]: the span-parent table holds for every span the run
@@ -40,8 +42,8 @@ use serde_json::Value;
 mod audio;
 
 pub use audio::{
-    AudioEvent, AudioRecord, BargeInWatch, HEARD_MARKER, Handed, HeardWatch, MuteWatch,
-    ONSET_TO_SILENCE_MS, OverlapWatch, PAUSE_BY_WINDOW, PAUSE_RESOLVES_MS, WINDOW_MS,
+    AudioEvent, AudioRecord, BargeInWatch, CAPTURE_STOPS_MS, HEARD_MARKER, Handed, HeardWatch,
+    MuteWatch, ONSET_TO_SILENCE_MS, OverlapWatch, PAUSE_BY_WINDOW, PAUSE_RESOLVES_MS, WINDOW_MS,
     barge_in_pauses_in_time, heard_prefix_matches_playback, nothing_sounds_while_muted,
 };
 

@@ -9,7 +9,7 @@
 use std::cmp::Ordering;
 
 use eileen_contracts::bus::BusEvent;
-use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Earcon, Effect, Input};
+use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Effect, Input, UserInput};
 use eileen_contracts::harness::BrainCmd;
 use eileen_contracts::ids::SpeakId;
 use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
@@ -21,11 +21,12 @@ use super::Violation;
 pub const WINDOW_MS: u64 = 32;
 /// The consecutive window by which playback is paused.
 pub const PAUSE_BY_WINDOW: u8 = 3;
-/// The longest from the onset of speech over Eileen to silence, ms, when the windows come at
-/// the speech process's pace.
+/// The longest from the onset of speech over Eileen to silence, ms.
 pub const ONSET_TO_SILENCE_MS: u64 = 150;
 /// The longest a pause waits for its resume or its stop, ms.
 pub const PAUSE_RESOLVES_MS: u64 = 600;
+/// The longest from a mute the user asks for to capture off, ms: one 10 ms frame.
+pub const CAPTURE_STOPS_MS: u64 = 10;
 /// What comes before the heard prefix in a brain turn's message, up to the closing quote at
 /// the end of its line. `eileen-core`'s brain module writes it; the simulator's barge-in tests
 /// read it from the real core's message, so a change of wording fails there first.
@@ -65,8 +66,11 @@ pub struct AudioRecord {
 
 /// Invariant 2 over a trace that ends at `now_ms`: after a speech window while Eileen speaks,
 /// playback is ducked by the next callback and paused by the callback after the third
-/// consecutive window, and plays nothing while paused; onset to silence stays within [`ONSET_TO_SILENCE_MS`]; and a pause is
-/// resumed or stopped within [`PAUSE_RESOLVES_MS`].
+/// consecutive window, and plays nothing while paused; onset to silence stays within
+/// [`ONSET_TO_SILENCE_MS`]; and a pause is resumed or stopped within [`PAUSE_RESOLVES_MS`]. The
+/// onset is the `SpeechStarted` of the user's speech over Eileen (the moment she began, if they
+/// were already speaking), or the run's first window less one window when no `SpeechStarted`
+/// came first or that window covers earlier speech.
 pub fn barge_in_pauses_in_time(records: &[AudioRecord], now_ms: u64) -> Result<(), Violation> {
     let mut watch = BargeInWatch::default();
     for record in records {
@@ -87,11 +91,15 @@ pub fn heard_prefix_matches_playback(records: &[AudioRecord]) -> Result<(), Viol
     Ok(())
 }
 
-/// Invariant 9's mute and microphone parts over a trace: capture is off by the first callback
-/// after a mute, and while muted or while another app uses the microphone no utterance starts,
-/// nothing is sent to synthesis, no phrase or earcon plays (the mute and unmute earcons, which
-/// confirm the user's own change, aside) and no sample reaches the device. Its call, cancel and
-/// input-lease parts join once the core has calls, worker interrupts and leases.
+/// Invariant 9's mute and microphone parts over a trace: capture is off within one 10 ms frame
+/// of a mute the user asks for ([`CAPTURE_STOPS_MS`]) and by the first callback after any
+/// mute; and while muted (asked for or announced) or while another app uses the microphone, no
+/// utterance starts, nothing is sent to synthesis, no phrase plays and no sample reaches the
+/// device. No earcon plays while the core's announced mute holds: the earcon that confirms a
+/// mute comes before `MuteChanged { muted: true }`, and the one that confirms an unmute after
+/// `MuteChanged { muted: false }`. The microphone part is checked here, but the core does not
+/// act on `MicInUseElsewhere` yet (#152). The call, cancel and input-lease parts join once the
+/// core has calls, worker interrupts and leases.
 pub fn nothing_sounds_while_muted(records: &[AudioRecord]) -> Result<(), Violation> {
     let mut watch = MuteWatch::default();
     for record in records {
@@ -106,10 +114,9 @@ enum Run {
     /// None under way.
     #[default]
     Quiet,
-    /// Ducked after `count` consecutive windows, the last numbered `last` at `last_ms`; the
-    /// run's speech began at `onset_ms`, and `paced` says each window came within
-    /// [`WINDOW_MS`] of the one before.
-    Ducked { last: u8, last_ms: u64, count: u8, onset_ms: u64, paced: bool },
+    /// Ducked after `count` consecutive windows, the last numbered `last`; the run's speech
+    /// began at `onset_ms`.
+    Ducked { last: u8, count: u8, onset_ms: u64 },
     /// Paused at `at_ms`, waiting for the core's verdict.
     Paused { at_ms: u64 },
 }
@@ -124,9 +131,11 @@ pub struct BargeInWatch {
     duck_owed: Option<u64>,
     /// When the window that needs a pause by the next callback came.
     pause_owed: Option<u64>,
-    /// After a pause or a stop owed to a run that came at pace: the run's onset, judged at the
-    /// next callback.
+    /// After a pause, or a stop owed a pause: the run's onset, judged at the next callback.
     silence_due: Option<u64>,
+    /// When the user's speech over the floor began, from a `SpeechStarted` no window has
+    /// followed yet.
+    speech: Option<u64>,
 }
 
 impl BargeInWatch {
@@ -137,17 +146,27 @@ impl BargeInWatch {
         Err(Violation::new(Self::N, Self::NAME, detail))
     }
 
-    /// Follows one record at `at_ms`.
+    /// Follows one record at `at_ms`. Any record past a pause's deadline, its own resume or
+    /// stop included, breaks the invariant while the pause is undecided.
     pub fn see(&mut self, at_ms: u64, event: &AudioEvent) -> Result<(), Violation> {
+        self.by(at_ms)?;
         match event {
             AudioEvent::Effect(Effect::Emit(BusEvent::Speaking { speak, .. })) => {
-                *self = Self { floor: Some(*speak), ..Self::default() };
+                // Speech already under way is over Eileen from the moment she begins.
+                let speech = self.speech.map(|_| at_ms);
+                *self = Self { floor: Some(*speak), speech, ..Self::default() };
             }
             AudioEvent::Effect(Effect::Emit(BusEvent::SpeakingStopped { speak, .. }))
                 if self.floor == Some(*speak) =>
             {
-                *self = Self::default();
+                *self = Self { speech: self.speech, ..Self::default() };
             }
+            AudioEvent::Input(Input::Voice(VoiceEvent::SpeechStarted { .. })) => {
+                self.speech = Some(at_ms);
+            }
+            AudioEvent::Input(Input::Voice(
+                VoiceEvent::SpeechEnded { .. } | VoiceEvent::EndOfTurn { .. },
+            )) => self.speech = None,
             AudioEvent::Input(Input::Voice(VoiceEvent::BargeInWindow {
                 speak, window, ..
             })) if self.floor == Some(*speak) => {
@@ -160,13 +179,14 @@ impl BargeInWatch {
         Ok(())
     }
 
-    /// The trace ends at `now_ms`: a pause older than [`PAUSE_RESOLVES_MS`] is a violation.
+    /// It is `now_ms`: a pause still undecided after [`PAUSE_RESOLVES_MS`] is a violation.
     pub fn by(&self, now_ms: u64) -> Result<(), Violation> {
         if let Run::Paused { at_ms } = self.run
             && now_ms.saturating_sub(at_ms) > PAUSE_RESOLVES_MS
         {
             return Self::fail(format!(
-                "playback paused at {at_ms} ms was neither resumed nor stopped by {now_ms} ms"
+                "playback paused at {at_ms} ms was neither resumed nor stopped within \
+                 {PAUSE_RESOLVES_MS} ms (still paused at {now_ms} ms)"
             ));
         }
         Ok(())
@@ -178,8 +198,8 @@ impl BargeInWatch {
         let age = |at: u64| now_ms.saturating_sub(at);
         let run = match self.run {
             Run::Quiet => Run::Quiet,
-            Run::Ducked { last, last_ms, count, onset_ms, paced } => {
-                Run::Ducked { last, last_ms: age(last_ms), count, onset_ms: age(onset_ms), paced }
+            Run::Ducked { last, count, onset_ms } => {
+                Run::Ducked { last, count, onset_ms: age(onset_ms) }
             }
             Run::Paused { at_ms } => Run::Paused { at_ms: age(at_ms) },
         };
@@ -189,32 +209,28 @@ impl BargeInWatch {
             duck_owed: self.duck_owed.map(age),
             pause_owed: self.pause_owed.map(age),
             silence_due: self.silence_due.map(age),
+            speech: self.speech.map(age),
         }
     }
 
     fn window(&mut self, at_ms: u64, window: u8) {
-        let onset = at_ms.saturating_sub(WINDOW_MS);
+        // A window covers the 32 ms before it, so speech began no later than that.
+        let covered = at_ms.saturating_sub(WINDOW_MS);
+        let onset = self.speech.take().map_or(covered, |speech| speech.min(covered));
         match self.run {
             Run::Quiet => {
-                self.run = Run::Ducked {
-                    last: window,
-                    last_ms: at_ms,
-                    count: 1,
-                    onset_ms: onset,
-                    paced: true,
-                };
+                self.run = Run::Ducked { last: window, count: 1, onset_ms: onset };
                 self.duck_owed.get_or_insert(at_ms);
             }
-            Run::Ducked { last, last_ms, count, onset_ms, paced } => {
-                let (count, onset_ms, paced) = if window == last.wrapping_add(1) {
-                    let on_time = at_ms.saturating_sub(last_ms) <= WINDOW_MS;
-                    (count.saturating_add(1), onset_ms, paced && on_time)
+            Run::Ducked { last, count, onset_ms } => {
+                let (count, onset_ms) = if window == last.wrapping_add(1) {
+                    (count.saturating_add(1), onset_ms)
                 } else if window == last {
-                    (count, onset_ms, paced)
+                    (count, onset_ms)
                 } else {
-                    (1, onset, true)
+                    (1, onset)
                 };
-                self.run = Run::Ducked { last: window, last_ms: at_ms, count, onset_ms, paced };
+                self.run = Run::Ducked { last: window, count, onset_ms };
                 if count >= PAUSE_BY_WINDOW {
                     self.pause_owed.get_or_insert(at_ms);
                 }
@@ -223,12 +239,11 @@ impl BargeInWatch {
         }
     }
 
-    /// The onset to judge at the next callback when a pause or stop ends a run that came at
-    /// pace.
-    const fn onset_at_pace(&self) -> Option<u64> {
+    /// The run's onset, judged at the next callback when a pause or a stop ends it.
+    const fn onset(&self) -> Option<u64> {
         match self.run {
-            Run::Ducked { onset_ms, paced: true, .. } => Some(onset_ms),
-            Run::Ducked { paced: false, .. } | Run::Quiet | Run::Paused { .. } => None,
+            Run::Ducked { onset_ms, .. } => Some(onset_ms),
+            Run::Quiet | Run::Paused { .. } => None,
         }
     }
 
@@ -237,13 +252,13 @@ impl BargeInWatch {
         match cmd {
             AudioCmd::Duck { .. } => self.duck_owed = None,
             AudioCmd::Pause { speak } if floor(speak) => {
-                self.silence_due = self.onset_at_pace();
+                self.silence_due = self.onset();
                 self.pause_owed = None;
                 self.run = Run::Paused { at_ms };
             }
             AudioCmd::Stop { speak } if floor(speak) => {
                 if self.pause_owed.is_some() {
-                    self.silence_due = self.onset_at_pace();
+                    self.silence_due = self.onset();
                 }
                 self.pause_owed = None;
                 self.duck_owed = None;
@@ -441,16 +456,21 @@ fn join(pieces: &[String]) -> String {
 /// Invariant 9's mute and microphone parts, record by record.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MuteWatch {
+    /// The mute the core announced (`MuteChanged`).
     muted: bool,
+    /// The mute the user last asked for (`SetMute`, `ToggleMute`).
+    asked: bool,
     /// Whether the microphone is captured; on until the core turns it off.
     capture: bool,
     /// Whether another app uses the microphone.
     elsewhere: bool,
+    /// When the user asked for a mute that capture has not yet followed.
+    capture_owed: Option<u64>,
 }
 
 impl Default for MuteWatch {
     fn default() -> Self {
-        Self { muted: false, capture: true, elsewhere: false }
+        Self { muted: false, asked: false, capture: true, elsewhere: false, capture_owed: None }
     }
 }
 
@@ -459,18 +479,57 @@ impl MuteWatch {
     const NAME: &'static str = "nothing_sounds_while_muted";
 
     fn fail(&self, at_ms: u64, what: &str) -> Result<(), Violation> {
-        let why = if self.muted { "muted" } else { "another app used the microphone" };
+        let why =
+            if self.muted || self.asked { "muted" } else { "another app used the microphone" };
         Err(Violation::new(Self::N, Self::NAME, format!("{what} at {at_ms} ms while {why}")))
+    }
+
+    /// It is `now_ms`: a mute the user asked for more than [`CAPTURE_STOPS_MS`] ago, with the
+    /// microphone still captured, is a violation.
+    pub fn by(&self, now_ms: u64) -> Result<(), Violation> {
+        if let Some(asked) = self.capture_owed
+            && now_ms.saturating_sub(asked) > CAPTURE_STOPS_MS
+        {
+            return Err(Violation::new(
+                Self::N,
+                Self::NAME,
+                format!(
+                    "the mute asked for at {asked} ms had not stopped capture by {now_ms} ms, \
+                     over {CAPTURE_STOPS_MS} ms later"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The user asked to mute (`true`) or to unmute.
+    fn ask(&mut self, at_ms: u64, muted: bool) {
+        self.asked = muted;
+        if !muted {
+            self.capture_owed = None;
+        } else if self.capture {
+            self.capture_owed.get_or_insert(at_ms);
+        }
     }
 
     /// Follows one record at `at_ms`.
     pub fn see(&mut self, at_ms: u64, event: &AudioEvent) -> Result<(), Violation> {
-        let silent = self.muted || self.elsewhere;
+        self.by(at_ms)?;
+        let silent = self.muted || self.asked || self.elsewhere;
         match event {
+            AudioEvent::Input(Input::User(UserInput::SetMute(muted))) => self.ask(at_ms, *muted),
+            AudioEvent::Input(Input::User(UserInput::ToggleMute)) => {
+                self.ask(at_ms, !self.muted);
+            }
             AudioEvent::Effect(Effect::Emit(BusEvent::MuteChanged { muted })) => {
                 self.muted = *muted;
             }
-            AudioEvent::Effect(Effect::Audio(AudioCmd::SetCapture(on))) => self.capture = *on,
+            AudioEvent::Effect(Effect::Audio(AudioCmd::SetCapture(on))) => {
+                self.capture = *on;
+                if !*on {
+                    self.capture_owed = None;
+                }
+            }
             AudioEvent::Input(Input::Activity(ActivityEvent::MicInUseElsewhere(elsewhere))) => {
                 self.elsewhere = *elsewhere;
             }
@@ -484,7 +543,7 @@ impl MuteWatch {
                 return self.fail(at_ms, "a phrase played");
             }
             AudioEvent::Effect(Effect::Audio(AudioCmd::Earcon(earcon)))
-                if silent && !matches!(earcon, Earcon::Muted | Earcon::Unmuted) =>
+                if self.muted || self.elsewhere =>
             {
                 return self.fail(at_ms, &format!("the {earcon:?} earcon played"));
             }

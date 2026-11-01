@@ -1,7 +1,7 @@
 //! Invariants 2, 3 and 9 on hand-built audio traces that break them, and on ones that keep them.
 
 use eileen_contracts::bus::{BusEvent, SpeakCause};
-use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Earcon, Effect, Input};
+use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Earcon, Effect, Input, UserInput};
 use eileen_contracts::harness::{BrainCmd, BrainSlot};
 use eileen_contracts::ids::{SpeakId, TurnId};
 use eileen_contracts::jobs::TurnAuthority;
@@ -111,6 +111,34 @@ fn invariant_2_fails_when_silence_comes_more_than_150_ms_after_the_onset() {
 }
 
 #[test]
+fn invariant_2_measures_the_onset_from_speech_started_when_the_windows_lag() {
+    let started = input(
+        10,
+        Input::Voice(VoiceEvent::SpeechStarted {
+            turn: TurnId::from_parts(2, 2),
+            source: 0,
+            replayed: false,
+        }),
+    );
+    let lagging = |silent_at: u64| {
+        vec![
+            speaking(0),
+            started.clone(),
+            window(80, 1),
+            audio(80, AudioCmd::Duck { db: -20 }),
+            window(112, 2),
+            window(144, 3),
+            audio(144, AudioCmd::Pause { speak: S }),
+            callback(silent_at, 0, 0),
+        ]
+    };
+    assert_eq!(barge_in_pauses_in_time(&lagging(160), 160), Ok(()), "150 ms after the onset");
+    let error = barge_in_pauses_in_time(&lagging(170), 170).unwrap_err();
+    assert!(error.detail.contains("began over Eileen at 10 ms"), "not the first window: {error}");
+    assert!(error.detail.contains("160 ms later"), "{error}");
+}
+
+#[test]
 fn invariant_2_fails_on_playback_while_paused() {
     let mut trace = paused_in_time();
     trace.push(callback(110, 0, 240));
@@ -124,6 +152,20 @@ fn invariant_2_fails_on_a_pause_left_undecided_past_600_ms() {
     assert_eq!(barge_in_pauses_in_time(&trace, 696), Ok(()), "600 ms after the pause: in time");
     let error = barge_in_pauses_in_time(&trace, 697).unwrap_err();
     assert!(error.detail.contains("neither resumed nor stopped"), "{error}");
+}
+
+#[test]
+fn invariant_2_fails_on_a_pause_resolved_after_600_ms() {
+    let resumed_at = |at_ms: u64| {
+        let mut trace = paused_in_time();
+        trace.extend([audio(at_ms, AudioCmd::Resume { speak: S }), audio(at_ms, AudioCmd::Unduck)]);
+        trace
+    };
+    assert_eq!(barge_in_pauses_in_time(&resumed_at(696), 5_000), Ok(()), "resumed in time");
+    let error = barge_in_pauses_in_time(&resumed_at(697), 5_000).unwrap_err();
+    assert_eq!(error.number, 2, "{error}");
+    assert!(error.detail.contains("paused at 96 ms"), "{error}");
+    assert!(error.detail.contains("still paused at 697 ms"), "judged at the resume: {error}");
 }
 
 /// Two clauses of 1,000 samples each: the first played in full, then half of the second.
@@ -186,9 +228,11 @@ fn invariant_3_fails_when_the_brain_is_told_of_an_interruption_that_did_not_happ
     assert!(error.detail.contains("carry None"), "{error}");
 }
 
-/// Muting the way the turn-taking machine does it: the earcon, capture off, then the change.
+/// The user mutes, and the core answers the way the turn-taking machine does: the earcon,
+/// capture off, then the change.
 fn muted() -> Vec<AudioRecord> {
     vec![
+        input(0, Input::User(UserInput::SetMute(true))),
         audio(0, AudioCmd::Earcon(Earcon::Muted)),
         audio(0, AudioCmd::SetCapture(false)),
         effect(0, Effect::Emit(BusEvent::MuteChanged { muted: true })),
@@ -196,17 +240,59 @@ fn muted() -> Vec<AudioRecord> {
     ]
 }
 
+/// The user unmutes at `at_ms`: capture on, the change, then its earcon.
+fn unmuted(at_ms: u64) -> Vec<AudioRecord> {
+    vec![
+        input(at_ms, Input::User(UserInput::SetMute(false))),
+        audio(at_ms, AudioCmd::SetCapture(true)),
+        effect(at_ms, Effect::Emit(BusEvent::MuteChanged { muted: false })),
+        audio(at_ms, AudioCmd::Earcon(Earcon::Unmuted)),
+    ]
+}
+
 #[test]
 fn invariant_9_holds_for_a_mute_and_an_unmute_with_their_earcons() {
     let mut trace = muted();
-    trace.extend([
-        audio(20, AudioCmd::SetCapture(true)),
-        audio(20, AudioCmd::Earcon(Earcon::Unmuted)),
-        effect(20, Effect::Emit(BusEvent::MuteChanged { muted: false })),
-        speaking(20),
-        callback(30, 0, 240),
-    ]);
+    trace.extend(unmuted(20));
+    trace.extend([speaking(20), callback(30, 0, 240)]);
     assert_eq!(nothing_sounds_while_muted(&trace), Ok(()), "{trace:?}");
+}
+
+#[test]
+fn invariant_9_fails_on_a_mute_or_unmute_earcon_inside_the_mute() {
+    let mut stray = muted();
+    stray.push(audio(20, AudioCmd::Earcon(Earcon::Muted)));
+    let error = nothing_sounds_while_muted(&stray).unwrap_err();
+    assert!(error.detail.contains("Muted earcon"), "{error}");
+    let mut early = muted();
+    let mut unmute = unmuted(20);
+    unmute.swap(2, 3);
+    early.extend(unmute);
+    let error = nothing_sounds_while_muted(&early).unwrap_err();
+    assert!(error.detail.contains("Unmuted earcon played at 20 ms"), "before the change: {error}");
+}
+
+#[test]
+fn invariant_9_fails_when_a_mute_asked_for_leaves_capture_on_past_one_frame() {
+    let ignored = vec![input(0, Input::User(UserInput::SetMute(true))), callback(10, 0, 0)];
+    assert_eq!(nothing_sounds_while_muted(&ignored), Ok(()), "one frame later: in time");
+    let mut late = ignored;
+    late.push(callback(20, 0, 0));
+    let error = nothing_sounds_while_muted(&late).unwrap_err();
+    assert_eq!(error.number, 9, "{error}");
+    assert!(error.detail.contains("asked for at 0 ms had not stopped capture by 20 ms"), "{error}");
+}
+
+#[test]
+fn invariant_9_fails_on_samples_after_a_mute_the_core_never_announced() {
+    let trace = vec![
+        speaking(0),
+        input(5, Input::User(UserInput::SetMute(true))),
+        audio(5, AudioCmd::SetCapture(false)),
+        callback(10, 0, 240),
+    ];
+    let error = nothing_sounds_while_muted(&trace).unwrap_err();
+    assert!(error.detail.contains("240 samples"), "{error}");
 }
 
 #[test]

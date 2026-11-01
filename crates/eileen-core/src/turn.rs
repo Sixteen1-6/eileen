@@ -301,21 +301,24 @@ impl Turns {
     }
 
     /// Mutes or unmutes; muting stops Eileen mid-sentence. Returns whether anything changed.
+    /// Each earcon sounds outside the mute it confirms (invariant 9): the mute's before the
+    /// change is announced, the unmute's after.
     pub fn set_mute(&mut self, muted: bool, out: &mut Vec<Out>) -> bool {
         if self.muted == muted {
             return false;
         }
+        self.muted = muted;
         if muted {
             self.stop(true, out);
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Muted)));
             out.push(Out::Audio(AudioCmd::SetCapture(false)));
             self.hearing = None;
+            out.push(Out::Muted(true));
         } else {
             out.push(Out::Audio(AudioCmd::SetCapture(true)));
+            out.push(Out::Muted(false));
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Unmuted)));
         }
-        self.muted = muted;
-        out.push(Out::Muted(muted));
         true
     }
 

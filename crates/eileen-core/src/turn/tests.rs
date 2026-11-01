@@ -291,10 +291,10 @@ fn muting_stops_speech_stops_capture_and_silences_everything() {
         out,
         [
             Out::Audio(AudioCmd::SetCapture(true)),
-            Out::Audio(AudioCmd::Earcon(Earcon::Unmuted)),
             Out::Muted(false),
+            Out::Audio(AudioCmd::Earcon(Earcon::Unmuted)),
         ],
-        "capture first, then the earcon"
+        "capture first, then the change, then its earcon outside the mute"
     );
 }
 
