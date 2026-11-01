@@ -41,7 +41,10 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 2. Against `eileen-stub-harness` in CI: a pooled worker job completes, and narration, permission
    requests, `Skill` calls, crashes and cancel behave as specified.
 3. On the owner's PC (`real_claude::`): brain and worker init, warm-turn and cold-start timings,
-   pool fit, interrupt and learning-loop row 7; the admission record is a W2 item.
+   pool fit, interrupt and learning-loop row 7; the admission record is a W2 item. The interrupt
+   check also confirms which `system/init` capability gates the interrupt (Eileen assumes
+   `interrupt_receipt_v1`) and that the CLI answers it with a `control_response`, before
+   `wp3/worker-brain` relies on either.
 4. The worker and brain environments follow their lists, no code opens the user's `.claude`
    folder, and real coding workers run `cargo test` and `npm test` green.
 5. `eileen doctor claude` reports a signed-out CLI and suggests `claude auth login` without
@@ -140,13 +143,15 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   item 10 of the contract report). `control::Requests` writes the interrupt as
   `eileen_<n>`, only when `system/init` lists `interrupt_receipt_v1`, keeps at most four open,
   and matches a `control_response` (`success` or `error`) to an open request by `request_id`;
-  a response with no id, an id over 128 bytes, or an id that is not open is malformed and
-  matches nothing, and `abandon` closes a request at the driver's deadline. The
+  a response with no id or an id over 128 bytes is malformed, one to an id that is not open
+  settles nothing (`SettleError::NotOpen`), and `abandon` closes a request at the driver's
+  deadline. Only `Requests` writes an interrupt; the line builder is private to the crate. The
   `control_message` fuzz entry checks the id cap, the tool input invariants, that a registered
   secret never survives in a reason or an error, that the stream parser agrees, that an
-  interrupt round-trips with the same id and that no response settles a request never sent;
-  its 11 seeds (the stdio run's requests and replies from `stdio-control.json`, plus
-  hand-written lines) replay in `eileen-harness::it::fuzz_corpus`. The interrupt against the
+  interrupt round-trips with the same id and that, with `eileen_1` open, only a response to
+  `eileen_1` settles it; its 14 seeds (the stdio run's requests and replies from
+  `stdio-control.json`, plus hand-written lines, among them a reason and an error holding the
+  registered secret and a reply to `eileen_1`) replay in `eileen-harness::it::fuzz_corpus`. The interrupt against the
   real CLI mid-turn is acceptance 3's owner-run check, still open; whether the CLI answers
   every interrupt with a `control_response` is part of it.
 - `wp3/stream-fixes`: review fixes to the parser. A tool input and a `Skill` call's object

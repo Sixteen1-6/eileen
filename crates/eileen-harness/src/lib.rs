@@ -35,9 +35,10 @@
 //!   `stream_json_line` fuzz target).
 //! - An interrupt is written only when `system/init` offers it, at most
 //!   `stream::control::MAX_OPEN_REQUESTS` are open at once, and a `control_response` settles
-//!   only a request Eileen sent and has not seen answered; one with no `request_id` or an
-//!   unknown one is malformed (`stream::control::tests`, and the `control_message` fuzz
-//!   target).
+//!   only a request Eileen sent and has not seen answered; one with no `request_id` is
+//!   malformed, and one to a request that is not open settles nothing
+//!   (`stream::control::SettleError::NotOpen`; `stream::control::tests`, and the
+//!   `control_message` fuzz target).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
