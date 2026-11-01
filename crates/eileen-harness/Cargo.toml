@@ -16,6 +16,9 @@ unsafe = "forbid"
 [dependencies]
 clap.workspace = true
 eileen-contracts.workspace = true
+# The Redactor, which every tool input passes through before it leaves the stream parser.
+eileen-trace.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

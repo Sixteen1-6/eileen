@@ -112,12 +112,45 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   input, and it never posts to the `PermissionRequest` hook, which the CLI never calls on the
   approval route.
 
+- `wp3/stream-json` (#135, draft): the typed stream-json parser of section 6.5, in a new
+  `eileen_harness::stream` module. `parse` caps the line before parsing (`MAX_LINE_BYTES`,
+  16 MB, since a tool result can carry a screenshot), gives `Unknown` for an unknown `type` or
+  `system` subtype, keeps what `system/init` reports for feature detection (session id, model,
+  tools, MCP servers with status, plugins, capabilities, `permissionMode`, `memory_paths.auto`
+  as `Personal`, the CLI version), splits assistant text into text and `> ` narration, redacts a
+  tool input with the `Redactor` and caps it at 2 KB as JSON text (a cut input is a JSON string
+  whose quotes and escapes count), turns a `Skill` call into `SkillInvoked` with its name
+  redacted and capped at 256 bytes,
+  and types tool results, partial text deltas, rate-limit events (as `PlanUsage`), hook events,
+  `system/permission_denied` and `result` (cost, context tokens, `permission_denials`, a failed
+  sign-in). `Line::denials` reads the three denial sources of section 2.5 and counts a failed
+  `approve` call as a denial. `worker_events` and `brain_events` map a line into the contracts'
+  events. `SUBAGENT_TOOLS` names `Task` and `Agent`. Unit tests in `stream::tests` run against
+  copies of the contract test's runs (`crates/eileen-harness/tests/fixtures/wp3-approval/`);
+  `fuzz_entry::stream_json_line` checks the caps, the narration split and that a literal
+  registered with the `Redactor` never survives in a tool input or skill call, and its 51 seeds
+  (from those runs, plus hand-written lines for the shapes they leave out) replay in
+  `eileen-harness::it::fuzz_corpus` on Windows and Linux, which is acceptance 7's Windows
+  replay. Its 10-minute `long.yml` run waits for WP0 phase B's `long.yml`.
+- The `control_message` half (the stdio control protocol: `interrupt` and `can_use_tool`
+  requests, `control_response`, `fuzz_entry::control_message` and its corpus from
+  `stdio-control.json`) is built and goes in its own pull request, `wp3/control-message`, on top
+  of `wp3/stream-json`: with it the logic ran to about 800 lines. Until it lands, control lines
+  parse as `Unknown` and the `control_message` entry is the stub.
+
 ## Surprises
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
   though section 3.3 has each package's first pull request pin its own. `wp3/worker-tools`
   replaces it with `wp0_pinned_exactly_the_slice_modules`: the modules with no `pinned_by` are
   exactly slice S1's, and a module a package pinned keeps its `pinned_by`.
+
+- The CLI writes `system/init` again at the start of every user turn in a stream-json
+  session (the steer run's second turn), so a driver that treats init as "started" must take
+  the first and check the rest. A `system` subtype the plan never named, `thinking_tokens`,
+  arrives while the model thinks; the parser gives it `Unknown`.
+- The contract test's fixtures leave the rate-limit event out (it describes the account's plan
+  usage), so its shape comes from the Agent SDK's parser until a recorded script confirms it.
 
 ## Decisions
 
@@ -146,6 +179,34 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   only because `with = "seed_text"` turns off serde's missing-field rule for `Option`. That rule
   is also why `a_permission_request_without_a_tool_use_id_parses` holds the behaviour instead:
   a later `with =` or `deserialize_with` on the field that made it required would fail there.
+
+- Denials are read from a tool result's text only when it is an error, by the prefixes CLI
+  2.1.304 wrote: `PreToolUse:<tool> hook error:` is the guard, `<tool_use_error>Error calling
+  tool (` a failed `approve` call, "The permission prompt tool returned an invalid permission
+  result" a malformed reply, and "Permission to use ... has been denied" the mode. An `approve`
+  deny's text is Eileen's own sentence, so it is counted from `result.permission_denials`
+  instead. Whether an Eileen MCP tool's own error uses the same wrapper is not recorded; if it
+  does, it counts as a denial, the safe direction, and `contract-claude` should record one.
+- A tool input is redacted whole, then cut: cutting first could leave half a key or a private
+  key block without its end marker, which the `Redactor` would no longer match. An input whose
+  redacted text is over 2 KB becomes the first 2 KB of that text as a JSON string.
+- Worker text and narration come from the whole assistant message, because narration needs
+  whole lines; the brain speaks from partial deltas, so its text comes only from them and the
+  whole message gives it nothing, and nothing is spoken twice.
+- The context after a turn is the last request's input, cache and output tokens from
+  `usage.iterations`, not the turn's totals, which count the cached prefix once per request
+  (5,192 against 10,318 in the pt-allow run). `Cost.tokens_in` counts cache writes with plain
+  input, and `tokens_cache_read` the reads.
+- `WorkerEvent::Init.mcp_servers` holds `name:status` strings, since the pinned contract has
+  `Vec<String>` for "the MCP servers and their status".
+- A `Skill` call without a skill name stays a `ToolUse`, so it is never a `SkillInvoked` with an
+  empty name.
+- A failed sign-in is an errored `result` with HTTP status 401 or one of the texts the
+  subscription-harnesses report recorded ("Not logged in", "Failed to authenticate",
+  "Please run /login", and the API's `authentication_error`); it gives `AuthFailed` and then
+  `TurnDone`, so the turn still ends.
+- `serde` is not a dependency: the parser walks `serde_json::Value`, which tolerates the fields
+  a CLI release adds, and an unused `serde` would fail cargo-machete.
 
 ## Outcome
 
