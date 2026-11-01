@@ -6,8 +6,8 @@ use std::fmt;
 use serde::Serialize;
 
 use super::{
-    AUDIO_FRAME_SAMPLES, AudioFlags, FrameError, FrameHeader, FrameKind, PCM_HEADER_MAX, PcmHeader,
-    SpeechCommandFrame, SpeechEventFrame, SpeechHelloFrame,
+    AUDIO_FRAME_BYTES, AUDIO_FRAME_SAMPLES, AudioFlags, FrameError, FrameHeader, FrameKind,
+    FrameSender, PCM_HEADER_MAX, PcmHeader, SpeechCommandFrame, SpeechEventFrame, SpeechHelloFrame,
 };
 
 /// The body of a frame, one variant per [`FrameKind`].
@@ -47,28 +47,6 @@ impl FrameBody {
             Self::Pong => FrameKind::Pong,
             Self::Hello(_) => FrameKind::Hello,
         }
-    }
-
-    /// Appends the body's bytes to `out`.
-    fn write(&self, out: &mut Vec<u8>) -> Result<(), FrameError> {
-        let kind = self.kind();
-        match self {
-            Self::Audio(samples) => write_samples(out, samples.as_slice()),
-            Self::Command(frame) => write_json(out, frame, kind)?,
-            Self::Event(frame) => write_json(out, frame, kind)?,
-            Self::Pcm { header, samples } => {
-                let start = out.len();
-                write_json(out, header, kind)?;
-                out.push(b'\n');
-                if out.len() - start > PCM_HEADER_MAX {
-                    return Err(FrameError::MissingPcmTerminator);
-                }
-                write_samples(out, samples);
-            }
-            Self::Ping | Self::Pong => {}
-            Self::Hello(hello) => write_json(out, hello, kind)?,
-        }
-        Ok(())
     }
 
     /// Reads the body of a frame of `kind` whose length its header check allowed.
@@ -114,11 +92,36 @@ fn write_json<T: Serialize>(
     serde_json::to_writer(out, value).map_err(|_| FrameError::BadJson { kind })
 }
 
+fn write_pcm(out: &mut Vec<u8>, header: &PcmHeader, samples: &[i16]) -> Result<(), FrameError> {
+    let start = out.len();
+    write_json(out, header, FrameKind::Pcm)?;
+    out.push(b'\n');
+    if out.len() - start > PCM_HEADER_MAX {
+        return Err(FrameError::MissingPcmTerminator);
+    }
+    write_samples(out, samples);
+    Ok(())
+}
+
 fn write_samples(out: &mut Vec<u8>, samples: &[i16]) {
     out.reserve(samples.len() * 2);
     for sample in samples {
         out.extend_from_slice(&sample.to_le_bytes());
     }
+}
+
+/// Writes an audio frame: the header, checked first, then the samples from the borrowed window.
+/// The one path for audio, from [`Frame::encode_into`] and [`Frame::encode_audio_into`].
+fn write_audio(
+    header: &FrameHeader,
+    samples: &[i16; AUDIO_FRAME_SAMPLES],
+    out: &mut Vec<u8>,
+) -> Result<(), FrameError> {
+    header.check()?;
+    out.reserve(FrameHeader::SIZE + AUDIO_FRAME_SAMPLES * 2);
+    out.extend_from_slice(&header.encode());
+    write_samples(out, samples);
+    Ok(())
 }
 
 fn read_samples(bytes: &[u8]) -> Result<Vec<i16>, FrameError> {
@@ -169,12 +172,52 @@ impl Frame {
     /// [`FrameHeader::decode`] would refuse on the other end (flags on a kind other than audio,
     /// a body longer than its kind allows), and leaves `out` as it was when it does.
     pub fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), FrameError> {
+        let kind = self.body.kind();
+        match &self.body {
+            FrameBody::Audio(samples) => write_audio(&self.header(AUDIO_FRAME_BYTES), samples, out),
+            FrameBody::Command(frame) => self.write_sized(out, |out| write_json(out, frame, kind)),
+            FrameBody::Event(frame) => self.write_sized(out, |out| write_json(out, frame, kind)),
+            FrameBody::Pcm { header, samples } => {
+                self.write_sized(out, |out| write_pcm(out, header, samples))
+            }
+            FrameBody::Ping | FrameBody::Pong => self.write_sized(out, |_| Ok(())),
+            FrameBody::Hello(hello) => self.write_sized(out, |out| write_json(out, hello, kind)),
+        }
+    }
+
+    /// Writes an audio frame, with no turn, from a borrowed window of samples: the bytes
+    /// [`Frame::encode_into`] writes for the same frame, without boxing a copy of the window
+    /// first, so the audio component writes each frame straight from its ring.
+    pub fn encode_audio_into(
+        flags: AudioFlags,
+        source: u16,
+        seq: u64,
+        samples: &[i16; AUDIO_FRAME_SAMPLES],
+        out: &mut Vec<u8>,
+    ) -> Result<(), FrameError> {
+        let header = FrameHeader {
+            kind: FrameKind::Audio.code(),
+            flags: flags.bits(),
+            source,
+            len: AUDIO_FRAME_BYTES,
+            seq,
+            turn: [0; 16],
+        };
+        write_audio(&header, samples, out)
+    }
+
+    /// Writes a body whose length is known only once it is written: room for the header, the
+    /// body, then the checked header in that room; or, on an error, `out` as it was.
+    fn write_sized(
+        &self,
+        out: &mut Vec<u8>,
+        body: impl FnOnce(&mut Vec<u8>) -> Result<(), FrameError>,
+    ) -> Result<(), FrameError> {
         let start = out.len();
         out.extend_from_slice(&[0; FrameHeader::SIZE]);
-        let written = self.body.write(out).and_then(|()| {
-            let body = out.len() - start - FrameHeader::SIZE;
-            let len = u32::try_from(body).unwrap_or(u32::MAX);
-            let header = self.header(len);
+        let written = body(out).and_then(|()| {
+            let len = out.len() - start - FrameHeader::SIZE;
+            let header = self.header(u32::try_from(len).unwrap_or(u32::MAX));
             header.check()?;
             Ok(header)
         });
@@ -221,13 +264,24 @@ impl Frame {
 /// Reads frames from a byte stream as it arrives: give it what the connection read, and it
 /// returns each frame once its last byte is in.
 ///
+/// A reader belongs to one end of the pipe and reads what the other end sent, so it refuses a
+/// kind that end may not send ([`FrameKind::sender`]). The core's readers also hold the speech
+/// process to one `Hello`: [`FrameReader::for_core`] refuses any frame before the first `Hello`,
+/// and both refuse a `Hello` after it. The transport reads the `Hello` with
+/// [`FrameReader::for_core`]; the audio component, which takes the connection after that, reads
+/// with [`FrameReader::for_core_after_hello`]; the speech process reads with
+/// [`FrameReader::for_speech`].
+///
 /// It holds one frame at most: the header's 32 bytes, then a body buffer reserved only after
-/// [`FrameHeader::decode`] has allowed the kind, flags and length, so a corrupt length never
-/// allocates. After an error the stream is out of step and every later call returns the same
-/// error: close the connection. `Debug` shows lengths only, never the bytes of a body, which may
-/// be a `Hello`'s token.
-#[derive(Default)]
+/// [`FrameHeader::decode`] has allowed the kind, flags and length and the reader has allowed the
+/// kind from its peer, so a corrupt length never allocates. After an error the stream is out of
+/// step and every later call returns the same error: close the connection. `Debug` shows lengths
+/// only, never the bytes of a body, which may be a `Hello`'s token.
 pub struct FrameReader {
+    /// The end whose frames this reader takes.
+    peer: FrameSender,
+    /// Whether the next frame must be the speech process's `Hello`.
+    awaiting_hello: bool,
     /// The header bytes read so far.
     header: [u8; FrameHeader::SIZE],
     /// How many of them.
@@ -245,6 +299,8 @@ impl fmt::Debug for FrameReader {
             .as_ref()
             .map(|(header, len, body)| (FrameKind::from_code(header.kind), *len, body.len()));
         f.debug_struct("FrameReader")
+            .field("peer", &self.peer)
+            .field("awaiting_hello", &self.awaiting_hello)
             .field("header_bytes", &self.have)
             .field("body_kind_len_read", &body)
             .field("failed", &self.failed)
@@ -253,10 +309,52 @@ impl fmt::Debug for FrameReader {
 }
 
 impl FrameReader {
-    /// A reader at the start of a stream.
+    const fn reading(peer: FrameSender, awaiting_hello: bool) -> Self {
+        Self {
+            peer,
+            awaiting_hello,
+            header: [0; FrameHeader::SIZE],
+            have: 0,
+            body: None,
+            failed: None,
+        }
+    }
+
+    /// The core's reader at the start of a connection: the speech process's frames, the first of
+    /// them its `Hello`.
     #[must_use]
-    pub const fn new() -> Self {
-        Self { header: [0; FrameHeader::SIZE], have: 0, body: None, failed: None }
+    pub const fn for_core() -> Self {
+        Self::reading(FrameSender::Speech, true)
+    }
+
+    /// The core's reader for a connection whose `Hello` was already read: the speech process's
+    /// frames, never another `Hello`.
+    #[must_use]
+    pub const fn for_core_after_hello() -> Self {
+        Self::reading(FrameSender::Speech, false)
+    }
+
+    /// The speech process's reader: the core's frames.
+    #[must_use]
+    pub const fn for_speech() -> Self {
+        Self::reading(FrameSender::Core, false)
+    }
+
+    /// Allows a kind from this reader's peer at this place in the stream.
+    fn admit(&mut self, kind: FrameKind) -> Result<(), FrameError> {
+        let sender = kind.sender();
+        if sender != FrameSender::Either && sender != self.peer {
+            return Err(FrameError::WrongDirection { kind });
+        }
+        match (self.awaiting_hello, kind == FrameKind::Hello) {
+            (true, true) => {
+                self.awaiting_hello = false;
+                Ok(())
+            }
+            (true, false) => Err(FrameError::BeforeHello { kind }),
+            (false, true) => Err(FrameError::SecondHello),
+            (false, false) => Ok(()),
+        }
     }
 
     /// How many more bytes the current frame needs: the rest of its header, or of its body.
@@ -296,7 +394,8 @@ impl FrameReader {
                 return Ok((taken, None));
             }
             self.have = 0;
-            let (_, header) = FrameHeader::decode(&self.header)?;
+            let (kind, header) = FrameHeader::decode(&self.header)?;
+            self.admit(kind)?;
             let len = usize::try_from(header.len).unwrap_or(0);
             self.body = Some((header, len, Vec::with_capacity(len)));
         }
@@ -318,23 +417,37 @@ impl FrameReader {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{Frame, FrameBody, FrameReader};
-    use crate::ids::TraceCtx;
+    use crate::harness::SessionToken;
+    use crate::ids::{SpeakId, TraceCtx, TurnId};
     use crate::speech::{
         AUDIO_FRAME_BYTES, AUDIO_FRAME_SAMPLES, AudioFlags, FrameError, FrameHeader, FrameKind,
-        HELLO_BODY_MAX, JSON_BODY_MAX, PCM_BODY_MAX, PCM_HEADER_MAX, PcmHeader, SpeechCmd,
-        SpeechCommandFrame, SpeechEventFrame, SpeechHelloFrame, VoiceEvent,
+        FrameSender, HELLO_BODY_MAX, JSON_BODY_MAX, PCM_BODY_MAX, PCM_HEADER_MAX, PcmHeader,
+        SpeechCmd, SpeechCommandFrame, SpeechEventFrame, SpeechHelloFrame, VoiceEvent,
     };
 
-    fn speak() -> crate::ids::SpeakId {
+    fn speak() -> SpeakId {
         "speak_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F".parse().unwrap()
     }
 
-    fn turn() -> crate::ids::TurnId {
+    fn turn() -> TurnId {
         "turn_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F".parse().unwrap()
     }
 
-    /// One frame of every kind, with the header fields D81 gives each direction.
+    fn hello(token: &str) -> Frame {
+        let token = SessionToken::new(token.to_owned());
+        Frame::new(FrameBody::Hello(SpeechHelloFrame { token }))
+    }
+
+    /// A header of `kind` with an allowed length and nothing else.
+    fn bare(kind: FrameKind) -> FrameHeader {
+        let len = if kind == FrameKind::Audio { AUDIO_FRAME_BYTES } else { 0 };
+        FrameHeader { kind: kind.code(), flags: 0, source: 0, len, seq: 0, turn: [0; 16] }
+    }
+
+    /// One frame of every kind, in wire order, with the header fields D81 gives each direction.
     fn one_of_each() -> Vec<Frame> {
         let mut audio = Box::new([0_i16; AUDIO_FRAME_SAMPLES]);
         for (n, sample) in audio.iter_mut().enumerate() {
@@ -370,18 +483,39 @@ mod tests {
             },
             Frame { seq: 41, ..Frame::new(FrameBody::Ping) },
             Frame { seq: 41, turn: turn().ulid().to_bytes(), ..Frame::new(FrameBody::Pong) },
-            Frame::new(FrameBody::Hello(SpeechHelloFrame { token: "a1b2".repeat(16) })),
+            hello(&"a1b2".repeat(16)),
         ];
         let kinds: Vec<_> = frames.iter().map(|frame| frame.body.kind()).collect();
         assert_eq!(kinds, FrameKind::ALL, "one frame of every kind, in wire order");
         frames
     }
 
-    /// Reads every frame from `stream`, giving the reader `chunk` bytes at a time.
-    fn read_all(stream: &[u8], chunk: usize) -> Result<Vec<Frame>, FrameError> {
-        let mut reader = FrameReader::new();
+    /// What each end sends: the core's frames, and the speech process's with its `Hello` first.
+    fn by_sender(frames: Vec<Frame>) -> (Vec<Frame>, Vec<Frame>) {
+        let (hellos, rest): (Vec<_>, Vec<_>) =
+            frames.into_iter().partition(|frame| frame.body.kind() == FrameKind::Hello);
+        let (from_core, others): (Vec<_>, Vec<_>) =
+            rest.into_iter().partition(|frame| frame.body.kind().sender() == FrameSender::Core);
+        let mut from_speech = hellos;
+        from_speech.extend(others);
+        (from_core, from_speech)
+    }
+
+    fn stream(frames: &[Frame]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for frame in frames {
+            frame.encode_into(&mut out).unwrap();
+        }
+        out
+    }
+
+    /// Feeds `pieces` to `reader` one after another and collects the frames.
+    fn read_pieces<'a>(
+        mut reader: FrameReader,
+        pieces: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Vec<Frame>, FrameError> {
         let mut frames = Vec::new();
-        for mut piece in stream.chunks(chunk) {
+        for mut piece in pieces {
             while !piece.is_empty() {
                 let (taken, frame) = reader.feed(piece)?;
                 assert!(taken > 0, "the reader takes at least one byte of a non-empty input");
@@ -393,17 +527,29 @@ mod tests {
         Ok(frames)
     }
 
+    /// Reads every frame from `stream`, giving `reader` `chunk` bytes at a time.
+    fn read_all(
+        reader: FrameReader,
+        stream: &[u8],
+        chunk: usize,
+    ) -> Result<Vec<Frame>, FrameError> {
+        read_pieces(reader, stream.chunks(chunk))
+    }
+
     #[test]
     fn every_kind_round_trips_whole_and_a_byte_at_a_time() {
         let frames = one_of_each();
-        let mut stream = Vec::new();
-        for frame in &frames {
-            frame.encode_into(&mut stream).unwrap();
-        }
-        for chunk in [stream.len(), 1, 7, FrameHeader::SIZE] {
-            assert_eq!(read_all(&stream, chunk).unwrap(), frames, "chunks of {chunk}");
-        }
         let audio = frames[0].encode().unwrap();
+        let (from_core, from_speech) = by_sender(frames);
+        let (core_bytes, speech_bytes) = (stream(&from_core), stream(&from_speech));
+        for chunk in [core_bytes.len(), 1, 7, FrameHeader::SIZE] {
+            let read = read_all(FrameReader::for_speech(), &core_bytes, chunk).unwrap();
+            assert_eq!(read, from_core, "the core's frames in chunks of {chunk}");
+        }
+        for chunk in [speech_bytes.len(), 1, 7, FrameHeader::SIZE] {
+            let read = read_all(FrameReader::for_core(), &speech_bytes, chunk).unwrap();
+            assert_eq!(read, from_speech, "the speech process's frames in chunks of {chunk}");
+        }
         assert_eq!(audio.len(), FrameHeader::SIZE + 1024, "an audio frame is 1056 bytes");
         assert_eq!(audio[1], 0b1001, "replayed is bit 0 and other audio bit 3");
         assert_eq!(audio[8..16], 41_u64.to_le_bytes(), "seq");
@@ -426,15 +572,30 @@ mod tests {
     }
 
     #[test]
-    fn an_over_length_len_is_refused_before_any_body_byte_is_read() {
-        let over = |kind: FrameKind, len: u32| FrameHeader {
-            kind: kind.code(),
-            flags: 0,
-            source: 0,
-            len,
-            seq: 0,
+    fn an_audio_frame_from_a_borrowed_window_is_the_frame_encode_writes() {
+        let mut window = [0_i16; AUDIO_FRAME_SAMPLES];
+        for (n, sample) in window.iter_mut().enumerate() {
+            *sample = i16::try_from(n).unwrap() - 256;
+        }
+        let flags = AudioFlags::BREAK | AudioFlags::PLAYBACK;
+        let frame = Frame {
+            flags,
+            source: 3,
+            seq: 9_000,
             turn: [0; 16],
+            body: FrameBody::Audio(Box::new(window)),
         };
+        let mut out = vec![7];
+        Frame::encode_audio_into(flags, 3, 9_000, &window, &mut out).unwrap();
+        assert_eq!(out[0], 7, "appended after what was there");
+        assert_eq!(out[1..], frame.encode().unwrap(), "the same bytes as encode");
+        let read = read_all(FrameReader::for_speech(), &out[1..], 100).unwrap();
+        assert_eq!(read, [frame], "and it reads back");
+    }
+
+    #[test]
+    fn an_over_length_len_is_refused_before_any_body_byte_is_read() {
+        let over = |kind: FrameKind, len: u32| FrameHeader { len, ..bare(kind) };
         let cases = [
             (FrameKind::Audio, AUDIO_FRAME_BYTES + 1),
             (FrameKind::Audio, AUDIO_FRAME_BYTES - 2),
@@ -447,11 +608,12 @@ mod tests {
             (FrameKind::Pcm, u32::MAX),
         ];
         for (kind, len) in cases {
-            let mut reader = FrameReader::new();
             let header = over(kind, len).encode();
             let wanted = Some(FrameError::BadLength { kind, len });
-            assert_eq!(reader.feed(&header).err(), wanted, "{kind:?} {len}: refused at the header");
-            assert_eq!(reader.feed(&[0; 64]).err(), wanted, "{kind:?} {len}: and every call after");
+            for mut reader in [FrameReader::for_core(), FrameReader::for_speech()] {
+                assert_eq!(reader.feed(&header).err(), wanted, "{kind:?} {len}: refused");
+                assert_eq!(reader.feed(&[0; 64]).err(), wanted, "{kind:?} {len}: every call after");
+            }
             assert_eq!(FrameHeader::decode(&header).err(), wanted, "{kind:?} {len}: the header");
         }
     }
@@ -462,7 +624,7 @@ mod tests {
             let header =
                 FrameHeader { kind: code, flags: 0, source: 0, len: 0, seq: 0, turn: [0; 16] };
             let wanted = Some(FrameError::UnknownKind(code));
-            assert_eq!(FrameReader::new().feed(&header.encode()).err(), wanted, "kind {code}");
+            assert_eq!(FrameReader::for_speech().feed(&header.encode()).err(), wanted, "{code}");
             assert_eq!(Frame::decode(&header, &[]).err(), wanted, "kind {code}, whole");
         }
     }
@@ -472,21 +634,68 @@ mod tests {
         let ping = Frame { flags: AudioFlags::REPLAYED, ..Frame::new(FrameBody::Ping) };
         let wanted = Some(FrameError::BadFlags { kind: FrameKind::Ping, flags: 1 });
         assert_eq!(ping.encode().err(), wanted, "written");
-        let header = FrameHeader {
-            kind: FrameKind::Ping.code(),
-            flags: 1,
-            source: 0,
-            len: 0,
-            seq: 0,
-            turn: [0; 16],
-        };
-        assert_eq!(FrameReader::new().feed(&header.encode()).err(), wanted, "read");
-        let audio = FrameHeader { kind: 1, flags: 0x10, len: AUDIO_FRAME_BYTES, ..header };
+        let header = FrameHeader { flags: 1, ..bare(FrameKind::Ping) };
+        assert_eq!(FrameReader::for_speech().feed(&header.encode()).err(), wanted, "read");
+        let audio = FrameHeader { flags: 0x10, ..bare(FrameKind::Audio) };
         assert_eq!(
-            FrameReader::new().feed(&audio.encode()).err(),
+            FrameReader::for_speech().feed(&audio.encode()).err(),
             Some(FrameError::BadFlags { kind: FrameKind::Audio, flags: 0x10 }),
             "audio, bit 4"
         );
+    }
+
+    #[test]
+    fn a_kind_from_the_wrong_end_is_refused_at_its_header() {
+        for kind in FrameKind::ALL {
+            let (mut reader, wrong) = match kind.sender() {
+                FrameSender::Core => (FrameReader::for_core_after_hello(), "the core's"),
+                FrameSender::Speech => (FrameReader::for_speech(), "the speech process's"),
+                FrameSender::Either => continue,
+            };
+            let header = bare(kind).encode();
+            let wanted = Some(FrameError::WrongDirection { kind });
+            assert_eq!(reader.feed(&header).err(), wanted, "{kind:?} is only {wrong}");
+            assert_eq!(reader.needed(), FrameHeader::SIZE, "{kind:?}: no body reserved");
+            assert_eq!(reader.feed(&[0; 8]).err(), wanted, "{kind:?}: and every call after");
+        }
+        let senders = FrameKind::ALL.map(FrameKind::sender);
+        assert_eq!(
+            senders,
+            [
+                FrameSender::Core,
+                FrameSender::Core,
+                FrameSender::Speech,
+                FrameSender::Speech,
+                FrameSender::Either,
+                FrameSender::Either,
+                FrameSender::Speech,
+            ],
+            "audio and commands from the core; events, PCM and the Hello from the speech process"
+        );
+    }
+
+    #[test]
+    fn the_core_reads_a_hello_first_and_only_once() {
+        let ping = bare(FrameKind::Ping).encode();
+        let hello_bytes = hello("token").encode().unwrap();
+        assert_eq!(
+            FrameReader::for_core().feed(&ping).err(),
+            Some(FrameError::BeforeHello { kind: FrameKind::Ping }),
+            "a ping before the Hello"
+        );
+        let twice = cat(&[&hello_bytes, &ping, &hello_bytes]);
+        assert_eq!(
+            read_all(FrameReader::for_core(), &twice, 9),
+            Err(FrameError::SecondHello),
+            "a Hello after the first"
+        );
+        assert_eq!(
+            FrameReader::for_core_after_hello().feed(&hello_bytes).err(),
+            Some(FrameError::SecondHello),
+            "a Hello after the transport read the first"
+        );
+        let read = read_all(FrameReader::for_core(), &cat(&[&hello_bytes, &ping]), 4);
+        assert_eq!(read.map(|frames| frames.len()), Ok(2), "a Hello, then a ping");
     }
 
     /// The parts, one after another.
@@ -496,23 +705,18 @@ mod tests {
 
     /// A PCM frame with `body` as its body, whatever it holds.
     fn pcm_with_body(body: &[u8]) -> Vec<u8> {
-        let header = FrameHeader {
-            kind: FrameKind::Pcm.code(),
-            flags: 0,
-            source: 0,
-            len: u32::try_from(body.len()).unwrap(),
-            seq: 0,
-            turn: [0; 16],
-        };
-        cat(&[&header.encode(), body])
+        let len = u32::try_from(body.len()).unwrap();
+        cat(&[&FrameHeader { len, ..bare(FrameKind::Pcm) }.encode(), body])
     }
 
     #[test]
     fn a_pcm_frame_whose_header_terminator_is_missing_is_refused() {
+        let read = |body: &[u8], chunk| {
+            read_all(FrameReader::for_core_after_hello(), &pcm_with_body(body), chunk)
+        };
         let json =
             br#"{"speak":"speak_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F","clause":0,"sample_rate":24000}"#;
-        let good = cat(&[json, b"\n", &[1, 0, 2, 0]]);
-        let frames = read_all(&pcm_with_body(&good), 5).unwrap();
+        let frames = read(&cat(&[json, b"\n", &[1, 0, 2, 0]]), 5).unwrap();
         assert_eq!(
             frames[0].body,
             FrameBody::Pcm {
@@ -522,22 +726,17 @@ mod tests {
             "the newline ends the header"
         );
         let missing = cat(&[json, &[1, 0, 2, 0]]);
-        assert_eq!(
-            read_all(&pcm_with_body(&missing), 64),
-            Err(FrameError::MissingPcmTerminator),
-            "no newline"
-        );
+        assert_eq!(read(&missing, 64), Err(FrameError::MissingPcmTerminator), "no newline");
         let late = cat(&[json, &[b' '; PCM_HEADER_MAX], b"\n"]);
         assert_eq!(
-            read_all(&pcm_with_body(&late), 64),
+            read(&late, 64),
             Err(FrameError::MissingPcmTerminator),
             "a newline past the header's maximum"
         );
         let odd = cat(&[json, b"\n", &[1, 0, 2]]);
-        assert_eq!(read_all(&pcm_with_body(&odd), 64), Err(FrameError::OddSamples), "odd");
-        let not_json = cat(&[b"{not json", b"\n"]);
+        assert_eq!(read(&odd, 64), Err(FrameError::OddSamples), "odd");
         assert_eq!(
-            read_all(&pcm_with_body(&not_json), 64),
+            read(b"{not json\n".as_slice(), 64),
             Err(FrameError::BadJson { kind: FrameKind::Pcm }),
             "a header that is not JSON"
         );
@@ -545,12 +744,11 @@ mod tests {
 
     #[test]
     fn a_hello_over_256_bytes_is_refused() {
-        let hello = |token: String| Frame::new(FrameBody::Hello(SpeechHelloFrame { token }));
         // `{"token":""}` is 12 bytes, so a 244-byte token is the longest that fits.
-        let longest = hello("t".repeat(244)).encode().unwrap();
+        let longest = hello(&"t".repeat(244)).encode().unwrap();
         assert_eq!(longest.len(), FrameHeader::SIZE + 256, "exactly 256 bytes of body");
         assert_eq!(
-            hello("t".repeat(245)).encode(),
+            hello(&"t".repeat(245)).encode(),
             Err(FrameError::BadLength { kind: FrameKind::Hello, len: 257 }),
             "written"
         );
@@ -558,7 +756,7 @@ mod tests {
         over[4..8].copy_from_slice(&257_u32.to_le_bytes());
         over.push(b' ');
         assert_eq!(
-            read_all(&over, 1),
+            read_all(FrameReader::for_core(), &over, 1),
             Err(FrameError::BadLength { kind: FrameKind::Hello, len: 257 }),
             "read"
         );
@@ -574,12 +772,11 @@ mod tests {
 
     #[test]
     fn a_hello_never_shows_its_token() {
-        let hello = SpeechHelloFrame { token: "s3cret-token".to_owned() };
-        let frame = Frame::new(FrameBody::Hello(hello));
+        let frame = hello("s3cret-token");
         let shown = format!("{frame:?}");
         assert!(!shown.contains("s3cret"), "the frame: {shown}");
         let bytes = frame.encode().unwrap();
-        let mut reader = FrameReader::new();
+        let mut reader = FrameReader::for_core();
         let (taken, done) = reader.feed(&bytes[..bytes.len() - 1]).unwrap();
         assert_eq!((taken, done), (bytes.len() - 1, None), "all but the last byte");
         let shown = format!("{reader:?}");
@@ -587,22 +784,180 @@ mod tests {
         let token_bytes = token_bytes.trim_matches(['[', ']']);
         assert!(!shown.contains(token_bytes), "the reader: {shown}");
         assert!(shown.contains("Hello"), "the reader names the kind it is reading: {shown}");
+        let (_, done) = reader.feed(&bytes[bytes.len() - 1..]).unwrap();
+        let token = match done {
+            Some(Frame { body: FrameBody::Hello(read), .. }) => read.token.expose().to_owned(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(token, "s3cret-token", "the last byte completes the Hello, token and all");
     }
 
     #[test]
     fn a_body_shorter_than_its_header_says_is_refused_whole() {
-        let header = FrameHeader {
-            kind: FrameKind::Hello.code(),
-            flags: 0,
-            source: 0,
-            len: 10,
-            seq: 0,
-            turn: [0; 16],
-        };
+        let header = FrameHeader { len: 10, ..bare(FrameKind::Hello) };
         assert_eq!(
             Frame::decode(&header, b"{}"),
             Err(FrameError::BadLength { kind: FrameKind::Hello, len: 10 }),
             "two bytes where ten were promised"
         );
+    }
+
+    /// Short text of any characters; even fully escaped, 40 of them fit a `Hello`.
+    fn text() -> impl Strategy<Value = String> {
+        prop::collection::vec(any::<char>(), 0..40).prop_map(String::from_iter)
+    }
+
+    /// The header fields of a frame that carries no flags.
+    fn plain(seq: u64, turn: [u8; 16], body: FrameBody) -> Frame {
+        Frame { seq, turn, ..Frame::new(body) }
+    }
+
+    fn heartbeat() -> impl Strategy<Value = Frame> {
+        (any::<bool>(), any::<u64>(), any::<[u8; 16]>()).prop_map(|(ping, seq, turn)| {
+            plain(seq, turn, if ping { FrameBody::Ping } else { FrameBody::Pong })
+        })
+    }
+
+    /// A frame the core may send, with any field its kind allows.
+    fn core_frame() -> impl Strategy<Value = Frame> {
+        let audio = (
+            0_u8..16,
+            any::<u16>(),
+            any::<u64>(),
+            any::<[u8; 16]>(),
+            prop::collection::vec(any::<i16>(), AUDIO_FRAME_SAMPLES),
+        )
+            .prop_map(|(flags, source, seq, turn, samples)| Frame {
+                flags: AudioFlags::from_bits(flags).unwrap(),
+                source,
+                seq,
+                turn,
+                body: FrameBody::Audio(samples.into_boxed_slice().try_into().unwrap()),
+            });
+        let command = (any::<u64>(), prop::collection::vec(text(), 0..4), any::<bool>()).prop_map(
+            |(span, words, cancel)| {
+                let cmd = if cancel {
+                    SpeechCmd::Cancel { speak: speak() }
+                } else {
+                    SpeechCmd::SetHotwords { words }
+                };
+                let body = SpeechCommandFrame { ctx: TraceCtx::default(), span, cmd };
+                Frame::new(FrameBody::Command(body))
+            },
+        );
+        prop_oneof![audio, command, heartbeat()]
+    }
+
+    /// A frame the speech process may send after its `Hello`, with any field its kind allows.
+    fn speech_frame() -> impl Strategy<Value = Frame> {
+        let event = (any::<u64>(), any::<u64>(), any::<u16>(), any::<(bool, bool)>(), any::<u32>())
+            .prop_map(|(seq, span, source, (started, replayed), chars)| {
+                let event = if started {
+                    VoiceEvent::SpeechStarted { turn: turn(), source, replayed }
+                } else {
+                    VoiceEvent::ClauseReady {
+                        speak: speak(),
+                        clause: source,
+                        chars,
+                        samples: chars,
+                    }
+                };
+                let body = SpeechEventFrame { ctx: TraceCtx::default(), span, event };
+                plain(seq, [0; 16], FrameBody::Event(body))
+            });
+        let pcm = (
+            any::<u64>(),
+            any::<u16>(),
+            any::<u32>(),
+            prop::collection::vec(any::<i16>(), 0..2048),
+        )
+            .prop_map(|(seq, clause, sample_rate, samples)| {
+                let header = PcmHeader { speak: speak(), clause, sample_rate };
+                plain(seq, [0; 16], FrameBody::Pcm { header, samples })
+            });
+        prop_oneof![event, pcm, heartbeat()]
+    }
+
+    /// The speech process's frames: its `Hello`, then the rest.
+    fn speech_frames() -> impl Strategy<Value = Vec<Frame>> {
+        (text(), prop::collection::vec(speech_frame(), 0..6)).prop_map(|(token, rest)| {
+            let mut frames = vec![hello(&token)];
+            frames.extend(rest);
+            frames
+        })
+    }
+
+    /// `bytes` cut at the given places, in order.
+    fn cut<'a>(bytes: &'a [u8], cuts: &[prop::sample::Index]) -> Vec<&'a [u8]> {
+        let mut at: Vec<usize> = cuts.iter().map(|cut| cut.index(bytes.len() + 1)).collect();
+        at.sort_unstable();
+        let mut pieces = Vec::new();
+        let mut from = 0;
+        for to in at.into_iter().chain([bytes.len()]) {
+            pieces.push(&bytes[from..to]);
+            from = to;
+        }
+        pieces
+    }
+
+    /// Bytes that start with a header of any kind, flags and a small length, so a body is read.
+    fn noise() -> impl Strategy<Value = Vec<u8>> {
+        (0_u8..9, 0_u8..17, 0_u32..1100, prop::collection::vec(any::<u8>(), 0..2400)).prop_map(
+            |(kind, flags, len, rest)| {
+                let header = FrameHeader { kind, flags, source: 0, len, seq: 0, turn: [0; 16] };
+                cat(&[&header.encode(), &rest])
+            },
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn any_frames_read_back_however_the_stream_is_cut(
+            from_core in prop::collection::vec(core_frame(), 0..6),
+            from_speech in speech_frames(),
+            cuts in prop::collection::vec(any::<prop::sample::Index>(), 0..12),
+        ) {
+            let core_bytes = stream(&from_core);
+            let read = read_pieces(FrameReader::for_speech(), cut(&core_bytes, &cuts));
+            prop_assert_eq!(read, Ok(from_core), "the core's frames");
+            let speech_bytes = stream(&from_speech);
+            let read = read_pieces(FrameReader::for_core(), cut(&speech_bytes, &cuts));
+            prop_assert_eq!(read, Ok(from_speech), "the speech process's frames");
+        }
+
+        #[test]
+        fn any_bytes_in_any_pieces_keep_the_reader_bounded(
+            bytes in prop_oneof![noise(), prop::collection::vec(any::<u8>(), 0..2400)],
+            cuts in prop::collection::vec(any::<prop::sample::Index>(), 0..12),
+            end in 0_usize..3,
+        ) {
+            let mut reader = [
+                FrameReader::for_core(),
+                FrameReader::for_core_after_hello(),
+                FrameReader::for_speech(),
+            ]
+            .into_iter()
+            .nth(end)
+            .unwrap();
+            let most = FrameHeader::SIZE.max(usize::try_from(PCM_BODY_MAX).unwrap());
+            let mut failed = None;
+            for mut piece in cut(&bytes, &cuts) {
+                while !piece.is_empty() {
+                    match reader.feed(piece) {
+                        Ok((taken, _)) => {
+                            prop_assert!(failed.is_none(), "no frame after an error");
+                            prop_assert!(taken > 0 && taken <= piece.len(), "took {}", taken);
+                            piece = &piece[taken..];
+                        }
+                        Err(error) => {
+                            prop_assert!(failed.is_none_or(|first| first == error), "{}", error);
+                            failed = Some(error);
+                            piece = &piece[1..];
+                        }
+                    }
+                    prop_assert!(reader.needed() <= most, "needs {}", reader.needed());
+                }
+            }
+        }
     }
 }

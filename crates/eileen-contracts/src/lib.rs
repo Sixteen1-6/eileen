@@ -50,8 +50,9 @@
 //!
 //! - Fast command: `cargo xtask test -p eileen-contracts`.
 //! - Layers: unit tests beside the helpers (the speech frame codec's round trips and refusals
-//!   among them), property tests for the text forms, one snapshot per module and per toolset,
-//!   the text walk, and the scenario example parsed from TOML.
+//!   among them), property tests for the text forms and for the speech frame reader (any frames
+//!   read back however the stream is cut; any bytes keep it bounded), one snapshot per module
+//!   and per toolset, the text walk, and the scenario example parsed from TOML.
 //! - A bug here starts as a failing round trip or a snapshot diff that nobody meant.
 //!
 //! # Traps

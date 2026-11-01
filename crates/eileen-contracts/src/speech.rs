@@ -22,10 +22,14 @@
 //!   body is a `Speak` of a long reply, its clauses and whole line together, a few tens of
 //!   kilobytes; the cap leaves room for that and keeps a corrupt length from reserving more.
 //!
-//! [`Frame`] is a whole frame as a value and [`Frame::encode_into`] writes one. [`FrameReader`]
-//! reads frames from bytes as they arrive and reserves a body only after its header passed.
-//! Both ends of the pipe use this codec, so neither crate depends on the other. The transport
-//! (WP2) checks the `Hello` before it hands a connection on; the codec only reads it.
+//! [`Frame`] is a whole frame as a value and [`Frame::encode_into`] writes one;
+//! [`Frame::encode_audio_into`] writes an audio frame straight from a borrowed window of samples.
+//! [`FrameReader`] reads frames from bytes as they arrive and reserves a body only after its
+//! header passed. A reader is made for one end ([`FrameKind::sender`]) and refuses a kind its
+//! peer may not send; the core's reader also refuses any frame before the `Hello` and a second
+//! `Hello`. Both ends of the pipe use this codec, so neither crate depends on the other. The
+//! transport (WP2) checks the `Hello`'s token before it hands a connection on; the codec only
+//! reads it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,6 +38,7 @@ use std::ops::BitOr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::harness::SessionToken;
 use crate::ids::{Personal, SpeakId, TraceCtx, TurnId};
 use crate::schema::Registry;
 
@@ -137,6 +142,27 @@ impl FrameKind {
             Self::Hello => HELLO_BODY_MAX,
         }
     }
+
+    /// The end of the pipe that may send this kind.
+    #[must_use]
+    pub const fn sender(self) -> FrameSender {
+        match self {
+            Self::Audio | Self::Command => FrameSender::Core,
+            Self::Event | Self::Pcm | Self::Hello => FrameSender::Speech,
+            Self::Ping | Self::Pong => FrameSender::Either,
+        }
+    }
+}
+
+/// Which end of the speech pipe may send a kind of frame ([`FrameKind::sender`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameSender {
+    /// Only the core.
+    Core,
+    /// Only the speech process.
+    Speech,
+    /// Both ends: the heartbeat and its answer.
+    Either,
 }
 
 /// The samples in an audio frame: one 32 ms window at 16 kHz.
@@ -247,6 +273,19 @@ pub enum FrameError {
     MissingPcmTerminator,
     /// Samples whose byte count is odd.
     OddSamples,
+    /// A kind the other end may not send ([`FrameKind::sender`]): the core sending an event, or
+    /// the speech process sending audio.
+    WrongDirection {
+        /// The kind.
+        kind: FrameKind,
+    },
+    /// A frame from the speech process before its `Hello`.
+    BeforeHello {
+        /// The kind.
+        kind: FrameKind,
+    },
+    /// A second `Hello` on one connection.
+    SecondHello,
 }
 
 impl fmt::Display for FrameError {
@@ -264,6 +303,13 @@ impl fmt::Display for FrameError {
                 write!(f, "a PCM frame's JSON header has no newline within {PCM_HEADER_MAX} bytes")
             }
             Self::OddSamples => write!(f, "a frame's samples are an odd number of bytes"),
+            Self::WrongDirection { kind } => {
+                write!(f, "a {kind:?} frame came from an end that may not send it")
+            }
+            Self::BeforeHello { kind } => {
+                write!(f, "a {kind:?} frame came before the speech process's Hello")
+            }
+            Self::SecondHello => write!(f, "a second Hello came on one connection"),
         }
     }
 }
@@ -370,18 +416,13 @@ pub struct PcmHeader {
 
 /// The body of a hello frame: the per-session token the core put in the speech process's
 /// environment. The speech process sends it only after checking that the pipe's server is the
-/// core's process, and the transport compares it (section 3.3.7). `Debug` hides the token, so a
-/// logged frame never carries it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// core's process, and the transport compares it (section 3.3.7). The token is a
+/// [`SessionToken`], like the dispatcher pipe's, so `Debug` hides it, `==` compares every byte,
+/// and recordings replace it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SpeechHelloFrame {
     /// The token.
-    pub token: String,
-}
-
-impl fmt::Debug for SpeechHelloFrame {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpeechHelloFrame").field("token", &"<hidden>").finish()
-    }
+    pub token: SessionToken,
 }
 
 /// The languages a component handles, as BCP 47 tags, reported by the component itself: a

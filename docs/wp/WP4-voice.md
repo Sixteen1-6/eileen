@@ -94,9 +94,20 @@ The parts of the audio series, in merge order, as each opens:
    `AudioCmd::SetCapture`. It settles the two framing details WP0 left open: a PCM frame's JSON
    header ends at its first newline, within 256 bytes, and command and event bodies are at most
    256 KiB. `Frame` and `FrameReader` read and write every kind, and the reader reserves a body
-   only after its header passed. Evidence: the unit tests in `eileen_contracts::speech::codec`.
-   The `speech_frame` fuzz entry in `eileen-speech` stays a stub until the speech series' first
-   part points it at `FrameReader`.
+   only after its header passed. A reader is made for one end (`for_core`,
+   `for_core_after_hello`, `for_speech`) and refuses a kind its peer may not send, any frame
+   before the speech process's `Hello` and a second `Hello`. `Frame::encode_audio_into` writes
+   an audio frame from a borrowed window, so the ring needs no copy. The `Hello`'s token is a
+   `SessionToken`, like the dispatcher pipe's. Evidence: the unit and property tests in
+   `eileen_contracts::speech::codec`.
+   The `speech_frame` fuzz entry stays a stub in this part, since the target is `eileen-speech`'s
+   and this part changes only the contracts. Whichever WP4 part lands first after it, from either
+   series, points `eileen_speech::fuzz_entry::speech_frame` at `FrameReader` (all three readers,
+   reporting `Err` when one takes more than it was given, needs more than a PCM body, or returns
+   a different error after its first), with a seed corpus. The entry stays
+   in `eileen-speech`, as BUILD.md section 4.7's table gives the target to WP4, though the parser
+   is in `eileen-contracts`; `fuzz/AGENTS.md` says "the neutral crate that owns the parser", and
+   pull request #136 proposes the wording under "Suggested guidance changes".
 
 The speech series has not opened yet.
 
