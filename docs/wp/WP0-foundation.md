@@ -149,9 +149,9 @@ until now matched `main`'s entry in full, because both kept the image's stable 1
 pinned 1.99.0 (`a820fa96`). Once this merges, `main` saves under the pinned-only hash
 (`df0daf48`) and the first `prune-caches` run deletes the `a820fa96` entries, so the lane loses
 its only matching Rust cache and builds from a partial restore each night until it keeps only the
-pinned toolchain too. That change is pull request #144, an amendment to WP10's file, which should
-merge with this one; until it does, the workflow tests list the lane's `session` job as the one
-known exception and fail once it gains the step. BUILD.md's sections 4.6 and 4b.3 gain
+pinned toolchain too. Pull request #144, an amendment to WP10's file merged right after #139,
+gives the lane's `session` job the same step, and the workflow tests now hold it to the same text
+with no exception. BUILD.md's sections 4.6 and 4b.3 gain
 `prune-caches` and this cache policy in amendment #143.
 
 ## Acceptance records
