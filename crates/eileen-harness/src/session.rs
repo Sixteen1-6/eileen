@@ -7,6 +7,8 @@
 //! - Every session gets `--setting-sources ""` with its own settings file and
 //!   `--strict-mcp-config` with its own MCP config, both under `<data_dir>/run/<session>/`, so
 //!   nothing of the user's own Claude settings, MCP servers or connectors loads.
+//! - The brain's prompt replaces the CLI's default one (`--system-prompt`, section 2.3); a
+//!   worker's is appended to it (`--append-system-prompt`, section 2.5).
 //! - `--tools` names the kind's built-in tools (none for the brain), `--disallowedTools` names
 //!   [`SUBAGENT_TOOLS`], and neither `--tools` nor `--allowedTools` ever lists them.
 //! - Permissions run under `--permission-mode dontAsk` with `--permission-prompt-tool
@@ -16,7 +18,12 @@
 //!   `${EILEEN_SHIM_TOKEN}`, so neither file holds a secret.
 //! - Vendor memory and file checkpointing are off in every session (D77), through the
 //!   environment and the settings file both.
-//! - No path the harness generates or passes lies under a `.claude` folder.
+//! - No path the harness generates or passes lies under a `.claude` folder, and every path it
+//!   passes is absolute, so nothing resolves against the worker's working folder, a repository
+//!   Eileen does not trust, or through a search of `PATH`.
+//! - A third-party MCP server starts only when the user approved it for the session's job kind,
+//!   never for the brain, and never with a `$` in its command or arguments: the CLI expands
+//!   `${VAR}` there from its own environment, which holds both tokens.
 
 mod env;
 
@@ -36,7 +43,7 @@ use crate::{HarnessConfig, SUBAGENT_TOOLS};
 /// Every flag Eileen passes to `claude` that `claude --help` lists. The nightly CLI drift job
 /// (section 4.6) checks each against the help of the pinned and the latest CLI; a test checks
 /// that every flag [`session_files`] writes is here or in [`CLAUDE_UNLISTED_FLAGS`].
-pub const CLAUDE_FLAGS: [&str; 23] = [
+pub const CLAUDE_FLAGS: [&str; 24] = [
     "-p",
     "--input-format",
     "--output-format",
@@ -45,6 +52,7 @@ pub const CLAUDE_FLAGS: [&str; 23] = [
     "--include-hook-events",
     "--model",
     "--effort",
+    "--system-prompt",
     "--append-system-prompt",
     "--setting-sources",
     "--settings",
@@ -108,6 +116,9 @@ pub const MCP_FILE: &str = "mcp.json";
 pub struct SessionFiles {
     /// The session's run folder, `<data_dir>/run/<session>`.
     pub run_dir: PathBuf,
+    /// The folder the CLI starts in: the spec's `cwd`, under the data folder when it is
+    /// relative (section 2.5: the job's repository, or `run/<session>/cwd`).
+    pub cwd: PathBuf,
     /// The arguments after the executable.
     pub argv: Vec<String>,
     /// Where the settings file goes.
@@ -132,6 +143,11 @@ pub enum SessionError {
     /// folder.
     #[error("the data folder is not an absolute path")]
     RelativeDataDir,
+    /// A path the CLI would be given is relative, so the CLI would look for it from the
+    /// session's working folder, or search `PATH` for a bare command: a file planted there would
+    /// run with the session's tokens in reach.
+    #[error("the session's {0} is not an absolute path")]
+    RelativePath(&'static str),
     /// The runtime has not filled the hook or shim endpoint: a session never starts without
     /// its tokens.
     #[error("the session's {0} is not filled in")]
@@ -149,9 +165,23 @@ pub enum SessionError {
     /// Two approved third-party servers share a name.
     #[error("two approved MCP servers share a name")]
     DuplicateServerName,
-    /// A brain session must start with the constructed allowlist (section 2.12).
-    #[error("the brain's environment must be the constructed allowlist")]
-    BrainNeedsAllowlist,
+    /// The brain and the librarian, which have no shell, start only with the constructed
+    /// allowlist (section 2.12).
+    #[error("a session without a shell must start with the constructed allowlist")]
+    NeedsAllowlist,
+    /// A third-party server's app has no entry in `mcp.servers`, so the user never approved it.
+    #[error("an MCP server's app has no approved entry in the config")]
+    UnapprovedServer,
+    /// A third-party server's config entry does not list the session's job kind (section 2.5).
+    #[error("an MCP server is not approved for this job kind")]
+    ServerNotForKind,
+    /// The brain gets only Eileen's own server (section 2.3).
+    #[error("the brain gets no third-party MCP server")]
+    BrainExtraServer,
+    /// A third-party server's command or an argument holds a `$`. The CLI expands `${VAR}` in
+    /// them from its own environment, which holds Eileen's tokens.
+    #[error("an MCP server's command or arguments hold a $")]
+    ExpandableMcpArg,
 }
 
 /// Builds what the session in `spec` spawns with.
@@ -160,19 +190,22 @@ pub fn session_files(
     cfg: &HarnessConfig,
     host: &HostEnv,
 ) -> Result<SessionFiles, SessionError> {
-    if !cfg.data_dir.has_root() {
+    if !cfg.data_dir.is_absolute() {
         return Err(SessionError::RelativeDataDir);
     }
     check_endpoints(spec)?;
     let brain = is_brain(spec);
-    if brain && spec.env != EnvPolicy::ConstructedAllowlist {
-        return Err(SessionError::BrainNeedsAllowlist);
+    if needs_allowlist(spec) && spec.env != EnvPolicy::ConstructedAllowlist {
+        return Err(SessionError::NeedsAllowlist);
     }
     let run_dir = cfg.data_dir.join("run").join(spec.session.to_string());
     let settings_path = run_dir.join(SETTINGS_FILE);
     let mcp_path = run_dir.join(MCP_FILE);
     let settings_text = path_text(&settings_path, "settings file")?;
     let mcp_text = path_text(&mcp_path, "MCP config")?;
+    // `join` keeps an absolute `cwd` as it is and puts a relative one under the data folder.
+    let cwd = cfg.data_dir.join(&spec.cwd);
+    path_text(&cwd, "working folder")?;
     let plugin_dirs = spec
         .plugin_dirs
         .iter()
@@ -186,6 +219,7 @@ pub fn session_files(
         mcp_rungs,
         env: env::session_env(spec, cfg, host),
         run_dir,
+        cwd,
         settings_path,
         mcp_path,
     })
@@ -195,6 +229,13 @@ pub fn session_files(
 #[must_use]
 pub fn is_brain(spec: &SessionSpec) -> bool {
     spec.toolsets.contains(&Toolset::Brain)
+}
+
+/// Whether `spec` must start with the constructed allowlist: the brain and the librarian, which
+/// have no shell (section 2.12). The scribe joins them once it has a job kind.
+#[must_use]
+pub fn needs_allowlist(spec: &SessionSpec) -> bool {
+    is_brain(spec) || spec.kind == JobKind::Librarian
 }
 
 /// The role the session's shim names in its hello (section 3.3.9).
@@ -226,10 +267,14 @@ fn check_endpoints(spec: &SessionSpec) -> Result<(), SessionError> {
     Ok(())
 }
 
-/// The path as text, refused when it lies under a `.claude` folder or is not UTF-8.
+/// The path as text, refused when it lies under a `.claude` folder, is relative or is not
+/// UTF-8.
 fn path_text<'a>(path: &'a Path, what: &'static str) -> Result<&'a str, SessionError> {
     if under_claude_folder(path) {
         return Err(SessionError::UnderClaudeFolder(what));
+    }
+    if !path.is_absolute() {
+        return Err(SessionError::RelativePath(what));
     }
     path.to_str().ok_or(SessionError::NotUtf8(what))
 }
@@ -273,7 +318,10 @@ fn argv(
         argv.extend(["--effort".to_owned(), effort_text(effort).to_owned()]);
     }
     if !spec.append_system_prompt.is_empty() {
-        argv.extend(["--append-system-prompt".to_owned(), spec.append_system_prompt.clone()]);
+        // The brain's prompt replaces the CLI's long default one, which would slow every turn
+        // (section 2.3); a worker keeps the default and adds its own (section 2.5).
+        let flag = if brain { "--system-prompt" } else { "--append-system-prompt" };
+        argv.extend([flag.to_owned(), spec.append_system_prompt.clone()]);
     }
     let (tools, allowed) = if brain {
         (String::new(), BRAIN_ALLOWED_TOOLS.to_owned())
@@ -401,13 +449,25 @@ fn mcp_config(
         }),
     );
     let mut rungs = BTreeMap::new();
+    if is_brain(spec) && !spec.extra_mcp_servers.is_empty() {
+        return Err(SessionError::BrainExtraServer);
+    }
     for server in &spec.extra_mcp_servers {
         if server.name == EILEEN_SERVER {
             return Err(SessionError::ReservedServerName);
         }
+        let approved = cfg.mcp.servers.get(&server.app).ok_or(SessionError::UnapprovedServer)?;
+        if !approved.job_kinds.contains(&spec.kind) {
+            return Err(SessionError::ServerNotForKind);
+        }
+        // The CLI expands `${VAR}` in a server's command and arguments from its own
+        // environment, which holds both tokens, so neither may hold a `$` at all.
+        if server.command.get().contains('$') || server.args.iter().any(|arg| arg.contains('$')) {
+            return Err(SessionError::ExpandableMcpArg);
+        }
         let command = path_text(Path::new(server.command.get()), "MCP server command")?;
-        // A third-party server inherits the CLI's environment, so Eileen's tokens are blanked
-        // for it: only Eileen's own shim may hold them.
+        // A third-party server may inherit the CLI's environment, so Eileen's tokens are
+        // blanked for it: only Eileen's own shim may hold them.
         let entry = json!({
             "type": "stdio",
             "command": command,
@@ -417,8 +477,7 @@ fn mcp_config(
         if servers.insert(server.name.clone(), entry).is_some() {
             return Err(SessionError::DuplicateServerName);
         }
-        let rung = cfg.mcp.servers.get(&server.app).map_or(Rung::AppMcp, |config| config.rung);
-        rungs.insert(server.name.clone(), rung);
+        rungs.insert(server.name.clone(), approved.rung);
     }
     Ok((json!({ "mcpServers": servers }), rungs))
 }

@@ -15,7 +15,7 @@ expression: portable_argv(&files)
   "claude-haiku-5-5",
   "--effort",
   "low",
-  "--append-system-prompt",
+  "--system-prompt",
   "You are Eileen.",
   "--setting-sources",
   "",

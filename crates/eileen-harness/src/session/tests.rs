@@ -22,6 +22,15 @@ use super::{
 };
 use crate::{HarnessConfig, SUBAGENT_TOOLS};
 
+/// What makes the fixture's paths absolute on this OS: a drive on Windows, where a path that
+/// starts with a slash alone is relative to the current drive.
+const ROOT: &str = if cfg!(windows) { "C:" } else { "" };
+
+/// `path`, which starts with a slash, made absolute on this OS.
+fn abs(path: &str) -> String {
+    format!("{ROOT}{path}")
+}
+
 const HOOK_TOKEN: &str = "hook-token-c0ffee-0123456789";
 const SHIM_TOKEN: &str = "shim-token-decaf-9876543210";
 
@@ -49,7 +58,7 @@ fn base_spec(session: WorkerSessionId, kind: JobKind, toolsets: Vec<Toolset>) ->
         route: Route::Claude,
         model: "claude-sonnet-5-5".to_owned(),
         effort: None,
-        cwd: format!("/data/eileen/run/{session}/cwd"),
+        cwd: format!("run/{session}/cwd"),
         worktree: None,
         snapshot_ref: None,
         append_system_prompt: "You are a Claude worker for Eileen.".to_owned(),
@@ -58,7 +67,7 @@ fn base_spec(session: WorkerSessionId, kind: JobKind, toolsets: Vec<Toolset>) ->
         extra_mcp_servers: Vec::new(),
         builtin_tools: Vec::new(),
         disallowed_tools: Vec::new(),
-        plugin_dirs: vec![format!("/data/eileen/run/{session}/plugin")],
+        plugin_dirs: vec![abs(&format!("/data/eileen/run/{session}/plugin"))],
         snapshot: None,
         resume_session: None,
         chrome: false,
@@ -104,7 +113,7 @@ fn computer_use_worker() -> SessionSpec {
     spec.extra_mcp_servers = vec![ApprovedMcpServer {
         app: "browser".to_owned(),
         name: "playwright".to_owned(),
-        command: Personal::new("/data/eileen/mcp/browser/node_modules/.bin/mcp-server".to_owned()),
+        command: Personal::new(abs(BROWSER_SERVER)),
         args: vec!["--headless".to_owned()],
     }];
     spec
@@ -120,12 +129,15 @@ fn brain() -> SessionSpec {
     spec
 }
 
+/// The approved browser server's command, under the data folder.
+const BROWSER_SERVER: &str = "/data/eileen/mcp/browser/node_modules/.bin/mcp-server";
+
 fn config() -> HarnessConfig {
     let browser = McpServerConfig {
         registry_id: "io.example/browser-mcp".to_owned(),
         package_type: PackageType::Npm,
         version: "1.2.3".to_owned(),
-        command: "/data/eileen/mcp/browser/node_modules/.bin/mcp-server".to_owned(),
+        command: abs(BROWSER_SERVER),
         args: vec!["--headless".to_owned()],
         digest: "sha256-0000".to_owned(),
         job_kinds: vec![JobKind::ComputerUse],
@@ -133,14 +145,54 @@ fn config() -> HarnessConfig {
         observes: ObservedSource::Web,
     };
     HarnessConfig {
-        data_dir: PathBuf::from("/data/eileen"),
+        data_dir: PathBuf::from(abs("/data/eileen")),
         hook_hold_s: 120,
-        shim_exe: PathBuf::from("/opt/eileen/eileen-shim"),
+        shim_exe: PathBuf::from(abs("/opt/eileen/eileen-shim")),
         mcp: McpConfig { servers: BTreeMap::from([("browser".to_owned(), browser)]) },
     }
 }
 
-/// A user's environment with one of each kind of variable: the brain's allowlist, the
+/// The host variables the worker denylist removes, from section 2.12's list, each spelled as
+/// a user might.
+const DENIED: [&str; 18] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CONFIG_DIR",
+    "MCP_TIMEOUT",
+    "OPENAI_API_KEY",
+    "OPENAI_ORG_ID",
+    "CODEX_HOME",
+    "XAI_API_KEY",
+    "XAI_BASE_URL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "AWS_PROFILE",
+    "AWS_SECRET_ACCESS_KEY",
+    "GH_TOKEN",
+    "github_token",
+    "NPM_TOKEN",
+    "SERVICE_SECRET",
+    "STRIPE_API_KEY",
+];
+
+/// The host variables a worker keeps: the pass-through list and the user's own.
+const KEPT: [&str; 13] = [
+    "Path",
+    "SystemRoot",
+    "USERPROFILE",
+    "LOCALAPPDATA",
+    "TEMP",
+    "HOME",
+    "EDITOR",
+    "LANG",
+    "CLAUDE_CODE_GIT_BASH_PATH",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS",
+];
+
+/// A user's Windows environment with one of each kind of variable: the brain's allowlist, the
 /// denylist in several spellings, the pass-through list, and ordinary variables.
 fn host() -> HostEnv {
     let vars = [
@@ -160,9 +212,12 @@ fn host() -> HostEnv {
         ("MCP_TIMEOUT", "1"),
         ("MCP_TOOL_TIMEOUT", "1"),
         ("OPENAI_API_KEY", "not-a-real-key"),
+        ("OPENAI_ORG_ID", "org-example"),
         ("CODEX_HOME", "/home/someone/.codex"),
         ("XAI_API_KEY", "not-a-real-key"),
+        ("XAI_BASE_URL", "https://example.invalid"),
         ("DEEPSEEK_API_KEY", "not-a-real-key"),
+        ("DEEPSEEK_BASE_URL", "https://example.invalid"),
         ("AWS_PROFILE", "default"),
         ("AWS_SECRET_ACCESS_KEY", "not-a-real-key"),
         ("GH_TOKEN", "not-a-real-token"),
@@ -182,6 +237,7 @@ fn host() -> HostEnv {
         registry_path: None,
         brain_path: None,
         toolchain_dirs: Vec::new(),
+        names_ignore_case: true,
     }
 }
 
@@ -189,10 +245,15 @@ fn files(spec: &SessionSpec) -> SessionFiles {
     session_files(spec, &config(), &host()).unwrap()
 }
 
-/// The path as the snapshots hold it: on Windows, `Path::join` puts a backslash after the test's
-/// data folder, so paths under it are written with forward slashes on every OS.
+/// The path as the snapshots hold it, the same on every OS: without the fixture's drive, and
+/// with forward slashes where `Path::join` put a backslash on Windows.
 fn portable(text: &str) -> String {
-    if text.starts_with("/data/") { text.replace('\\', "/") } else { text.to_owned() }
+    let text = text.strip_prefix(ROOT).filter(|rest| rest.starts_with('/')).unwrap_or(text);
+    if text.starts_with("/data/") || text.starts_with("/opt/") {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    }
 }
 
 fn portable_json(value: &Value) -> Value {
@@ -262,39 +323,85 @@ fn the_brain_gets_no_built_in_tool_and_only_eileens_tools() {
 }
 
 #[test]
-fn an_approved_server_with_no_config_entry_is_an_app_mcp_rung() {
+fn the_brain_prompt_replaces_the_default_and_a_workers_is_appended() {
+    let brain = files(&brain());
+    assert_eq!(flag_value(&brain, "--system-prompt"), Some("You are Eileen."), "section 2.3");
+    assert!(!brain.argv.iter().any(|arg| arg == "--append-system-prompt"), "the brain's replaces");
+    let worker = files(&coding_worker());
+    assert_eq!(
+        flag_value(&worker, "--append-system-prompt"),
+        Some("You are a Claude worker for Eileen."),
+        "section 2.5"
+    );
+    assert!(!worker.argv.iter().any(|arg| arg == "--system-prompt"), "a worker keeps the default");
+}
+
+#[test]
+fn a_third_party_server_needs_an_entry_for_the_sessions_kind() {
     let mut cfg = config();
     cfg.mcp.servers.clear();
-    let files = session_files(&computer_use_worker(), &cfg, &host()).unwrap();
-    assert_eq!(files.mcp_rungs.get("playwright"), Some(&Rung::AppMcp), "section 2.5's default");
+    assert_eq!(
+        session_files(&computer_use_worker(), &cfg, &host()),
+        Err(SessionError::UnapprovedServer),
+        "a server whose app has no entry was never approved"
+    );
+    let mut spec = computer_use_worker();
+    spec.kind = JobKind::Research;
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::ServerNotForKind),
+        "the browser server is approved for computer use only"
+    );
+    let mut spec = brain();
+    spec.extra_mcp_servers = computer_use_worker().extra_mcp_servers;
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::BrainExtraServer),
+        "the brain gets only Eileen's own server"
+    );
+}
+
+#[test]
+fn a_third_party_server_never_gets_an_expandable_argument() {
+    for arg in ["${EILEEN_SHIM_TOKEN}", "${EILEEN_HOOK_TOKEN}", "--key=$HOME"] {
+        let mut spec = computer_use_worker();
+        spec.extra_mcp_servers[0].args = vec!["--key".to_owned(), arg.to_owned()];
+        assert_eq!(
+            session_files(&spec, &config(), &host()),
+            Err(SessionError::ExpandableMcpArg),
+            "{arg} would be expanded by the CLI from its own environment"
+        );
+    }
+    let mut spec = computer_use_worker();
+    spec.extra_mcp_servers[0].command = Personal::new(abs("/data/${EILEEN_SHIM_TOKEN}/server"));
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::ExpandableMcpArg),
+        "in the command too"
+    );
 }
 
 #[test]
 fn the_worker_environment_drops_the_denylist_and_keeps_the_pass_through_list() {
     for spec in [coding_worker(), computer_use_worker()] {
         let files = files(&spec);
-        for (name, _) in &host().vars {
-            if !is_denylisted(name) {
-                assert!(files.env.get(name).is_some(), "{name} is not denylisted, so it stays");
-                continue;
-            }
-            let ours = SESSION_VARS.iter().any(|var| var.eq_ignore_ascii_case(name));
+        for name in DENIED {
             assert!(
-                ours || files.env.get(name).is_none(),
+                files.env.get(name).is_none(),
                 "{name} is denylisted and must not reach a worker"
             );
         }
-        for name in PASS_THROUGH {
+        for name in KEPT {
             assert_eq!(
                 files.env.get(name),
                 host().vars.iter().find(|(var, _)| var == name).map(|(_, value)| value.as_str()),
-                "{name} passes through unchanged"
+                "{name} stays unchanged"
             );
         }
-        for name in ["ANTHROPIC_API_KEY", "GH_TOKEN", "github_token", "AWS_PROFILE", "NPM_TOKEN"] {
-            assert!(files.env.get(name).is_none(), "{name} is removed");
+        for name in PASS_THROUGH {
+            assert!(KEPT.contains(&name), "{name} is pinned as kept");
         }
-        assert_eq!(files.env.get("GIT_CONFIG_COUNT"), Some("2"), "git's fsmonitor and bare rules");
+        assert_eq(files.env.get("GIT_CONFIG_COUNT"), Some("2"), "git's fsmonitor and bare rules");
         assert_eq!(files.env.get("GIT_CONFIG_KEY_1"), Some("safe.bareRepository"), "bare rule");
         assert_eq!(files.env.get("EDITOR"), Some("notepad"), "the user's own variables stay");
     }
@@ -314,6 +421,48 @@ fn the_brain_environment_holds_only_the_allowlist() {
     assert_eq!(files.env.get("SystemRoot"), Some(r"C:\Windows"), "an allowlisted variable");
     for name in ["HOME", "EDITOR", "HTTPS_PROXY", "CLAUDE_CODE_GIT_BASH_PATH", "GIT_CONFIG_COUNT"] {
         assert!(files.env.get(name).is_none(), "{name} is not on the brain's allowlist");
+    }
+}
+
+#[test]
+fn on_a_host_whose_names_keep_case_each_spelling_is_its_own_variable() {
+    let mut host = host();
+    host.names_ignore_case = false;
+    host.vars = [
+        ("PATH", "/usr/bin"),
+        ("path", "/elsewhere"),
+        ("http_proxy", "http://lower.invalid:8080"),
+        ("HTTP_PROXY", "http://upper.invalid:8080"),
+        ("no_proxy", "localhost"),
+        ("NO_PROXY", "127.0.0.1"),
+        ("Path", "/not/the/path"),
+        ("enable_claudeai_mcp_servers", "true"),
+    ]
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .into();
+    host.toolchain_dirs = vec!["/USR/BIN".to_owned()];
+    let worker = session_files(&coding_worker(), &config(), &host).unwrap();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    for (name, value) in [
+        ("http_proxy", "http://lower.invalid:8080"),
+        ("HTTP_PROXY", "http://upper.invalid:8080"),
+        ("no_proxy", "localhost"),
+        ("NO_PROXY", "127.0.0.1"),
+        ("path", "/elsewhere"),
+        ("Path", "/not/the/path"),
+    ] {
+        assert_eq!(worker.env.get(name), Some(value), "{name} survives beside its other spelling");
+    }
+    assert_eq!(
+        worker.env.get("PATH"),
+        Some(format!("/USR/BIN{separator}/usr/bin").as_str()),
+        "a toolchain folder in another case is another folder"
+    );
+    assert_eq!(worker.env.get("ENABLE_CLAUDEAI_MCP_SERVERS"), Some("false"), "Eileen's own");
+    let brain = session_files(&brain(), &config(), &host).unwrap();
+    assert_eq!(brain.env.get("PATH"), Some("/usr/bin"), "the allowlist names PATH");
+    for name in ["path", "Path", "http_proxy"] {
+        assert!(brain.env.get(name).is_none(), "{name} is not on the brain's allowlist");
     }
 }
 
@@ -473,15 +622,12 @@ fn a_resumed_session_forks_and_chrome_is_opt_in() {
 
 #[test]
 fn no_generated_path_lies_under_the_users_claude_folder() {
+    let run = config().data_dir.join("run");
     for (kind, spec) in all_three() {
         let files = files(&spec);
-        let paths = [&files.run_dir, &files.settings_path, &files.mcp_path];
+        let paths = [&files.run_dir, &files.cwd, &files.settings_path, &files.mcp_path];
         for path in paths {
-            assert!(
-                path.starts_with("/data/eileen/run"),
-                "{kind}: {} is not in run",
-                path.display()
-            );
+            assert!(path.starts_with(&run), "{kind}: {} is not in run", path.display());
             assert!(!under_claude_folder(path), "{kind}: {}", path.display());
         }
         for arg in &files.argv {
@@ -491,11 +637,18 @@ fn no_generated_path_lies_under_the_users_claude_folder() {
         assert!(!mcp.to_ascii_lowercase().contains(".claude"), "{kind}: the MCP config");
     }
     let mut cfg = config();
-    cfg.data_dir = PathBuf::from("/home/someone/.claude/eileen");
+    cfg.data_dir = PathBuf::from(abs("/home/someone/.claude/eileen"));
     assert_eq!(
         session_files(&brain(), &cfg, &host()),
         Err(SessionError::UnderClaudeFolder("settings file")),
         "a data folder under .claude is refused"
+    );
+    let mut spec = coding_worker();
+    spec.cwd = abs("/home/someone/.claude/projects/x");
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::UnderClaudeFolder("working folder")),
+        "a working folder under .claude is refused"
     );
     let mut spec = coding_worker();
     spec.plugin_dirs = vec![r"C:\Users\someone\.Claude\plugins\x".to_owned()];
@@ -504,6 +657,20 @@ fn no_generated_path_lies_under_the_users_claude_folder() {
         Err(SessionError::UnderClaudeFolder("plugin folder")),
         "a plugin folder under .claude, in any case and with Windows separators, is refused"
     );
+}
+
+#[test]
+fn the_working_folder_is_the_repository_or_one_under_the_data_folder() {
+    let spec = computer_use_worker();
+    let files = files(&spec);
+    assert_eq!(
+        files.cwd,
+        config().data_dir.join(format!("run/{}/cwd", spec.session)),
+        "a relative cwd sits under the data folder"
+    );
+    let mut spec = coding_worker();
+    spec.cwd = abs("/src/repo");
+    assert_eq!(files(&spec).cwd, PathBuf::from(abs("/src/repo")), "the job's repository");
 }
 
 /// Empties one of a spec's endpoint fields.
@@ -534,9 +701,17 @@ fn refused_specs_and_configs() {
     spec.env = EnvPolicy::WorkerDenylist;
     assert_eq!(
         session_files(&spec, &config(), &host()),
-        Err(SessionError::BrainNeedsAllowlist),
+        Err(SessionError::NeedsAllowlist),
         "the brain never gets the user's environment"
     );
+    let mut spec = base_spec(session_id(4), JobKind::Librarian, vec![Toolset::Learn]);
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::NeedsAllowlist),
+        "nor does the librarian, which has no shell either"
+    );
+    spec.env = EnvPolicy::ConstructedAllowlist;
+    assert!(session_files(&spec, &config(), &host()).is_ok(), "the librarian on the allowlist");
     let mut spec = computer_use_worker();
     spec.extra_mcp_servers[0].name = "eileen".to_owned();
     assert_eq!(
@@ -558,11 +733,59 @@ fn refused_specs_and_configs() {
         Err(SessionError::RelativeDataDir),
         "a relative data folder"
     );
+    // On Windows this has a root but no drive, so it would resolve against the current drive.
+    cfg.data_dir = PathBuf::from(r"\data\eileen");
+    assert_eq!(
+        session_files(&brain(), &cfg, &host()),
+        Err(SessionError::RelativeDataDir),
+        "a data folder without a drive"
+    );
+    assert_eq!(
+        session_files(&brain(), &HarnessConfig::default(), &host()),
+        Err(SessionError::RelativeDataDir),
+        "the default config starts no session"
+    );
+}
+
+#[test]
+fn every_path_the_cli_is_given_is_absolute() {
+    let mut cfg = config();
+    cfg.shim_exe = PathBuf::from("eileen-shim");
+    assert_eq!(
+        session_files(&brain(), &cfg, &host()),
+        Err(SessionError::RelativePath("shim executable")),
+        "a bare shim name would be searched for, from the worker's folder too"
+    );
+    cfg.shim_exe = HarnessConfig::default().shim_exe;
+    assert_eq!(
+        session_files(&brain(), &cfg, &host()),
+        Err(SessionError::RelativePath("shim executable")),
+        "the default config has no shim"
+    );
+    let mut spec = computer_use_worker();
+    spec.extra_mcp_servers[0].command = Personal::new("mcp-server".to_owned());
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::RelativePath("MCP server command")),
+        "a bare third-party command"
+    );
+    let mut spec = coding_worker();
+    spec.plugin_dirs = vec!["plugin".to_owned()];
+    assert_eq!(
+        session_files(&spec, &config(), &host()),
+        Err(SessionError::RelativePath("plugin folder")),
+        "a relative plugin folder would load from the repository"
+    );
 }
 
 #[test]
 fn the_denylist_matches_any_case_and_spares_the_pass_through_list() {
     for name in ["ANTHROPIC_API_KEY", "anthropic_base_url", "Claude_Config_Dir", "MCP_TIMEOUT"] {
+        assert!(is_denylisted(name), "{name}");
+    }
+    // One name per vendor prefix with no key, token or secret suffix, so only the prefix
+    // removes it.
+    for name in ["OPENAI_ORG_ID", "CODEX_HOME", "XAI_BASE_URL", "deepseek_base_url"] {
         assert!(is_denylisted(name), "{name}");
     }
     for name in ["GH_TOKEN", "GITHUB_TOKEN", "AWS_REGION", "MY_API_KEY", "X_SECRET", "Y_TOKEN"] {

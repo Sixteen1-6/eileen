@@ -1,8 +1,10 @@
 //! The two environment policies of section 2.12, and the variables every session adds.
 //!
-//! Names are compared without regard to ASCII case, because Windows treats `Path` and `PATH` as
-//! one variable: a denylisted name is caught in any case, and a session variable replaces every
-//! spelling of its name instead of sitting beside it.
+//! Whether two names are one variable is the host's rule ([`HostEnv::names_ignore_case`]):
+//! Windows treats `Path` and `PATH` as one variable, so there a session variable replaces every
+//! spelling of its name, while Linux keeps `http_proxy` and `HTTP_PROXY` apart and so does this
+//! module. A denylisted name is caught in any case on every host, because removing a variable
+//! named like a secret is never the wrong side to err on.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -83,6 +85,10 @@ pub struct HostEnv {
     /// Toolchain folders the runtime found (`%USERPROFILE%\.cargo\bin`, Node, uv), put in front
     /// of a coding session's `PATH` when it lacks them.
     pub toolchain_dirs: Vec<String>,
+    /// Whether the host treats variable names, and the folders in `PATH`, without regard to
+    /// ASCII case. The runtime sets it to `cfg!(windows)`; it is a field so both rules are
+    /// tested on every OS.
+    pub names_ignore_case: bool,
 }
 
 /// Names only: the values can hold the user's secrets.
@@ -93,45 +99,59 @@ impl fmt::Debug for HostEnv {
             .field("registry_path", &self.registry_path.is_some())
             .field("brain_path", &self.brain_path.is_some())
             .field("toolchain_dirs", &self.toolchain_dirs.len())
+            .field("names_ignore_case", &self.names_ignore_case)
             .finish()
     }
+}
+
+/// Whether `a` and `b` name one variable, or one folder, on a host with that rule.
+fn same_name(a: &str, b: &str, ignore_case: bool) -> bool {
+    if ignore_case { a.eq_ignore_ascii_case(b) } else { a == b }
 }
 
 /// A session's whole environment. `Debug` shows the names only, because the values include the
 /// session's tokens.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct SessionEnv(BTreeMap<String, String>);
+pub struct SessionEnv {
+    vars: BTreeMap<String, String>,
+    ignore_case: bool,
+}
 
 impl SessionEnv {
-    /// The value of `name`, in any ASCII case.
+    const fn new(ignore_case: bool) -> Self {
+        Self { vars: BTreeMap::new(), ignore_case }
+    }
+
+    /// The value of `name`, by the host's rule for names.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.0
+        self.vars
             .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .find(|(key, _)| same_name(key, name, self.ignore_case))
             .map(|(_, value)| value.as_str())
     }
 
     /// The variables, in name order, for the spawn.
     pub fn vars(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0.iter().map(|(name, value)| (name.as_str(), value.as_str()))
+        self.vars.iter().map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
     /// The names, in order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
+        self.vars.keys().map(String::as_str)
     }
 
-    /// Sets `name`, replacing it in every ASCII case.
+    /// Sets `name`, replacing every spelling the host counts as the same variable.
     fn set(&mut self, name: &str, value: String) {
-        self.0.retain(|key, _| !key.eq_ignore_ascii_case(name));
-        self.0.insert(name.to_owned(), value);
+        let ignore_case = self.ignore_case;
+        self.vars.retain(|key, _| !same_name(key, name, ignore_case));
+        self.vars.insert(name.to_owned(), value);
     }
 }
 
 impl fmt::Debug for SessionEnv {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("SessionEnv").field(&self.0.keys().collect::<Vec<_>>()).finish()
+        f.debug_tuple("SessionEnv").field(&self.vars.keys().collect::<Vec<_>>()).finish()
     }
 }
 
@@ -165,7 +185,7 @@ pub(super) fn session_env(spec: &SessionSpec, cfg: &HarnessConfig, host: &HostEn
 }
 
 fn worker_base(spec: &SessionSpec, host: &HostEnv) -> SessionEnv {
-    let mut env = SessionEnv::default();
+    let mut env = SessionEnv::new(host.names_ignore_case);
     for (name, value) in &host.vars {
         if !is_denylisted(name) {
             env.set(name, value.clone());
@@ -180,7 +200,9 @@ fn worker_base(spec: &SessionSpec, host: &HostEnv) -> SessionEnv {
             .toolchain_dirs
             .iter()
             .map(String::as_str)
-            .filter(|dir| !path.split(PATH_SEPARATOR).any(|part| part.eq_ignore_ascii_case(dir)))
+            .filter(|dir| {
+                !path.split(PATH_SEPARATOR).any(|part| same_name(part, dir, host.names_ignore_case))
+            })
             .collect();
         if !missing.is_empty() {
             let separator = PATH_SEPARATOR.to_string();
@@ -198,9 +220,9 @@ fn worker_base(spec: &SessionSpec, host: &HostEnv) -> SessionEnv {
 }
 
 fn brain_base(host: &HostEnv) -> SessionEnv {
-    let mut env = SessionEnv::default();
+    let mut env = SessionEnv::new(host.names_ignore_case);
     for (name, value) in &host.vars {
-        if BRAIN_ALLOWLIST.iter().any(|allowed| allowed.eq_ignore_ascii_case(name)) {
+        if BRAIN_ALLOWLIST.iter().any(|allowed| same_name(allowed, name, host.names_ignore_case)) {
             env.set(name, value.clone());
         }
     }

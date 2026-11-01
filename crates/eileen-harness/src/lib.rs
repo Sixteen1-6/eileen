@@ -45,9 +45,11 @@
 //! - Every session spawns with `--setting-sources ""`, `--strict-mcp-config`, `--permission-mode
 //!   dontAsk`, the `approve` permission-prompt tool, the subagent tools disallowed, vendor memory
 //!   and file checkpointing off, and its tokens only in its environment, never in a file or on
-//!   the command line; the brain gets no built-in tool and only the constructed allowlist, a
-//!   worker the user's environment minus the denylist (sections 2.5 and 2.12;
-//!   `session::tests`). No path a session is given lies under a `.claude` folder.
+//!   the command line; the brain gets no built-in tool and no third-party MCP server, the brain
+//!   and the librarian only the constructed allowlist, a worker the user's environment minus the
+//!   denylist (sections 2.3, 2.5 and 2.12; `session::tests`). Every path a session is given is
+//!   absolute and none lies under a `.claude` folder. A third-party MCP server reaches only the
+//!   job kinds its config entry names.
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -85,11 +87,16 @@
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
 //!   failed in the same text, so only a call the guard asked about counts.
-//! - Windows variable names ignore case: the environment policies compare names that way, so
-//!   `Path` is `PATH` and a session variable replaces every spelling of its name.
+//! - Windows variable names ignore case and Linux ones do not: `HostEnv::names_ignore_case`
+//!   carries the host's rule, so on Windows `Path` is `PATH` and a session variable replaces
+//!   every spelling of its name, while on Linux `http_proxy` and `HTTP_PROXY` both survive.
 //! - The settings file and the MCP config name the tokens (`$EILEEN_HOOK_TOKEN` through
 //!   `allowedEnvVars`, `${EILEEN_SHIM_TOKEN}`), and the CLI fills them from the session's
 //!   environment; writing a token into either file puts it on disk.
+//! - The CLI expands `${VAR}` in every MCP server's command, arguments and `env` from its own
+//!   environment, which holds both tokens, so a third-party server whose command or arguments
+//!   hold a `$` is refused (`session::SessionError::ExpandableMcpArg`); blanking the tokens in
+//!   its `env` does not stop an expansion in its arguments.
 //! - Redact a JSON value's strings before serializing it, never its text: serialized, a newline
 //!   before a token is the `n` of `\n`, after which the `Redactor` sees no word start.
 //! - One pass of the `Redactor` can leave a token: right after another match it has no word
@@ -145,18 +152,23 @@ pub struct HarnessConfig {
     /// `approvals.hook_hold_s`: how long an `approve` call is held while the user decides,
     /// seconds. `MCP_TOOL_TIMEOUT` is this plus 30 s.
     pub hook_hold_s: u16,
-    /// `eileen-shim` in Eileen's install folder, which each session's MCP config starts.
+    /// The absolute path of `eileen-shim` in Eileen's install folder, which each session's MCP
+    /// config starts. Never a bare name: the CLI would search for it, from the worker's folder
+    /// too.
     pub shim_exe: PathBuf,
-    /// The approved third-party MCP servers, for each one's rung.
+    /// The approved third-party MCP servers: which job kinds get each, and its rung.
     pub mcp: McpConfig,
 }
 
+/// A config with no data folder and no shim, for the stub drivers. `session::session_files`
+/// refuses it, so a session never starts from it by accident: the runtime fills both paths
+/// before the first spawn.
 impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::new(),
             hook_hold_s: ApprovalsConfig::default().hook_hold_s,
-            shim_exe: PathBuf::from("eileen-shim"),
+            shim_exe: PathBuf::new(),
             mcp: McpConfig::default(),
         }
     }

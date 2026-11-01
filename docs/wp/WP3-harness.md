@@ -175,8 +175,10 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   one sending `Bearer $EILEEN_HOOK_TOKEN` and `$EILEEN_SESSION_ID` through `allowedEnvVars`.
   The MCP config starts `eileen-shim` with the session's pipe and role and names its token as
   `${EILEEN_SHIM_TOKEN}`; approved third-party servers follow with Eileen's tokens blanked,
-  and each one's rung comes back beside the files from `mcp.servers.<app>.rung` (`app_mcp`
-  when the app has no entry). Every session gets `ENABLE_CLAUDEAI_MCP_SERVERS=false`,
+  and each one's rung comes back beside the files from `mcp.servers.<app>.rung`. A server
+  whose app has no entry there, or whose entry does not list the session's job kind, is
+  refused, and so is any third-party server on the brain. Every session gets
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false`,
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1`, its id,
   both tokens, `TRACEPARENT` and `MCP_TOOL_TIMEOUT=(hook_hold_s + 30) * 1000`.
   `CLAUDE_FLAGS` and `CLAUDE_UNLISTED_FLAGS` are the constants the nightly drift job reads.
@@ -285,12 +287,36 @@ permission route, which section 6.5's amendment of that date records (see Goal).
 - The session files leave out what waits on WP3's owner-run probes or on later pull requests:
   `--restricted`, `--add-dir` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`, the notes
   hub's `--append-system-prompt-file`, `--fallback-model` (it needs the resolved alias of the
-  next model down), the brain's own `--system-prompt`, the D77 receipt hooks (`PostToolUse` on
-  the memory folders and `InstructionsLoaded`, moot while `MemorySpec` is off) and the
-  `dev` toolset's shim. Each is one more flag or entry beside the ones built.
+  next model down), the brain settings file's `alwaysThinkingEnabled` (WP3 measures which
+  way of turning thinking off works first), the D77 receipt hooks (`PostToolUse` on the memory
+  folders and `InstructionsLoaded`, moot while `MemorySpec` is off) and the `dev` toolset's
+  shim. Each is one more flag or entry beside the ones built.
 - The brain is the session whose toolsets hold `brain`: `SessionSpec` has no brain kind. It
-  gets `--tools ""` and `--allowedTools mcp__eileen__*` whatever the spec lists, and a brain
-  spec with the worker denylist is refused, so the brain never sees the user's environment.
+  gets `--tools ""` and `--allowedTools mcp__eileen__*` whatever the spec lists, and its
+  prompt through `--system-prompt`, which replaces the CLI's default prompt (section 2.3); a
+  worker's goes through `--append-system-prompt`. A brain or librarian spec with the worker
+  denylist is refused, so neither sees the user's environment. Section 2.12 gives the scribe
+  the allowlist too, but `JobKind` has no scribe kind yet; it joins `needs_allowlist` when it
+  gets one.
+- The brain's command line keeps four things section 2.3's brain block does not list, on
+  purpose: `--permission-mode dontAsk` with `--permission-prompt-tool mcp__eileen__approve`,
+  so a tier-2 `act` tool the guard asks about reaches the same approval route as a worker's;
+  the hooks in its settings file, so the `PreToolUse` guard fails closed for the brain too;
+  `--include-hook-events`; and `--disallowedTools Task,Agent`, which section 2.5 gives every
+  session. Its files sit under `run/<ws_id>/`, not `run\brain\`, because the hot spare runs
+  beside the primary and each needs its own. The pull request lists these for an amendment of
+  section 2.3.
+- Every path a session is given is absolute: the data folder (`is_absolute`, so a Windows path
+  with a root and no drive is refused), the shim, each third-party server's command and each
+  plugin folder. A relative one would resolve from the worker's folder, a repository Eileen
+  does not trust, and a bare command name would be searched for there and on `PATH`.
+  `HarnessConfig::default()` has an empty data folder and shim, so a session never starts
+  from it. The spec's `cwd` becomes `SessionFiles.cwd`, under the data folder when relative
+  (core sends `run/<session>/cwd`), and is held to the same `.claude` rule.
+- The CLI expands `${VAR}` in every MCP server's command, arguments and `env` from its own
+  environment, which holds both tokens, so a third-party server with a `$` in its command or
+  an argument is refused (`SessionError::ExpandableMcpArg`): blanking the tokens in its `env`
+  does not stop an expansion in its arguments.
 - Each hook posts to `http://127.0.0.1:<port>/<path>/<event>`, with `HookEndpoint.path` as the
   session's prefix and the event in kebab case (`pre-tool-use`, `stop-failure`), the layout the
   contract test used. WP2's endpoint serves these paths.
@@ -300,8 +326,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   accepts the generated config.
 - The session's span in `TRACEPARENT` is the low 64 bits of its `ws_` ULID, so it is stable and
   needs no randomness.
-- Environment names compare without ASCII case on every OS, because Windows keeps `Path` and a
-  user can set `github_token`; a session variable replaces every spelling of its name.
+- Whether two environment names are one variable is the host's rule,
+  `HostEnv::names_ignore_case`, which the runtime sets to `cfg!(windows)`: on Windows `Path`
+  is `PATH` and a session variable replaces every spelling of its name, while on Linux
+  `http_proxy` and `HTTP_PROXY` both survive, as curl needs. The denylist matches any case on
+  every host, so `github_token` goes on both.
 - A subagent tool in a spec's `builtin_tools` or `allowed_tools` is dropped, not refused: the
   session still starts, without it.
 
