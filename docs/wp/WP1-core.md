@@ -78,15 +78,41 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-Not started.
+- `wp1/minimal-core` (open): the minimal core slice S1 wires. `eileen-core` gains `turn` (a
+  pure, cloneable turn-taking machine), barge-in with pause-then-decide, the addressee gate's
+  rules 1, 3 and 4 in minimal form, fast-path dispatch through `IntentResolver::resolve` with
+  mute, unmute, stop, cancel, "go on" and "what time is it" answered by the core, one brain turn
+  spoken clause by clause, one job with a cold worker session and fail-closed hook answers,
+  mute, the attributed completion announcement, its spans, and `Core::snapshot` from the live
+  state. `eileen-sim` gains the parts that answer the core (the speech process, the playback
+  device in 10 ms callbacks, a scripted brain and scripted workers), `SimResolver`, timers drawn
+  from the world's pending timers, an incremental span collector for invariant 13, and the
+  slice tests `eileen-sim::it::slice::*`. Acceptance 4 (barge-in in simulation) is shown by
+  `stop_while_eileen_speaks_ducks_pauses_and_stops_within_the_decision` and
+  `a_backchannel_resumes_from_the_paused_sample`; the exhaustive enumeration
+  (`wp1/turn-exhaustive`) builds on `turn::Turns` next.
 
 ## Surprises
 
-None yet.
+- A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
+  commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
+  the reply is still open (synthesis behind playback). The contract does not say this yet; the
+  pull request proposes the wording for WP4's speech process and audio driver.
+- Dumping and re-parsing the flight-recorder ring after every step costs time in proportion to
+  everything recorded so far, which the real core's spans made too slow for the pull request
+  seeds. The simulator now collects span records as they happen and checks invariant 13 only
+  after a step that produced one.
 
 ## Decisions
 
-None yet.
+- The core strips the assistant's name (at the start or the end of the turn) before it calls
+  the resolver, and passes the lower-cased words that remain.
+- A worker session's `SessionSpec` leaves the hook and shim endpoints empty for the runtime to
+  fill at spawn (it mints the tokens), and names its working folder `run/<session>/cwd`
+  relative to the data directory.
+- Effects carry the core's own `seq` counter, kept in the snapshot as `effect_seq`.
+- The local time zone reaches the core as `CoreConfig.local_offset_min`, read by the runtime at
+  start.
 
 ## Outcome
 
