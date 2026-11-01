@@ -1,7 +1,14 @@
-//! The invariants of BUILD.md section 4.7 that the skeleton checks after every step, each a
-//! named function over what the run produced so far. Their numbers are the section's, which
-//! regressions and acceptance lines cite. WP1 adds the other twelve.
+//! The invariants of BUILD.md section 4.7, each a named function over what the run produced so
+//! far. Their numbers are the section's, which regressions and acceptance lines cite. The world
+//! checks 6, 8, 10 and 13 after every step ([`CHECKED`]); `turn::exhaustive` checks 2, 3, 9 and
+//! 10 after every input it enumerates ([`EXHAUSTIVE`]). WP1 adds the others.
 //!
+//! - 2, [`barge_in_pauses_in_time`]: after a speech window while Eileen speaks, playback is
+//!   ducked by the next callback and paused by the callback after the third consecutive
+//!   window, onset to silence stays within [`ONSET_TO_SILENCE_MS`], and a pause is resumed or
+//!   stopped within [`PAUSE_RESOLVES_MS`].
+//! - 3, [`heard_prefix_matches_playback`]: what the brain is told the user heard equals the
+//!   text mapped from the samples handed to the device.
 //! - 6, [`bus_events_are_attributed`]: every bus event carries a turn or job id where it
 //!   belongs, nothing is emitted for a job after its terminal event, order is kept, a slow
 //!   subscriber gets an explicit `Lagged` and never silent loss, and no unaddressed speech
@@ -12,6 +19,9 @@
 //!   [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most [`RESTARTS_PER_WINDOW`] times
 //!   in any [`RESTART_WINDOW_MS`]. That killed children leave no descendants waits for the
 //!   simulated Job Objects.
+//! - 9, [`nothing_sounds_while_muted`]: capture stops by the next callback after a mute, and
+//!   nothing is spoken, played or handed to the device while muted or while another app uses
+//!   the microphone. The call, cancel and input-lease parts wait for those features.
 //! - 10, [`utterances_do_not_overlap`]: two utterances never overlap and the speech queue stays
 //!   bounded.
 //! - 13, [`spans_follow_the_table`]: the span-parent table holds for every span the run
@@ -22,17 +32,34 @@ use std::fmt;
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
 use eileen_contracts::connectors::SidecarId;
-use eileen_contracts::ids::{Envelope, SpeakId, TurnId};
+use eileen_contracts::ids::{Envelope, TurnId};
 use eileen_trace::names;
 use eileen_trace::{EventRecord, SpanRecord};
 use serde_json::Value;
 
-/// The invariants the skeleton checks, by number and name.
+mod audio;
+
+pub use audio::{
+    AudioEvent, AudioRecord, BargeInWatch, HEARD_MARKER, Handed, HeardWatch, MuteWatch,
+    ONSET_TO_SILENCE_MS, OverlapWatch, PAUSE_BY_WINDOW, PAUSE_RESOLVES_MS, WINDOW_MS,
+    barge_in_pauses_in_time, heard_prefix_matches_playback, nothing_sounds_while_muted,
+};
+
+/// The invariants the world checks after every step, by number and name.
 pub const CHECKED: &[(u8, &str)] = &[
     (6, "bus_events_are_attributed"),
     (8, "children_restart_with_bounded_backoff"),
     (10, "utterances_do_not_overlap"),
     (13, "spans_follow_the_table"),
+];
+
+/// The invariants `turn::exhaustive` checks after every input, by number and name (section
+/// 4.7, "Exhaustive tests").
+pub const EXHAUSTIVE: &[(u8, &str)] = &[
+    (2, "barge_in_pauses_in_time"),
+    (3, "heard_prefix_matches_playback"),
+    (9, "nothing_sounds_while_muted"),
+    (10, "utterances_do_not_overlap"),
 ];
 
 /// A broken invariant.
@@ -314,22 +341,14 @@ pub fn utterances_do_not_overlap(
 ) -> Result<(), Violation> {
     const N: u8 = 10;
     const NAME: &str = "utterances_do_not_overlap";
-    let mut speaking: Option<SpeakId> = None;
+    let mut watch = OverlapWatch::default();
     for event in published {
-        if let BusEvent::Speaking { speak, .. } = &event.body {
-            if let Some(other) = speaking.filter(|other| other != speak) {
-                return Err(Violation::new(
-                    N,
-                    NAME,
-                    format!("{speak} started at seq {} while {other} was speaking", event.seq),
-                ));
-            }
-            speaking = Some(*speak);
-        }
-        if let BusEvent::SpeakingStopped { speak, .. } = &event.body
-            && speaking == Some(*speak)
-        {
-            speaking = None;
+        if let Some((speak, other)) = watch.follow(&event.body) {
+            return Err(Violation::new(
+                N,
+                NAME,
+                format!("{speak} started at seq {} while {other} was speaking", event.seq),
+            ));
         }
     }
     if speech_queue > speech_queue_max {

@@ -321,3 +321,5 @@ fn invariant_13_fails_on_a_turn_without_its_id() {
     let error = spans_follow_the_table(&spans, &lines).unwrap_err();
     assert!(error.detail.contains("no turn id"), "{error}");
 }
+
+mod audio;
