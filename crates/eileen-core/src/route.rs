@@ -2,6 +2,14 @@
 //! to 6): the gate decides whether it was meant for Eileen, the resolver says what it means, and
 //! the core answers the safety and control commands and "what time is it" itself; every other
 //! resolution goes to the brain.
+//!
+//! Unmuting is for the user's hands (section 3.3.3, after `UserInput`): an `eileen say` turn,
+//! which is ambient (sections 2.3 and 2.12), may mute, stop and cancel but never unmute. The
+//! safety and control commands the minimal core does not run yet are answered with a sentence
+//! and never reach the brain, which could otherwise claim to have done them (section 2.4,
+//! precedence 1).
+
+use std::collections::VecDeque;
 
 use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, TurnRoute};
 use eileen_contracts::ids::{MonoTime, Personal, TurnId};
@@ -15,6 +23,52 @@ use crate::addressee::{self, Decision, Facts};
 use crate::speech::Owner;
 use crate::turn::Verdict;
 use crate::{Core, Cx, clock, turn_ctx};
+
+/// What Eileen says when an `eileen say` turn asks her to unmute.
+const UNMUTE_BY_HAND: &str = "Unmute with the key or the tray.";
+
+/// What Eileen says to a safety or control command the minimal core does not run yet.
+const NOT_BUILT: &str = "I can't do that yet.";
+
+/// How many ended speech turns the core remembers, so a repeated `EndOfTurn` is not routed
+/// again.
+const HANDLED_KEPT: usize = 8;
+
+/// The speech turns already routed, newest last, at most `HANDLED_KEPT`.
+#[derive(Debug, Default)]
+pub(crate) struct Handled(VecDeque<TurnId>);
+
+impl Handled {
+    /// Records `turn`; false when it was already handled.
+    pub(crate) fn first_time(&mut self, turn: TurnId) -> bool {
+        if self.0.contains(&turn) {
+            return false;
+        }
+        if self.0.len() >= HANDLED_KEPT {
+            self.0.pop_front();
+        }
+        self.0.push_back(turn);
+        true
+    }
+}
+
+/// Whether `resolution` is a safety or control command (section 2.4, precedence 1) that the
+/// minimal core does not run yet.
+const fn safety_not_built(resolution: &Resolution) -> bool {
+    let Resolution::Command { command, .. } = resolution else { return false };
+    matches!(
+        command,
+        CoreCommand::ThatWasForYou
+            | CoreCommand::Undo
+            | CoreCommand::UndoFact
+            | CoreCommand::Forget(_)
+            | CoreCommand::SomethingWentWrong
+            | CoreCommand::SaveScenario
+            | CoreCommand::StopRecording
+            | CoreCommand::OffTheRecord(_)
+            | CoreCommand::PauseAgents
+    )
+}
 
 /// The commands the minimal core answers itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,11 +136,12 @@ struct Routed<'t> {
 }
 
 impl Core {
-    /// The speech process's final transcript of `turn`.
+    /// The speech process's final transcript of `turn`. A turn already handled is not routed
+    /// again.
     pub(crate) fn end_of_turn(&mut self, cx: &mut Cx<'_>, turn: TurnId, text: &str) {
         self.turns.end_of_turn();
         self.partial = None;
-        if self.turns.muted() || self.spans.has_turn(turn) {
+        if !self.handled.first_time(turn) || self.turns.muted() {
             return;
         }
         self.utterance(cx, turn, text, TurnSource::Voice);
@@ -177,17 +232,21 @@ impl Core {
         self.spans.close_turn_if_done(turn);
     }
 
-    /// The fast path for the commands the minimal core answers, the brain for the rest.
+    /// The fast path for the commands the minimal core answers, a sentence for the safety
+    /// commands it does not run yet, and the brain for the rest.
     fn route(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>, resolution: &Resolution) {
         if let Some(fast) = Fast::of(resolution) {
             self.fast_path(cx, routed, fast);
+        } else if safety_not_built(resolution) {
+            self.not_built(cx, routed);
         } else {
             self.route_to_brain(cx, routed);
         }
     }
 
     fn fast_path(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>, fast: Fast) {
-        let name = fast.name();
+        let refused = fast == Fast::Unmute && routed.authority == TurnAuthority::Ambient;
+        let name = if refused { "unmute_by_hand" } else { fast.name() };
         emit_routed(cx, routed, TurnRoute::FastPath, name);
         self.spans.router(routed.turn, "fast_path", name);
         self.spans.fast_path(routed.turn, name);
@@ -196,6 +255,9 @@ impl Core {
         }
         match fast {
             Fast::Mute => self.set_mute(cx, true),
+            Fast::Unmute if refused => {
+                self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, UNMUTE_BY_HAND);
+            }
             Fast::Unmute => self.set_mute(cx, false),
             Fast::Stop => self.stop_speaking(cx, true),
             Fast::Cancel(job) => {
@@ -209,6 +271,15 @@ impl Core {
                 self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, &line);
             }
         }
+    }
+
+    /// A safety or control command the minimal core does not run: said so, and the brain is
+    /// not asked.
+    fn not_built(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
+        emit_routed(cx, routed, TurnRoute::FastPath, "not_built");
+        self.spans.router(routed.turn, "fast_path", "not_built");
+        self.stop_speaking(cx, true);
+        self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, NOT_BUILT);
     }
 
     fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {

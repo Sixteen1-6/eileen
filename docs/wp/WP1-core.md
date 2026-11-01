@@ -125,6 +125,19 @@ Every pull request also meets the rules section 6.1 sets for every package.
   changes the runtime read from the time zone's rules at start for the current year and the
   next; the core takes the change with the latest `from` at or before the step's wall time,
   whatever the order of the list.
+- `jobs_dispatch` takes its turn and authority from the core's record of the brain turn in
+  flight, not from the call's `CallOrigin`, and only from the brain's shim: the shim protocol
+  carries neither, so the claim is filled outside the core and is not trusted.
+- An `eileen say` turn may mute, stop and cancel, but an unmute from it is answered with a
+  sentence and capture stays off. Cancel stays, because it only stops work the user started.
+- The safety and control commands the minimal core does not run (section 2.4, precedence 1:
+  "that was for you", undo, forget, off the record and the rest) are answered "I can't do that
+  yet." and never reach the brain. Other core commands, such as "how's it going", still go to
+  the brain, which can answer them from its read-only tools.
+- A worker gets its kind's built-in tools narrowed to `Read`, `Grep`, `Edit` and `Write`, the
+  file tools the minimal hook can check. `Glob` is left out: its pattern can reach outside the
+  job's folder while only its `path` carries a path fact. `--allowedTools` repeats them with
+  `mcp__eileen__*`.
 
 ## Outcome
 

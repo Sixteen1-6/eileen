@@ -17,9 +17,9 @@ use eileen_contracts::intent::{
 };
 use eileen_contracts::jobs::{Cost, TurnAuthority};
 use eileen_contracts::learn::{
-    CheckPlan, Outcome, PhrasingFact, Recipe, ReplayRefusal, ReplayState, ReplayStep, RouteStat,
-    ShadowVerdict, SkillMeta, SkillRef, StepResult, TrajectoryStep, Transition, UseRecord,
-    VocabularyEntry,
+    CheckPlan, ForgetTarget, Outcome, PhrasingFact, Recipe, ReplayRefusal, ReplayState, ReplayStep,
+    RouteStat, ShadowVerdict, SkillMeta, SkillRef, StepResult, TrajectoryStep, Transition,
+    UseRecord, VocabularyEntry,
 };
 use eileen_contracts::ports::{
     Cleaned, DictationCleaner, IntentResolver, SettingsValidator, SkillEngine,
@@ -98,6 +98,8 @@ impl IntentResolver for Scripted {
             "unmute" => Some(CoreCommand::Unmute),
             "cancel" => Some(CoreCommand::Cancel { job: None }),
             "how's it going" => Some(CoreCommand::HowsItGoing),
+            "forget that" => Some(CoreCommand::Forget(ForgetTarget::Fact { id: "f1".to_owned() })),
+            "off the record" => Some(CoreCommand::OffTheRecord(true)),
             _ => None,
         };
         command.map_or(Resolution::Brain { depth: None, addressee_unsure: false }, |command| {
@@ -247,6 +249,11 @@ fn done(turn: TurnId) -> Input {
         context_tokens: 0,
         is_error: false,
     })
+}
+
+/// `eileen say <text>`.
+fn cli(text: &str) -> Input {
+    Input::User(UserInput::Cli { text: Personal::new(text.to_owned()) })
 }
 
 /// Starts a brain turn for `text` and returns it.
@@ -587,6 +594,108 @@ fn other_resolutions_go_to_the_brain() {
             .any(|e| matches!(e, BusEvent::TurnRouted { route: TurnRoute::Brain, .. })),
         "routed to the brain"
     );
+}
+
+#[test]
+fn eileen_say_cannot_unmute() {
+    let mut h = Harness::new();
+    h.step(Input::User(UserInput::SetMute(true)));
+    let effects = h.step(cli("unmute"));
+    assert!(
+        !effects.contains(&Effect::Audio(AudioCmd::SetCapture(true))),
+        "capture stays off: {effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Emit(BusEvent::MuteChanged { .. }))),
+        "no mute change: {effects:?}"
+    );
+    assert!(
+        events(&effects).iter().any(|e| matches!(
+            e,
+            BusEvent::TurnRouted { route: TurnRoute::FastPath, reason } if reason == "unmute_by_hand"
+        )),
+        "the bus says why: {effects:?}"
+    );
+    assert!(h.core.turns().muted(), "still muted");
+    let effects =
+        h.step(Input::User(UserInput::Typed { text: Personal::new("unmute".to_owned()) }));
+    assert!(
+        effects.contains(&Effect::Audio(AudioCmd::SetCapture(true))),
+        "text typed in Eileen's own UI is the user's: {effects:?}"
+    );
+    let effects = h.step(cli("mute"));
+    assert!(
+        effects.contains(&Effect::Audio(AudioCmd::SetCapture(false))),
+        "eileen say may still mute: {effects:?}"
+    );
+}
+
+#[test]
+fn a_repeated_end_of_turn_is_routed_once() {
+    let mut h = Harness::new();
+    let turn = TurnId::from_parts(40, 40);
+    h.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0 }));
+    h.wait(400);
+    let first = h.step(Input::Voice(end_of_turn(turn, "what time is it")));
+    let again = h.step(Input::Voice(end_of_turn(turn, "what time is it")));
+    let started = |effects: &[Effect]| {
+        events(effects).iter().filter(|e| matches!(e, BusEvent::TurnStarted { .. })).count()
+    };
+    assert_eq!((started(&first), spoken(&first).len()), (1, 1), "the first: {first:?}");
+    assert_eq!((started(&again), spoken(&again).len()), (0, 0), "the repeat: {again:?}");
+    let asked = ask_brain(&mut h, "Eileen, tell me about rivers");
+    h.step(done(asked));
+    let again = h.step(Input::Voice(end_of_turn(asked, "Eileen, tell me about rivers")));
+    assert_eq!(brain_turn(&again), None, "a finished brain turn is not sent again: {again:?}");
+}
+
+#[test]
+fn an_ambient_turn_never_rides_on_an_addressed_one() {
+    let mut h = Harness::new();
+    let ambient = brain_turn(&h.step(cli("dispatch a job to clean my files"))).expect("sent");
+    assert!(ambient.1.contains("clean my files"), "{}", ambient.1);
+    let effects = h.say("Eileen, tell me about rivers");
+    let (_, message) = brain_turn(&effects).expect("a new brain turn");
+    assert!(!message.contains("clean my files"), "the ambient words are dropped: {message}");
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::Brain(BrainCmd::Turn { authority: TurnAuthority::Addressed, .. })
+        )),
+        "the spoken turn keeps its own authority"
+    );
+}
+
+#[test]
+fn an_unanswered_turn_is_merged_into_the_next_of_the_same_authority() {
+    let mut h = Harness::new();
+    h.say("Eileen, tell me about rivers");
+    let (_, message) = brain_turn(&h.say("Eileen, and lakes")).expect("a new brain turn");
+    assert!(
+        message.contains("[heard] Eileen, tell me about rivers Eileen, and lakes"),
+        "{message}"
+    );
+}
+
+#[test]
+fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
+    for text in ["Eileen, forget that", "Eileen, off the record"] {
+        let mut h = Harness::new();
+        let effects = h.say(text);
+        assert_eq!(brain_turn(&effects), None, "{text}: no brain turn");
+        assert_eq!(
+            spoken(&effects).first().map(|s| s.1.clone()),
+            Some(vec!["I can't do that yet.".to_owned()]),
+            "{text}: said so"
+        );
+        assert!(
+            events(&effects).iter().any(|e| matches!(
+                e,
+                BusEvent::TurnRouted { route: TurnRoute::FastPath, reason } if reason == "not_built"
+            )),
+            "{text}: {effects:?}"
+        );
+    }
 }
 
 mod jobs;

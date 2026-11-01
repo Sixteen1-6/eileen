@@ -34,9 +34,13 @@
 //! - Barge-in ducks at the first window, pauses at the third consecutive one and resolves within
 //!   600 ms of the pause (invariant 2); the brain is told exactly the heard prefix (invariant 3).
 //! - Nothing is spoken and no earcon plays while muted (invariant 9).
-//! - A worker's `PreToolUse` is never allowed: no decision only for file tools whose every path
-//!   is in the job's folders, a deny with a do-not-retry reason for everything else, until W2's
-//!   permission gate replaces this.
+//! - A worker's `PreToolUse` is never allowed: no decision only for its kind's file tools when
+//!   every path is in the job's folders and outside any git component, a deny with a
+//!   do-not-retry reason for everything else, until W2's permission gate replaces this.
+//! - A job starts only from the brain's own shim, for the brain turn in flight, with the
+//!   authority the core sent that turn with; an ambient turn starts none (section 2.3).
+//! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
+//! - A speech turn is routed once, however often its `EndOfTurn` arrives.
 //! - The span-parent table holds for every span (invariant 13).
 //!
 //! # Boundaries
@@ -117,6 +121,7 @@ use crate::addressee::Window;
 use crate::announce::Queue;
 use crate::brain::Brain;
 use crate::job::Jobs;
+use crate::route::Handled;
 use crate::spans::Spans;
 use crate::turn::Turns;
 
@@ -274,6 +279,8 @@ pub struct Core {
     announcements: Queue,
     timers: Timers,
     spans: Spans,
+    /// The speech turns already routed, so a repeated `EndOfTurn` is dropped.
+    handled: Handled,
     seq: u64,
     /// The snapshot the core started from, for the fields it does not run yet.
     resumed: CoreSnapshotV1,
@@ -309,6 +316,7 @@ impl Core {
             announcements: Queue::default(),
             timers,
             spans: Spans::default(),
+            handled: Handled::default(),
             seq: counter(COUNTER_SEQ),
             resumed,
         }

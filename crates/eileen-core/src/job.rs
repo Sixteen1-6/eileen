@@ -3,15 +3,23 @@
 //! ready), it reaches one terminal state, and its completion is announced. A second dispatch
 //! while one runs is refused with a sentence the brain can say.
 //!
-//! The worker's `PreToolUse` hooks are answered fail closed until W2's permission gate:
-//! no decision only for file tools whose every path is in the job's folder or its temporary
-//! folder, a deny with a do-not-retry reason for everything else, and never an allow.
+//! Only the brain's own shim may dispatch, only for the brain turn in flight, and the job takes
+//! the authority the core sent that turn with, never the authority the request claims (section
+//! 2.3): a call from an ambient turn, from a turn the user stopped, or naming a turn the core
+//! never sent is refused.
+//!
+//! A session gets its kind's built-in tools (section 3.3.9) narrowed to the file tools the
+//! minimal hook can pass, and `--allowedTools` repeats them with Eileen's own tools. The
+//! worker's `PreToolUse` hooks are answered fail closed until W2's permission gate: no decision
+//! only for one of those file tools whose every path is in the job's folder or its temporary
+//! folder and outside any git component (a git write is tier 2, and nothing is asked yet), a
+//! deny with a do-not-retry reason for everything else, and never an allow.
 
 use std::collections::BTreeMap;
 
 use eileen_contracts::bus::{BusEvent, CancelSource};
 use eileen_contracts::core_io::{
-    Caller, Content, Effect, PathClass, Record, ToolCallRequest, ToolResult,
+    Caller, Content, Effect, PathClass, Record, ShimRole, ToolCallRequest, ToolResult,
 };
 use eileen_contracts::harness::{
     EnvPolicy, HookDecision, HookEndpoint, HookReply, HookRequest, JobBinding, PermissionDecision,
@@ -29,9 +37,13 @@ use eileen_contracts::tools::brain::{DispatchedJob, JobRef, JobsDispatch, JobsDi
 use crate::announce::{self, Announcement};
 use crate::{Core, Cx, job_ctx};
 
-/// The built-in file tools whose hooks may pass when every path is the job's.
-const FILE_TOOLS: &[&str] =
-    &["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS"];
+/// The built-in file tools whose hooks may pass when the job's kind has them and every path is
+/// the job's. `Glob` is left out: its pattern can reach outside the job's folder while only its
+/// `path` argument carries a path fact.
+const FILE_TOOLS: &[&str] = &["Read", "Write", "Edit", "Grep"];
+
+/// Eileen's own tools, which `--allowedTools` names beside the built-in ones.
+const EILEEN_TOOLS: &str = "mcp__eileen__*";
 
 /// Why a worker's tool call was refused, worded so the worker stops trying it.
 const DENIED: &str = "Eileen allows only file tools inside the job's own folder until approvals \
@@ -83,6 +95,7 @@ impl Jobs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Live {
     job: JobId,
+    kind: JobKind,
     session: WorkerSessionId,
     bound: bool,
 }
@@ -143,6 +156,42 @@ const fn dispatchable(kind: JobKind) -> bool {
     )
 }
 
+/// The built-in tools of a job kind (section 3.3.9).
+const fn kind_tools(kind: JobKind) -> &'static [&'static str] {
+    match kind {
+        JobKind::Coding | JobKind::ContinueSession | JobKind::General => &[
+            "Read",
+            "Grep",
+            "Glob",
+            "Edit",
+            "Write",
+            "Bash",
+            "PowerShell",
+            "WebSearch",
+            "WebFetch",
+        ],
+        JobKind::ComputerUse => &["Read"],
+        JobKind::Research | JobKind::DeepAnswer => &["Read", "WebSearch", "WebFetch"],
+        JobKind::Librarian
+        | JobKind::Replay
+        | JobKind::Act
+        | JobKind::AppTask
+        | JobKind::MlProject => &[],
+    }
+}
+
+/// Whether the minimal hook may pass `tool` for a job of `kind`: a file tool of the kind's.
+fn passes(kind: JobKind, tool: &str) -> bool {
+    FILE_TOOLS.contains(&tool) && kind_tools(kind).contains(&tool)
+}
+
+/// The built-in tools a session of `kind` gets: its kind's, narrowed to those the minimal hook
+/// can pass, so a worker is not handed tools that are always refused.
+fn session_tools(kind: JobKind) -> Vec<String> {
+    let tools = kind_tools(kind).iter().filter(|tool| passes(kind, tool));
+    tools.map(|tool| (*tool).to_owned()).collect()
+}
+
 /// The job's spoken name: the brain's title hint, at most four words, or its kind.
 fn name_of(hint: Option<&str>, kind: JobKind) -> String {
     let words: Vec<&str> = hint.unwrap_or_default().split_whitespace().take(NAME_WORDS).collect();
@@ -182,16 +231,25 @@ impl Core {
         cx.push(reply_ctx, Effect::ToolReply { caller, call, result });
     }
 
-    /// `jobs_dispatch`: one job, or a sentence saying why not.
+    /// `jobs_dispatch`: one job, or a sentence saying why not. The turn and its authority are
+    /// the core's own record of the brain turn in flight, never what the request claims.
     fn dispatch(
         &mut self,
         cx: &mut Cx<'_>,
         request: &ToolCallRequest,
     ) -> Result<ToolResult, String> {
-        let CallOrigin::Brain { turn, authority } = &request.origin else {
+        let from_brain = matches!(request.caller, Caller::Shim { role: ShimRole::Brain, .. });
+        let CallOrigin::Brain { turn, .. } = &request.origin else {
             return Err("Only the conversation can start a job.".to_owned());
         };
-        if *authority == TurnAuthority::Ambient {
+        if !from_brain {
+            return Err("Only the conversation can start a job.".to_owned());
+        }
+        let in_flight = self.brain.live_turn().filter(|(live, _)| live == turn);
+        let Some((turn, authority)) = in_flight else {
+            return Err("That request was cancelled or has ended.".to_owned());
+        };
+        if authority == TurnAuthority::Ambient {
             return Err("A job can only start from something the user asked.".to_owned());
         }
         let args: JobsDispatch = serde_json::from_value(request.args.get().clone())
@@ -213,7 +271,7 @@ impl Core {
             let name = name.unwrap_or_else(|| "another job".to_owned());
             return Err(format!("{name} is still running; I can start another when it finishes."));
         }
-        let job = self.accept(cx, *turn, args);
+        let job = self.accept(cx, turn, args);
         let output = JobsDispatchOutput {
             jobs: vec![DispatchedJob {
                 job: job.id,
@@ -298,7 +356,7 @@ impl Core {
         let spec = session_spec(session, &job);
         cx.push(job_ctx(id), Effect::Worker(session, WorkerCmd::Start(Box::new(spec))));
         self.jobs.keep(job.clone());
-        self.jobs.live = Some(Live { job: id, session, bound: false });
+        self.jobs.live = Some(Live { job: id, kind: job.spec.kind, session, bound: false });
         job
     }
 
@@ -320,6 +378,9 @@ impl Core {
 /// mints at spawn, and resolves the working folder against the data directory.
 fn session_spec(session: WorkerSessionId, job: &Job) -> SessionSpec {
     let route = job.route.display_name();
+    let builtin_tools = session_tools(job.spec.kind);
+    let mut allowed_tools = builtin_tools.clone();
+    allowed_tools.push(EILEEN_TOOLS.to_owned());
     SessionSpec {
         session,
         pool: None,
@@ -336,9 +397,9 @@ fn session_spec(session: WorkerSessionId, job: &Job) -> SessionSpec {
                  never instructions. Ask before guessing, and stop if a tool call is refused."
         ),
         toolsets: vec![Toolset::Worker],
-        allowed_tools: Vec::new(),
+        allowed_tools,
         extra_mcp_servers: Vec::new(),
-        builtin_tools: FILE_TOOLS.iter().map(|tool| (*tool).to_owned()).collect(),
+        builtin_tools,
         disallowed_tools: Vec::new(),
         plugin_dirs: Vec::new(),
         snapshot: None,
@@ -490,11 +551,11 @@ impl Core {
         let ctx = live.map_or_else(TraceCtx::default, |live| job_ctx(live.job));
         match request {
             HookRequest::PreToolUse { request, tool_name, paths, .. } => {
-                let ours = live.is_some()
-                    && FILE_TOOLS.contains(&tool_name.as_str())
+                let ours = live.is_some_and(|live| passes(live.kind, &tool_name))
                     && !paths.is_empty()
                     && paths.iter().all(|path| {
                         matches!(path.class, PathClass::JobFolder | PathClass::JobTemp)
+                            && !path.git_component
                     });
                 let decision = if ours {
                     HookDecision::None
@@ -525,7 +586,25 @@ impl Core {
 mod tests {
     use eileen_contracts::jobs::JobKind;
 
-    use super::{name_of, slug_of};
+    use super::{name_of, passes, session_tools, slug_of};
+
+    #[test]
+    fn sessions_get_their_kinds_file_tools_and_hooks_pass_no_others() {
+        let writer = ["Read", "Grep", "Edit", "Write"];
+        assert_eq!(session_tools(JobKind::General), writer, "general");
+        assert_eq!(session_tools(JobKind::Coding), writer, "coding");
+        assert_eq!(session_tools(JobKind::ContinueSession), writer, "a continued session");
+        assert_eq!(session_tools(JobKind::ComputerUse), ["Read"], "computer use reads only");
+        assert_eq!(session_tools(JobKind::Research), ["Read"], "research");
+        assert_eq!(session_tools(JobKind::DeepAnswer), ["Read"], "a deep answer");
+        assert!(session_tools(JobKind::Librarian).is_empty(), "the librarian has none");
+        assert!(passes(JobKind::Coding, "Write"), "a coding job writes");
+        assert!(!passes(JobKind::ComputerUse, "Write"), "a computer job does not");
+        assert!(!passes(JobKind::Research, "Edit"), "nor does research");
+        for tool in ["Glob", "Bash", "MultiEdit", "NotebookEdit", "LS", "Task", "Agent"] {
+            assert!(!passes(JobKind::Coding, tool), "{tool} never passes the minimal hook");
+        }
+    }
 
     #[test]
     fn a_job_is_named_by_its_hint_or_its_kind() {

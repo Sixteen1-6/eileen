@@ -2,6 +2,11 @@
 //! one `BrainCmd::Turn` to the primary slot with the transcript and any heard prefix, the
 //! streamed text cut into clauses and spoken as one utterance, and `TurnDone`. Text is accepted
 //! only for the turn in flight and from the instance it was sent to.
+//!
+//! The core keeps the authority it sent each turn with: a job starts only from the turn in
+//! flight and with that authority, never with what a tool call claims (section 2.3). A turn that
+//! replaces one still unanswered takes its words only when both have the same authority, so an
+//! `eileen say` request never rides on a later spoken turn's authority (section 2.12).
 
 use eileen_contracts::bus::SpeakCause;
 use eileen_contracts::config::{Humor, Verbosity};
@@ -31,6 +36,8 @@ pub(crate) struct Live {
     turn: TurnId,
     /// The instance the turn was sent to; the first to answer when none was ready.
     instance: Option<u32>,
+    /// The authority the core sent the turn with.
+    authority: TurnAuthority,
     /// The user's words it holds, for a turn that replaces it before it answered.
     transcript: String,
     cutter: Cutter,
@@ -40,9 +47,16 @@ pub(crate) struct Live {
     silenced: bool,
 }
 
+impl Brain {
+    /// The turn in flight and the authority the core sent it with.
+    pub(crate) fn live_turn(&self) -> Option<(TurnId, TurnAuthority)> {
+        self.live.as_ref().map(|live| (live.turn, live.authority))
+    }
+}
+
 impl Core {
     /// Sends `turn` to the primary brain. A turn still in flight is interrupted, and when it
-    /// had not answered yet the new turn holds both utterances.
+    /// had not answered yet and has the same authority the new turn holds both utterances.
     pub(crate) fn send_brain_turn(
         &mut self,
         cx: &mut Cx<'_>,
@@ -50,7 +64,9 @@ impl Core {
         transcript: &str,
         authority: TurnAuthority,
     ) {
-        let unanswered = self.interrupt_brain(cx).filter(|old| old.speak.is_none());
+        let unanswered = self
+            .interrupt_brain(cx)
+            .filter(|old| old.speak.is_none() && old.authority == authority);
         let words = match unanswered {
             Some(old) => format!("{} {transcript}", old.transcript),
             None => transcript.to_owned(),
@@ -67,6 +83,7 @@ impl Core {
         self.brain.live = Some(Live {
             turn,
             instance: self.brain.instance,
+            authority,
             transcript: words,
             cutter: Cutter::default(),
             speak: None,

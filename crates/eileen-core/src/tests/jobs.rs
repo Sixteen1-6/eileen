@@ -4,32 +4,47 @@
 use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
 use eileen_contracts::core_io::{
     Caller, Content, Effect, Input, PathAccess, PathClass, PathFact, PlaybackEvent, ShimRole,
-    TimerId, ToolCallRequest,
+    TimerId, ToolCallRequest, UserInput,
 };
 use eileen_contracts::harness::{
     HookDecision, HookReply, HookRequest, PermissionDecision, WorkerCmd, WorkerEvent,
 };
-use eileen_contracts::ids::{Personal, ToolName, TurnId, Untrusted, WorkerSessionId};
-use eileen_contracts::jobs::{CallOrigin, Cost, JobStatus, TurnAuthority};
+use eileen_contracts::ids::{JobId, Personal, ToolName, TurnId, Untrusted, WorkerSessionId};
+use eileen_contracts::jobs::{CallOrigin, Cost, JobStatus, Route, TurnAuthority};
 use eileen_contracts::speech::VoiceEvent;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::{Harness, ask_brain, done, events, spoken, timer_set};
+use super::{Harness, ask_brain, brain_turn, done, events, spoken, timer_set};
 
-fn dispatch(turn: TurnId) -> Input {
+const BRAIN: Caller = Caller::Shim { connection: 1, role: ShimRole::Brain };
+
+fn hello() -> Value {
+    json!({
+        "kind": "general",
+        "task": "create hello.txt containing hi",
+        "title_hint": "the hello file"
+    })
+}
+
+/// A `jobs_dispatch` call from `caller`, claiming `origin`.
+fn dispatch_from(caller: Caller, origin: CallOrigin, args: Value) -> Input {
     Input::ToolCall(ToolCallRequest {
-        caller: Caller::Shim { connection: 1, role: ShimRole::Brain },
-        origin: CallOrigin::Brain { turn, authority: TurnAuthority::Addressed },
+        caller,
+        origin,
         tool: ToolName::new("jobs_dispatch").unwrap(),
-        args: Untrusted::new(json!({
-            "kind": "general",
-            "task": "create hello.txt containing hi",
-            "title_hint": "the hello file"
-        })),
+        args: Untrusted::new(args),
         paths: Vec::new(),
         urls: Vec::new(),
         traceparent: None,
     })
+}
+
+fn addressed(turn: TurnId) -> CallOrigin {
+    CallOrigin::Brain { turn, authority: TurnAuthority::Addressed }
+}
+
+fn dispatch(turn: TurnId) -> Input {
+    dispatch_from(BRAIN, addressed(turn), hello())
 }
 
 fn tool_reply(effects: &[Effect]) -> Option<(bool, String)> {
@@ -154,6 +169,9 @@ fn hooks_pass_only_file_tools_in_the_job_folder_and_never_allow() {
         (4, "Write", vec![path(PathClass::JobFolder), path(PathClass::Credential)]),
         (5, "Bash", vec![path(PathClass::JobFolder)]),
         (6, "Write", Vec::new()),
+        (9, "Write", vec![PathFact { git_component: true, ..path(PathClass::JobFolder) }]),
+        (10, "MultiEdit", vec![path(PathClass::JobFolder)]),
+        (11, "Glob", vec![path(PathClass::JobFolder)]),
     ] {
         let decision = decide(request, tool, paths);
         assert!(
@@ -261,4 +279,72 @@ fn a_session_with_no_live_job_takes_no_events() {
     assert!(h.step(Input::Worker(stray, init())).is_empty(), "no live job");
     let exited = WorkerEvent::Exited { code: Some(1) };
     assert!(h.step(Input::Worker(stray, exited)).is_empty(), "nothing");
+}
+
+/// Asserts the call was refused with a sentence, and nothing started.
+fn assert_refused(effects: &[Effect], case: &str) -> String {
+    let (is_error, text) = tool_reply(effects).unwrap_or_else(|| panic!("{case}: no reply"));
+    assert!(is_error, "{case}: an error result: {text}");
+    assert!(!text.is_empty(), "{case}: a sentence");
+    assert!(
+        !events(effects).iter().any(|e| matches!(e, BusEvent::JobAccepted { .. })),
+        "{case}: no job: {effects:?}"
+    );
+    assert_eq!(started_session(effects), None, "{case}: no session");
+    text
+}
+
+#[test]
+fn a_dispatch_is_refused_with_a_sentence_unless_an_addressed_brain_turn_asked() {
+    let session = WorkerSessionId::from_parts(7, 7);
+    let worker = Caller::Shim { connection: 2, role: ShimRole::Worker(session) };
+    let from_worker =
+        CallOrigin::Worker { job: JobId::from_parts(7, 7), session, route: Route::Claude };
+    let with = |extra: Value| {
+        let mut args = hello();
+        if let (Some(args), Some(extra)) = (args.as_object_mut(), extra.as_object()) {
+            args.extend(extra.clone());
+        }
+        args
+    };
+    let unknown = addressed(TurnId::from_parts(99, 99));
+    let cases = [
+        ("a worker's shim with a brain origin", worker, None, hello()),
+        ("a worker origin", BRAIN, Some(from_worker), hello()),
+        ("the session origin", BRAIN, Some(CallOrigin::Session), hello()),
+        ("a turn the core never sent", BRAIN, Some(unknown), hello()),
+        ("a fanout of two", BRAIN, None, with(json!({ "fanout": 2 }))),
+        ("a kind the core runs itself", BRAIN, None, with(json!({ "kind": "librarian" }))),
+        ("the reserved kind", BRAIN, None, with(json!({ "kind": "ml_project" }))),
+        ("a route not built", BRAIN, None, with(json!({ "route": "codex" }))),
+        ("arguments that do not parse", BRAIN, None, json!({ "kind": 3 })),
+    ];
+    for (case, caller, origin, args) in cases {
+        let mut h = Harness::new();
+        let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+        let origin = origin.unwrap_or_else(|| addressed(turn));
+        assert_refused(&h.step(dispatch_from(caller, origin, args)), case);
+    }
+}
+
+#[test]
+fn a_dispatch_from_an_ambient_turn_is_refused_whatever_it_claims() {
+    let mut h = Harness::new();
+    let cli = Input::User(UserInput::Cli {
+        text: Personal::new("create a file called hello dot txt".to_owned()),
+    });
+    let (turn, _) = brain_turn(&h.step(cli)).expect("an ambient brain turn");
+    let text = assert_refused(&h.step(dispatch(turn)), "claims addressed");
+    assert_eq!(text, "A job can only start from something the user asked.", "said why");
+}
+
+#[test]
+fn a_dispatch_after_stop_or_after_the_turn_ended_is_refused() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    h.say("stop");
+    assert_refused(&h.step(dispatch(turn)), "the user stopped the turn");
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    h.step(done(turn));
+    assert_refused(&h.step(dispatch(turn)), "the turn ended");
 }

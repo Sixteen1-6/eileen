@@ -70,11 +70,6 @@ impl Spans {
         true
     }
 
-    /// Whether `turn`'s span is open.
-    pub(crate) fn has_turn(&self, turn: TurnId) -> bool {
-        self.turns.contains_key(&turn)
-    }
-
     fn turn_id(&self, turn: TurnId) -> Option<tracing::Id> {
         self.turns.get(&turn).and_then(|spans| spans.turn.id())
     }
