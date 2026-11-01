@@ -190,8 +190,8 @@ fn recorded_reply(conversation: &str) -> String {
     content[0]["text"].as_str().unwrap().to_owned()
 }
 
-/// A recorded reply's JSON as serde_json writes it, compact (the recording's keys are already in
-/// sorted order, which is also the order the reply writes them).
+/// A recorded reply's JSON as `serde_json` writes it, compact. The recording's keys are already
+/// sorted, which is also the order the reply writes them in.
 fn compact(text: &str) -> String {
     serde_json::to_string(&serde_json::from_str::<Value>(text).unwrap()).unwrap()
 }
@@ -286,7 +286,7 @@ fn json_value() -> impl Strategy<Value = Value> {
 
 proptest! {
     /// `allow` carries whatever input was stored, unchanged: its text is that value exactly as
-    /// serde_json writes it on its own, inside the allow shape and nothing else.
+    /// `serde_json` writes it on its own, inside the allow shape and nothing else.
     #[test]
     fn allow_carries_any_stored_value_unchanged(value in json_value()) {
         let input = serde_json::to_string(&value).unwrap();
