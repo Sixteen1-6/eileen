@@ -125,6 +125,27 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: linux
@@ -154,6 +175,23 @@ jobs:
           name: logic-linux-junit
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
+        # save, and rust-cache saves after the last step, so this is the last step and runs only
+        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
+        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
+              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+            fi
+          done
 
   windows-clippy:
     name: windows-clippy
@@ -167,6 +205,27 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: win-clippy
@@ -177,6 +236,23 @@ jobs:
         run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
+        # save, and rust-cache saves after the last step, so this is the last step and runs only
+        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
+        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
+              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+            fi
+          done
 
   windows-test:
     name: windows-test
@@ -190,6 +266,27 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: win-test
@@ -212,6 +309,61 @@ jobs:
           name: windows-test-junit
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Only main's runs
+        # save, and rust-cache saves after the last step, so this is the last step and runs only
+        # there. Cargo judges a registry crate by its hash, never by these dates, and the next run
+        # checks the sources out afresh, so newer dates cannot make it skip a needed build.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -mindepth 1 -maxdepth 1 -exec touch -c -- {} +
+              echo "$dir: dated $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) entries"
+            fi
+          done
+
+  prune-caches:
+    name: prune-caches
+    # Each lockfile change leaves a superseded generation of the three rust-cache entries (1.0
+    # to 1.25 GB) until it goes seven days unread, which kept the repository over its 10 GB
+    # cache limit, where GitHub evicts. After main's three jobs have saved, keep the newest
+    # entry of each shared key and delete the rest. Other caches, such as the Linux desktop
+    # lane's packages, are never touched. Not an all-green need: it is upkeep, and only runs
+    # where nothing waits for it.
+    needs: [logic-linux, windows-clippy, windows-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # gh cache list and gh cache delete; nothing else
+    steps:
+      - name: Keep the newest rust-cache entry of each shared key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for shared in linux win-clippy win-test; do
+            superseded="$(gh cache list --ref refs/heads/main --key "v0-rust-$shared-" \
+              --sort created_at --order desc --limit 1000 --json id,key \
+              --jq '.[1:][] | "\(.id) \(.key)"')"
+            if [ -z "$superseded" ]; then
+              echo "$shared: nothing superseded"
+              continue
+            fi
+            while read -r id key; do
+              # A concurrent push to main may have deleted it first.
+              if gh cache delete "$id"; then
+                echo "$shared: deleted $key"
+              else
+                echo "::warning::$shared: could not delete $key"
+              fi
+            done <<< "$superseded"
+          done
 
   all-green:
     name: all-green
