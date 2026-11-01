@@ -128,8 +128,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `jobs_dispatch` takes its turn and authority from the core's record of the brain turn in
   flight, not from the call's `CallOrigin`, and only from the brain's shim: the shim protocol
   carries neither, so the claim is filled outside the core and is not trusted.
-- An `eileen say` turn may mute, stop and cancel, but an unmute from it is answered with a
-  sentence and capture stays off. Cancel stays, because it only stops work the user started.
+- An `eileen say` turn may mute, stop and cancel, but an unmute from it is
+  routed with the reason `unmute_by_hand` and capture stays off; nothing is spoken, since
+  Eileen is muted. Cancel stays, because it only stops work the user started.
+- A brain turn that replaces one still unanswered holds both utterances with the weaker
+  authority, so an `eileen say` request neither rides on a spoken turn's authority nor drops
+  the spoken request.
 - The safety and control commands the minimal core does not run (section 2.4, precedence 1:
   "that was for you", undo, forget, off the record and the rest) are answered "I can't do that
   yet." and never reach the brain. Other core commands, such as "how's it going", still go to

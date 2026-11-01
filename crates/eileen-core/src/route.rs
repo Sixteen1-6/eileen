@@ -4,7 +4,8 @@
 //! resolution goes to the brain.
 //!
 //! Unmuting is for the user's hands (section 3.3.3, after `UserInput`): an `eileen say` turn,
-//! which is ambient (sections 2.3 and 2.12), may mute, stop and cancel but never unmute. The
+//! which is ambient (sections 2.3 and 2.12), may mute, stop and cancel but never unmute; the
+//! refusal is routed with the reason `unmute_by_hand`, since nothing is spoken while muted. The
 //! safety and control commands the minimal core does not run yet are answered with a sentence
 //! and never reach the brain, which could otherwise claim to have done them (section 2.4,
 //! precedence 1).
@@ -23,9 +24,6 @@ use crate::addressee::{self, Decision, Facts};
 use crate::speech::Owner;
 use crate::turn::Verdict;
 use crate::{Core, Cx, clock, turn_ctx};
-
-/// What Eileen says when an `eileen say` turn asks her to unmute.
-const UNMUTE_BY_HAND: &str = "Unmute with the key or the tray.";
 
 /// What Eileen says to a safety or control command the minimal core does not run yet.
 const NOT_BUILT: &str = "I can't do that yet.";
@@ -139,9 +137,12 @@ impl Core {
     /// The speech process's final transcript of `turn`. A turn already handled is not routed
     /// again.
     pub(crate) fn end_of_turn(&mut self, cx: &mut Cx<'_>, turn: TurnId, text: &str) {
+        if !self.handled.first_time(turn) {
+            return;
+        }
         self.turns.end_of_turn();
         self.partial = None;
-        if !self.handled.first_time(turn) || self.turns.muted() {
+        if self.turns.muted() {
             return;
         }
         self.utterance(cx, turn, text, TurnSource::Voice);
@@ -255,9 +256,7 @@ impl Core {
         }
         match fast {
             Fast::Mute => self.set_mute(cx, true),
-            Fast::Unmute if refused => {
-                self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, UNMUTE_BY_HAND);
-            }
+            Fast::Unmute if refused => {}
             Fast::Unmute => self.set_mute(cx, false),
             Fast::Stop => self.stop_speaking(cx, true),
             Fast::Cancel(job) => {
@@ -278,6 +277,7 @@ impl Core {
     fn not_built(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
         emit_routed(cx, routed, TurnRoute::FastPath, "not_built");
         self.spans.router(routed.turn, "fast_path", "not_built");
+        self.interrupt_brain(cx);
         self.stop_speaking(cx, true);
         self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, NOT_BUILT);
     }

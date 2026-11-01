@@ -617,6 +617,7 @@ fn eileen_say_cannot_unmute() {
         "the bus says why: {effects:?}"
     );
     assert!(h.core.turns().muted(), "still muted");
+    assert!(spoken(&effects).is_empty(), "nothing is spoken while muted");
     let effects =
         h.step(Input::User(UserInput::Typed { text: Personal::new("unmute".to_owned()) }));
     assert!(
@@ -656,13 +657,21 @@ fn an_ambient_turn_never_rides_on_an_addressed_one() {
     assert!(ambient.1.contains("clean my files"), "{}", ambient.1);
     let effects = h.say("Eileen, tell me about rivers");
     let (_, message) = brain_turn(&effects).expect("a new brain turn");
-    assert!(!message.contains("clean my files"), "the ambient words are dropped: {message}");
+    assert!(message.contains("clean my files") && message.contains("rivers"), "both: {message}");
     assert!(
         effects.iter().any(|e| matches!(
             e,
-            Effect::Brain(BrainCmd::Turn { authority: TurnAuthority::Addressed, .. })
+            Effect::Brain(BrainCmd::Turn { authority: TurnAuthority::Ambient, .. })
         )),
-        "the spoken turn keeps its own authority"
+        "the merged turn has the weaker authority: {effects:?}"
+    );
+    let effects = h.say("Eileen, tell me about lakes");
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::Brain(BrainCmd::Turn { authority: TurnAuthority::Ambient, .. })
+        )),
+        "and keeps it when merged again: {effects:?}"
     );
 }
 
@@ -696,6 +705,14 @@ fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
             "{text}: {effects:?}"
         );
     }
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
+    let effects = h.say("Eileen, forget that");
+    assert!(
+        effects.contains(&Effect::Brain(BrainCmd::Interrupt { slot: BrainSlot::Primary })),
+        "the brain turn in flight is interrupted: {effects:?}"
+    );
+    assert!(spoken(&h.step(delta(turn, "Rivers carry water. "))).is_empty(), "its text is dropped");
 }
 
 mod jobs;

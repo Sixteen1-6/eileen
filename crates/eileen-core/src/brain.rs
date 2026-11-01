@@ -5,8 +5,9 @@
 //!
 //! The core keeps the authority it sent each turn with: a job starts only from the turn in
 //! flight and with that authority, never with what a tool call claims (section 2.3). A turn that
-//! replaces one still unanswered takes its words only when both have the same authority, so an
-//! `eileen say` request never rides on a later spoken turn's authority (section 2.12).
+//! replaces one still unanswered holds both utterances with the weaker of their authorities, so
+//! an `eileen say` request never rides on a later spoken turn's authority (section 2.12) and
+//! neither request is dropped.
 
 use eileen_contracts::bus::SpeakCause;
 use eileen_contracts::config::{Humor, Verbosity};
@@ -56,7 +57,7 @@ impl Brain {
 
 impl Core {
     /// Sends `turn` to the primary brain. A turn still in flight is interrupted, and when it
-    /// had not answered yet and has the same authority the new turn holds both utterances.
+    /// had not answered yet the new turn holds both utterances, with the weaker authority.
     pub(crate) fn send_brain_turn(
         &mut self,
         cx: &mut Cx<'_>,
@@ -64,12 +65,11 @@ impl Core {
         transcript: &str,
         authority: TurnAuthority,
     ) {
-        let unanswered = self
-            .interrupt_brain(cx)
-            .filter(|old| old.speak.is_none() && old.authority == authority);
-        let words = match unanswered {
-            Some(old) => format!("{} {transcript}", old.transcript),
-            None => transcript.to_owned(),
+        let unanswered = self.interrupt_brain(cx).filter(|old| old.speak.is_none());
+        // `Ambient` orders after `Addressed`, so the larger is the weaker.
+        let (words, authority) = match unanswered {
+            Some(old) => (format!("{} {transcript}", old.transcript), old.authority.max(authority)),
+            None => (transcript.to_owned(), authority),
         };
         let heard = self.turns.take_heard();
         let message = self.message(&words, heard.as_deref());

@@ -129,6 +129,16 @@ fn one_job_runs_and_a_second_dispatch_is_refused_with_a_sentence() {
     let (job, name) = accepted.expect("accepted");
     assert_eq!(name, "the hello file", "named by the brain's hint");
     let session = started_session(&effects).expect("a cold session starts");
+    let spec = effects.iter().find_map(|e| {
+        if let Effect::Worker(_, WorkerCmd::Start(spec)) = e { Some(spec.clone()) } else { None }
+    });
+    let spec = spec.expect("its spec");
+    assert_eq!(spec.builtin_tools, ["Read", "Grep", "Edit", "Write"], "the kind's file tools");
+    assert_eq!(
+        spec.allowed_tools,
+        ["Read", "Grep", "Edit", "Write", "mcp__eileen__*"],
+        "the same, with Eileen's own tools"
+    );
     let (is_error, text) = tool_reply(&effects).unwrap();
     assert!(!is_error && text.contains(&job.to_string()), "the reply carries the job's id: {text}");
     let (is_error, text) = tool_reply(&h.step(dispatch(turn))).unwrap();
