@@ -162,8 +162,11 @@ rtrb = "0.4.0"
 # block-buffer 0.12.1, crypto-common 0.2.2, hybrid-array 0.4.15) are past the cooling-off period on
 # 2026-10-31; cfg-if, cpufeatures 0.3.1 and typenum are already in the lock.
 sha2 = { version = "0.11.1", default-features = false }
-# Not pinned: rubato. Both resampling ratios are integers (48 kHz capture to 16 kHz is 3:1, 24 kHz
-# synthesis to the 48 kHz device rate is 1:2), so WP4 measures its own polyphase filter first.
+# Not pinned: rubato. At the 48 kHz endpoint rate of BUILD.md section 2.8 both resampling ratios
+# are integers (capture to 16 kHz is 3:1, 24 kHz synthesis to 48 kHz is 1:2), so WP4 measures its
+# own polyphase filter first, against the bar section 6.6 sets (passband, alias and image rejection,
+# cost per 10 ms buffer). If the own filter misses it, an amendment pins rubato here so that it can
+# be measured against the same bar.
 
 # Images
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -189,13 +192,14 @@ loom = "0.7.2"
 # shuttle is exact, so the first lock cannot take 0.9.8; Dependabot still proposes exact bumps.
 shuttle = "=0.9.5"
 shuttle-tokio = "1.0.0"
-# assert_no_alloc 1.1.2 (2021-08-03, the newest release; BSD-1-Clause, which deny.toml allows for
-# this crate only, decision D82) checks that the audio callback never allocates. Members take it
-# under [dev-dependencies] only: a test binary installs its AllocDisabler as the global allocator,
-# which needs no unsafe code of Eileen's, and runs the callback's code inside assert_no_alloc. With
-# warn_debug it counts that thread's allocations and frees for the test to assert zero; its
-# default feature, disable_release, compiles the check out of release builds.
-assert_no_alloc = "1.1.2"
+# allocation-counter 0.8.1 (2023-09-21, the newest release; MIT/Apache-2.0; no dependencies and no
+# features) checks that the audio callbacks neither allocate nor free (BUILD.md section 6.6,
+# decision D82). A test runs the callback's code inside allocation_counter::measure, which counts
+# that thread's allocations and frees in every build profile, and asserts that the AllocationInfo
+# it returns is the default, all zeros. The crate declares its own #[global_allocator], so members
+# take it only under [dev-dependencies]: rustc links it only into the test binaries whose code
+# names it, never into a shipped binary. deny.toml lets only eileen-audio take it.
+allocation-counter = "0.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

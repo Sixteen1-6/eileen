@@ -80,27 +80,38 @@ No code yet. The amendments before the first part:
 - #127 (`amend/wp4-slice-plan`, merged 2026-10-31): the slice as two series, and one owner for
   each part of the speech pipe (decision D81).
 - #132 (`amend/wp4-pins`, draft): pins `sha2` 0.11.1 for the model downloads' SHA256 and
-  `assert_no_alloc` 1.1.2, a dev-dependency only, for the audio callback's allocation check, and
-  records `rubato` as not pinned (decision D82).
+  `allocation-counter` 0.8.1, a dev-dependency of `eileen-audio` only, for the callbacks'
+  allocation check in test builds (decision D82), and sets the bar the resampler is measured
+  against, with `rubato` not pinned unless the own filter misses it.
 
 The slice parts are listed here as each opens. None has opened yet.
 
 ## Surprises
 
-- `assert_no_alloc` is BSD-1-Clause (crates.io and its `LICENSE` file), which `deny.toml`'s allow
-  list lacks. The observability report recorded this and proposed writing the allocator instead,
-  which `eileen-audio`'s `forbid(unsafe_code)` rules out. D82 allows the license for that one
-  crate.
+- `assert_no_alloc`, the observability report's reference design, is BSD-1-Clause, which
+  `deny.toml`'s allow list lacks, and the allocator the report proposed writing instead needs the
+  unsafe code `eileen-audio` forbids. `allocation-counter` 0.8.1 (MIT/Apache-2.0) does the same
+  job with no license exception (D82).
+- A dev-dependency that declares its own `#[global_allocator]` reaches only the test binaries whose
+  code names it: rustc links a crate passed with `--extern` only when code uses it. So the check
+  cannot run in product debug builds without a feature in `eileen.exe`; D82 checks the real
+  callbacks in an `owner_pc::` device test instead.
 
 ## Decisions
 
 - D81: the audio component owns every frame of the speech pipe, WP2 the transport, and the core
   the speech process's life.
-- D82: the allocation check is `assert_no_alloc`'s `AllocDisabler`, installed by a test binary,
-  with `deny.toml`'s exception scoped to that crate.
-- Resampling: both ratios are integers (48 kHz capture to 16 kHz is 3:1, 24 kHz synthesis to the
-  48 kHz device rate is 1:2), so the own polyphase filter is measured first, and `rubato` is pinned
-  by amendment only if the measurement favours it (BUILD.md section 6.6).
+- D82: the callbacks' code runs inside `allocation_counter::measure` in tests, which assert an
+  all-zero `AllocationInfo`, and an `owner_pc::` device test does the same on the real callbacks,
+  passing the counts out through atomics. Product builds carry no check. `deny.toml` lets only
+  `eileen-audio` take the crate, and check 15 keeps it under `[dev-dependencies]` once WP0's
+  phase B builds it; until then the `bans` entry holds it to `eileen-audio`, whose manifest WP4
+  owns.
+- Resampling: the bar of BUILD.md section 6.6 (the decimator flat within 0.1 dB to 7 kHz and
+  60 dB down from 9 kHz, the interpolator flat to 10 kHz with its images 60 dB down from 14 kHz,
+  each at most 25 us per 10 ms buffer). At the 48 kHz endpoint rate both ratios are integers (3:1
+  and 1:2), so the own polyphase filter is measured first, a 44.1 kHz endpoint included; if it
+  misses, an amendment pins `rubato` so that it can be measured against the same bar.
 
 ## Outcome
 

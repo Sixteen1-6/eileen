@@ -1,9 +1,10 @@
 # cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
-# allowed for jpeg-encoder, two license exceptions (webpki-roots, and assert_no_alloc for tests
-# only, decision D82), the Linux target added so the Linux lane is checked too, seven advisory
-# ignores against crates that only sherpa-onnx-sys's build script brings in (three against zip,
-# decision D78, and four against the zstd crates zip takes, decision D80), and bans that keep each
-# of those crates on that path so the ignores cover nothing else.
+# allowed for jpeg-encoder, one license exception for webpki-roots, the Linux target added so the
+# Linux lane is checked too, seven advisory ignores against crates that only sherpa-onnx-sys's
+# build script brings in (three against zip, decision D78, and four against the zstd crates zip
+# takes, decision D80), bans that keep each of those crates on that path so the ignores cover
+# nothing else, and a ban that keeps allocation-counter, whose global allocator replaces that of
+# any binary linking it, inside eileen-audio (decision D82).
 
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
@@ -55,9 +56,6 @@ confidence-threshold = 0.9
 exceptions = [
   # Reaches the tree only through sherpa-onnx-sys's build-time download client (ureq's default TLS).
   { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
-  # Decision D82: a dev-dependency only, the allocation check of the audio callback's tests. Its one
-  # clause asks that copies of the source keep the notice, and it never reaches a shipped binary.
-  { crate = "assert_no_alloc", allow = ["BSD-1-Clause"] },
 ]
 
 [bans]
@@ -76,6 +74,11 @@ deny = [
   { crate = "zstd:<0.14.3", wrappers = ["zip"], reason = "D80: below 0.14.3, only zip may bring in zstd" },
   { crate = "zstd-safe", wrappers = ["zstd"], reason = "D80: only zstd may bring in zstd-safe" },
   { crate = "zstd-sys", wrappers = ["zstd-safe"], reason = "D80: only zstd-safe may bring in zstd-sys" },
+  # D82: allocation-counter declares its own #[global_allocator]. eileen-audio's allocation tests
+  # take it as a dev-dependency; this keeps every other crate from taking it. cargo-deny cannot tell
+  # a dev-dependency from a normal one, so check 15 (BUILD.md section 4b.3, WP0's phase B) holds
+  # that half.
+  { crate = "allocation-counter", wrappers = ["eileen-audio"], reason = "D82: only eileen-audio's tests may take it" },
 ]
 
 [sources]
