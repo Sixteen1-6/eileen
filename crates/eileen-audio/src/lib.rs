@@ -23,8 +23,8 @@
 //! - The audio callbacks allocate, free and log nothing (WP4's tests check it in test builds with
 //!   `allocation-counter`, a dev-dependency; product builds carry no check, decision D82).
 //! - Mute stops the capture stream within one buffer (WP4 acceptance 9 tests it).
-//! - Every read and write on a speech connection has a deadline, and every queue of the memory
-//!   transport a maximum (tests in `fake::tests`). A shipped binary never enables `fake`.
+//! - Every accept, read and write on a speech connection has a deadline, and every queue of the
+//!   memory transport a maximum (tests in `fake::tests`). A shipped binary never enables `fake`.
 //! - The ring buffer is safe under concurrent use by the callback and its reader (WP4 adds its
 //!   loom tests, under `cfg(loom)`).
 //!
@@ -36,7 +36,8 @@
 //!   [`AudioConfig`]. The component never names the pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
-//!   target table.
+//!   target table. Today `eileen-rt` is used only by `fake`, so it is optional and the feature
+//!   turns it on, and a dev-dependency for this crate's own tests.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -78,10 +79,13 @@ pub mod fake;
 pub mod stream;
 pub mod transport;
 
-pub use stream::{AudioError, AudioSink, AudioSource, AudioStream, StreamFormat};
+pub use stream::{
+    AudioError, AudioSink, AudioSource, AudioStream, CaptureCallback, CaptureInfo, RenderCallback,
+    RenderInfo, StreamFormat,
+};
 pub use transport::{
-    ByteRead, ByteWrite, ConnectionError, ConnectionId, SpeechConnection, SpeechReader,
-    SpeechTransport, SpeechWriter,
+    AcceptError, ByteRead, ByteWrite, ConnectionError, ConnectionId, SpeechConnection,
+    SpeechReader, SpeechTransport, SpeechWriter,
 };
 
 /// What the audio component reads at start. Later parts of WP4's audio series add the source
