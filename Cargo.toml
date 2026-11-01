@@ -156,6 +156,14 @@ realfft = "3.5.0"
 # rtrb: the newest non-yanked release crates.io listed on 2026-10-21 (0.4.0, released 2026-08-17;
 # 0.3.5 is a later backport on the 0.3 line)
 rtrb = "0.4.0"
+# sha2 checks each model download against the full SHA256 in models.toml. 0.11.1 (2026-10-12, MIT
+# OR Apache-2.0) is the newest release, 19 days old on 2026-10-31. Its default features (alloc, oid)
+# stay off: hashing a file in chunks needs neither. The crates its first lock adds (digest 0.11.3,
+# block-buffer 0.12.1, crypto-common 0.2.2, hybrid-array 0.4.15) are past the cooling-off period on
+# 2026-10-31; cfg-if, cpufeatures 0.3.1 and typenum are already in the lock.
+sha2 = { version = "0.11.1", default-features = false }
+# Not pinned: rubato. Both resampling ratios are integers (48 kHz capture to 16 kHz is 3:1, 24 kHz
+# synthesis to the 48 kHz device rate is 1:2), so WP4 measures its own polyphase filter first.
 
 # Images
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -181,6 +189,13 @@ loom = "0.7.2"
 # shuttle is exact, so the first lock cannot take 0.9.8; Dependabot still proposes exact bumps.
 shuttle = "=0.9.5"
 shuttle-tokio = "1.0.0"
+# assert_no_alloc 1.1.2 (2021-08-03, the newest release; BSD-1-Clause, which deny.toml allows for
+# this crate only, decision D82) checks that the audio callback never allocates. Members take it
+# under [dev-dependencies] only: a test binary installs its AllocDisabler as the global allocator,
+# which needs no unsafe code of Eileen's, and runs the callback's code inside assert_no_alloc. With
+# warn_debug it counts that thread's allocations and frees for the test to assert zero; its
+# default feature, disable_release, compiles the check out of release builds.
+assert_no_alloc = "1.1.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
