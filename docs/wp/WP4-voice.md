@@ -11,18 +11,22 @@ TTS and Chatterbox); tier-0 dictation cleanup; consent enrollment and the speake
 first-run calibration; the embedding model; the machine profile's speech part; and `models.toml`
 with the speech part of `eileen setup`.
 
-Its first two pull requests are slice S1's and come before everything else:
+Its first work is slice S1's and comes before everything else, as two series of small pull
+requests (BUILD.md section 6.6), each part under section 6.1's size and merged in order. The last
+part of each series is the branch named here:
 
-- `wp4/s1-audio`: capture, render and loopback, AEC, mute, the ring buffer, playback accounting
-  and the energy barge-in fallback.
-- `wp4/s1-speech`: the pipe, VAD, Nemotron, end of turn, Kokoro with its front end, barge-in
-  windows and the transcript-injection stub.
+- `wp4/s1-audio` (parts `wp4/s1-audio-<part>`): capture, render and loopback, AEC, mute, the ring
+  buffer, playback accounting, the energy barge-in fallback and the core end of the speech pipe
+  (decision D81).
+- `wp4/s1-speech` (parts `wp4/s1-speech-<part>`): the speech process's end of the pipe, VAD,
+  Nemotron, end of turn, Kokoro with its front end, barge-in windows and the transcript-injection
+  stub.
 
 ## Branch, dependencies and files
 
-- Branch: `wp4/<topic>`; the slice's pull requests are `wp4/s1-audio` and `wp4/s1-speech`.
+- Branch: `wp4/<topic>`; the slice's series end in `wp4/s1-audio` and `wp4/s1-speech`.
 - Depends on: WP0 phase A.
-- Wave: W1 for the two slice pull requests, W2 for the rest, which starts when both have merged.
+- Wave: W1 for the two slice series, W2 for the rest, which starts when both have merged.
 - Desktop: yes (audio devices). Device tests take `desktop.lock` and never run during WP6's
   spike; speech-model tests and benchmarks take both build slots (`--exclusive`).
 - Owns: `crates/eileen-audio`, `crates/eileen-audio-win`, `crates/eileen-speech` (including
@@ -31,7 +35,7 @@ Its first two pull requests are slice S1's and come before everything else:
 
 ## Done when
 
-The acceptance list of BUILD.md section 6.6, items 1 to 14, each recorded under Progress with its
+The acceptance list of BUILD.md section 6.6, items 1 to 15, each recorded under Progress with its
 evidence when it holds. The lines below are reminders; the full text in BUILD.md is the bar.
 
 1. Synthetic echo through `RoomMixer`: no far-end words leak, the command is recovered, and false
@@ -62,20 +66,41 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
     not pass, or lacks the people or utterances, gates nothing on voice.
 14. The machine profile's speech part: setup benchmarks, thread counts, command accuracy,
     recognizer swaps, endpoints and execution providers.
+15. The core end of the speech pipe, over an in-memory transport with a scripted stand-in: a late
+    connect or a restart recognises each turn once, the latest `SetMode` and `SetHotwords` arrive
+    before any audio, a gap sets the break flag, muted frames are never written, and `Bench` and
+    `Providers` reach the machine link.
 
 Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-Not started.
+No code yet. The amendments before the first part:
+
+- #127 (`amend/wp4-slice-plan`, merged 2026-10-31): the slice as two series, and one owner for
+  each part of the speech pipe (decision D81).
+- #132 (`amend/wp4-pins`, draft): pins `sha2` 0.11.1 for the model downloads' SHA256 and
+  `assert_no_alloc` 1.1.2, a dev-dependency only, for the audio callback's allocation check, and
+  records `rubato` as not pinned (decision D82).
+
+The slice parts are listed here as each opens. None has opened yet.
 
 ## Surprises
 
-None yet.
+- `assert_no_alloc` is BSD-1-Clause (crates.io and its `LICENSE` file), which `deny.toml`'s allow
+  list lacks. The observability report recorded this and proposed writing the allocator instead,
+  which `eileen-audio`'s `forbid(unsafe_code)` rules out. D82 allows the license for that one
+  crate.
 
 ## Decisions
 
-None yet.
+- D81: the audio component owns every frame of the speech pipe, WP2 the transport, and the core
+  the speech process's life.
+- D82: the allocation check is `assert_no_alloc`'s `AllocDisabler`, installed by a test binary,
+  with `deny.toml`'s exception scoped to that crate.
+- Resampling: both ratios are integers (48 kHz capture to 16 kHz is 3:1, 24 kHz synthesis to the
+  48 kHz device rate is 1:2), so the own polyphase filter is measured first, and `rubato` is pinned
+  by amendment only if the measurement favours it (BUILD.md section 6.6).
 
 ## Outcome
 
