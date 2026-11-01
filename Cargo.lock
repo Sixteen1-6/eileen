@@ -834,6 +834,9 @@ version = "0.0.0"
 dependencies = [
  "eileen-contracts",
  "eileen-stdx",
+ "eileen-trace",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1068,7 +1071,6 @@ dependencies = [
  "eileen-contracts",
  "eileen-core",
  "eileen-dictation",
- "eileen-intent",
  "eileen-skills",
  "eileen-stdx",
  "eileen-trace",
