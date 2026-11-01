@@ -210,8 +210,10 @@ impl Core {
         }
         self.apply(cx, out);
         if changed && let Some(speak) = stopped {
+            // Text of it already on the HUD, lost when speech went down, follows what was not
+            // heard.
             if let Some(rest) = self.turns.rest() {
-                self.hud.show(owner, rest);
+                self.hud.lead(owner, rest);
             }
             self.brain_reply_on_hud(speak);
         }

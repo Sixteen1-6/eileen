@@ -528,11 +528,8 @@ fn a_reply_while_speech_is_down_goes_to_the_hud() {
 
 #[test]
 fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
-    let sentences = [
-        "Rivers carry water from the hills down to the sea.",
-        "Along the way they cut valleys.",
-        "Some of the longest run for thousands of kilometres.",
-    ];
+    let answer = "Rivers carry water from the hills down to the sea. Along the way they cut \
+                  valleys. Some of the longest run for thousands of kilometres.";
     let mut world = world();
     world.script_brain(BrainReply::text(&[
         "Rivers carry water from the hills down to the sea. ",
@@ -542,7 +539,11 @@ fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
     let from = world.effects().len();
     say(&mut world, 1, "Eileen, tell me about rivers");
     settle(&mut world, 1_000);
-    let (speak, _) = speaks(&bodies(&world, from)).first().cloned().expect("Eileen speaks");
+    let sent = speaks(&bodies(&world, from));
+    let (speak, _) = sent.first().cloned().expect("Eileen speaks");
+    // The clauses as the core cut them, in the order it sent them.
+    let clauses: Vec<String> =
+        sent.into_iter().filter(|(s, _)| *s == speak).flat_map(|(_, clauses)| clauses).collect();
     let synthesized = world
         .inputs()
         .iter()
@@ -553,14 +554,15 @@ fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
             *s == speak
         })
         .count();
+    let played = clauses[..synthesized].join(" ");
     assert!(
-        (1..sentences.len()).contains(&synthesized),
-        "some of the answer was synthesized and some not: {synthesized}"
+        synthesized > 0 && played.len() < answer.len(),
+        "some of the answer was synthesized and some not: {synthesized} of {clauses:?}"
     );
     world.crash_speech();
-    // At 1 600 samples a character, 24 000 a second, the clauses play for about 5 s.
+    // At 1 600 samples a character, 24 000 a second, the clauses play for a few seconds.
     settle(&mut world, 10_000);
-    let heard = sentences[..synthesized].join(" ").chars().count();
+    let heard = played.chars().count();
     let stopped: Vec<(bool, u32)> = events(&world)
         .iter()
         .filter_map(|e| {
@@ -573,11 +575,12 @@ fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
     assert_eq!(
         stopped,
         [(false, u32::try_from(heard).unwrap())],
-        "the synthesized clauses played to their end, {heard} characters"
+        "the synthesized clauses played to their end: {played:?}"
     );
+    let rest = answer.strip_prefix(played.as_str()).unwrap().trim_start();
     assert_eq!(
         hud_line(&world).as_deref(),
-        Some(sentences[synthesized..].join(" ").as_str()),
+        Some(rest),
         "the rest, and only the rest, is on the HUD"
     );
 }

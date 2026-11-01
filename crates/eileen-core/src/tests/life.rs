@@ -377,3 +377,29 @@ fn a_core_resumed_from_a_snapshot_starts_speech_again() {
     assert_eq!(effects.first(), Some(&START), "the life is not in the snapshot: {effects:?}");
     assert_eq!(resumed.mic(), Some(&MicState::LoadingSpeech));
 }
+
+#[test]
+fn muting_after_speech_went_down_keeps_what_was_lost_on_the_hud() {
+    let (mut h, _) = up();
+    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
+    let text = "Rivers carry water to the sea. They shape valleys. They feed lakes. ";
+    let effects = h.step(delta(turn, text));
+    let (speak, _) = spoken(&effects).remove(0);
+    for clause in 0..2 {
+        h.step(Input::Voice(VoiceEvent::ClauseReady { speak, clause, chars: 20, samples: 900 }));
+    }
+    h.step(exited());
+    assert_eq!(h.hud_line(), Some("They feed lakes."), "the clause never synthesized");
+    h.step(Input::User(UserInput::SetMute(true)));
+    assert_eq!(
+        h.hud_line(),
+        Some("Rivers carry water to the sea. They shape valleys. They feed lakes."),
+        "what was not heard comes first, and nothing is lost"
+    );
+    h.step(delta(turn, "And they end."));
+    h.step(done(turn));
+    assert_eq!(
+        h.hud_line(),
+        Some("Rivers carry water to the sea. They shape valleys. They feed lakes. And they end.")
+    );
+}

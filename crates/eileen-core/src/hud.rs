@@ -62,6 +62,21 @@ impl Hud {
         }
     }
 
+    /// Puts `text` in front of the line when it belongs to `owner`, and shows it as a new line
+    /// otherwise.
+    pub(crate) fn lead(&mut self, owner: Owner, text: &str) {
+        match self.line.take() {
+            Some(old) if self.owner == owner => {
+                self.show(owner, text);
+                self.push(&old);
+            }
+            old => {
+                self.line = old;
+                self.show(owner, text);
+            }
+        }
+    }
+
     /// Adds `text` after a space, cutting the line at its limit on a character boundary.
     fn push(&mut self, text: &str) {
         if self.full {
