@@ -509,6 +509,8 @@ fn a_pause_with_nothing_addressed_resumes_at_the_deadline() {
     let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
     let mut last = Vec::new();
     for window in 1..=3 {
+        // Speech windows come 32 ms apart, so the pause re-arms the duck's timer for later.
+        h.wait(32);
         last = h.step(Input::Voice(VoiceEvent::BargeInWindow { speak, window, prob_pct: 90 }));
     }
     let (timer, at) = timer_set(&last).expect("the decision timer");
