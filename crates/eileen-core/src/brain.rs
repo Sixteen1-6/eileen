@@ -1,7 +1,9 @@
 //! One brain turn at a time (BUILD.md sections 2.2 step 6 and 2.3): the Routed earcon at once,
 //! one `BrainCmd::Turn` to the primary slot with the transcript and any heard prefix, the
 //! streamed text cut into clauses and spoken as one utterance, and `TurnDone`. Text is accepted
-//! only for the turn in flight and from the instance it was sent to.
+//! only for the turn in flight and from the instance it was sent to. A reply Eileen cannot say
+//! aloud, because the microphone is muted, speech is down or the speech process made no clause
+//! of it, is shown on the HUD from there to its end (section 6.3).
 //!
 //! The core keeps the authority it sent each turn with: a job starts only from the turn in
 //! flight and with that authority, never with what a tool call claims (section 2.3). A turn that
@@ -44,8 +46,10 @@ pub(crate) struct Live {
     cutter: Cutter,
     /// The reply's utterance, once it started.
     speak: Option<SpeakId>,
-    /// The reply was stopped or muted: nothing more of it is spoken.
+    /// The reply was stopped: nothing more of it is spoken or shown.
     silenced: bool,
+    /// The reply goes to the HUD's line from here to its end.
+    on_hud: bool,
 }
 
 impl Brain {
@@ -88,6 +92,7 @@ impl Core {
             cutter: Cutter::default(),
             speak: None,
             silenced: false,
+            on_hud: false,
         });
     }
 
@@ -172,7 +177,8 @@ impl Core {
     /// The turn ended: the last clause is spoken and the reply closed.
     fn brain_done(&mut self, cx: &mut Cx<'_>, turn: TurnId, is_error: bool) {
         let rest = self.brain.live.as_mut().and_then(|live| live.cutter.finish());
-        let answered = self.brain.live.as_ref().is_some_and(|live| live.speak.is_some());
+        let answered =
+            self.brain.live.as_ref().is_some_and(|live| live.speak.is_some() || live.on_hud);
         let mut clauses: Vec<String> = rest.into_iter().collect();
         if is_error && !answered && clauses.is_empty() {
             clauses.push(NO_ANSWER.to_owned());
@@ -184,11 +190,26 @@ impl Core {
     }
 
     /// Speaks clauses of the reply: the first starts its utterance, the rest are added to it.
+    /// While Eileen cannot speak they go to the HUD's line instead: a new line at the first, and
+    /// added to it after.
     fn reply(&mut self, cx: &mut Cx<'_>, clauses: Vec<String>, close: bool) {
-        let Some(live) = self.brain.live.as_ref() else { return };
+        let can_speak = self.can_speak();
+        let Some(live) = self.brain.live.as_mut() else { return };
         let (turn, speak) = (live.turn, live.speak);
-        if live.silenced || self.turns.muted() {
-            self.silence_reply();
+        if live.silenced {
+            return;
+        }
+        if live.on_hud || !can_speak {
+            let text = clauses.join(" ");
+            if text.trim().is_empty() {
+                return;
+            }
+            if live.on_hud {
+                self.hud.append(&text);
+            } else {
+                live.on_hud = true;
+                self.hud.show(&text);
+            }
             return;
         }
         match speak {
@@ -228,6 +249,14 @@ impl Core {
     const fn silence_reply(&mut self) {
         if let Some(live) = self.brain.live.as_mut() {
             live.silenced = true;
+        }
+    }
+
+    /// The utterance `speak` will not be heard to its end, and its text is on the HUD: when it
+    /// is the reply in flight, the rest of the reply follows it there.
+    pub(crate) fn brain_reply_on_hud(&mut self, speak: SpeakId) {
+        if let Some(live) = self.brain.live.as_mut().filter(|live| live.speak == Some(speak)) {
+            live.on_hud = true;
         }
     }
 }

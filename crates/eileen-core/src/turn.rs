@@ -77,6 +77,14 @@ pub enum Out {
         /// Whether it resumed after a barge-in.
         resumed: bool,
     },
+    /// Text of the utterance that will not be heard, because the speech process made no
+    /// clause of it or went down first: the core shows it on the HUD instead.
+    Unspoken {
+        /// The utterance.
+        speak: SpeakId,
+        /// The text.
+        text: String,
+    },
     /// A barge-in began: playback is ducked.
     BargeIn {
         /// The utterance.
@@ -447,13 +455,36 @@ impl Turns {
     }
 
     /// The speech process finished what `speak` was sent. An utterance it made no clause for
-    /// (speech is down, section 6.6) ends here, unheard, rather than holding the floor.
+    /// (speech is down, section 6.6) ends here, unheard, rather than holding the floor, and its
+    /// text goes to the HUD.
     pub fn speak_done(&mut self, speak: SpeakId, out: &mut Vec<Out>) {
-        let unsynthesized = self.utterance.as_ref().is_some_and(|utterance| {
+        let Some(utterance) = self.utterance.as_ref().filter(|utterance| {
             utterance.speak == speak && utterance.clauses.iter().all(|c| c.samples.is_none())
-        });
-        if unsynthesized {
+        }) else {
+            return;
+        };
+        out.push(Out::Unspoken { speak, text: utterance.text() });
+        self.end(false, out);
+    }
+
+    /// The speech process went down and will synthesize nothing more. The utterance keeps the
+    /// clauses it had synthesized in order from the first, whose samples the audio driver holds
+    /// and plays, and is closed; the text of the rest goes to the HUD. With no clause
+    /// synthesized it ends here, unheard.
+    pub fn speech_lost(&mut self, out: &mut Vec<Out>) {
+        let Some(utterance) = self.utterance.as_mut() else { return };
+        let ready = utterance.clauses.iter().take_while(|c| c.samples.is_some()).count();
+        let lost = utterance.clauses.split_off(ready);
+        utterance.closed = true;
+        let (speak, drained) = (utterance.speak, utterance.drained);
+        if !lost.is_empty() {
+            let text = join(lost.iter().map(|clause| clause.text.as_str()));
+            out.push(Out::Unspoken { speak, text });
+        }
+        if ready == 0 {
             self.end(false, out);
+        } else if drained {
+            self.finish(out);
         }
     }
 
