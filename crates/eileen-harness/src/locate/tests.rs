@@ -347,6 +347,26 @@ fn a_bare_claude_exe_in_another_folder_is_passed_over() {
 }
 
 #[test]
+fn a_shim_in_the_native_folder_is_not_taken_for_the_native_install() {
+    let scratch = Scratch::new();
+    scratch.file("tools/claude.exe", "MZ");
+    let shim = scratch.file(
+        "home/.local/bin/claude.cmd",
+        "@ECHO off\r\n\"%dp0%\\..\\..\\..\\tools\\claude.exe\" %*\r\n",
+    );
+
+    let found = locate_claude(&windows_env(&[&scratch.path().join("home/.local/bin")]));
+
+    assert_eq!(
+        found,
+        Err(LocateError::NoUsableCli {
+            refused: vec![Refusal { path: shim, reason: RefusalReason::UnknownInstall }],
+        }),
+        "the native installer writes no shims, so where it leads decides"
+    );
+}
+
+#[test]
 fn a_shim_that_names_a_binary_outside_the_npm_package_is_passed_over() {
     let scratch = Scratch::new();
     scratch.file("elsewhere/claude.exe", "MZ");
@@ -496,11 +516,7 @@ fn the_native_link_on_unix_resolves_to_its_release() {
 #[test]
 fn a_unix_claude_outside_both_layouts_is_passed_over() {
     let scratch = Scratch::new();
-    let stray = scratch.file(
-        "bin/claude",
-        "#!/bin/sh
-",
-    );
+    let stray = scratch.file("bin/claude", "#!/bin/sh\n");
     let env = LocateEnv { windows: false, ..windows_env(&[&scratch.path().join("bin")]) };
 
     let found = locate_claude(&env);
@@ -511,5 +527,27 @@ fn a_unix_claude_outside_both_layouts_is_passed_over() {
             refused: vec![Refusal { path: stray, reason: RefusalReason::UnknownInstall }],
         }),
         "neither npm's link nor the native installer's"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_native_folder_to_another_binary_is_passed_over() {
+    let scratch = Scratch::new();
+    let other = scratch.file("tools/claude", "MZ");
+    fs::create_dir_all(scratch.path().join("home/.local/bin")).unwrap();
+    let link = scratch.path().join("home/.local/bin/claude");
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    let env =
+        LocateEnv { windows: false, ..windows_env(&[&scratch.path().join("home/.local/bin")]) };
+
+    let found = locate_claude(&env);
+
+    assert_eq!(
+        found,
+        Err(LocateError::NoUsableCli {
+            refused: vec![Refusal { path: link, reason: RefusalReason::UnknownInstall }],
+        }),
+        "the folder the link sits in does not make what it leads to the native install"
     );
 }

@@ -241,7 +241,7 @@ fn in_unix_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
     if target.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("js")) {
         return Some(Err(refuse(RefusalReason::ShimWithoutBinary)));
     }
-    Some(checked(&found, target))
+    Some(checked(&found, target, Reached::Directly))
 }
 
 /// Whether something, a dangling link included, is at `path`; nothing a link leads to is
@@ -253,30 +253,42 @@ fn is_here(path: &Path) -> bool {
 /// A `claude` executable found as it is, or a link to one.
 fn direct(found: &Path) -> Result<ClaudeInstall, Refusal> {
     let exe = resolve(found).map_err(|reason| Refusal { path: found.to_path_buf(), reason })?;
-    checked(found, exe)
+    checked(found, exe, Reached::Directly)
 }
 
 /// Refuses `exe`, already resolved, when it or `found` is the desktop app's, lies under a
 /// `.claude` folder, is no file, or belongs to neither layout; otherwise the install, with its
 /// version from the layout. A refusal names `found`, what the user has.
-fn checked(found: &Path, exe: PathBuf) -> Result<ClaudeInstall, Refusal> {
+fn checked(found: &Path, exe: PathBuf, reached: Reached) -> Result<ClaudeInstall, Refusal> {
     let refuse = |reason| Refusal { path: found.to_path_buf(), reason };
     refuse_by_name(found).and_then(|()| refuse_by_name(&exe)).map_err(refuse)?;
     if !exe.is_file() {
         return Err(refuse(RefusalReason::ShimWithoutBinary));
     }
-    let kind = install_kind(found, &exe).ok_or_else(|| refuse(RefusalReason::UnknownInstall))?;
+    let kind =
+        install_kind(found, &exe, reached).ok_or_else(|| refuse(RefusalReason::UnknownInstall))?;
     let version = layout_version(&exe);
     Ok(ClaudeInstall { kind, exe, version, skipped: Vec::new() })
 }
 
+/// How a candidate led to its executable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reached {
+    /// The candidate is the executable, or a link to it.
+    Directly,
+    /// A `claude.cmd` or `claude.ps1` names it; only npm writes those.
+    ThroughShim,
+}
+
 /// Which of the two layouts section 2.5 accepts `exe`, found as `found`, belongs to: npm's
 /// package binary, or the native installer's `~/.local/bin` executable or one of its releases.
-/// `None` for anything else, which the search passes over.
-fn install_kind(found: &Path, exe: &Path) -> Option<InstallKind> {
+/// `None` for anything else, which the search passes over. Judged by `exe`, where the links
+/// led, never by where `found` lies: a link in `~/.local/bin` can lead anywhere, and the native
+/// installer writes no shims.
+fn install_kind(found: &Path, exe: &Path, reached: Reached) -> Option<InstallKind> {
     if in_npm_package(exe) {
         Some(InstallKind::NpmShim { shim: found.to_path_buf() })
-    } else if is_native_bin(found) || is_native_release(exe) {
+    } else if is_native_release(exe) || (reached == Reached::Directly && is_native_bin(exe)) {
         Some(InstallKind::Native)
     } else {
         None
@@ -371,7 +383,7 @@ fn through_shim(shim: &Path) -> Result<ClaudeInstall, Refusal> {
     });
     let exe = named.unwrap_or_else(|| npm_package_dir(&dir).join("bin").join("claude.exe"));
     let exe = resolve(&exe).map_err(refuse)?;
-    checked(shim, exe)
+    checked(shim, exe, Reached::ThroughShim)
 }
 
 /// Every path a shim starts relative to its own folder: `%dp0%\...` or `%~dp0\...` in

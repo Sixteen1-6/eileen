@@ -405,8 +405,9 @@ fn the_supervised_runner_reads_a_real_child_to_its_exit() {
         .envs([(CHILD_SWITCH, "1")])
         .class(ChildClass::Tool);
     spec.raw_stderr = true;
-    // Far above what the child needs, so only a stall reaches it.
-    let probe = Probe { spec, deadline: Duration::from_secs(60) };
+    // Far above the fraction of a second the child needs, so only a stall reaches it, and
+    // under nextest's own limit, so a stall fails here rather than as a nextest timeout.
+    let probe = Probe { spec, deadline: Duration::from_secs(20) };
 
     let answer = runner.run(&probe).unwrap();
 
