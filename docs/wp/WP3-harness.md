@@ -57,16 +57,37 @@ Every pull request also meets the rules section 6.1 sets for every package.
 ## Progress
 
 The approval contract test's first pass ran on the owner's PC on 2026-10-21 and settled the
-permission route, which section 6.5's amendment of that date records (see Goal). No WP3 branch
-has started.
+permission route, which section 6.5's amendment of that date records (see Goal).
+
+- `wp3/worker-tools` (open, draft): pins the provisional `tools/worker` module of
+  `eileen-contracts` (section 3.3, `modules.toml`), the worker toolset row of section 3.3.9.
+  `Approve` now documents route 2 of section 2.5 and gains `matches_ask` (the same
+  `tool_use_id` and an equal input); `ApproveReply` holds the two shapes the CLI accepted,
+  `{"behavior":"allow","updatedInput":<input>}` and `{"behavior":"deny","message":...}`, with
+  `text()` and `content()` for the one text block. Tests in `eileen-contracts::it::wire` check
+  the call and both replies against `docs/research/fixtures/wp3-approval/mcp-approve.json` and
+  the guard's ask in `hooks.json`, and a property test shows `allow` carries any stored value
+  unchanged. None of the acceptance items above closes with it; it is the contract the
+  dispatcher (WP2) and `wp3/worker-brain` build on.
 
 ## Surprises
 
-None yet.
+- `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
+  though section 3.3 has each package's first pull request pin its own. `wp3/worker-tools`
+  replaces it with `wp0_pinned_exactly_the_slice_modules`: the modules with no `pinned_by` are
+  exactly slice S1's, and a module a package pinned keeps its `pinned_by`.
 
 ## Decisions
 
-None yet.
+- `ApproveReply::allow` takes an `Untrusted<Value>`, the type of the guard's stored
+  `HookRequest::PreToolUse.tool_input`, while `Approve.input` stays a plain `Value`. So the
+  call's own input does not type-check as an allow, which section 2.5's echo rule needs
+  (finding 7 of the contract report: the CLI runs `updatedInput` without calling the guard
+  again). A compile-fail doc test on `allow` keeps it so.
+- `ApproveReply::text()` cannot fail; if `serde_json` ever failed to write a reply, the text
+  would be a denial, never an allow.
+- An approve result is never an error, a denial included: the CLI reads an errored `approve`
+  call as a failed tool, not a denial (the contract report's tool-error rows).
 
 ## Outcome
 
