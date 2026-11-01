@@ -290,5 +290,5 @@ impl SpeechRing {
 #[cfg(test)]
 mod concurrency;
 
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 mod tests;

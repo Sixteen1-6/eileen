@@ -1,3 +1,6 @@
+// Outside a loom model loom's atomics panic, so under `--cfg loom` only `concurrency` runs.
+#![cfg(not(loom))]
+
 use std::time::Duration;
 
 use allocation_counter::AllocationInfo;
