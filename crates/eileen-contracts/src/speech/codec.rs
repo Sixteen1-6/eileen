@@ -1,6 +1,8 @@
 //! Whole frames of the speech pipe as values, written to bytes and read back on top of
 //! [`FrameHeader`]. The framing is in the parent module's doc.
 
+use std::fmt;
+
 use serde::Serialize;
 
 use super::{
@@ -222,8 +224,9 @@ impl Frame {
 /// It holds one frame at most: the header's 32 bytes, then a body buffer reserved only after
 /// [`FrameHeader::decode`] has allowed the kind, flags and length, so a corrupt length never
 /// allocates. After an error the stream is out of step and every later call returns the same
-/// error: close the connection.
-#[derive(Debug, Default)]
+/// error: close the connection. `Debug` shows lengths only, never the bytes of a body, which may
+/// be a `Hello`'s token.
+#[derive(Default)]
 pub struct FrameReader {
     /// The header bytes read so far.
     header: [u8; FrameHeader::SIZE],
@@ -233,6 +236,20 @@ pub struct FrameReader {
     body: Option<(FrameHeader, usize, Vec<u8>)>,
     /// The error that stopped the stream.
     failed: Option<FrameError>,
+}
+
+impl fmt::Debug for FrameReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let body = self
+            .body
+            .as_ref()
+            .map(|(header, len, body)| (FrameKind::from_code(header.kind), *len, body.len()));
+        f.debug_struct("FrameReader")
+            .field("header_bytes", &self.have)
+            .field("body_kind_len_read", &body)
+            .field("failed", &self.failed)
+            .finish()
+    }
 }
 
 impl FrameReader {
@@ -558,8 +575,17 @@ mod tests {
     #[test]
     fn a_hello_never_shows_its_token() {
         let hello = SpeechHelloFrame { token: "s3cret-token".to_owned() };
-        let shown = format!("{:?}", Frame::new(FrameBody::Hello(hello)));
-        assert!(!shown.contains("s3cret"), "{shown}");
+        let frame = Frame::new(FrameBody::Hello(hello));
+        let shown = format!("{frame:?}");
+        assert!(!shown.contains("s3cret"), "the frame: {shown}");
+        let bytes = frame.encode().unwrap();
+        let mut reader = FrameReader::new();
+        let (taken, done) = reader.feed(&bytes[..bytes.len() - 1]).unwrap();
+        assert_eq!((taken, done), (bytes.len() - 1, None), "all but the last byte");
+        let shown = format!("{reader:?}");
+        let token_bytes = format!("{:?}", &b"s3cret"[..]);
+        assert!(!shown.contains(&token_bytes[1..token_bytes.len() - 1]), "the reader: {shown}");
+        assert!(shown.contains("Hello"), "the reader names the kind it is reading: {shown}");
     }
 
     #[test]
