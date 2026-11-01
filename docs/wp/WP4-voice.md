@@ -75,16 +75,41 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-No code yet. The amendments before the first part:
+The amendments before the first part:
 
 - #127 (`amend/wp4-slice-plan`, merged 2026-10-31): the slice as two series, and one owner for
   each part of the speech pipe (decision D81).
-- #132 (`amend/wp4-pins`, draft): pins `sha2` 0.11.1 for the model downloads' SHA256 and
-  `allocation-counter` 0.8.1, a dev-dependency of `eileen-audio` only, for the callbacks'
+- #132 (`amend/wp4-pins`, merged 2026-11-01): pins `sha2` 0.11.1 for the model downloads' SHA256
+  and `allocation-counter` 0.8.1, a dev-dependency of `eileen-audio` only, for the callbacks'
   allocation check in test builds (decision D82), and sets the bar the resampler is measured
   against, with `rubato` not pinned unless the own filter misses it.
 
-The slice parts are listed here as each opens. None has opened yet.
+The parts of the audio series, in merge order, as each opens:
+
+1. `amend/speech-pipe-codec` (draft, the owner reviews it): the first part, an amendment to
+   WP0's `eileen_contracts::speech`. It writes the frame codec both ends of the pipe use and
+   D81's meanings: `FrameKind::Hello` (kind 7, at most 256 bytes), `AudioFlags` (replayed,
+   break, playback, other audio, bits 0 to 3), the `seq` and `turn` meanings on `FrameHeader`,
+   `SpeechStarted.replayed`, and the doc comments of `AudioCmd::Duck` and
+   `AudioCmd::SetCapture`. It settles the two framing details WP0 left open: a PCM frame's JSON
+   header ends at its first newline, within 256 bytes, and command and event bodies are at most
+   256 KiB. `Frame` and `FrameReader` read and write every kind, and the reader reserves a body
+   only after its header passed. A reader is made for one end (`for_core`,
+   `for_core_after_hello`, `for_speech`) and refuses a kind its peer may not send, any frame
+   before the speech process's `Hello` and a second `Hello`. `Frame::encode_audio_into` writes
+   an audio frame from a borrowed window, so the ring needs no copy. The `Hello`'s token is a
+   `SessionToken`, like the dispatcher pipe's. Evidence: the unit and property tests in
+   `eileen_contracts::speech::codec`.
+   The `speech_frame` fuzz entry stays a stub in this part, since the target is `eileen-speech`'s
+   and this part changes only the contracts. Whichever WP4 part lands first after it, from either
+   series, points `eileen_speech::fuzz_entry::speech_frame` at `FrameReader` (all three readers,
+   reporting `Err` when one takes more than it was given, needs more than a PCM body, or returns
+   a different error after its first), with a seed corpus. The entry stays
+   in `eileen-speech`, as BUILD.md section 4.7's table gives the target to WP4, though the parser
+   is in `eileen-contracts`; `fuzz/AGENTS.md` says "the neutral crate that owns the parser", and
+   pull request #136 proposes the wording under "Suggested guidance changes".
+
+The speech series has not opened yet.
 
 ## Surprises
 

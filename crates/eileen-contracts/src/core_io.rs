@@ -455,9 +455,14 @@ pub enum EffectFamily {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioCmd {
-    /// Start or stop sending microphone audio to the speech process.
+    /// The mute control: start or stop capturing the microphone. `false` stops the capture
+    /// stream and empties the ring, so nothing captured before a mute is written to the speech
+    /// process or replayed after it (invariant 9); the first audio frame after capture resumes
+    /// carries the break flag (decision D81).
     SetCapture(bool),
-    /// Duck other audio by this many decibels (negative).
+    /// Lower Eileen's own playback by this many decibels (negative), by the next output
+    /// callback (invariant 2). It never lowers other apps' audio: Windows' communications
+    /// ducking of them is opted out, and an approval pauses their media through SMTC instead.
     Duck {
         /// The gain change, dB.
         db: i8,

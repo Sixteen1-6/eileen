@@ -147,7 +147,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Start or stop sending microphone audio to the speech process.",
+          "description": "The mute control: start or stop capturing the microphone. `false` stops the capture\nstream and empties the ring, so nothing captured before a mute is written to the speech\nprocess or replayed after it (invariant 9); the first audio frame after capture resumes\ncarries the break flag (decision D81).",
           "properties": {
             "set_capture": {
               "type": "boolean"
@@ -160,7 +160,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         {
           "additionalProperties": false,
-          "description": "Duck other audio by this many decibels (negative).",
+          "description": "Lower Eileen's own playback by this many decibels (negative), by the next output\ncallback (invariant 2). It never lowers other apps' audio: Windows' communications\nducking of them is opted out, and an approval pauses their media through SMTC instead.",
           "properties": {
             "duck": {
               "properties": {

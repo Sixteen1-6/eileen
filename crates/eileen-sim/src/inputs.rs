@@ -91,12 +91,16 @@ impl Generator {
             let turn = TurnId::from_parts(now_ms, rng.ulid_random());
             self.turn = Some(turn);
             self.spoke = true;
-            return Ok(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0 }));
+            return Ok(Input::Voice(VoiceEvent::SpeechStarted {
+                turn,
+                source: 0,
+                replayed: false,
+            }));
         };
         let event = match bytes.int_in_range(0_u8..=3)? {
             0 if !self.spoke => {
                 self.spoke = true;
-                VoiceEvent::SpeechStarted { turn, source: 0 }
+                VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }
             }
             0 | 1 => VoiceEvent::Partial { turn, text: phrase(bytes)?, stable: bytes.arbitrary()? },
             2 if self.spoke => {
