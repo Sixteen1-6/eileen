@@ -96,7 +96,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `eileen-core::clock::tests::the_hour_moves_at_a_daylight_saving_change`. The crate keeps
   `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
   (check 24 as #134 amended it, D84). It follows #134 and builds on it.
-- `wp1/speech-life` (open): the core's half of the speech process's life (section 6.3 as #134
+- `wp1/speech-life` (#141, merged): the core's half of the speech process's life (section 6.3 as #134
   amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
   `life`: `Sidecar(Speech, Start)` on the first step; `HangDumpThenKill` then `Restart` when no
   `Ready` comes within 120 s of a `Start` or `Restart`, or no `Heartbeat` for 5 s from that
@@ -118,8 +118,35 @@ Every pull request also meets the rules section 6.1 sets for every package.
   deadlines, an exit, the backoff's reset, replies on the HUD), `eileen-core::turn::tests::*`
   (`speech_lost`), `eileen-sim::invariants::tests::invariant_8_*` and five
   `eileen-sim::it::slice` tests plus a load that never finishes and a crash mid-answer.
+- `wp1/turn-exhaustive` (open): acceptance 2 and 4. `eileen-sim::exhaustive` enumerates every
+  sequence of section 4.7's eleven turn-taking inputs (speech start, speech end, end of turn,
+  clause ready, playback tick, mute, unmute, brain text, backchannel, other audio, physical
+  input) through the real `eileen_core::turn::Turns`, from three starts (idle, speaking the
+  first clause of a streaming reply, and paused by a barge-in), to depth 6 on pull requests.
+  A bench plays the core's part around `Turns` for these inputs and the parts that answer it
+  (a device that takes 32 ms of samples a tick and reports its position, a speech process that
+  readies a clause at a time, the user's speech as one barge-in window a tick while captured),
+  and checks invariants 2, 3, 9 and 10 after every input. States are pruned by a 64-bit FNV-1a
+  hash of everything that can change what follows, with times taken as ages, which is why
+  `Turns` now derives `Hash`. A broken machine (no duck, no pause, the whole reply told to the
+  brain, capture left on when muted, an utterance over another) is caught with a shortest
+  counterexample (`eileen-sim::exhaustive::tests::*`). Invariants 2
+  (`barge_in_pauses_in_time`), 3 (`heard_prefix_matches_playback`) and 9
+  (`nothing_sounds_while_muted`, its mute and microphone parts) are named functions in
+  `eileen-sim::invariants`, each a watch the enumeration carries in its states, with
+  hand-built violating traces (`invariants::tests::audio::*`); invariant 10 runs on the same
+  watch as before. The world keeps an audio trace (inputs, effects and each callback's
+  samples), and `eileen-sim::it::barge_in` shows acceptance 4 through the real core: onset to
+  silence within 96 ms plus one callback, the heard prefix the brain is told equal to the
+  samples handed to the device, and a backchannel that resumes from the exact paused sample,
+  with invariants 2, 3 and 9 holding over each trace. The nightly hook: `nightly.yml` is not on
+  `main` yet, so WP0 phase B's nightly job runs
+  `EILEEN_EXHAUSTIVE_DEPTH=8 cargo nextest run -p eileen-sim --profile nightly -E 'test(/turn::exhaustive/)'`;
+  the test reads the variable (`eileen_sim::exhaustive::DEPTH_ENV`) and runs depth 6 without
+  it.
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
-  `SpeechStarted.replayed` (it has, #136); then `wp1/turn-exhaustive`.
+  `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
+  after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1).
 
 ## Surprises
 
@@ -139,6 +166,15 @@ Every pull request also meets the rules section 6.1 sets for every package.
   everything recorded so far, which the real core's spans made too slow for the pull request
   seeds. The simulator now collects span records as they happen and checks invariant 13 only
   after a step that produced one.
+
+- The core ends an utterance it stops at once, so after a stop with no pause first (muting, a
+  typed request) the heard prefix is the position of the last `Played` report, up to 50 ms of
+  audio behind the device, under one character at speaking pace. A barge-in pauses first, and
+  the `Paused` report is exact, so the brain is told exactly what was heard there. The
+  exhaustive bench reports after every tick, so invariant 3 holds in it; in the world, whose
+  device reports every 50 ms, a mute mid-sentence can be a character short, which is why
+  invariant 3 is not yet in the world's per-step check. Taking the `Stopped` report's position
+  for a heard prefix not yet handed to the brain would close the gap for muting.
 
 ## Decisions
 
@@ -186,6 +222,18 @@ Every pull request also meets the rules section 6.1 sets for every package.
   its exit, whichever came first), at most six restarts of one child in any 60 s, and no child
   left down past 60 s. Five restarts fit in the first minute of a child that crashes at once
   (1, 2, 4, 8 and 16 s steps), so six leaves one of margin.
+
+- `turn::exhaustive`'s playback tick is one barge-in window, 32 ms, with one device callback
+  of 768 samples, rather than the device's 10 ms: every tick is then the same, so states that
+  differ only in time are one state, and onset to silence is bounded by three windows and one
+  tick (128 ms, within invariant 2's 150 ms). The 10 ms device and acceptance 4's 96 ms plus
+  one callback are shown in the world (`it::barge_in`).
+- Invariant 2's onset is the first window of a run less one window (the speech process judges
+  32 ms windows), and its 150 ms bound applies when the run's windows came at that pace; the
+  duck, the pause by the third consecutive window, silence while paused and the 600 ms
+  decision hold whatever the pace.
+- Invariant 9 lets the mute and unmute earcons play at the change: they confirm the user's own
+  key press, and the unmute earcon is emitted just before `MuteChanged { muted: false }`.
 
 ## Outcome
 
