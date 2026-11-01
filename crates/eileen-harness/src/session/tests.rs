@@ -335,7 +335,11 @@ fn the_registry_path_and_the_brain_path_replace_the_users() {
     host.brain_path = Some("/system/bin".to_owned());
     let worker = session_files(&computer_use_worker(), &config(), &host).unwrap();
     assert_eq!(worker.env.get("PATH"), Some("/registry/bin"), "the worker's PATH");
-    assert_eq!(worker.env.names().filter(|name| name.eq_ignore_ascii_case("PATH")).count(), 1);
+    assert_eq!(
+        worker.env.names().filter(|name| name.eq_ignore_ascii_case("PATH")).count(),
+        1,
+        "one PATH, whatever case the user's had"
+    );
     let brain = session_files(&brain(), &config(), &host).unwrap();
     assert_eq!(brain.env.get("PATH"), Some("/system/bin"), "the brain's constructed PATH");
 }

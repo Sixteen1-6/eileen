@@ -172,11 +172,7 @@ impl WorkerDriver for AnyWorker {
 
 /// The worker driver for `route`; `RouteUnavailable` unless v0.1 builds it, which is Claude
 /// alone.
-#[expect(
-    clippy::missing_const_for_fn,
-    clippy::trivially_copy_pass_by_ref,
-    reason = "the stub's body and section 3.3.8's signature; WP3 locates the CLI here"
-)]
+#[expect(clippy::missing_const_for_fn, reason = "the stub's body; WP3 locates the CLI here")]
 pub fn worker_for(route: Route, _cfg: &HarnessConfig) -> Result<AnyWorker, DriverError> {
     match route {
         Route::Claude => Ok(AnyWorker::Claude(ClaudeWorker)),

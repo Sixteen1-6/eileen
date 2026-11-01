@@ -113,7 +113,7 @@ impl SessionEnv {
     }
 
     /// The variables, in name order, for the spawn.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn vars(&self) -> impl Iterator<Item = (&str, &str)> {
         self.0.iter().map(|(name, value)| (name.as_str(), value.as_str()))
     }
 

@@ -335,7 +335,7 @@ fn tool_list(tools: &[String]) -> String {
 
 /// The headers every hook sends: the bearer token and the session id, interpolated by the CLI
 /// from the session's environment, so neither sits in the file.
-fn hook(url: String, timeout_s: u16, block: bool) -> Value {
+fn hook(url: &str, timeout_s: u16, block: bool) -> Value {
     let mut hook = json!({
         "type": "http",
         "url": url,
@@ -354,19 +354,19 @@ fn hook(url: String, timeout_s: u16, block: bool) -> Value {
 
 fn settings(spec: &SessionSpec) -> Value {
     let endpoint = &spec.hook_endpoint;
-    let base = format!("http://127.0.0.1:{}/{}", endpoint.port, endpoint.path.trim_matches('/'),);
+    let base = format!("http://127.0.0.1:{}/{}", endpoint.port, endpoint.path.trim_matches('/'));
     let base = base.trim_end_matches('/');
     let mut hooks = Map::new();
     hooks.insert(
         "PreToolUse".to_owned(),
-        hook(format!("{base}/pre-tool-use"), GUARD_TIMEOUT_S, true),
+        hook(&format!("{base}/pre-tool-use"), GUARD_TIMEOUT_S, true),
     );
     hooks.insert(
         "PermissionRequest".to_owned(),
-        hook(format!("{base}/permission-request"), GUARD_TIMEOUT_S, true),
+        hook(&format!("{base}/permission-request"), GUARD_TIMEOUT_S, true),
     );
     for (event, path) in BUS_HOOKS {
-        hooks.insert(event.to_owned(), hook(format!("{base}/{path}"), BUS_HOOK_TIMEOUT_S, false));
+        hooks.insert(event.to_owned(), hook(&format!("{base}/{path}"), BUS_HOOK_TIMEOUT_S, false));
     }
     json!({
         "disableSkillShellExecution": true,
@@ -383,7 +383,7 @@ fn mcp_config(
     let mut args = vec!["--pipe".to_owned(), spec.shim.pipe.clone(), "--role".to_owned()];
     match shim_role(spec) {
         ShimRole::Worker(session) => {
-            args.extend(["worker".to_owned(), "--session".to_owned(), session.to_string()])
+            args.extend(["worker".to_owned(), "--session".to_owned(), session.to_string()]);
         }
         ShimRole::Brain => args.push("brain".to_owned()),
         ShimRole::Librarian => args.push("librarian".to_owned()),
