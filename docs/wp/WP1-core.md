@@ -90,7 +90,13 @@ Every pull request also meets the rules section 6.1 sets for every package.
   slice tests `eileen-sim::it::slice::*`. Acceptance 4 (barge-in in simulation) is shown by
   `stop_while_eileen_speaks_ducks_pauses_and_stops_within_the_decision` and
   `a_backchannel_resumes_from_the_paused_sample`; the exhaustive enumeration
-  (`wp1/turn-exhaustive`) builds on `turn::Turns` next.
+  (`wp1/turn-exhaustive`) builds on `turn::Turns` next. Every CI lane is green on #130.
+- Next for the first pull request's scope: #127 (merged while #130 was open) adds the speech
+  process's life (start at boot, hang dump and restart on a missed heartbeat or a late `Ready`,
+  replies on the HUD while speech is down, turns heard late addressed only by name, a named
+  command during a restart acted on once from the replay). It waits for `SpeechStarted.replayed`
+  in the contracts and is the follow-up `wp1/speech-life`. #130 already ends an utterance that
+  gets `SpeakDone` with no clause, as the audio component answers while speech is down.
 
 ## Surprises
 
