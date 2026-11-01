@@ -359,9 +359,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           for shared in linux win-clippy win-test; do
+            # The key prefix alone would also match a later key such as `linux-fuzz`, so only
+            # entries whose next part is rust-cache's OS name count, newest first, and the first
+            # of those is kept.
             superseded="$(gh cache list --ref refs/heads/main --key "v0-rust-$shared-" \
               --sort created_at --order desc --limit 1000 --json id,key \
-              --jq '.[1:][] | "\(.id) \(.key)"')"
+              --jq '.[] | "\(.id) \(.key)"' |
+              { grep -E "^[0-9]+ v0-rust-$shared-(Linux|Windows_NT)-" || true; } |
+              tail -n +2)"
             if [ -z "$superseded" ]; then
               echo "$shared: nothing superseded"
               continue
