@@ -167,7 +167,7 @@ pub struct Device {
 impl Device {
     /// A device with capture on.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { playing: VecDeque::new(), ducked: false, capture: true }
     }
 
