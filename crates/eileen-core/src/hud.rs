@@ -52,7 +52,7 @@ impl Hud {
 }
 
 /// Where and how the HUD is drawn, from settings.
-const fn layout(config: &HudConfig) -> HudLayout {
+const fn layout(config: HudConfig) -> HudLayout {
     HudLayout {
         corner: config.corner,
         scale_pct: config.scale_pct,
@@ -67,7 +67,7 @@ impl Core {
     pub(crate) fn refresh_hud(&mut self, cx: &mut Cx<'_>) {
         let state = HudState {
             v: STATE_VERSION,
-            layout: layout(&self.config.config.hud),
+            layout: layout(self.config.config.hud),
             mic: self.mic_state(),
             conversation: None,
             heard: None,

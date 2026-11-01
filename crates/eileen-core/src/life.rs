@@ -104,7 +104,7 @@ impl Core {
     }
 
     /// From a sidecar's client. The minimal core runs only the speech process.
-    pub(crate) fn sidecar(&mut self, cx: &mut Cx<'_>, which: SidecarId, event: SidecarEvent) {
+    pub(crate) fn sidecar(&mut self, cx: &mut Cx<'_>, which: SidecarId, event: &SidecarEvent) {
         if which != SidecarId::Speech {
             return;
         }

@@ -371,7 +371,7 @@ impl Core {
             Input::ToolCall(request) => self.tool_call(&mut cx, ctx, request),
             Input::User(input) => self.user(&mut cx, input),
             Input::Timer(id) => self.timer(&mut cx, id),
-            Input::Sidecar(which, event) => self.sidecar(&mut cx, which, event),
+            Input::Sidecar(which, event) => self.sidecar(&mut cx, which, &event),
             Input::ToolResult(..)
             | Input::Learn(_)
             | Input::Activity(_)
