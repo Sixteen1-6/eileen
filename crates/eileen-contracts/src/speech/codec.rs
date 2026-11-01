@@ -785,11 +785,11 @@ mod tests {
         assert!(!shown.contains(token_bytes), "the reader: {shown}");
         assert!(shown.contains("Hello"), "the reader names the kind it is reading: {shown}");
         let (_, done) = reader.feed(&bytes[bytes.len() - 1..]).unwrap();
-        let token = match done {
+        let secret = match done {
             Some(Frame { body: FrameBody::Hello(read), .. }) => read.token.expose().to_owned(),
             other => format!("{other:?}"),
         };
-        assert_eq!(token, "s3cret-token", "the last byte completes the Hello, token and all");
+        assert_eq!(secret, "s3cret-token", "the last byte completes the Hello, token and all");
     }
 
     #[test]
