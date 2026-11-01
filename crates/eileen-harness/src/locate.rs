@@ -31,9 +31,6 @@ pub const TESTED_CLI: ClaudeVersion = ClaudeVersion { major: 2, minor: 1, patch:
 /// The largest `package.json` or shim this module reads; real ones are under 2 KB.
 const MAX_SMALL_FILE: u64 = 64 * 1024;
 
-/// The most entries read from the native installer's versions folder.
-const MAX_VERSION_ENTRIES: usize = 256;
-
 /// The package's folder inside npm's `node_modules`.
 const NPM_PACKAGE: [&str; 2] = ["@anthropic-ai", "claude-code"];
 
@@ -171,7 +168,10 @@ pub fn locate_claude(env: &LocateEnv) -> Result<ClaudeInstall, LocateError> {
     let mut searched = Vec::new();
     let mut refused = Vec::new();
     for dir in search_dirs(env) {
-        if under_claude_folder(&dir) {
+        // A folder that is, or links into, a `.claude` folder is refused before anything in it
+        // is looked at. A desktop app folder is searched: its `claude` is refused by name and
+        // named, so the user learns why it was passed over.
+        if resolve(&dir) == Err(RefusalReason::UnderClaudeFolder) {
             refused.push(Refusal { path: dir, reason: RefusalReason::UnderClaudeFolder });
             continue;
         }
@@ -208,74 +208,156 @@ fn search_dirs(env: &LocateEnv) -> Vec<PathBuf> {
     dirs
 }
 
-/// `claude.cmd`, `claude.ps1` and then `claude.exe` in `dir`, as `cmd.exe` and `PATHEXT` order
-/// them (`.ps1` is PowerShell's, found before `.exe` only there; npm writes both shims).
+/// The most links followed from one candidate before it is refused.
+const MAX_LINKS: usize = 8;
+
+/// `claude.exe`, `claude.cmd` and then `claude.ps1` in `dir`, the order `cmd.exe` takes from
+/// the default `PATHEXT`; npm's folder holds the two shims and no `claude.exe`.
 fn in_windows_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
-    for shim_name in ["claude.cmd", "claude.ps1"] {
-        let shim = dir.join(shim_name);
-        if shim.is_file() {
-            return Some(through_shim(&shim));
-        }
-    }
     let exe = dir.join("claude.exe");
-    exe.is_file().then(|| direct(exe.clone(), &exe))
+    if is_here(&exe) {
+        return Some(direct(&exe));
+    }
+    ["claude.cmd", "claude.ps1"]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|shim| is_here(shim))
+        .map(|shim| through_shim(&shim))
 }
 
-/// `claude` in `dir`, following a link (npm's on Unix, and the native installer's).
+/// `claude` in `dir`: npm's link into its package, the native installer's, or another.
 fn in_unix_dir(dir: &Path) -> Option<Result<ClaudeInstall, Refusal>> {
     let found = dir.join("claude");
-    if !found.is_file() {
+    if !is_here(&found) {
         return None;
     }
-    let is_link = fs::symlink_metadata(&found).is_ok_and(|meta| meta.file_type().is_symlink());
-    if !is_link {
-        return Some(direct(found.clone(), &found));
-    }
-    let Ok(target) = fs::canonicalize(&found) else {
-        return Some(Err(Refusal { path: found, reason: RefusalReason::ShimWithoutBinary }));
+    let refuse = |reason| Refusal { path: found.clone(), reason };
+    let target = match resolve(&found) {
+        Ok(target) => target,
+        Err(reason) => return Some(Err(refuse(reason))),
     };
     if target.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("js")) {
-        return Some(Err(Refusal { path: found, reason: RefusalReason::ShimWithoutBinary }));
+        return Some(Err(refuse(RefusalReason::ShimWithoutBinary)));
     }
     if in_npm_package(&target) {
         return Some(checked(&found, target, |shim| InstallKind::NpmShim { shim }));
     }
-    Some(direct(target, &found))
+    Some(checked(&found, target, |found| native_or_other(&found)))
 }
 
-/// A `claude` executable found as it is: the native installer's, or another.
-fn direct(exe: PathBuf, found: &Path) -> Result<ClaudeInstall, Refusal> {
-    let found = found.to_path_buf();
-    checked(&found, exe, |_| {
-        if is_native_bin(&found) { InstallKind::Native } else { InstallKind::Other }
-    })
+/// Whether something, a dangling link included, is at `path`; nothing a link leads to is
+/// looked at.
+fn is_here(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
-/// Refuses `exe` when it is the desktop app's or under a `.claude` folder; otherwise the
-/// install, with its version from the layout. A refusal names `found`, what the user has.
+/// A `claude` executable found as it is, or a link to one.
+fn direct(found: &Path) -> Result<ClaudeInstall, Refusal> {
+    let exe = resolve(found).map_err(|reason| Refusal { path: found.to_path_buf(), reason })?;
+    checked(found, exe, |found| native_or_other(&found))
+}
+
+fn native_or_other(found: &Path) -> InstallKind {
+    if is_native_bin(found) { InstallKind::Native } else { InstallKind::Other }
+}
+
+/// Refuses `exe`, already resolved, when it or `found` is the desktop app's, lies under a
+/// `.claude` folder or is no file; otherwise the install, with its version from the layout. A
+/// refusal names `found`, what the user has.
 fn checked(
     found: &Path,
     exe: PathBuf,
     kind: impl FnOnce(PathBuf) -> InstallKind,
 ) -> Result<ClaudeInstall, Refusal> {
     let refuse = |reason| Refusal { path: found.to_path_buf(), reason };
-    if is_desktop_app_copy(&exe) || is_desktop_app_copy(found) {
-        return Err(refuse(RefusalReason::DesktopApp));
+    refuse_by_name(found).and_then(|()| refuse_by_name(&exe)).map_err(refuse)?;
+    if !exe.is_file() {
+        return Err(refuse(RefusalReason::ShimWithoutBinary));
     }
-    if under_claude_folder(&exe) {
-        return Err(refuse(RefusalReason::UnderClaudeFolder));
-    }
-    let version = layout_version(&exe, found);
+    let version = layout_version(&exe);
     Ok(ClaudeInstall { kind: kind(found.to_path_buf()), exe, version, skipped: Vec::new() })
+}
+
+/// The desktop app's folders and `.claude` folders, by name alone, before anything there is
+/// looked at.
+fn refuse_by_name(path: &Path) -> Result<(), RefusalReason> {
+    if under_claude_folder(path) {
+        Err(RefusalReason::UnderClaudeFolder)
+    } else if is_desktop_app_copy(path) {
+        Err(RefusalReason::DesktopApp)
+    } else {
+        Ok(())
+    }
+}
+
+/// Follows the links (symbolic links and junctions) in `path`, in any of its folders, the way
+/// the OS would, reading each link rather than opening what it leads to. Every path on the way
+/// passes [`refuse_by_name`] before any of it is looked at, so a link into a `.claude` folder
+/// or the desktop app's is refused without being followed. At most [`MAX_LINKS`] links.
+fn resolve(path: &Path) -> Result<PathBuf, RefusalReason> {
+    let mut current = lexical(path);
+    for _ in 0..=MAX_LINKS {
+        refuse_by_name(&current)?;
+        match first_link(&current) {
+            Some(next) => current = next,
+            None => return Ok(current),
+        }
+    }
+    Err(RefusalReason::ShimWithoutBinary)
+}
+
+/// `path` with its first link, counted from the root, replaced by the link's target.
+fn first_link(path: &Path) -> Option<PathBuf> {
+    let parts: Vec<Component<'_>> = path.components().collect();
+    let mut prefix = PathBuf::new();
+    for (at, part) in parts.iter().enumerate() {
+        prefix.push(part);
+        if !matches!(part, Component::Normal(_)) {
+            continue;
+        }
+        let is_link = fs::symlink_metadata(&prefix).is_ok_and(|meta| meta.file_type().is_symlink());
+        if is_link {
+            let target = fs::read_link(&prefix).ok()?;
+            let base = prefix.parent().map_or_else(PathBuf::new, Path::to_path_buf);
+            let rest: PathBuf = parts.iter().skip(at + 1).collect();
+            return Some(lexical(&base.join(target).join(rest)));
+        }
+    }
+    None
+}
+
+/// `path` with `.` dropped and each `..` taking off the folder before it, without asking the
+/// file system. [`resolve`] follows a link before it applies the `..` after it.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let at_root = matches!(
+                    out.components().next_back(),
+                    None | Some(Component::RootDir | Component::Prefix(_) | Component::ParentDir)
+                );
+                if at_root {
+                    out.push(part);
+                } else {
+                    out.pop();
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(part),
+        }
+    }
+    out
 }
 
 /// Reads an npm shim for the binary it starts: the first quoted path, relative to the shim's
 /// folder, whose file name is `claude.exe`. A shim that names none (it runs `cli.js` through
 /// node) falls back to the package's binary beside it, if that exists.
 fn through_shim(shim: &Path) -> Result<ClaudeInstall, Refusal> {
-    let refuse = || Refusal { path: shim.to_path_buf(), reason: RefusalReason::ShimWithoutBinary };
+    let refuse = |reason| Refusal { path: shim.to_path_buf(), reason };
+    let resolved = resolve(shim).map_err(refuse)?;
     let dir = shim.parent().map_or_else(PathBuf::new, Path::to_path_buf);
-    let text = read_small(shim).map_err(|_| refuse())?;
+    let text = read_small(&resolved).map_err(|_| refuse(RefusalReason::ShimWithoutBinary))?;
     let named = shim_targets(&text, &dir).into_iter().find(|target| {
         target
             .file_name()
@@ -283,12 +365,7 @@ fn through_shim(shim: &Path) -> Result<ClaudeInstall, Refusal> {
             .is_some_and(|name| name.eq_ignore_ascii_case("claude.exe"))
     });
     let exe = named.unwrap_or_else(|| npm_package_dir(&dir).join("bin").join("claude.exe"));
-    if is_desktop_app_copy(&exe) {
-        return Err(Refusal { path: shim.to_path_buf(), reason: RefusalReason::DesktopApp });
-    }
-    if !exe.is_file() {
-        return Err(refuse());
-    }
+    let exe = resolve(&exe).map_err(refuse)?;
     checked(shim, exe, |shim| InstallKind::NpmShim { shim })
 }
 
@@ -339,9 +416,12 @@ fn is_native_bin(path: &Path) -> bool {
 }
 
 /// The version the layout records: `version` in npm's `package.json` for the package's binary,
-/// the newest entry of `~/.local/share/claude/versions` for the native installer's (or the
-/// entry a Unix link leads to). `None` when the layout says nothing.
-fn layout_version(exe: &Path, found: &Path) -> Option<ClaudeVersion> {
+/// or the name of the native installer's release a Unix link leads to
+/// (`~/.local/share/claude/versions/<version>`). `None` when the layout says nothing, as for
+/// the native installer's `claude.exe` on Windows: it is a copy of a release, and the newest
+/// release in the versions folder need not be the one copied (after a rollback, or while an
+/// update waits), so the doctor asks the CLI itself.
+fn layout_version(exe: &Path) -> Option<ClaudeVersion> {
     if in_npm_package(exe) {
         let package = exe.parent()?.parent()?.join("package.json");
         let text = read_small(&package).ok()?;
@@ -355,25 +435,7 @@ fn layout_version(exe: &Path, found: &Path) -> Option<ClaudeVersion> {
     if parent_is_versions {
         return exe.file_name()?.to_str().and_then(ClaudeVersion::parse);
     }
-    if is_native_bin(found) {
-        let local = found.parent()?.parent()?;
-        return newest_version(&local.join("share").join("claude").join("versions"));
-    }
     None
-}
-
-/// The newest entry of the native installer's versions folder whose name is a version.
-fn newest_version(dir: &Path) -> Option<ClaudeVersion> {
-    fs::read_dir(dir)
-        .ok()?
-        .take(MAX_VERSION_ENTRIES)
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name();
-            let name = name.to_str()?;
-            ClaudeVersion::parse(name.strip_suffix(".exe").unwrap_or(name))
-        })
-        .max()
 }
 
 /// Reads a small text file, refusing one over [`MAX_SMALL_FILE`] and any under `.claude`.

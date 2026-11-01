@@ -3,7 +3,8 @@
 //! running sessions use, whether it is signed in, and the toolchains a worker would see.
 //!
 //! The sign-in check is `claude auth status`, read by its exit code only (D4): its output names
-//! the account, so it goes nowhere. When the CLI is signed out the report asks the user to run
+//! the account, so standard output is null and standard error is read and dropped, never
+//! forwarded into the logs. When the CLI is signed out the report asks the user to run
 //! `claude auth login` and nothing else starts; Eileen never runs a login. Nothing here opens a
 //! credential file or anything under a `.claude` folder. Every probe starts through
 //! `eileen_supervisor`, in the worker environment, with a deadline.
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eileen_supervisor::{ChildClass, ChildSpec};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::locate::{
     ClaudeInstall, ClaudeVersion, InstallKind, LocateEnv, LocateError, MIN_CLI, TESTED_CLI,
@@ -168,19 +169,11 @@ async fn run_supervised(probe: &Probe) -> Result<ProbeOutput, ProbeError> {
         .map_err(|error| ProbeError::Spawn(error.to_string()))?;
     drop(child.take_stdin());
     let stdout = child.take_stdout();
+    let stderr = child.take_stderr();
     let answered = tokio::time::timeout(probe.deadline, async {
-        let mut kept = Vec::new();
-        if let Some(mut stdout) = stdout {
-            let mut chunk = [0_u8; 1024];
-            loop {
-                let read = stdout.read(&mut chunk).await?;
-                if read == 0 {
-                    break;
-                }
-                let room = MAX_STDOUT.saturating_sub(kept.len());
-                kept.extend_from_slice(chunk.get(..read.min(room)).unwrap_or_default());
-            }
-        }
+        let (kept, drained) = tokio::join!(read_kept(stdout, MAX_STDOUT), read_kept(stderr, 0));
+        drained?;
+        let kept = kept?;
         let status = child.wait().await?;
         Ok::<_, io::Error>((status, kept))
     })
@@ -196,6 +189,24 @@ async fn run_supervised(probe: &Probe) -> Result<ProbeOutput, ProbeError> {
             drop(child);
             Err(ProbeError::DeadlinePassed(probe.deadline))
         }
+    }
+}
+
+/// Reads `pipe` to its end, keeping its first `keep` bytes and dropping the rest, so a chatty
+/// child never blocks on a full pipe. A missing pipe reads as empty.
+async fn read_kept(pipe: Option<impl AsyncRead + Unpin>, keep: usize) -> io::Result<Vec<u8>> {
+    let mut kept = Vec::new();
+    let Some(mut pipe) = pipe else {
+        return Ok(kept);
+    };
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = pipe.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(kept);
+        }
+        let room = keep.saturating_sub(kept.len());
+        kept.extend_from_slice(chunk.get(..read.min(room)).unwrap_or_default());
     }
 }
 
@@ -339,6 +350,7 @@ fn claude_probe(exe: &Path, args: &[&str], env: &[(String, String)], deadline: D
         .class(ChildClass::ClaudeSession);
     spec.env_clear = true;
     spec.piped = false;
+    spec.raw_stderr = true;
     Probe { spec, deadline }
 }
 
@@ -402,6 +414,7 @@ fn ask_vswhere(
         .envs(env.iter().cloned())
         .class(ChildClass::Tool);
     spec.env_clear = true;
+    spec.raw_stderr = true;
     match runner.run(&Probe { spec, deadline: VSWHERE_DEADLINE }) {
         Ok(ProbeOutput { exit_code: Some(0), stdout }) => {
             match stdout.lines().map(str::trim).find(|line| !line.is_empty()) {

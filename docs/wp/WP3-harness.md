@@ -195,8 +195,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   is read for the package's `bin\claude.exe`; a shim that runs `cli.js` through node, the
   Claude desktop app's bundled copy (its `Claude-Data`, `AnthropicClaude` and MSIX folders, or
   any `claude-code\<version>` folder) and a folder under `.claude` are passed over and named.
-  The version comes from the layout: the package's `package.json`, or the newest entry of
-  `~/.local/share/claude/versions`. `cli::doctor_claude` runs `claude auth status` through
+  Links and junctions are followed by reading each one, with every target refused by name
+  (desktop app, `.claude`) before anything there is looked at. The version comes from the
+  layout where it is exact: the package's `package.json`, or the release a Unix link leads to.
+  The native installer's `claude.exe` on Windows is a copy of some release, not always the
+  newest in its versions folder, so its version comes from `claude --version`. `cli::doctor_claude` runs `claude auth status` through
   `eileen_supervisor` in the worker environment with a 20 s deadline, reading its exit code
   only (0 signed in, 1 signed out). Signed out, it prints the `claude auth login` suggestion and
   starts nothing else; signed in, it asks `claude --version` when the layout gave no version

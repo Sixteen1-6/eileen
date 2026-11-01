@@ -7,7 +7,8 @@ use eileen_supervisor::{ChildClass, ChildSpec};
 
 use super::{
     AUTH_STATUS_DEADLINE, AuthCheck, DoctorInputs, MsvcCheck, Probe, ProbeError, ProbeOutput,
-    ProbeRunner, RunningCheck, SupervisedRunner, VersionCheck, doctor,
+    ProbeRunner, RunningCheck, SupervisedRunner, VERSION_DEADLINE, VSWHERE_DEADLINE, VersionCheck,
+    doctor,
 };
 use crate::locate::tests::{Scratch, npm_layout, windows_env};
 use crate::locate::{ClaudeVersion, LocateEnv, LocateError};
@@ -20,6 +21,7 @@ struct Asked {
     env: Vec<(OsString, OsString)>,
     env_clear: bool,
     piped: bool,
+    raw_stderr: bool,
     class: ChildClass,
     deadline: Duration,
 }
@@ -49,6 +51,7 @@ impl ProbeRunner for FakeRunner {
             env: spec.env.clone(),
             env_clear: spec.env_clear,
             piped: spec.piped,
+            raw_stderr: spec.raw_stderr,
             class: spec.class,
             deadline: probe.deadline,
         });
@@ -173,6 +176,14 @@ fn a_signed_in_cli_reports_the_toolchains_a_worker_sees() {
         runner.args(1)
     );
     assert_eq!(runner.asked[1].class, ChildClass::Tool, "a short tool run");
+    assert!(runner.asked[1].env_clear, "vswhere starts from an empty environment");
+    assert_eq!(
+        runner.asked[1].env,
+        vec![(OsString::from("SystemRoot"), OsString::from(r"C:\Windows"))],
+        "the worker's, as for the CLI"
+    );
+    assert!(runner.asked[1].raw_stderr, "its standard error is drained, not logged");
+    assert_eq!(runner.asked[1].deadline, VSWHERE_DEADLINE, "the wait has a deadline");
 }
 
 #[test]
@@ -216,6 +227,7 @@ fn auth_status_runs_in_the_worker_environment_with_a_deadline() {
         "only what survives the worker denylist"
     );
     assert!(!asked.piped, "its output, which names the account, is never read");
+    assert!(asked.raw_stderr, "nor its standard error forwarded into the logs");
     assert_eq!(asked.class, ChildClass::ClaudeSession, "below normal, like every Claude process");
     assert_eq!(asked.deadline, AUTH_STATUS_DEADLINE, "the wait has a deadline");
 }
@@ -251,6 +263,10 @@ fn an_unknown_layout_version_is_asked_of_the_cli_once_signed_in() {
     let report = doctor(&inputs, &mut runner).unwrap();
 
     assert_eq!(runner.args(1), ["--version"], "the CLI is asked");
+    let asked = &runner.asked[1];
+    assert!(asked.piped && asked.raw_stderr, "its version is read and its stderr drained");
+    assert!(asked.env_clear, "in the worker environment");
+    assert_eq!(asked.deadline, VERSION_DEADLINE, "with a deadline");
     assert_eq!(report.version, VersionCheck::InRange(version("2.1.304")), "and its answer used");
     assert!(report.to_string().contains("the native installer"), "the layout is named");
 }

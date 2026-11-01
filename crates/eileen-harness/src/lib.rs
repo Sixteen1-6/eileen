@@ -63,7 +63,8 @@
 //!   and a signed-out CLI gets the `claude auth login` suggestion with nothing else started
 //!   (`cli::doctor::tests::a_signed_out_cli_gets_the_login_suggestion_and_nothing_else_runs`);
 //!   every probe runs in the worker environment with a deadline
-//!   (`cli::doctor::tests::auth_status_runs_in_the_worker_environment_with_a_deadline`).
+//!   (`cli::doctor::tests::auth_status_runs_in_the_worker_environment_with_a_deadline`, and
+//!   the version and vswhere probes in their own tests).
 //! - Denials are read from the stream, and an `approve` call that errored, timed out or lost its
 //!   server counts as one when the guard asked about the call (section 2.5;
 //!   `stream::tests::failed_approve_calls_count_as_denials` and
@@ -98,8 +99,14 @@
 //!   the `.cmd` and `.ps1` name the package's `bin\claude.exe` relative to their own folder
 //!   (`%dp0%`, `$basedir`), and an older package's shim runs `cli.js` through node instead,
 //!   which is no executable Eileen can supervise.
-//! - `claude auth status` prints the account's email and organisation, so the doctor never
-//!   pipes its output; the exit code is the whole answer.
+//! - `claude auth status` prints the account's email and organisation, so the doctor reads its
+//!   exit code only: standard output is null, and standard error is drained and dropped
+//!   (`ChildSpec::raw_stderr`), since the supervisor would otherwise forward each line into
+//!   tracing.
+//! - Windows links count too: a `claude.exe` in a `PATH` folder can be a symbolic link or sit
+//!   behind a junction, so `locate` follows each link by reading it, checking every target by
+//!   name before anything there is looked at, rather than canonicalizing, which would open
+//!   whatever the link leads to.
 //! - CI never holds vendor credentials, and no code path opens a vendor credential file.
 //! - The CLI writes `system/init` again at the start of every user turn, and `system/init`
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
