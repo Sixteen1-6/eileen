@@ -920,6 +920,8 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "eileen-contracts",
+ "eileen-trace",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
