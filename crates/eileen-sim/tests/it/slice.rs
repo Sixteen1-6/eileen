@@ -558,7 +558,8 @@ fn a_crash_while_eileen_speaks_shows_the_rest_on_the_hud() {
         "some of the answer was synthesized and some not: {synthesized}"
     );
     world.crash_speech();
-    settle(&mut world, 2_000);
+    // At 1 600 samples a character, 24 000 a second, the clauses play for about 5 s.
+    settle(&mut world, 10_000);
     let heard = sentences[..synthesized].join(" ").chars().count();
     assert!(
         events(&world).iter().any(|e| matches!(
