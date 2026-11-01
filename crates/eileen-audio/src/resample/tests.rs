@@ -312,9 +312,9 @@ fn the_callback_path_allocates_nothing() {
 /// compiling, through `cargo xtask test --owner --release -p eileen-audio owner_pc::` (a release
 /// build takes both build slots) with `--no-capture` added to see the numbers: each conversion
 /// prints its mean, median, 99th percentile and worst buffer, which the pull request's
-/// `owner-run:` line records. Compiled only without debug assertions, so a debug run neither
-/// passes nor fails it.
-#[cfg(not(debug_assertions))]
+/// `owner-run:` line records. It is a test only without debug assertions, so a debug run neither
+/// passes nor fails it, but every test build compiles it, so CI's lints cover it.
+#[cfg_attr(debug_assertions, expect(dead_code, reason = "a test only in release builds"))]
 mod owner_pc {
     use std::hint::black_box;
 
@@ -355,7 +355,7 @@ mod owner_pc {
         costs
     }
 
-    #[test]
+    #[cfg_attr(not(debug_assertions), test)]
     fn each_conversion_takes_at_most_25_us_per_10_ms_buffer() {
         let mut over = Vec::new();
         for conversion in Conversion::ALL {
