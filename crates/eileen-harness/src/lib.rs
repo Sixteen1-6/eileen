@@ -71,6 +71,8 @@
 //!   failed in the same text, so only a call the guard asked about counts.
 //! - Redact a JSON value's strings before serializing it, never its text: serialized, a newline
 //!   before a token is the `n` of `\n`, after which the `Redactor` sees no word start.
+//! - One pass of the `Redactor` can leave a token: right after another match it has no word
+//!   start until that match is replaced. The parser redacts each string until it settles.
 //! - A `rate_limit_event` reports one window, while `PlanUsage` holds both with the nearer
 //!   reset, so the events pass through `stream::PlanWindows` before they become `RateLimit`.
 //!

@@ -299,7 +299,7 @@ fn an_unknown_type_is_unknown() {
     let Line::Unknown { kind } = parse(long.as_bytes(), &Redactor::new()) else {
         panic!("a long unknown type is still unknown")
     };
-    assert_eq!(kind.len(), super::MAX_KIND_BYTES, "its name is capped");
+    assert_eq!(kind.len(), MAX_KIND_BYTES, "its name is capped");
 }
 
 #[test]
@@ -482,6 +482,30 @@ fn a_token_at_the_start_of_a_line_in_an_input_is_redacted() {
         }
         assert!(text.contains("[redacted:github_token]"), "and marked {place}: {text}");
     }
+}
+
+#[test]
+fn a_token_right_after_another_match_is_redacted() {
+    // A token needs a word start. Right after another match it has none until that match is
+    // replaced, so one pass of the redactor leaves it and the next would find it.
+    let redactor = Arc::new(Redactor::new());
+    let _token = redactor.add_literal("hook-token-5f2a9c").unwrap();
+    let chained = "hook-token-5f2a9cAKIAIOSFODNN7EXAMPLEghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let line = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": { chained: chained } },
+        { "type": "tool_use", "id": "toolu_2", "name": "Skill",
+          "input": { "skill": chained, "args": chained } },
+    ] } });
+    let Line::Assistant(blocks) = parse(line.to_string().as_bytes(), &redactor) else {
+        panic!("an assistant line")
+    };
+    let [Block::ToolUse(call), Block::SkillInvoked { name, args }] = &blocks[..] else {
+        panic!("{blocks:?}")
+    };
+    let all = "[redacted:secret][redacted:aws_key][redacted:github_token]";
+    assert_eq!(call.input.get(), &json!({ all: all }), "a key and a value, in three passes");
+    assert_eq!(name, all, "a skill's name");
+    assert_eq!(args.get(), all, "and its arguments");
 }
 
 #[test]

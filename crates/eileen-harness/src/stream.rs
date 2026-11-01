@@ -12,8 +12,8 @@
 //!   needs. A `type`, or a `system` subtype, this parser does not know is [`Line::Unknown`].
 //! - Model text, tool results and the vendor's messages are `Untrusted`. A tool's input is
 //!   redacted with the [`Redactor`] before anything else sees it, each string, key and number on
-//!   its own raw text, and only then serialized and capped at [`MAX_TOOL_INPUT_BYTES`]; a `Skill`
-//!   call becomes [`Block::SkillInvoked`].
+//!   its own raw text until the redactor finds nothing more, and only then serialized and capped
+//!   at [`MAX_TOOL_INPUT_BYTES`]; a `Skill` call becomes [`Block::SkillInvoked`].
 //! - Assistant text is split into text and narration: each line that starts with
 //!   [`NARRATION_PREFIX`] is one narration line.
 //! - Denials come from the stream, because the CLI's denial hooks never fired (section 2.5):
@@ -59,6 +59,13 @@ pub const NARRATION_PREFIX: &str = "> ";
 
 /// The built-in tool whose call loads a skill.
 pub const SKILL_TOOL: &str = "Skill";
+
+/// The most times the parser redacts one string before it replaces it whole (see
+/// `redact_settled`).
+const MAX_REDACT_PASSES: usize = 8;
+
+/// What a string the [`Redactor`] was still changing after [`MAX_REDACT_PASSES`] becomes.
+const UNSETTLED_MARK: &str = "[redacted:unsettled]";
 
 /// Texts of a failed sign-in in an errored `result`, as the subscription-harnesses report saw them
 /// change by CLI version ("Not logged in" on 2.1.175, "Failed to authenticate" on 2.1.294), with
@@ -606,11 +613,11 @@ fn tool_use(block: &Value, redactor: &Redactor) -> Result<Block, &'static str> {
     {
         let args = match input.and_then(|input| input.get("args")) {
             None => String::new(),
-            Some(Value::String(args)) => redactor.redact(args).into_owned(),
+            Some(Value::String(args)) => redact_settled(args, redactor),
             Some(args) => redacted(args, redactor).to_string(),
         };
         return Ok(Block::SkillInvoked {
-            name: cut(&redactor.redact(skill), MAX_SKILL_NAME_BYTES).to_owned(),
+            name: cut(&redact_settled(skill, redactor), MAX_SKILL_NAME_BYTES).to_owned(),
             args: Untrusted::new(cut(&args, MAX_TOOL_INPUT_BYTES).to_owned()),
         });
     }
@@ -637,7 +644,7 @@ fn redacted_input(input: &Value, redactor: &Redactor) -> Value {
 /// 128 levels deep, which bounds the recursion.
 fn redacted(value: &Value, redactor: &Redactor) -> Value {
     match value {
-        Value::String(text) => Value::String(redactor.redact(text).into_owned()),
+        Value::String(text) => Value::String(redact_settled(text, redactor)),
         Value::Number(number) => match redactor.redact(&number.to_string()) {
             Cow::Owned(_) => Value::from(0),
             Cow::Borrowed(_) => value.clone(),
@@ -647,11 +654,31 @@ fn redacted(value: &Value, redactor: &Redactor) -> Value {
         }
         Value::Object(map) => Value::Object(
             map.iter()
-                .map(|(key, item)| (redactor.redact(key).into_owned(), redacted(item, redactor)))
+                .map(|(key, item)| (redact_settled(key, redactor), redacted(item, redactor)))
                 .collect(),
         ),
         Value::Null | Value::Bool(_) => value.clone(),
     }
+}
+
+/// `text` redacted until the [`Redactor`] finds nothing more in it. A token right after another
+/// match has no word start, so one pass leaves it, and replacing the match before it puts a `]`
+/// there, after which the next pass finds it: a registered secret, then an AWS key, then a
+/// GitHub token takes three passes. A text still changing after [`MAX_REDACT_PASSES`] becomes
+/// [`UNSETTLED_MARK`] whole.
+fn redact_settled(text: &str, redactor: &Redactor) -> String {
+    let mut text = match redactor.redact(text) {
+        Cow::Borrowed(_) => return text.to_owned(),
+        Cow::Owned(once) => once,
+    };
+    for _ in 1..MAX_REDACT_PASSES {
+        let again = redactor.redact(&text).into_owned();
+        if again == text {
+            return text;
+        }
+        text = again;
+    }
+    UNSETTLED_MARK.to_owned()
 }
 
 /// The longest start of `text`, ending on a character boundary, whose JSON string is at most

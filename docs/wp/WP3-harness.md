@@ -139,7 +139,9 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   parse as `Unknown` and the `control_message` entry is the stub.
 - `wp3/stream-fixes`: review fixes to the parser. A tool input and a `Skill` call's object
   arguments are redacted string by string, keys and numbers included, before they are
-  serialized and cut (`stream::tests::a_token_at_the_start_of_a_line_in_an_input_is_redacted`).
+  serialized and cut (`stream::tests::a_token_at_the_start_of_a_line_in_an_input_is_redacted`),
+  each until the redactor finds nothing more in it
+  (`stream::tests::a_token_right_after_another_match_is_redacted`).
   A rate-limit line is a `RateLimit` for the `five_hour` or the `seven_day` window, any other
   window is `Unknown`, and `stream::PlanWindows` merges them into the contract's `PlanUsage`.
   `Line::denials` takes which calls the guard asked about and counts `ApproveFailed` only for
@@ -166,6 +168,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   token after a literal backslash and letter in raw text, such as `printf 'a\nghp_...'`;
   teaching `word_start` the card rule's escape case is an `eileen-trace` change, suggested in
   the pull request.
+- One pass of the `Redactor` is not always enough: a token glued to another match, such as a
+  registered secret followed by an AWS key and a GitHub token, has no word start until the
+  match before it becomes a `]`-ended mark. The parser redacts each string until it settles,
+  at most 8 times, and a string still changing then becomes `[redacted:unsettled]`. The
+  trace's log writer redacts once, so a log can keep such a token.
 
 ## Decisions
 
