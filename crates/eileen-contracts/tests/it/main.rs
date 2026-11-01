@@ -8,8 +8,6 @@ mod fuzz_corpus;
 #[cfg(test)]
 mod modules;
 #[cfg(test)]
-mod pending_probe;
-#[cfg(test)]
 mod schemas;
 #[cfg(test)]
 mod text;
