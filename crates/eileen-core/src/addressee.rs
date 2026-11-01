@@ -269,8 +269,8 @@ impl Window {
     /// Eileen finished speaking at `now`: the window opens, or stays open, until the instant
     /// returned.
     pub(crate) fn spoke(&mut self, now: MonoTime, follow_up_s: u16, window_s: u16) -> MonoTime {
-        let window_ns = u64::from(window_s).saturating_mul(NS_PER_S);
-        let engaged = self.last_addressed.is_some_and(|at| now.0.saturating_sub(at.0) <= window_ns);
+        let full_ns = u64::from(window_s).saturating_mul(NS_PER_S);
+        let engaged = self.last_addressed.is_some_and(|at| now.0.saturating_sub(at.0) <= full_ns);
         let seconds = if engaged { window_s.max(follow_up_s) } else { follow_up_s };
         let until = MonoTime(now.0.saturating_add(u64::from(seconds).saturating_mul(NS_PER_S)));
         let until = self.until.filter(|old| *old > until && now < *old).unwrap_or(until);

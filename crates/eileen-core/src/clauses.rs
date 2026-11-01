@@ -70,7 +70,7 @@ impl Cutter {
         let mut in_word = false;
         let mut chars = text.char_indices().peekable();
         while let Some((at, c)) = chars.next() {
-            let next = chars.peek().map(|(_, n)| *n);
+            let following = chars.peek().map(|(_, n)| *n);
             if c.is_whitespace() {
                 if in_word {
                     words += 1;
@@ -85,7 +85,7 @@ impl Cutter {
                 continue;
             }
             in_word = true;
-            let followed_by_space = next.is_some_and(char::is_whitespace);
+            let followed_by_space = following.is_some_and(char::is_whitespace);
             let end = at + c.len_utf8();
             if followed_by_space && matches!(c, '.' | '!' | '?' | ';' | ':') {
                 return Some(end);

@@ -49,7 +49,7 @@ pub enum Verdict {
 }
 
 /// What the machine asks the core to do, in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Out {
     /// An audio command.
     Audio(AudioCmd),

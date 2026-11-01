@@ -36,7 +36,7 @@ struct Records {
 }
 
 impl Records {
-    fn tick(&mut self) -> i64 {
+    const fn tick(&mut self) -> i64 {
         self.clock = self.clock.saturating_add(1);
         self.changed = true;
         self.clock

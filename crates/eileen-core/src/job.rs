@@ -433,15 +433,16 @@ impl Core {
         let at = cx.at;
         let ctx = job_ctx(live.job);
         let Some(job) = self.jobs.get_mut(live.job) else { return };
-        let (status, event, line) = match end {
+        let (status, event, spoken) = match end {
             End::Completed { summary } => {
-                let line = announce::completed(&job.name, job.route.display_name(), summary.get());
+                let spoken =
+                    announce::completed(&job.name, job.route.display_name(), summary.get());
                 let event = BusEvent::JobCompleted { job: job.id, summary, artifacts: Vec::new() };
-                (JobStatus::Completed, event, Some(line))
+                (JobStatus::Completed, event, Some(spoken))
             }
             End::Failed { why } => {
-                let line = announce::failed(&job.name, &why);
-                (JobStatus::Failed, BusEvent::JobFailed { job: job.id, error: why }, Some(line))
+                let spoken = announce::failed(&job.name, &why);
+                (JobStatus::Failed, BusEvent::JobFailed { job: job.id, error: why }, Some(spoken))
             }
             End::Cancelled { by } => {
                 (JobStatus::Cancelled, BusEvent::JobCancelled { job: job.id, by }, None)
@@ -454,7 +455,7 @@ impl Core {
         cx.push(ctx, Effect::Persist(row));
         cx.push(ctx, Effect::Worker(live.session, WorkerCmd::Cancel));
         self.spans.close_job(live.job);
-        if let Some(text) = line {
+        if let Some(text) = spoken {
             self.announcements.push(Announcement { job: live.job, text });
         }
     }
