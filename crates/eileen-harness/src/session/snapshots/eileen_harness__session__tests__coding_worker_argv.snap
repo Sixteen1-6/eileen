@@ -1,0 +1,41 @@
+---
+source: crates/eileen-harness/src/session/tests.rs
+expression: portable_argv(&files)
+---
+[
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--include-partial-messages",
+  "--include-hook-events",
+  "--model",
+  "claude-sonnet-5-5",
+  "--effort",
+  "high",
+  "--append-system-prompt",
+  "You are a Claude worker for Eileen.",
+  "--setting-sources",
+  "",
+  "--settings",
+  "/data/eileen/run/ws_01M3250V000000000000000001/claude-settings.json",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "/data/eileen/run/ws_01M3250V000000000000000001/mcp.json",
+  "--tools",
+  "Bash,PowerShell,Read,Edit,Write,Glob,Grep",
+  "--allowedTools",
+  "Bash,PowerShell,Read,Edit,Write,Glob,Grep,mcp__eileen__*",
+  "--disallowedTools",
+  "Task,Agent",
+  "--permission-mode",
+  "dontAsk",
+  "--permission-prompt-tool",
+  "mcp__eileen__approve",
+  "--plugin-dir",
+  "/data/eileen/run/ws_01M3250V000000000000000001/plugin",
+  "--no-session-persistence",
+  "--no-chrome"
+]

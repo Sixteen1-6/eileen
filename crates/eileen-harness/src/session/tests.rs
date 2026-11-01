@@ -508,23 +508,19 @@ fn no_generated_path_lies_under_the_users_claude_folder() {
 
 #[test]
 fn a_session_without_its_endpoints_does_not_start() {
-    let cases: [(&str, fn(&mut SessionSpec), &str); 4] = [
-        ("hook port", |spec| spec.hook_endpoint.port = 0, "hook port"),
-        (
-            "hook token",
-            |spec| spec.hook_endpoint.token = SessionToken::new(String::new()),
-            "hook token",
-        ),
-        ("shim pipe", |spec| spec.shim.pipe.clear(), "shim pipe"),
-        ("shim token", |spec| spec.shim.token = SessionToken::new(String::new()), "shim token"),
+    let cases: [(&str, fn(&mut SessionSpec)); 4] = [
+        ("hook port", |spec| spec.hook_endpoint.port = 0),
+        ("hook token", |spec| spec.hook_endpoint.token = SessionToken::new(String::new())),
+        ("shim pipe", |spec| spec.shim.pipe.clear()),
+        ("shim token", |spec| spec.shim.token = SessionToken::new(String::new())),
     ];
-    for (case, empty, what) in cases {
+    for (what, empty) in cases {
         let mut spec = coding_worker();
         empty(&mut spec);
         assert_eq!(
             session_files(&spec, &config(), &host()),
             Err(SessionError::EndpointMissing(what)),
-            "{case}"
+            "{what}"
         );
     }
 }
