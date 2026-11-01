@@ -453,13 +453,19 @@ fn join(pieces: &[String]) -> String {
     kept.join(" ")
 }
 
+/// The mute as invariant 9 follows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+struct Mute {
+    /// The mute the core announced (`MuteChanged`).
+    announced: bool,
+    /// The mute the user last asked for (`SetMute`, `ToggleMute`).
+    asked: bool,
+}
+
 /// Invariant 9's mute and microphone parts, record by record.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MuteWatch {
-    /// The mute the core announced (`MuteChanged`).
-    muted: bool,
-    /// The mute the user last asked for (`SetMute`, `ToggleMute`).
-    asked: bool,
+    mute: Mute,
     /// Whether the microphone is captured; on until the core turns it off.
     capture: bool,
     /// Whether another app uses the microphone.
@@ -470,7 +476,7 @@ pub struct MuteWatch {
 
 impl Default for MuteWatch {
     fn default() -> Self {
-        Self { muted: false, asked: false, capture: true, elsewhere: false, capture_owed: None }
+        Self { mute: Mute::default(), capture: true, elsewhere: false, capture_owed: None }
     }
 }
 
@@ -479,8 +485,11 @@ impl MuteWatch {
     const NAME: &'static str = "nothing_sounds_while_muted";
 
     fn fail(&self, at_ms: u64, what: &str) -> Result<(), Violation> {
-        let why =
-            if self.muted || self.asked { "muted" } else { "another app used the microphone" };
+        let why = if self.mute.announced || self.mute.asked {
+            "muted"
+        } else {
+            "another app used the microphone"
+        };
         Err(Violation::new(Self::N, Self::NAME, format!("{what} at {at_ms} ms while {why}")))
     }
 
@@ -504,7 +513,7 @@ impl MuteWatch {
 
     /// The user asked to mute (`true`) or to unmute.
     fn ask(&mut self, at_ms: u64, muted: bool) {
-        self.asked = muted;
+        self.mute.asked = muted;
         if !muted {
             self.capture_owed = None;
         } else if self.capture {
@@ -515,14 +524,14 @@ impl MuteWatch {
     /// Follows one record at `at_ms`.
     pub fn see(&mut self, at_ms: u64, event: &AudioEvent) -> Result<(), Violation> {
         self.by(at_ms)?;
-        let silent = self.muted || self.asked || self.elsewhere;
+        let silent = self.mute.announced || self.mute.asked || self.elsewhere;
         match event {
             AudioEvent::Input(Input::User(UserInput::SetMute(muted))) => self.ask(at_ms, *muted),
             AudioEvent::Input(Input::User(UserInput::ToggleMute)) => {
-                self.ask(at_ms, !self.muted);
+                self.ask(at_ms, !self.mute.announced);
             }
             AudioEvent::Effect(Effect::Emit(BusEvent::MuteChanged { muted })) => {
-                self.muted = *muted;
+                self.mute.announced = *muted;
             }
             AudioEvent::Effect(Effect::Audio(AudioCmd::SetCapture(on))) => {
                 self.capture = *on;
@@ -543,12 +552,12 @@ impl MuteWatch {
                 return self.fail(at_ms, "a phrase played");
             }
             AudioEvent::Effect(Effect::Audio(AudioCmd::Earcon(earcon)))
-                if self.muted || self.elsewhere =>
+                if self.mute.announced || self.elsewhere =>
             {
                 return self.fail(at_ms, &format!("the {earcon:?} earcon played"));
             }
             AudioEvent::Callback(handed) => {
-                if self.muted && self.capture {
+                if self.mute.announced && self.capture {
                     return self.fail(at_ms, "the microphone was still captured");
                 }
                 if silent && let Some(part) = handed.iter().find(|part| part.samples > 0) {
