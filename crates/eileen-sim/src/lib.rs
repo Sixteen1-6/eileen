@@ -11,11 +11,12 @@
 //! - The parts that answer the core ([`parts`]): the speech process with its life (a load,
 //!   `Ready`, a heartbeat a second, and the hangs, crashes, slow loads and loads that never
 //!   finish a test or a fault injects), the playback device in 10 ms callbacks, a scripted
-//!   brain ([`BrainReply`]) at the profile's pace that can stall and fail, and scripted worker
-//!   sessions that can crash or run slow; the PC ([`pc`]): available memory, commit headroom
-//!   and paging read into `Input::Memory` every 5 s, CPU load and power, and a heavy app that
-//!   grows and closes; and [`SimResolver`], the scripted intent resolver beside its own
-//!   settings validator.
+//!   brain ([`BrainReply`]) with one process per slot, each with its own instance number, at
+//!   the profile's pace, that can stall and fail, and scripted worker sessions that can crash
+//!   or run slow; the PC ([`pc`]): available memory, commit headroom and paging read into
+//!   `Input::Memory` every 5 s, `MachineEvent::Load`'s CPU load, power and build slot, and a
+//!   heavy app that grows and closes; and [`SimResolver`], the scripted intent resolver beside
+//!   its own settings validator.
 //! - The world's fault points ([`faults`]), switched per run through `eileen_stdx::buggify`,
 //!   each fire recorded with its step, and fired exactly from those records in a replay.
 //! - The profiles `default`, `barge-in-heavy`, `many-jobs`, `flaky-sidecars`, `media-playing`
@@ -56,7 +57,8 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask sim` (the pull request seed set, [`run::PR_SEEDS`]).
+//! - Fast command: `cargo xtask sim` (the pull request seed set, [`run::PR_SEEDS`], with
+//!   every profile; `--profile <name>` for one).
 //! - Layers: unit tests per module, one test per pull request seed and profile
 //!   (`it::pr_seeds`), every stored regression (`it::regressions`), the world's PC, fault
 //!   points and stalling brain through the real core (`it::world`), slice S1's flows

@@ -182,10 +182,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `wp1/sim-world` (open): the world and profiles of section 4.7, with no change to the core.
   `eileen-sim` gains `pc`, the simulated PC: available memory, commit headroom and paging
   (pages in proportion to how far available memory is under the profile's floor), read into
-  `Input::Memory` every 5 s as section 2.5 samples it, with Eileen's own share (the core, the
-  brain, the speech process while it runs and each live worker session, at section 4.4's
-  figures), the CPU's busy percent and the power state, and a heavy app that opens, grows to
-  its peak, holds it and closes. It gains `faults`, the world's fault points through
+  `Input::Memory` every 5 s as section 2.5 samples it, with Eileen's own share (the core, each
+  running brain process, the speech process while it runs and each live worker session, at
+  section 4.4's figures), and `MachineEvent::Load`'s fields as section 3.3.17 pins them: the
+  CPU's busy percent, `PowerState` (`has_battery`, `on_battery`, `battery_saver`, so a laptop
+  on mains differs from a desktop) and `build_slot_held` (a window in the profile); and a heavy
+  app that opens, grows to its peak, holds it and closes. It gains `faults`, the world's fault points through
   `eileen_stdx::buggify`, switched per run from the seed (a runtime switch): the brain stalls
   (nothing for the profile's `stall_ms`, then its whole answer, with no interrupt heard until
   then) or fails, the speech process crashes or hangs at a heartbeat or loads 10 s slower, a
@@ -194,12 +196,22 @@ Every pull request also meets the rules section 6.1 sets for every package.
   refuses a site the world cannot fire, and a test can fire a site every time it is reached
   (`Faults::every`). The brain's pace (a first-text delay with jitter, the delta pace, how
   often an unscripted reply dispatches a job) comes from the profile, drawn from a fourth
-  random stream. The generator draws activity (other audio starting and stopping, physical
+  random stream. The fake brain keeps one process per slot with its own instance number,
+  stamped on its `Ready`, deltas and `TurnDone`: `Start`, `Recycle` and `Promote` start a
+  process with the next number, `Stop` ends one with `Exited`, each holds the profile's brain
+  memory while it runs, and a stall in one slot holds up only that slot, so a fallback can
+  answer while the stalled primary is silent. The core sends only to the primary today, so
+  the per-instance fallback of invariant 15 is shown at the part (`parts::tests`) and waits
+  for the core's fallback to be shown through it. The generator draws activity (other audio starting and stopping, physical
   input, another app taking the microphone) and takes the profile's barge-in chance. Profiles:
   `default`, `barge-in-heavy`, `many-jobs`, `flaky-sidecars`, `media-playing` and
-  `low-memory`, with `profile.schema.json` regenerated. Tests: `eileen-sim::pc::tests::*`,
+  `low-memory`, with `profile.schema.json` regenerated. `cargo xtask sim` with no arguments,
+  and CI's simulator step, run the pull request seeds of every profile, as `it::pr_seeds`
+  does, whose tests and coverage list come from one seed list. Tests: `eileen-sim::pc::tests::*`,
   `eileen-sim::faults::tests::*`, `eileen-sim::parts::tests::*` (the brain's pace, its stall
-  and its failure, a slow load), `eileen-sim::profile::tests::*`, `eileen-sim::inputs::tests::*`,
+  and its failure, a stall in one slot not holding up another, promotion, a slow load),
+  `eileen-sim::world::tests::the_fault_points_written_here_are_exactly_the_known_sites`,
+  `eileen-sim::cli::tests::*`, `eileen-sim::profile::tests::*`, `eileen-sim::inputs::tests::*`,
   `eileen-sim::run::tests::a_run_with_faults_replays_with_exactly_its_fault_records`,
   `eileen-sim::it::world::*` (the readings, the heavy app paging and closing, the CPU and
   power, media at the start, a stalled brain's late answer never spoken, and each fault
@@ -255,9 +267,13 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - A world fault site is reached only inside a step (while the step's input or effects are
   applied), so a record's `seq` is the same in the run and in the replay. A site the core names
   later is recorded after its step and refused by a replay, which cannot fire inside the core.
-- A stalled brain hears no interrupt until its stall ends and answers the next turn only after
-  it, as a stuck CLI would; the core's per-turn filter (it accepts text only for the turn in
-  flight) already drops the late answer, which `it::world` shows.
+- A stalled brain process hears no interrupt until its stall ends, judged by time rather than
+  by turn, and answers the next turn sent to its slot only after it, as a stuck CLI would; the
+  other slots answer at once. The core's per-turn filter (it accepts text only for the turn in
+  flight) already drops the late answer, which `it::world` shows; the per-instance filter of
+  invariant 15 is shown through the core once the core starts a fallback.
+- A turn sent to a slot with no process starts one first, as the driver would; the primary
+  runs from the start as instance 1, as the runtime starts it before the core's first step.
 - A memory reading is due every 5 s of virtual time and goes before a timer or a part's answer
   only when strictly earlier, so the readings never reorder what the slice tests deliver.
 
