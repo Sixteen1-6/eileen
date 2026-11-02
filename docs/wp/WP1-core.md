@@ -158,6 +158,22 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `EILEEN_EXHAUSTIVE_DEPTH=8 cargo nextest run -p eileen-sim --profile nightly -E 'test(/turn::exhaustive/)'`;
   the test reads the variable (`eileen_sim::exhaustive::DEPTH_ENV`) and runs depth 6 without
   it.
+- `wp1/record` (open): `eileen-record`'s formats, store, reader, writer and trim (section 3.3.16).
+  `line::encode` and `line::decode` write any contract value as one line of JSON with each
+  string over 1 KiB in the blob store, through `record::stub_blobs` and `resolve_blobs`;
+  `writer::Writer` and `reader::Reader` write and read a recording's `RecordLine`s, each line
+  bounded at 1 MiB, a cut-off last line reported as `Truncated`, CRLF endings and blank lines
+  read. `blob::BlobStore` keeps `blobs/<2 hex>/<hash>.zst`, named by BLAKE3 (pure) and
+  zstd-compressed, with a `<hash>.refs` count beside it: one reference per stub a writer wrote,
+  and `reader::release_blobs` releases a deleted recording's references, deleting each blob
+  with its last. A blob that does not hash to its name reads as corrupt. `trim::trim` keeps a
+  window of inputs, every setup input before it (`trim::is_setup`) and each kept hook input's
+  answer. Tests: `eileen-record::it::round_trip::*` (property tests through the disk store, the
+  crate doc's promised inverse), `eileen-record::it::trim::*`, `eileen-record::it::blobs::*`
+  (the reference count), `eileen-record::blob::tests::*`, `eileen-record::line::tests::*`, and
+  the `recording` fuzz target's `fuzz_entry` with its seed corpus, replayed by
+  `eileen-record::it::fuzz_corpus::*`. `eileen record` itself stays a stub until the runtime
+  wires the flight recorder.
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
   `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
   after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
@@ -252,6 +268,20 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - Invariant 9 judges earcons against the mute the core announced, and judges speech, phrases
   and samples against that or the user's request: the mute earcon confirms the request before
   `MuteChanged { muted: true }`, and the unmute earcon follows `MuteChanged { muted: false }`.
+
+- A setup input, which `record trim` keeps from before its window, is one that leaves the core
+  in a standing state a fresh core started from the scenario's configuration and fixtures
+  lacks: `SetMute` and `ToggleMute`, `Memory`, the `Activity` states (other audio, the
+  microphone taken, the session locked, a presentation), `Settings` `FileChanged` and `Voice`
+  `Calibration`. Section 3.3.16 names setup inputs without listing them; the list is
+  `trim::is_setup`, and trim keeps every one, not only the latest of each, so the order of
+  changes survives.
+- A blob's reference count is a small file beside it, written beside its name and renamed into
+  place, rather than a database row: the store stays std and zstd only, and a crash between the
+  blob and its count over-counts (a blob kept too long), never under-counts.
+- `eileen-record` turns on serde_json's `float_roundtrip`, so a float in a recorded line reads
+  back exactly; the default parser can be a unit in the last place off, which would break the
+  exact inverse the crate doc promises.
 
 ## Outcome
 
