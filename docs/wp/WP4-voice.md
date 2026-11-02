@@ -145,9 +145,9 @@ The parts of the audio series, in merge order, as each opens:
    all four conversions inside `allocation_counter::measure`. The cost bar is the `owner_pc::`
    benchmark in the same module, still to be run on the owner's PC; its result goes on the pull
    request's `owner-run:` line and here.
-5. `wp4/s1-audio-sources` (draft): the test audio of section 4.7, "End to end without a sound
-   card", public in `eileen-audio` for `eileen run --audio-source wav:<file> --audio-sink
-   capture:<file>` and other crates' tests. `WavClip` holds a WAV file's samples (integer up to
+5. `wp4/s1-audio-sources` (#153, merged 2026-11-01): the test audio of section 4.7, "End to end
+   without a sound card", public in `eileen-audio` for `eileen run --audio-source wav:<file>
+   --audio-sink capture:<file>` and other crates' tests. `WavClip` holds a WAV file's samples (integer up to
    32 bits or 32-bit float, read through `hound` 3.5.1, section 4.1's pin, at most 20 minutes,
    8 channels, 192 kHz and 20 minutes of 48 kHz stereo in samples, so at most 461 MB);
    `WavSource` captures one as a microphone would, then silence; `CaptureSink` writes what Eileen
@@ -170,6 +170,21 @@ The parts of the audio series, in merge order, as each opens:
    the speaker stopped, a room stopped and started again with an echo still due, one past due
    and the bed the speakers played meanwhile, and the setup checks). The tests make their audio;
    no recorded fixture is checked in.
+6. `wp4/s1-audio-playback` (#158, draft): playback, crate-private in `eileen-audio`
+   (`playback`) until the component takes it. The `Player`, the component's half, takes PCM
+   frames straight from the speech connection, never through `Core::step` (section 3.3.7),
+   converts them from 24 kHz with part 4's interpolator (a fresh one per utterance), and queues
+   them with a marker per utterance and clause in a bounded queue (30 s of device samples by
+   default, which holds the largest PCM frame), refusing and logging a frame that does not fit.
+   It serves `Duck`, `Unduck`, `Pause`, `Resume` and `Stop`, and `finish` marks an utterance's
+   last audio. The `Renderer`, the render callback's half, hands the samples to the device on
+   every channel, moves to a new gain over the first millisecond of the next callback, holds a
+   paused utterance at a sample, drops a stopped one, and reports `Played` (at most every 50 ms
+   of audio), `Paused`, `Stopped` and `Drained`. Evidence: the unit tests in
+   `eileen_audio::playback::tests` (each command over a `CaptureSink` on paused tokio time,
+   compared bit for bit with the interpolator over the whole clause; a duck exact from the next
+   callback; a resume from exactly the paused sample; the clause counts of `Played`; the
+   refusals and the logged drops; and the render callback inside `allocation_counter::measure`).
 
 The speech series has not opened yet.
 
@@ -292,6 +307,33 @@ The speech series has not opened yet.
   mixer gain that is not a finite non-negative number, or an echo delay over 1 s.
 - `eileen-rt`, `eileen-stdx` and `hound` are ordinary dependencies of `eileen-audio` now, since
   the test audio ships for `eileen run`; the `fake` feature no longer needs to turn `eileen-rt` on.
+
+- Playback's `samples_played` counts the clause's own samples, at its `PcmHeader::sample_rate`
+  (24 kHz), as `ClauseReady.samples` does, so the core divides one by the other to map the
+  samples heard to characters (section 2.8, "What was heard"). The renderer counts device
+  samples and scales them by 24 kHz over the device's rate; the interpolator's delay (16 input
+  samples, under 1 ms) is not subtracted.
+- Commands reach the renderer through atomics, not a command queue: the target gain, and one
+  hold (playing, paused or stopped) per live utterance in slot `ordinal % 8`. The renderer reads
+  them at each callback, so a duck or a pause given before a callback is in force for all of
+  it, and there is no queue of commands to fill. The player gives a new utterance an ordinal only
+  while fewer than eight are live (between the one the renderer has reached and the newest), so
+  no two share a slot; a ninth is refused and logged.
+- Utterances play in the order their audio arrived, each whole: audio of an utterance after a
+  later one's began is refused, so a stopped or overtaken utterance never sounds again, and a
+  paused utterance with audio left holds those behind it, so Eileen never talks over herself.
+  The renderer reports `Drained` at the end `Player::finish` marks (the component calls it on
+  `SpeakDone`) or, for an utterance overtaken by a later one, when it moves on.
+- A pause cuts at a sample, with no fade: the duck at the first barge-in window (about 20 dB,
+  section 2.8) comes two windows earlier, so the cut is quiet, and "resume from the paused
+  sample" stays exact. A duck moves the gain over the first millisecond of the next callback
+  so the step does not click, and a positive `db` counts as 0, since a duck only lowers.
+- A frame that does not fit the queue is dropped whole, never cut, so each marker covers the
+  samples it names; the drop is logged as `channel.full` (`audio.playback`), an existing name,
+  so no name was added to `eileen_trace::names`. Events the render side cannot queue are counted
+  in an atomic and logged by the player when it next reads (`audio.playback.events`).
+- `Earcon` stays for a later part: `Player::apply` serves only duck, unduck, pause, resume and
+  stop, and reports any other command as not its own.
 
 ## Outcome
 

@@ -39,6 +39,11 @@
 //! - The ring keeps every frame the speech process has not confirmed, up to 180 s, numbered from
 //!   the core's start (decision D81); a mute empties it, so nothing captured before a mute is
 //!   written after it (`ring::tests`).
+//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
+//!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
+//!   of a stopped utterance (`playback::tests`). Its queues are bounded: a PCM frame that does
+//!   not fit is refused and logged, and so is a frame of a ninth live utterance; its render side
+//!   allocates nothing (`allocation_counter::measure` in the same tests).
 //!
 //! # Boundaries
 //!
@@ -51,10 +56,11 @@
 //!   [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The component never names the
 //!   pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
-//!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
-//!   target table; `rtrb` for the ring's handoff, `hound` for WAV files, and `loom` only under
-//!   `cfg(loom)`. `realfft` (the resamplers' measurements) and `allocation-counter` (decision
-//!   D82) are dev-dependencies, never outside `[dev-dependencies]`.
+//!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
+//!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
+//!   and `loom` only under `cfg(loom)`. `realfft` (the resamplers' measurements) and
+//!   `allocation-counter` (decision D82) are dev-dependencies, never outside
+//!   `[dev-dependencies]`.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -69,7 +75,9 @@
 //!   models run once on a real thread), the test sources and sinks under paused tokio time
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
-//!   again), and device tests on the owner's PC under `desktop.lock`.
+//!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
+//!   command, compared bit for bit with the interpolator over the whole clause), and device tests
+//!   on the owner's PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
@@ -95,10 +103,16 @@
 //!   stops its own stream deadlocks. A `CaptureSink`'s task runs from its first stream until the
 //!   file is completed, writing silence while no stream runs, so no restart writes a long gap in
 //!   one step.
+//! - Playback's `samples_played` counts the clause's own 24 kHz samples, as `ClauseReady.samples`
+//!   does, not the device's; and a paused utterance with audio left holds every utterance behind
+//!   it, so the core stops one before it speaks the next.
 //!
 //! # Logs and tracing
 //!
-//! - None yet, and never inside the audio callback; WP4 reports through the tick ring.
+//! - `channel.full` when playback refuses a frame (`channel` `audio.playback`, or
+//!   `audio.playback.utterances` for the live-utterance limit) and when its render side lost
+//!   events (`audio.playback.events`), logged from the component's side, never inside the audio
+//!   callback; WP4 reports the callbacks through the tick ring.
 //!
 //! # Do not change without a decision record
 //!
