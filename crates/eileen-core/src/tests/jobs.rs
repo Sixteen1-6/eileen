@@ -121,14 +121,7 @@ fn a_job_runs_and_a_second_dispatch_runs_beside_it() {
     let mut h = Harness::new();
     let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
     let effects = h.step(dispatch(turn));
-    let accepted = events(&effects).into_iter().find_map(|e| {
-        if let BusEvent::JobAccepted { job, name, .. } = e {
-            Some((*job, name.clone()))
-        } else {
-            None
-        }
-    });
-    let (job, name) = accepted.expect("accepted");
+    let (job, name) = accepted(&effects).expect("accepted");
     assert_eq!(name, "the hello file", "named by the brain's hint");
     let session = started_session(&effects).expect("a cold session starts");
     let spec = effects.iter().find_map(|e| {
