@@ -50,8 +50,9 @@
 //!   loopback while it sounds, Eileen's own PCM once the loopback has been silent for 500 ms or is
 //!   not running, and bypassed (high-pass filter and noise suppression only) once both have been
 //!   silent for 500 ms; the bypass leaves AEC3's state alone, so the next reply is cancelled from
-//!   its first words (`aec::tests`). The energy barge-in fallback reports one onset per run of
-//!   speech windows, at the third (`energy::tests`), and allocates nothing.
+//!   its first words (`aec::tests`). sonora allocates on every chunk, so echo cancellation runs
+//!   off the audio callbacks (`aec::tests` pins it). The energy barge-in fallback reports one
+//!   onset per run of speech windows, at the third (`energy::tests`), and allocates nothing.
 //!
 //! # Boundaries
 //!

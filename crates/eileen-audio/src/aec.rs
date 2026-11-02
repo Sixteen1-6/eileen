@@ -26,8 +26,10 @@
 //!   Eileen's own voice shows only in her pauses, which the hold bridges.
 //!
 //! The capture side calls [`EchoCanceller::process`] once per 10 ms of microphone audio, with the
-//! loopback and the own PCM of the same time. Whether it runs in the capture callback depends on
-//! whether sonora allocates in steady state, which `tests` measures; the component part decides.
+//! loopback and the own PCM of the same time. sonora allocates and frees as it processes, on
+//! every chunk and converged or not (`tests` pins it), so the canceller cannot run inside an
+//! audio callback, which allocates nothing: the callbacks hand their 16 kHz chunks on, and the
+//! component part runs the canceller where the ring's reader runs.
 
 use sonora::config::{EchoCanceller as Aec3, HighPassFilter, NoiseSuppression};
 use sonora::{AudioProcessing, Config, StreamConfig};

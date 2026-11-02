@@ -229,6 +229,22 @@ The speech series has not opened yet.
 - realfft's newest release, 3.5.1, came out on 2026-10-26, inside the cooling-off period, so the
   lock holds 3.5.0, the release section 4.1 names.
 
+- sonora 0.2.0 allocates and frees on every chunk it processes, converged or not: about 33
+  allocations and 13 KiB a chunk on Windows CI (`allocation_counter::measure` in
+  `aec::tests`), at most 6 KiB live at once. So the echo canceller cannot run inside the capture
+  callback, which allocates nothing (D82). The callbacks hand their 16 kHz chunks (microphone,
+  loopback, own PCM) on, and the component part runs the canceller beside the ring's reader,
+  numbering frames after it; the ring's `CaptureWriter` then takes cancelled audio from that
+  side rather than from the callback.
+- With a -45 dBFS minimum, the energy detector fired on a syllable peak of Eileen's echo 4.2 s
+  into a run, at -45 to -40 dBFS for three windows, so the minimum is -40 dBFS, still under a
+  voice near the PC. It also fired 2.2 s into Eileen over music, where AEC3 had not converged:
+  -26 to -27.5 dBFS at the microphone, -31 to -33.5 dBFS after the canceller. No threshold
+  meant for a voice tells that apart, so the false-onset bar is counted from 3 s on, where the
+  ERLE floors are measured. AEC3 learns the room once after the core starts, since the bypass
+  keeps its state, so this is the first few seconds of the first sound played, and only while
+  the speech process is not connected.
+
 - `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
   first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
 
@@ -400,7 +416,7 @@ The speech series has not opened yet.
   so other audio quieter than her voice shows in her pauses and the hold bridges them.
 - The energy fallback works on the 32 ms windows the VAD and the speech frames use. A window
   is speech at 12 dB over an adaptive floor (18 dB while other audio plays, section 2.8's
-  stricter threshold) and at least -45 dBFS; the floor starts at the first window, drops to any
+  stricter threshold) and at least -40 dBFS; the floor starts at the first window, drops to any
   quieter window and rises 5 dB a second, so a steady noise stops counting within seconds. An
   onset is the third speech window in a row, where barge-in pauses playback, once per run. It
   returns windows and onsets; turning them into the core's barge-in input is the component
