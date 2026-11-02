@@ -354,6 +354,89 @@ fn fill_measured(renderer: &mut Renderer, out: &mut [f32], what: &str) {
 }
 
 #[test]
+fn a_late_command_for_a_finished_utterance_leaves_the_one_in_its_slot_alone() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let mut out = vec![0.0; BUFFER];
+    // The first utterance plays out and the renderer reaches the second.
+    player.push(header(speak(1), 0), &tone(0, 10)).unwrap();
+    player.finish(speak(1));
+    player.push(header(speak(2), 0), &tone(0, 10)).unwrap();
+    fill_measured(&mut renderer, &mut out, "moving to the second utterance");
+    // Seven more, the last in the first one's hold slot; only the last is finished, so the
+    // others drain when the next begins.
+    for n in 3..=9 {
+        player.push(header(speak(n), 0), &tone(0, 10)).unwrap();
+    }
+    player.finish(speak(9));
+    player.pause(speak(1));
+    player.stop(speak(1));
+    fill_measured(&mut renderer, &mut out, "moving from one utterance to the next");
+    let drained: Vec<PlaybackEvent> =
+        (1..=9).map(|n| PlaybackEvent::Drained { speak: speak(n) }).collect();
+    assert_eq!(events(&mut player), drained, "every utterance played out, the ninth untouched");
+}
+
+#[test]
+fn played_comes_at_most_once_per_50_ms_with_long_buffers() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let one = speak(1);
+    // Clause 0 holds 4900 device samples, so the second 100 ms buffer crosses into clause 1.
+    player.push(header(one, 0), &tone(0, 2_450)).unwrap();
+    player.push(header(one, 1), &tone(2_450, 5_000)).unwrap();
+    let mut out = vec![0.0; 10 * BUFFER];
+    fill_measured(&mut renderer, &mut out, "a 100 ms buffer");
+    fill_measured(&mut renderer, &mut out, "a 100 ms buffer across a clause");
+    assert_eq!(
+        events(&mut player),
+        [
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 2_400 },
+            PlaybackEvent::Played { speak: one, clause: 1, samples_played: 2_350 },
+        ],
+        "one report per buffer, however long"
+    );
+}
+
+#[test]
+fn a_duck_ramp_carries_over_buffers_shorter_than_it() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let input = tone(0, 1_000);
+    player.push(header(speak(1), 0), &input).unwrap();
+    let mut out = vec![0.0; BUFFER];
+    renderer.fill(&mut out, RenderInfo { plays_at: Duration::ZERO });
+    player.duck(-20);
+    let mut played = Vec::new();
+    let mut short = [0.0; 16];
+    for _ in 0..4 {
+        fill_measured(&mut renderer, &mut short, "ramping over 16-sample buffers");
+        played.extend(short);
+    }
+    let full = &upsampled(&input)[BUFFER..BUFFER + 64];
+    let target = 10_f32.powf(-1.0);
+    let ramp = super::ramp_frames(48_000);
+    for (k, (heard, whole)) in played.iter().zip(full).enumerate().take(ramp - 1) {
+        if whole.abs() > 1e-3 {
+            let gain = heard / whole;
+            assert!(gain > target + 1e-4 && gain < 1.0, "still ramping at {k}: {gain}");
+        }
+    }
+    let after: Vec<f32> = full[ramp - 1..].iter().map(|s| s * target).collect();
+    assert_eq!(bits(&played[ramp - 1..]), bits(&after), "the duck in full from the ramp's end");
+}
+
+#[test]
+fn early_pauses_past_their_limit_are_logged() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    for n in 0..16 {
+        player.pause(speak(n));
+    }
+    let ((), captured) = eileen_trace::test_support::capture(|| player.pause(speak(16)));
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "the dropped pause logged: {captured:?}");
+    assert_eq!(logged[0].fields["channel"], "audio.playback.waiting", "the limit named");
+    assert_eq!(logged[0].fields["capacity"], 16, "its size");
+}
+
+#[test]
 fn the_render_callback_allocates_and_frees_nothing() {
     let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
     let (one, two) = (speak(1), speak(2));

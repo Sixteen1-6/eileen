@@ -147,9 +147,10 @@ The parts of the audio series, in merge order, as each opens:
    request's `owner-run:` line and here.
 5. `wp4/s1-audio-sources` (#153, merged 2026-11-01): the test audio of section 4.7, "End to end
    without a sound card", public in `eileen-audio` for `eileen run --audio-source wav:<file>
-   --audio-sink capture:<file>` and other crates' tests. `WavClip` holds a WAV file's samples (integer up to
-   32 bits or 32-bit float, read through `hound` 3.5.1, section 4.1's pin, at most 20 minutes,
-   8 channels, 192 kHz and 20 minutes of 48 kHz stereo in samples, so at most 461 MB);
+   --audio-sink capture:<file>` and other crates' tests. `WavClip` holds a WAV file's samples
+   (integer up to 32 bits or 32-bit float, read through `hound` 3.5.1, section 4.1's pin, at
+   most 20 minutes, 8 channels, 192 kHz and 20 minutes of 48 kHz stereo in samples, so at most
+   461 MB);
    `WavSource` captures one as a microphone would, then silence; `CaptureSink` writes what Eileen
    plays to a WAV of 32-bit floats, up to the 1.07 billion samples hound can count; `RoomMixer`
    joins a speaker, a microphone and the speaker's loopback. The speaker plays Eileen's playback
@@ -315,10 +316,16 @@ The speech series has not opened yet.
   samples, under 1 ms) is not subtracted.
 - Commands reach the renderer through atomics, not a command queue: the target gain, and one
   hold (playing, paused or stopped) per live utterance in slot `ordinal % 8`. The renderer reads
-  them at each callback, so a duck or a pause given before a callback is in force for all of
-  it, and there is no queue of commands to fill. The player gives a new utterance an ordinal only
-  while fewer than eight are live (between the one the renderer has reached and the newest), so
-  no two share a slot; a ninth is refused and logged.
+  the gain at the start of each callback and a hold at each step through the queue, so a duck
+  or a pause given before a callback is in force from its start (one given during a callback
+  may take effect within it), and there is no queue of commands to fill. The player gives a
+  new utterance an ordinal only within eight of the one the renderer last reached, and writes
+  a hold only for an utterance the renderer has not passed, so no write reaches a slot another
+  live utterance holds; a new utterance past the limit is refused and logged, and so is an
+  early pause past the 16 the player remembers before their audio.
+- Each utterance starts the interpolator from silence, and the previous one's last 16 input
+  samples (under 1 ms) stay unplayed in the old interpolator's history: speech ends in silence,
+  and flushing them would add samples `ClauseReady.samples` does not count.
 - Utterances play in the order their audio arrived, each whole: audio of an utterance after a
   later one's began is refused, so a stopped or overtaken utterance never sounds again, and a
   paused utterance with audio left holds those behind it, so Eileen never talks over herself.
@@ -326,8 +333,9 @@ The speech series has not opened yet.
   `SpeakDone`) or, for an utterance overtaken by a later one, when it moves on.
 - A pause cuts at a sample, with no fade: the duck at the first barge-in window (about 20 dB,
   section 2.8) comes two windows earlier, so the cut is quiet, and "resume from the paused
-  sample" stays exact. A duck moves the gain over the first millisecond of the next callback
-  so the step does not click, and a positive `db` counts as 0, since a duck only lowers.
+  sample" stays exact. A duck moves the gain over the first millisecond of frames from the next
+  callback, on into later buffers when that one is shorter, so the step does not click, and a
+  positive `db` counts as 0, since a duck only lowers.
 - A frame that does not fit the queue is dropped whole, never cut, so each marker covers the
   samples it names; the drop is logged as `channel.full` (`audio.playback`), an existing name,
   so no name was added to `eileen_trace::names`. Events the render side cannot queue are counted

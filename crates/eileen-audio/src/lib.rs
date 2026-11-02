@@ -42,7 +42,7 @@
 //! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
 //!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
 //!   of a stopped utterance (`playback::tests`). Its queues are bounded: a PCM frame that does
-//!   not fit is refused and logged, and so is a frame of a ninth live utterance; its render side
+//!   not fit is refused and logged, and so is a new utterance past the live limit; its render side
 //!   allocates nothing (`allocation_counter::measure` in the same tests).
 //!
 //! # Boundaries

@@ -17,12 +17,18 @@
 //!   again. A paused utterance with audio left holds the ones behind it until it resumes or
 //!   stops, so Eileen never talks over herself.
 //! - `Duck { db }` and `Unduck` take effect in the next output callback (simulator invariant 2):
-//!   the gain moves over that callback's first millisecond, so the step does not click, then
-//!   holds. A duck only lowers; a positive `db` counts as 0.
-//! - `Pause { speak }` stops the utterance at a sample in the next callback and keeps every
+//!   the gain moves over its first millisecond of frames (on into the next buffers when the
+//!   callback's is shorter), so the step does not click, then holds. A duck only lowers; a
+//!   positive `db` counts as 0.
+//! - `Pause { speak }` stops the utterance at a sample by the next callback and keeps every
 //!   queued clause; `Resume` continues from that sample, and the resampler's history is kept
-//!   with it, so the audio after the pause is exactly what would have followed. `Stop` drops the
-//!   utterance's queued audio and refuses any that comes later.
+//!   with it, so the audio after the pause is exactly what would have followed. A pause and a
+//!   resume that both land between two callbacks cut nothing and report nothing. `Stop` drops the
+//!   utterance's queued audio and refuses any that comes later. A command for an utterance the
+//!   renderer has passed changes nothing: it has played out.
+//! - Each utterance starts the interpolator from silence, and the last 16 samples of the one
+//!   before it (under 1 ms) stay in the old interpolator's history unplayed; speech ends in
+//!   silence, so nothing heard is lost, and `samples_played` never counts them.
 //! - `samples_played` counts the clause's own samples, at the 24 kHz of its `PcmHeader`, as
 //!   `ClauseReady.samples` does, so the core maps it straight to characters: the device's samples
 //!   since the clause began, times 24 kHz over the device's rate. `Played` comes at most every
@@ -35,11 +41,14 @@
 //! The halves share three `rtrb` SPSC queues (samples, markers and events) and a few atomics: the
 //! target gain, the newest utterance the renderer has reached, and one hold (playing, paused or
 //! stopped) per live utterance. Each utterance gets an ordinal in arrival order, and its hold
-//! lives in slot `ordinal % UTTERANCES`; the player gives a new ordinal only while fewer than
-//! [`UTTERANCES`] are live, so no two live utterances share a slot. Holds are stored and loaded
-//! sequentially consistent: a new utterance's hold is stored before any of its audio is queued,
-//! so no sample of it plays under an older utterance's hold, and a stop is stored after the audio
-//! it drops, so a renderer that sees the stop also sees every marker queued before it.
+//! lives in slot `ordinal % UTTERANCES`. The player gives a new ordinal only within
+//! [`UTTERANCES`] of the one the renderer last reached (`ordinal - head < UTTERANCES`), and
+//! writes a hold only for an ordinal not older than that one, so no write reaches a slot another
+//! live utterance holds. Before the renderer has reached any, seven may wait. Holds are stored
+//! and loaded sequentially consistent: a new utterance's hold is stored before any of its audio
+//! is queued, so no sample of it plays under an older utterance's hold, and a stop is stored
+//! after the audio it drops, so a renderer that sees the stop also sees every marker queued
+//! before it.
 
 #[cfg(test)]
 mod tests;
@@ -93,7 +102,8 @@ pub(crate) enum PlayError {
         /// The rate refused.
         sample_rate: u32,
     },
-    /// The queue cannot hold the frame's samples; the frame is dropped and the drop logged.
+    /// The queue cannot hold the frame's samples, or the frame would start an utterance past
+    /// the live limit; the frame is dropped and the drop logged.
     #[error("the playback queue cannot hold {samples} more samples")]
     Full {
         /// Device samples the frame needed.
@@ -163,6 +173,12 @@ fn slot_of(ordinal: u64) -> usize {
     num::saturating_usize_from_u64(ordinal % UTTERANCES)
 }
 
+/// `ordinal` if its utterance is still live: not older than `head`, the one the renderer last
+/// reached. An older one has played out, and its slot may already be a later utterance's.
+fn live(ordinal: Option<u64>, head: u64) -> Option<u64> {
+    ordinal.filter(|&ordinal| ordinal >= head)
+}
+
 /// The frames the gain moves over: 1 ms at the device's rate.
 pub(crate) fn ramp_frames(rate: u32) -> usize {
     usize::try_from(rate / 1_000).unwrap_or(1).max(1)
@@ -225,7 +241,11 @@ pub(crate) fn playback_with(
         channels: usize::from(format.channels.max(1)),
         rate: u64::from(rate),
         gain: 1.0,
+        ramp_to: 1.0,
         ramp: ramp_frames(rate),
+        ramp_steps: f32::from(u16::try_from(ramp_frames(rate)).unwrap_or(u16::MAX)),
+        ramp_step: 0.0,
+        ramp_left: 0,
         played_every: usize::try_from(rate / 20).unwrap_or(1).max(1),
         since_played: 0,
         current: None,
@@ -376,19 +396,30 @@ impl Player {
 
     /// Holds `speak` at its next sample, or at its first if it has not begun.
     pub(crate) fn pause(&mut self, speak: SpeakId) {
+        let head = self.head();
         if let Some(utterance) = self.utterances.get_mut(&speak) {
             if utterance.hold == Hold::Playing {
                 utterance.hold = Hold::Paused;
                 let ordinal = utterance.ordinal;
-                if let Some(ordinal) = ordinal {
+                if let Some(ordinal) = live(ordinal, head) {
                     self.set_hold(ordinal, Hold::Paused);
                 }
             }
             return;
         }
-        if !self.ended.contains(&speak) && self.utterances.len() < WAITING {
-            self.utterances.insert(speak, Utterance { ordinal: None, hold: Hold::Paused });
+        if self.ended.contains(&speak) {
+            return;
         }
+        if self.utterances.values().filter(|u| u.ordinal.is_none()).count() >= WAITING {
+            let _refused = self.refuse(0, "audio.playback.waiting", WAITING);
+            return;
+        }
+        self.utterances.insert(speak, Utterance { ordinal: None, hold: Hold::Paused });
+    }
+
+    /// The ordinal of the newest utterance the renderer has reached.
+    fn head(&self) -> u64 {
+        self.shared.head.load(Ordering::SeqCst)
     }
 
     /// Continues `speak` from the sample it paused at.
@@ -400,7 +431,11 @@ impl Player {
         utterance.hold = Hold::Playing;
         let ordinal = utterance.ordinal;
         match ordinal {
-            Some(ordinal) => self.set_hold(ordinal, Hold::Playing),
+            Some(ordinal) => {
+                if let Some(ordinal) = live(Some(ordinal), self.head()) {
+                    self.set_hold(ordinal, Hold::Playing);
+                }
+            }
             // Paused before its audio: nothing left to remember.
             None => {
                 self.utterances.remove(&speak);
@@ -410,9 +445,15 @@ impl Player {
 
     /// Drops `speak`'s queued audio and refuses any more.
     pub(crate) fn stop(&mut self, speak: SpeakId) {
+        let head = self.head();
         let known = self.utterances.get_mut(&speak);
         match known.map(|u| (u.ordinal, std::mem::replace(&mut u.hold, Hold::Stopped))) {
-            Some((Some(ordinal), _)) => self.set_hold(ordinal, Hold::Stopped),
+            Some((Some(ordinal), _)) => {
+                // An utterance the renderer has passed played out; its slot may be another's.
+                if let Some(ordinal) = live(Some(ordinal), head) {
+                    self.set_hold(ordinal, Hold::Stopped);
+                }
+            }
             Some((None, _)) | None if !self.ended.contains(&speak) => {
                 self.utterances.remove(&speak);
                 self.reported.push_back(PlaybackEvent::Stopped {
@@ -501,9 +542,16 @@ pub(crate) struct Renderer {
     shared: Arc<Shared>,
     channels: usize,
     rate: u64,
-    /// The gain the last callback ended at.
+    /// The gain of the last frame scaled.
     gain: f32,
+    /// The target the latest ramp moves to.
+    ramp_to: f32,
+    /// Frames a ramp takes (1 ms), as a count and as a divisor.
     ramp: usize,
+    ramp_steps: f32,
+    /// The gain change per frame of the ramp under way, and its frames left.
+    ramp_step: f32,
+    ramp_left: usize,
     played_every: usize,
     since_played: usize,
     current: Option<Current>,
@@ -647,7 +695,8 @@ impl Renderer {
         self.current = Some(current);
         self.since_played += frames;
         if self.since_played >= self.played_every {
-            self.since_played -= self.played_every;
+            // One report however long the buffer, so two never come within 50 ms of audio.
+            self.since_played %= self.played_every;
             self.report(PlaybackEvent::Played {
                 speak: current.speak,
                 clause: current.clause,
@@ -690,24 +739,22 @@ impl Renderer {
         }
     }
 
-    /// Scales the buffer by the gain, moving from the last callback's gain to `target` over the
-    /// first millisecond.
+    /// Scales the buffer by the gain. A new `target` starts a ramp from the gain now to it over
+    /// the next millisecond of frames, which runs on into later buffers when this one is shorter.
     fn apply_gain(&mut self, out: &mut [f32], target: f32) {
-        let from = self.gain;
-        let ramp = if from.to_bits() == target.to_bits() { 0 } else { self.ramp };
-        let steps = f32::from(u16::try_from(ramp).unwrap_or(u16::MAX));
-        let mut step = 0_u16;
-        for (k, frame) in out.chunks_exact_mut(self.channels).enumerate() {
-            let gain = if k < ramp {
-                step += 1;
-                from + (target - from) * f32::from(step) / steps
-            } else {
-                target
-            };
+        if target.to_bits() != self.ramp_to.to_bits() {
+            self.ramp_to = target;
+            self.ramp_left = self.ramp;
+            self.ramp_step = (target - self.gain) / self.ramp_steps;
+        }
+        for frame in out.chunks_exact_mut(self.channels) {
+            if self.ramp_left > 0 {
+                self.ramp_left -= 1;
+                self.gain = if self.ramp_left == 0 { target } else { self.gain + self.ramp_step };
+            }
             for sample in frame {
-                *sample *= gain;
+                *sample *= self.gain;
             }
         }
-        self.gain = target;
     }
 }
