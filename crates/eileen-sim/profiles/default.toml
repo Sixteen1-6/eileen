@@ -29,7 +29,11 @@ paging_floor_mb = 1000
 paging_kb_s_per_mb = 40
 paging_limit_kb_s = 4000
 cpu_busy_pct = 10
-power = "ac"
+
+[pc.power]
+has_battery = false
+on_battery = false
+battery_saver = false
 
 # Section 4.4's figures: the core, the speech process with its models, a claude session each.
 [eileen]

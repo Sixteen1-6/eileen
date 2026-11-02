@@ -139,12 +139,35 @@
         "stall_ms"
       ]
     },
+    "BuildSlot": {
+      "description": "A build holding a build slot from `held_at_s` until `released_at_s`, seconds of virtual\ntime from the start of the run: `MachineEvent::Load`'s `build_slot_held` in between.",
+      "type": "object",
+      "properties": {
+        "held_at_s": {
+          "description": "When the build takes the slot.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "released_at_s": {
+          "description": "When it lets the slot go.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "held_at_s",
+        "released_at_s"
+      ]
+    },
     "EileenCosts": {
       "description": "What Eileen's own processes hold, each in MB (section 4.4).",
       "type": "object",
       "properties": {
         "brain": {
-          "description": "The brain session.",
+          "description": "Each brain process (the primary, and a spare or a fallback while one runs).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -297,6 +320,18 @@
       "description": "The simulated PC: its memory, its paging, its CPU and its power, and the other apps on it.\nEvery figure is in MB unless its name says otherwise.",
       "type": "object",
       "properties": {
+        "build_slot": {
+          "description": "When a build holds one of the PC's build slots during the run.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BuildSlot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "commit_limit_mb": {
           "description": "The commit limit: physical memory and the page file together.",
           "type": "integer",
@@ -369,8 +404,8 @@
           "minimum": 0
         },
         "power": {
-          "description": "Where the PC draws its power from.",
-          "$ref": "#/$defs/Power"
+          "description": "Its power, as section 3.3.17's `PowerState` carries it.",
+          "$ref": "#/$defs/PowerState"
         }
       },
       "additionalProperties": false,
@@ -388,24 +423,28 @@
         "power"
       ]
     },
-    "Power": {
-      "description": "Where the simulated PC draws its power from.",
-      "oneOf": [
-        {
-          "description": "Mains power.",
-          "type": "string",
-          "const": "ac"
+    "PowerState": {
+      "description": "The simulated PC's power, field for field section 3.3.17's `PowerState`, which\n`MachineEvent::Load` carries: a desktop has no battery, and a laptop runs on its battery or\non mains, with Windows' battery saver on or off.",
+      "type": "object",
+      "properties": {
+        "battery_saver": {
+          "description": "Windows' battery saver is on.",
+          "type": "boolean"
         },
-        {
-          "description": "The battery.",
-          "type": "string",
-          "const": "battery"
+        "has_battery": {
+          "description": "The PC has a battery.",
+          "type": "boolean"
         },
-        {
-          "description": "The battery, with Windows' battery saver on.",
-          "type": "string",
-          "const": "battery_saver"
+        "on_battery": {
+          "description": "It runs on its battery now.",
+          "type": "boolean"
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "has_battery",
+        "on_battery",
+        "battery_saver"
       ]
     }
   }

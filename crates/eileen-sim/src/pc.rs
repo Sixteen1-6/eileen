@@ -10,14 +10,15 @@
 //! memory is under the profile's floor, a steady rate, so it is already the 30 s average the
 //! runtime reports.
 //!
-//! The CPU's busy percent and the power state are what section 2.16's `MachineEvent::Load`
-//! carries every 30 s; that input arrives with WP0's `wp0/machine-contracts`, so until then a
-//! test reads them here ([`Pc::load`]) and the core is not told.
+//! The CPU's busy percent, the power state and whether a build holds a build slot are what
+//! section 2.16's `MachineEvent::Load` carries every 30 s, in its fields; that input arrives
+//! with WP0's `wp0/machine-contracts`, so until then a test reads them here ([`Pc::load`]) and
+//! the core is not told.
 
 use eileen_contracts::ids::Personal;
 use eileen_contracts::jobs::MemoryPressure;
 
-use crate::profile::{EileenCosts, PcProfile, Power};
+use crate::profile::{EileenCosts, PcProfile, PowerState};
 
 /// How often the runtime samples memory into `Input::Memory`, ms (section 2.5).
 pub const MEMORY_SAMPLE_MS: u64 = 5_000;
@@ -31,16 +32,21 @@ pub struct EileenUse {
     pub speech: bool,
     /// Worker sessions started and not yet exited.
     pub workers: u32,
+    /// Brain processes running: the primary, and a spare or a fallback while one runs.
+    pub brains: u32,
 }
 
-/// The CPU and power at one moment.
+/// The CPU and power at one moment: `MachineEvent::Load`'s fields, and whether the heavy app
+/// is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Load {
     /// The CPU's busy percent.
     pub cpu_busy_pct: u8,
-    /// Where the PC draws its power from.
-    pub power: Power,
-    /// Whether the heavy app is open.
+    /// The PC's power.
+    pub power: PowerState,
+    /// Whether a build holds one of the PC's build slots.
+    pub build_slot_held: bool,
+    /// Whether the heavy app is open, which the core is not told.
     pub heavy_app_open: bool,
 }
 
@@ -72,15 +78,16 @@ impl Pc {
         clamp(grown.min(u64::from(app.peak_mb)))
     }
 
-    /// What Eileen's processes hold, MB: the core and the brain always, the speech process
-    /// while it runs, and each live worker session.
+    /// What Eileen's processes hold, MB: the core always, the speech process while it runs,
+    /// and each running brain process and live worker session.
     #[must_use]
     pub fn eileen_mb(&self, using: EileenUse) -> u32 {
         let speech = if using.speech { self.costs.speech } else { 0 };
         let workers = u64::from(self.costs.worker).saturating_mul(u64::from(using.workers));
+        let brains = u64::from(self.costs.brain).saturating_mul(u64::from(using.brains));
         clamp(
             u64::from(self.costs.core)
-                .saturating_add(u64::from(self.costs.brain))
+                .saturating_add(brains)
                 .saturating_add(u64::from(speech))
                 .saturating_add(workers),
         )
@@ -112,9 +119,14 @@ impl Pc {
     }
 
     /// The CPU and power at `now_ms`: the profile's base load, plus the heavy app's while it
-    /// is open, at most 100 percent.
+    /// is open, at most 100 percent; the profile's power; and whether its build holds a slot.
     #[must_use]
     pub fn load(&self, now_ms: u64) -> Load {
+        let build_slot_held = self.profile.build_slot.is_some_and(|slot| {
+            let held = u64::from(slot.held_at_s).saturating_mul(MS_PER_S);
+            let released = u64::from(slot.released_at_s).saturating_mul(MS_PER_S);
+            (held..released).contains(&now_ms)
+        });
         let open = self.profile.heavy_app.as_ref().is_some_and(|app| {
             let opens = u64::from(app.opens_at_s).saturating_mul(MS_PER_S);
             let closes = u64::from(app.closes_at_s).saturating_mul(MS_PER_S);
@@ -127,6 +139,7 @@ impl Pc {
         Load {
             cpu_busy_pct: self.profile.cpu_busy_pct.saturating_add(added).min(100),
             power: self.profile.power,
+            build_slot_held,
             heavy_app_open: open,
         }
     }
@@ -142,7 +155,7 @@ mod tests {
     use eileen_contracts::ids::Personal;
 
     use super::{EileenUse, Pc};
-    use crate::profile::{Power, Profile};
+    use crate::profile::{PowerState, Profile};
 
     fn pc_of(name: &str) -> Pc {
         let profile = Profile::load(name).unwrap();
@@ -170,7 +183,7 @@ mod tests {
     #[test]
     fn memory_follows_the_apps_and_eileen() {
         let pc = pc_of("low-memory");
-        let idle = EileenUse { speech: true, workers: 0 };
+        let idle = EileenUse { speech: true, workers: 0, brains: 1 };
         // 16,384 less 12,600 others, 60 core, 400 brain and 1,250 speech.
         let before = pc.reading(0, idle);
         assert_eq!(before.available_mb, 2_074, "{before:?}");
@@ -178,14 +191,19 @@ mod tests {
         assert_eq!(before.commit_headroom_mb, 3_770, "{before:?}");
         assert_eq!(before.paging_kb_s, 0, "above the 1,000 MB floor, no paging");
         assert_eq!(before.paging_limit_kb_s, 4_000, "the effective limit is passed on");
-        let peak = pc.reading(60_000, EileenUse { speech: true, workers: 2 });
+        let peak = pc.reading(60_000, EileenUse { workers: 2, ..idle });
         assert_eq!(peak.available_mb, 0, "2,074 less 2,000 and two workers of 400: {peak:?}");
         assert_eq!(peak.commit_headroom_mb, 970, "under 1 GB of commit left: {peak:?}");
         assert_eq!(peak.paging_kb_s, 40_000, "1,000 MB under the floor at 40 KB/s each");
         let after = pc.reading(120_000, idle);
         assert_eq!(after, before, "closing the app gives it all back");
-        let no_speech = pc.reading(0, EileenUse::default());
+        let no_speech = pc.reading(0, EileenUse { speech: false, ..idle });
         assert_eq!(no_speech.available_mb, 3_324, "the speech process's 1,250 MB is free");
+        let fallback = pc.reading(0, EileenUse { brains: 2, ..idle });
+        assert_eq!(fallback.available_mb, 1_674, "a second brain process holds 400 MB more");
+        assert_eq!(fallback.commit_headroom_mb, 3_370, "and commits it");
+        let stopped = pc.reading(0, EileenUse { brains: 1, ..idle });
+        assert_eq!(stopped, before, "stopping it gives it back");
     }
 
     #[test]
@@ -217,7 +235,20 @@ mod tests {
         let open = pc.load(50_000);
         assert_eq!((open.cpu_busy_pct, open.heavy_app_open), (90, true), "30 plus 60: {open:?}");
         assert_eq!(pc.load(120_000).cpu_busy_pct, 30, "back once it closed");
-        assert_eq!(before.power, Power::Ac, "on mains");
-        assert_eq!(pc_of("media-playing").load(0).power, Power::Battery);
+    }
+
+    #[test]
+    fn the_load_carries_the_power_and_the_build_slot_as_the_contract_does() {
+        let desktop = PowerState { has_battery: false, on_battery: false, battery_saver: false };
+        assert_eq!(pc_of("low-memory").load(0).power, desktop, "a desktop");
+        let on_mains = PowerState { has_battery: true, on_battery: false, battery_saver: false };
+        assert_eq!(pc_of("many-jobs").load(0).power, on_mains, "a laptop on mains");
+        let on_battery = PowerState { has_battery: true, on_battery: true, battery_saver: false };
+        assert_eq!(pc_of("media-playing").load(0).power, on_battery, "a laptop on its battery");
+        // low-memory: a build holds a slot from 60 s until 100 s.
+        let pc = pc_of("low-memory");
+        let held = [59_999, 60_000, 99_999, 100_000].map(|ms| pc.load(ms).build_slot_held);
+        assert_eq!(held, [false, true, true, false], "held from 60 s until 100 s");
+        assert!(!pc_of("default").load(80_000).build_slot_held, "the default PC builds nothing");
     }
 }

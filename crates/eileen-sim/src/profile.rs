@@ -114,23 +114,39 @@ pub struct PcProfile {
     pub paging_limit_kb_s: u32,
     /// The CPU's busy percent with no heavy app open.
     pub cpu_busy_pct: u8,
-    /// Where the PC draws its power from.
-    pub power: Power,
+    /// Its power, as section 3.3.17's `PowerState` carries it.
+    pub power: PowerState,
+    /// When a build holds one of the PC's build slots during the run.
+    #[serde(default)]
+    pub build_slot: Option<BuildSlot>,
     /// An app that opens, grows, holds its size and closes during the run.
     #[serde(default)]
     pub heavy_app: Option<HeavyApp>,
 }
 
-/// Where the simulated PC draws its power from.
+/// The simulated PC's power, field for field section 3.3.17's `PowerState`, which
+/// `MachineEvent::Load` carries: a desktop has no battery, and a laptop runs on its battery or
+/// on mains, with Windows' battery saver on or off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PowerState {
+    /// The PC has a battery.
+    pub has_battery: bool,
+    /// It runs on its battery now.
+    pub on_battery: bool,
+    /// Windows' battery saver is on.
+    pub battery_saver: bool,
+}
+
+/// A build holding a build slot from `held_at_s` until `released_at_s`, seconds of virtual
+/// time from the start of the run: `MachineEvent::Load`'s `build_slot_held` in between.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Power {
-    /// Mains power.
-    Ac,
-    /// The battery.
-    Battery,
-    /// The battery, with Windows' battery saver on.
-    BatterySaver,
+#[serde(deny_unknown_fields)]
+pub struct BuildSlot {
+    /// When the build takes the slot.
+    pub held_at_s: u32,
+    /// When it lets the slot go.
+    pub released_at_s: u32,
 }
 
 /// An app that opens, grows to its peak, holds it and closes: a video editor rendering, a
@@ -160,7 +176,7 @@ pub struct EileenCosts {
     pub core: u32,
     /// The speech process, from its start until it ends.
     pub speech: u32,
-    /// The brain session.
+    /// Each brain process (the primary, and a spare or a fallback while one runs).
     pub brain: u32,
     /// Each worker session, from its start until it exits.
     pub worker: u32,
@@ -277,7 +293,8 @@ impl Profile {
 
 impl PcProfile {
     /// The rules a PC keeps: the other apps fit in it, the biggest is one of them, a percent
-    /// is at most 100, and a heavy app has a name, a peak and a growth, and closes after it
+    /// is at most 100, only a PC with a battery runs on it or saves it, a build slot is let go
+    /// after it is taken, and a heavy app has a name, a peak and a growth, and closes after it
     /// opens.
     const fn check(&self) -> Result<(), &'static str> {
         if self.physical_mb == 0 || self.commit_limit_mb < self.physical_mb {
@@ -291,6 +308,14 @@ impl PcProfile {
         }
         if self.cpu_busy_pct > 100 {
             return Err("a percent is at most 100");
+        }
+        if (self.power.on_battery || self.power.battery_saver) && !self.power.has_battery {
+            return Err("a PC on its battery or with battery saver on has a battery");
+        }
+        if let Some(slot) = &self.build_slot
+            && slot.released_at_s <= slot.held_at_s
+        {
+            return Err("a build lets its slot go after it takes it");
         }
         if let Some(app) = &self.heavy_app {
             if app.name.is_empty() || app.peak_mb == 0 || app.grows_mb_s == 0 {
@@ -380,6 +405,9 @@ mod tests {
             ("fire_per_mille = ", "fire_per_mille = 1001 #", "a chance over 1000 per mille"),
             ("barge_in_pct = ", "barge_in_pct = 101 #", "a percent over 100"),
             ("dispatch_pct = ", "dispatch_pct = 101 #", "a dispatch percent over 100"),
+            ("on_battery = ", "on_battery = true #", "on a battery the PC does not have"),
+            ("battery_saver = ", "battery_saver = true #", "saving a battery it does not have"),
+            ("released_at_s = ", "released_at_s = 0 #", "a build slot let go before it is taken"),
         ] {
             assert!(text.contains(from), "the profile sets `{from}`");
             assert!(Profile::parse("low-memory", &text.replace(from, to)).is_err(), "{why}");

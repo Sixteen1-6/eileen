@@ -361,6 +361,7 @@ impl World {
         EileenUse {
             speech: matches!(self.speech.process(), Process::Loading | Process::Up | Process::Hung),
             workers: u32::try_from(self.sessions.len()).unwrap_or(u32::MAX),
+            brains: self.brain.running(),
         }
     }
 
@@ -919,6 +920,21 @@ mod tests {
         assert_eq!(world.advance(10), None, "10 ms: not yet");
         assert_eq!(world.advance(40), Some(Input::Timer(TimerId(9))), "50 ms: due");
         assert_eq!(world.advance(100), None, "fired once");
+    }
+
+    #[test]
+    fn the_fault_points_written_here_are_exactly_the_known_sites() {
+        // `buggify!` needs a literal, so each site is spelled at its `fault!` call; a typo there
+        // would fire in a run and leave a regression that cannot replay.
+        let written: std::collections::BTreeSet<&str> = include_str!("world.rs")
+            .split("fault!(self, \"")
+            .skip(1)
+            .filter_map(|after| after.split('"').next())
+            .collect();
+        assert!(!written.is_empty(), "the world has fault points");
+        let known: std::collections::BTreeSet<&str> =
+            crate::faults::SITES.iter().map(|(site, _)| *site).collect();
+        assert_eq!(written, known, "every fault! call names a site in faults::SITES, and back");
     }
 
     #[test]

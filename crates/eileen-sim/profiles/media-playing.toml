@@ -29,7 +29,11 @@ paging_floor_mb = 1000
 paging_kb_s_per_mb = 40
 paging_limit_kb_s = 4000
 cpu_busy_pct = 25
-power = "battery"
+
+[pc.power]
+has_battery = true
+on_battery = true
+battery_saver = false
 
 [eileen]
 core = 60

@@ -1,6 +1,7 @@
 # Many jobs (BUILD.md section 4.7): most brain turns dispatch a job, so worker sessions start,
 # ask their hooks, finish, fail and are cancelled while the conversation goes on. Each session
-# holds memory while it lives. Schema: profile.schema.json beside it.
+# holds memory while it lives. The PC is a laptop on mains. Schema: profile.schema.json beside
+# it.
 name = "many-jobs"
 steps = 2000
 seeds = 64
@@ -28,7 +29,11 @@ paging_floor_mb = 1000
 paging_kb_s_per_mb = 40
 paging_limit_kb_s = 4000
 cpu_busy_pct = 20
-power = "ac"
+
+[pc.power]
+has_battery = true
+on_battery = false
+battery_saver = false
 
 [eileen]
 core = 60
