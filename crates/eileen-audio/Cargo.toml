@@ -20,12 +20,17 @@ ignored = ["cpal"]
 
 [features]
 # `fake`, the in-memory speech transport, for other crates' tests (WP2's). Only dev-dependencies
-# turn it on, so no shipped binary carries it, nor the `eileen-rt` channels it is built on.
-fake = ["dep:eileen-rt"]
+# turn it on, so no shipped binary carries it.
+fake = []
 
 [dependencies]
 eileen-contracts.workspace = true
-eileen-rt = { workspace = true, optional = true }
+# The test sources' and sinks' paced tasks, and the memory transport's channels.
+eileen-rt.workspace = true
+# Their numeric conversions.
+eileen-stdx.workspace = true
+# WavSource and CaptureSink read and write WAV files.
+hound.workspace = true
 rtrb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -42,10 +47,6 @@ loom.workspace = true
 # The capture side's no-allocation check (decision D82): a dev-dependency only, so its global
 # allocator reaches only this crate's test binaries.
 allocation-counter.workspace = true
-# The ring's concurrency tests run on a named thread when they do not run under loom.
-eileen-stdx.workspace = true
-# This crate's own tests compile `fake` under `cfg(test)`, without the feature.
-eileen-rt.workspace = true
 # The resamplers' tests measure each conversion's spectrum against BUILD.md section 6.6's bar.
 realfft.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
