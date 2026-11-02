@@ -1,4 +1,7 @@
 //! Worker drivers (section 3.3.8): one session of a vendor CLI that runs one job at a time.
+//! Claude's is built ([`ClaudeWorker`]); Codex and ACP are designed slots.
+
+mod claude;
 
 use std::future::{Future, ready};
 
@@ -7,6 +10,7 @@ use eileen_contracts::ids::WorkerSessionId;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::speech::LanguageSupport;
 
+pub use self::claude::ClaudeWorker;
 use crate::{DriverError, HarnessConfig};
 
 /// A vendor CLI that runs worker sessions.
@@ -40,8 +44,8 @@ pub struct WorkerSession {
     pub model: String,
 }
 
-/// Declares a worker driver whose every call answers `$error`: `NotBuilt` for the route v0.1
-/// builds, until WP3 builds it, and `RouteUnavailable` for a designed slot.
+/// Declares a worker driver for a designed slot, whose every call answers `$error`
+/// (`RouteUnavailable`).
 macro_rules! stub_worker {
     ($(#[$doc:meta])* $name:ident, $route:expr, $languages:expr, $error:expr) => {
         $(#[$doc])*
@@ -84,14 +88,6 @@ macro_rules! stub_worker {
         }
     };
 }
-
-stub_worker!(
-    /// The Claude worker: `claude -p` in stream-json. A stub until WP3 builds it.
-    ClaudeWorker,
-    Route::Claude,
-    LanguageSupport::Any,
-    DriverError::NotBuilt { route: Route::Claude }
-);
 
 stub_worker!(
     /// The Codex app-server worker, a designed slot.
@@ -171,11 +167,10 @@ impl WorkerDriver for AnyWorker {
 }
 
 /// The worker driver for `route`; `RouteUnavailable` unless v0.1 builds it, which is Claude
-/// alone.
-#[expect(clippy::missing_const_for_fn, reason = "the stub's body; WP3 locates the CLI here")]
-pub fn worker_for(route: Route, _cfg: &HarnessConfig) -> Result<AnyWorker, DriverError> {
+/// alone. Claude's runs `cfg.claude_exe`.
+pub fn worker_for(route: Route, cfg: &HarnessConfig) -> Result<AnyWorker, DriverError> {
     match route {
-        Route::Claude => Ok(AnyWorker::Claude(ClaudeWorker)),
+        Route::Claude => Ok(AnyWorker::Claude(ClaudeWorker::new(cfg.clone()))),
         Route::Codex | Route::Grok | Route::DeepSeek | Route::Local => {
             Err(DriverError::RouteUnavailable { route })
         }

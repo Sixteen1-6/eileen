@@ -1,7 +1,8 @@
 //! Eileen's drivers for vendor CLIs (BUILD.md sections 2.3, 2.5 and 3.3.8): Claude workers and
 //! the Claude brain, the warm pool's session lifecycle, the brain benchmark, and the Codex, ACP,
 //! `DeepSeek` and local routes as designed slots. The stream-json parser, each session's spawn
-//! files, the CLI's location and `eileen doctor claude` are built; the drivers are stubs until
+//! files, the CLI's location, `eileen doctor claude` and the Claude worker without the pool
+//! ([`ClaudeWorker`]) are built; the brain driver, the pool and the component are stubs until
 //! WP3 builds them.
 //!
 //! # Owns
@@ -33,10 +34,16 @@
 //!
 //! - Every vendor process starts through `eileen_supervisor`, in a Job Object
 //!   (`disallowed-methods` bans `Command::new`; check 14).
-//! - The stub builds only the Claude route, whose drivers answer `NotBuilt` until WP3 builds
-//!   them, and every other route is `RouteUnavailable` (unit tests
+//! - Only the Claude route has drivers, and every other route is `RouteUnavailable`; the Claude
+//!   brain answers `NotBuilt` until WP3 builds it (unit tests
 //!   `tests::only_the_claude_route_has_a_worker_driver` and
 //!   `tests::the_stub_claude_brain_answers_not_built_and_measures_nothing`).
+//! - A Claude worker session is bound to a job only after its `system/init` lists `eileen` as
+//!   connected and reports no auto-memory folder; one that reports a folder is started once
+//!   more and then refused (D77). It spawns through `eileen_supervisor` in the Claude class
+//!   with exactly the session's environment; every write to it and every wait for its init or
+//!   its exit has a deadline; cancel kills its Job Object and waits for the job to empty
+//!   (`eileen-stub-harness::it::worker`).
 //! - A stream-json line longer than `stream::MAX_LINE_BYTES` is malformed before it is parsed,
 //!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
 //!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
@@ -88,12 +95,15 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-harness`.
+//! - Fast command: `cargo xtask test -p eileen-harness`; the worker's runs against the stub:
+//!   `cargo xtask test -p eileen-stub-harness worker`.
 //! - Layers: unit tests for the parser and the flags, with insta snapshots of each session kind's
 //!   command line, settings file and MCP config (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
 //!   against `eileen-stub-harness`, the CLI's location against fake npm and native layouts in a
-//!   temporary folder, the doctor against a scripted probe runner, its supervised runner against
+//!   temporary folder, `ClaudeWorker` against the stub in `eileen-stub-harness::it::worker`
+//!   (there because Cargo names the stub's binary only to its own package's tests), the doctor
+//!   against a scripted probe runner, its supervised runner against
 //!   this test binary run again as a chatty child
 //!   (`cli::doctor::tests::the_supervised_runner_reads_a_real_child_to_its_exit`: exit code,
 //!   the 4 KB cap on standard output, standard error drained), the two fuzz targets with their
@@ -127,6 +137,12 @@
 //! - CI never holds vendor credentials, and no code path opens a vendor credential file.
 //! - The CLI writes `system/init` again at the start of every user turn, and `system/init`
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
+//! - CLI 2.1.316 writes nothing on stdout, `system/init` included, until the first user line
+//!   arrives, while `ClaudeWorker::start` waits for init before a job is bound, as section
+//!   3.3.8 has it. Against the real CLI a start therefore runs into its init deadline, until
+//!   the amendment that settles how a session shows it is ready before its job changes the
+//!   start (the CLI does answer the `initialize` and `mcp_status` control requests before any
+//!   user line; `docs/wp/WP3-harness.md`, "Surprises").
 //! - Not every denial looks like one: an `approve` call that fails reaches the model as a tool
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
@@ -170,6 +186,7 @@ pub mod stream;
 mod worker;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub use brain::{
     AnyBrain, BrainBackend, BrainBenchResult, BrainSuite, ClaudeBrain, CodexBrain, DeepSeekBrain,
@@ -188,8 +205,12 @@ pub use worker::{
 /// `Task` and the model calls it `Agent` (WP3's approval contract test, section 2.5).
 pub const SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
 
-/// What the harness reads at start. WP3 adds the rest of its fields (the CLI's location, the
-/// model aliases, the pool sizes) as it builds the drivers.
+/// How long a Claude session may take from its spawn to `system/init` by default. A worker's
+/// cold start under load took 30 to 111 s (section 0).
+pub const INIT_DEADLINE: Duration = Duration::from_secs(120);
+
+/// What the harness reads at start. WP3 adds the rest of its fields (the model aliases, the
+/// pool sizes) as it builds the drivers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessConfig {
     /// Eileen's data folder; each session's files go under `run/<session>/` in it.
@@ -203,9 +224,17 @@ pub struct HarnessConfig {
     pub shim_exe: PathBuf,
     /// The approved third-party MCP servers: which job kinds get each, and its rung.
     pub mcp: McpConfig,
+    /// The absolute path of the real `claude` executable, which the runtime fills from
+    /// [`locate`]. Empty until then, and a worker refuses to start without it.
+    pub claude_exe: PathBuf,
+    /// What the runtime read from the user's machine, from which each session's environment is
+    /// built (section 2.12).
+    pub host: session::HostEnv,
+    /// How long a session may take from its spawn to `system/init` ([`INIT_DEADLINE`]).
+    pub init_deadline: Duration,
 }
 
-/// A config with no data folder and no shim, for the stub drivers. `session::session_files`
+/// A config with no data folder, no shim and no CLI, for the stub drivers. `session::session_files`
 /// refuses it, so a session never starts from it by accident: the runtime fills both paths
 /// before the first spawn.
 impl Default for HarnessConfig {
@@ -215,6 +244,9 @@ impl Default for HarnessConfig {
             hook_hold_s: ApprovalsConfig::default().hook_hold_s,
             shim_exe: PathBuf::new(),
             mcp: McpConfig::default(),
+            claude_exe: PathBuf::new(),
+            host: session::HostEnv::default(),
+            init_deadline: INIT_DEADLINE,
         }
     }
 }
@@ -234,6 +266,77 @@ pub enum DriverError {
         /// The route asked for.
         route: Route,
     },
+    /// The driver does not carry out this command yet: the pool, worktrees and snapshots come
+    /// later in WP3.
+    #[error("the driver does not carry out {command} yet")]
+    Unsupported {
+        /// The command.
+        command: &'static str,
+    },
+    /// `HarnessConfig::claude_exe` is not an absolute path: the CLI was not located.
+    #[error("the claude executable has not been located")]
+    NoExecutable,
+    /// The session's files could not be built.
+    #[error(transparent)]
+    Session(#[from] session::SessionError),
+    /// The session's run folder could not be written.
+    #[error("the session's {what} could not be written: {kind}")]
+    Files {
+        /// What was being written.
+        what: &'static str,
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// The CLI could not be started.
+    #[error("the claude CLI could not be started: {kind}")]
+    Spawn {
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// The session wrote no `system/init` within the deadline.
+    #[error("the session wrote no system/init within {secs} s")]
+    InitDeadline {
+        /// The deadline, seconds.
+        secs: u64,
+    },
+    /// The session's process ended before its `system/init`.
+    #[error("the session ended before its system/init (exit code {code:?})")]
+    EndedBeforeInit {
+        /// Its exit code, when it had one.
+        code: Option<i32>,
+    },
+    /// The session's `system/init` does not list `eileen` as connected, so it is never bound
+    /// (section 2.5).
+    #[error("the session's system/init does not list eileen as connected")]
+    EileenNotConnected,
+    /// The session's `system/init` reported an auto-memory folder on its first start and on its
+    /// restart, though every session starts with vendor memory off (D77), so it is never bound.
+    #[error("the session reported an auto-memory folder with vendor memory off")]
+    MemoryPathReported,
+    /// A session is already started on this driver.
+    #[error("a session is already started")]
+    AlreadyStarted,
+    /// There is no session: none was started, or it ended or was cancelled.
+    #[error("there is no session")]
+    NoSession,
+    /// The session already has its job.
+    #[error("the session already has its job")]
+    AlreadyBound,
+    /// A user turn came before the job's first line.
+    #[error("the session has no job yet")]
+    NotBound,
+    /// The interrupt was not written.
+    #[error(transparent)]
+    Interrupt(#[from] stream::control::SendError),
+    /// A write to the session's stdin failed.
+    #[error("the session's stdin could not be written: {kind}")]
+    Write {
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// A write to the session's stdin did not finish within its deadline.
+    #[error("a write to the session's stdin passed its deadline")]
+    WriteDeadline,
 }
 
 /// The harness component: the brain's slots and the workers. The stub accepts the brain and

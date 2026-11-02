@@ -34,7 +34,7 @@ fn only_the_claude_route_has_a_worker_driver() {
 }
 
 #[test]
-fn the_stub_claude_worker_reports_any_language_and_no_events() {
+fn a_claude_worker_without_a_session_reports_any_language_and_no_events() {
     let mut worker = worker_for(Route::Claude, &HarnessConfig::default()).unwrap();
     assert_eq!(worker.route(), Route::Claude, "its route");
     assert_eq!(worker.languages(), LanguageSupport::Any, "Claude reports any language");

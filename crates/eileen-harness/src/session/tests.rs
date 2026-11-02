@@ -91,7 +91,7 @@ fn base_spec(session: WorkerSessionId, kind: JobKind, toolsets: Vec<Toolset>) ->
     }
 }
 
-fn coding_worker() -> SessionSpec {
+pub(crate) fn coding_worker() -> SessionSpec {
     let mut spec = base_spec(session_id(1), JobKind::Coding, vec![Toolset::Worker]);
     spec.builtin_tools =
         ["Bash", "PowerShell", "Read", "Edit", "Write", "Glob", "Grep"].map(str::to_owned).into();
@@ -149,6 +149,7 @@ fn config() -> HarnessConfig {
         hook_hold_s: 120,
         shim_exe: PathBuf::from(abs("/opt/eileen/eileen-shim")),
         mcp: McpConfig { servers: BTreeMap::from([("browser".to_owned(), browser)]) },
+        ..HarnessConfig::default()
     }
 }
 

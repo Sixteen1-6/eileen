@@ -267,8 +267,51 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   its seeds are the harness scripts cut to 4 KB and hand-written lines, replayed by
   `it::fuzz_corpus`. Part of acceptance 2; the pooled job and cancel come
   with `ClaudeWorker` running against the stub.
+- `wp3/claude-worker`: `ClaudeWorker` as a `WorkerDriver` without the pool (sections 3.3.8
+  and 6.5). `start` writes the run folder (`run/<session>/cwd`, the settings file and
+  `mcp.json` from `wp3/session-files`), spawns `HarnessConfig::claude_exe` through
+  `eileen_supervisor` in the Claude class (Job Object, below-normal priority) with exactly
+  the session's environment, and waits within `HarnessConfig::init_deadline` (120 s by
+  default) for `system/init`. An init that does not list `eileen` as connected is refused at
+  once; one that reports an auto-memory folder is restarted once (every session already has
+  memory off, D77) and then refused, and neither is ever bound. `bind` writes the first user
+  line (the task, `Follow skill eileen-learned:<id>` with any inline skill text, and the
+  facts block) in the shape the contract test wrote; `send` writes later turns, the
+  interrupt through `stream::control::Requests` when init offers it, and cancels by killing
+  the Job Object and waiting for the job to empty. `next_event` gives the first init's
+  `Init`, each line's worker events, settles control replies, passes over later inits (and
+  kills a session whose later init reports a memory folder), and ends with `Exited` and the
+  exit code, so a crash before `TurnDone` fails the job in the core. Every write and every
+  wait on the process has a deadline. `worker_for(Route::Claude)` returns it; other routes
+  stay `RouteUnavailable`; `languages()` is `Any`. The pool, recycle, worktrees, snapshots,
+  build slots, `JOB_OBJECT_LIMIT_JOB_MEMORY` and rate-limit events are later pull requests.
+  Its runs against the stub are in `eileen-stub-harness::it::worker`, because Cargo names
+  the stub's binary only to its own package's tests: a job to completion with its events in
+  order, narration, a `Skill` call, a crash's exit code, cancel with the stub held at
+  `await_user`, a later turn and an interrupt, the two refused inits, and the environment
+  the stub records (`EILEEN_STUB_ENV_FILE`): no denylisted variable, the pass-through list,
+  and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` though the user's own environment set it to 0. The
+  six `driver-` scripts write `system/init` before the first user line (see Surprises).
+  Acceptance 2 except the pooled bind and the approval path, the stub half of acceptance 4,
+  and the init part of acceptance 8.
 
 ## Surprises
+
+- CLI 2.1.316 writes nothing on stdout, not even `system/init`, until the first user line
+  arrives (a probe on the owner's PC on 2026-11-01: `claude -p` with stream-json in and out,
+  `--setting-sources ""`, an empty strict MCP config and no tools, stdin held open for 12 s
+  with nothing written: no output, exit 0 when stdin closed). The approval runs wrote their
+  first user line at once, so they never showed it, and section 3.3.8's Start row ("wait for
+  `system/init`") and the core's bind on `WorkerEvent::Init` both assume init comes first.
+  Against the real CLI, `ClaudeWorker::start` would pass its init deadline. The same probe
+  found that the CLI answers two control requests before any user line, with no model turn:
+  `initialize` (a `control_response` whose response holds `capabilities`, `pid`,
+  `claude_code_version`, `current_permission_mode`, the models and the account, which must
+  never be logged; on this run `capabilities` was `ui_surface_v1` and
+  `mcp_call_result_not_for_model_v1`, not the list `system/init` gives) and `mcp_status`
+  (`{"mcpServers": [...]}`). An amendment should settle how a session shows it is ready
+  before its job, for example `mcp_status` until `eileen` is connected, with the memory check
+  moved to the first turn's init (killing the session there), before slice S1 runs live.
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
   though section 3.3 has each package's first pull request pin its own. `wp3/worker-tools`
