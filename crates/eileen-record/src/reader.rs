@@ -2,11 +2,12 @@
 //! [`RecordLine`] a line, its stubs resolved from the blob store. A line is read with a bound,
 //! so a file that is not a recording cannot make the reader hold more than [`MAX_LINE_BYTES`].
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Read};
 
-use eileen_contracts::record::RecordLine;
+use eileen_contracts::record::{BlobRef, RecordLine};
 
-use crate::blob::{BlobStoreError, Blobs, Released};
+use crate::blob::{Blobs, Released};
 use crate::line::{self, LineError, MAX_LINE_BYTES};
 
 /// Why a line of a recording could not be read.
@@ -149,43 +150,64 @@ pub struct ReleaseReport {
     pub deleted: u64,
     /// Stubs naming a blob the store no longer held.
     pub absent: u64,
-}
-
-/// Why a recording's blobs could not be released.
-#[derive(Debug, thiserror::Error)]
-pub enum ReleaseError {
-    /// A line could not be read.
-    #[error("could not read the recording")]
-    Read(#[from] ReadError),
-    /// The store failed.
-    #[error("the blob store failed")]
-    Store(#[from] BlobStoreError),
+    /// Lines that did not parse, released by the stubs found in their bytes.
+    pub damaged: u64,
+    /// Releases the store refused: those blobs stay counted, too high, until a sweep.
+    pub failed: u64,
 }
 
 /// Releases every reference a recording's lines hold, once for each stub, as deleting the
 /// recording does: a blob no other recording, incident or trajectory refers to is deleted. The
-/// lines are not parsed, so a recording written by an older version is released too.
-pub fn release_blobs<R, B>(input: R, blobs: &mut B) -> Result<ReleaseReport, ReleaseError>
+/// lines are not parsed as `RecordLine`s, so a recording written by an older version is
+/// released too.
+///
+/// It reads the whole recording before it releases anything, so an error (the file could not
+/// be read, or a line is over the limit) means nothing was released, and the call can be made
+/// again. Once it starts releasing it does not stop: a release the store refuses leaves that
+/// blob counted too high, so kept, and is counted in [`ReleaseReport::failed`].
+///
+/// Releasing is not idempotent, so the caller first makes the recording unreachable, renaming
+/// it to a tombstone such as `<id>.deleting` that nothing reads or lists, runs this once on the
+/// tombstone, and deletes the tombstone when it returns `Ok`. A crash in between leaves the
+/// tombstone's blobs counted, which a sweep that recounts every referrer recovers, and never
+/// releases a reference twice.
+///
+/// A whole line is released by the stubs it parses to. A line that does not parse (one a
+/// writer stopped part way through, or damage) is released by the complete stubs found in its
+/// bytes ([`line::scan_refs`]): that can miss one, leaving it for the sweep, but never names
+/// one the line did not add.
+pub fn release_blobs<R, B>(input: R, blobs: &mut B) -> Result<ReleaseReport, ReadError>
 where
     R: BufRead,
     B: Blobs + ?Sized,
 {
     let mut reader = Reader::new(input);
     let mut report = ReleaseReport::default();
+    let mut refs: BTreeMap<BlobRef, u64> = BTreeMap::new();
     while let Some(raw) = reader.next_raw() {
         let raw = raw?;
-        let refs = match line::stub_refs(&raw.bytes) {
-            Ok(refs) => refs,
-            // A cut-off last line holds no whole stub to release.
-            Err(_) if !raw.ended => break,
-            Err(source) => return Err(ReadError::Line { line: reader.line(), source }.into()),
-        };
-        for blob in refs {
-            report.released = report.released.saturating_add(1);
-            match blobs.release(&blob)? {
-                Released::Kept(_) => {}
-                Released::Deleted => report.deleted = report.deleted.saturating_add(1),
-                Released::Absent => report.absent = report.absent.saturating_add(1),
+        let parsed = if raw.ended { line::stub_refs(&raw.bytes).ok() } else { None };
+        let found = parsed.unwrap_or_else(|| {
+            report.damaged = report.damaged.saturating_add(1);
+            line::scan_refs(&raw.bytes)
+        });
+        for blob in found {
+            let count = refs.entry(blob).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+    }
+    for (blob, count) in &refs {
+        for _ in 0..*count {
+            match blobs.release(blob) {
+                Ok(released) => {
+                    report.released = report.released.saturating_add(1);
+                    match released {
+                        Released::Kept(_) => {}
+                        Released::Deleted => report.deleted = report.deleted.saturating_add(1),
+                        Released::Absent => report.absent = report.absent.saturating_add(1),
+                    }
+                }
+                Err(_) => report.failed = report.failed.saturating_add(1),
             }
         }
     }
