@@ -25,7 +25,7 @@ pub const MAX_INLINE_BYTES: usize = 1024;
 /// store, a line over it is corrupt or not a recording.
 pub const MAX_LINE_BYTES: usize = 1 << 20;
 
-/// The deepest nesting of arrays and objects a written line may hold. serde_json's parser
+/// The deepest nesting of arrays and objects a written line may hold. `serde_json`'s parser
 /// refuses a 128th level, and escapes can double the nesting of a value, so [`encode`] refuses
 /// a line [`decode`] could not parse rather than write one that never reads.
 pub const MAX_DEPTH: usize = 127;
@@ -368,10 +368,11 @@ mod tests {
     #[test]
     fn a_cut_line_gives_up_only_its_complete_unescaped_stubs() {
         let mut blobs = MemoryBlobs::default();
-        let (first, second) = ("f".repeat(40), "s".repeat(40));
+        // The forged reference, 67 bytes, stays inline under a limit of 70.
+        let (first, second) = ("f".repeat(80), "s".repeat(80));
         let forged = json!({ "$blob": format!("b3:{}", "cd".repeat(32)) });
         let value = json!({ "a": first, "b": forged, "c": second });
-        let line = encode(&value, 8, &mut blobs).unwrap();
+        let line = encode(&value, 70, &mut blobs).unwrap();
         let cut = line.get(..line.len() - 10).unwrap();
         assert!(stub_refs(cut.as_bytes()).is_err(), "the cut line does not parse");
         assert_eq!(scan_refs(cut.as_bytes()), [blob_ref(first.as_bytes())], "the whole stub");

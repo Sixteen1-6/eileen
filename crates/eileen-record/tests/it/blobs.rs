@@ -109,7 +109,7 @@ fn a_damaged_middle_line_gives_up_its_whole_stubs_and_another_recording_still_re
     let first = write(&[typed(1, "hello"), typed(2, &shared), typed(3, "bye")], &mut store);
     let second = write(&[typed(1, &shared)], &mut store);
     let text = String::from_utf8(first).unwrap();
-    let damaged = text.replacen(r#"{"input":{"seq":2"#, r#"{"input":{"seq":2,,"#, 1);
+    let damaged = text.replacen(r#""mono":2000000,"#, r#""mono":2000000,,"#, 1);
     assert_ne!(damaged, text, "line 2 no longer parses");
 
     let released = release_blobs(Cursor::new(damaged.as_bytes()), &mut store).unwrap();
