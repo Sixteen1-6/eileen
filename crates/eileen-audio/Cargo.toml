@@ -52,6 +52,8 @@ loom.workspace = true
 # The capture side's no-allocation check (decision D82): a dev-dependency only, so its global
 # allocator reaches only this crate's test binaries.
 allocation-counter.workspace = true
+# The integration tests (tests/it) drive the component over the in-memory transport.
+eileen-audio = { workspace = true, features = ["fake"] }
 # Playback's tests read the drop it logs.
 eileen-trace = { workspace = true, features = ["testing"] }
 # The resamplers' tests measure each conversion's spectrum against BUILD.md section 6.6's bar.
