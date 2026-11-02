@@ -166,9 +166,14 @@ Every pull request also meets the rules section 6.1 sets for every package.
   read. `blob::BlobStore` keeps `blobs/<2 hex>/<hash>.zst`, named by BLAKE3 (pure) and
   zstd-compressed, with a `<hash>.refs` count beside it: one reference per stub a writer wrote,
   and `reader::release_blobs` releases a deleted recording's references, deleting each blob
-  with its last. A blob that does not hash to its name reads as corrupt. `trim::trim` keeps a
-  window of inputs, every setup input before it (`trim::is_setup`) and each kept hook input's
-  answer. Tests: `eileen-record::it::round_trip::*` (property tests through the disk store, the
+  with its last, reading the whole recording before it releases anything. The store takes an
+  exclusive lock on `blobs/.lock`, syncs each file before renaming it into place, rewrites a
+  blob that does not hash to its name on the next put of its bytes, and reads a damaged count
+  as `blob::UNKNOWN_COUNT`. A line that fails to write, is nested past `line::MAX_DEPTH` or is
+  refused by the output part way keeps no reference the file does not hold. `trim::trim` keeps
+  the inputs of the chosen turns and jobs (`trim::Selection`), the latest setup input of each
+  kind before them (`trim::setup_kind`), the unclaimed setup inputs among them and each kept
+  hook input's answer. Tests: `eileen-record::it::round_trip::*` (property tests through the disk store, the
   crate doc's promised inverse), `eileen-record::it::trim::*`, `eileen-record::it::blobs::*`
   (the reference count), `eileen-record::blob::tests::*`, `eileen-record::line::tests::*`, and
   the `recording` fuzz target's `fuzz_entry` with its seed corpus, replayed by
@@ -269,19 +274,37 @@ Every pull request also meets the rules section 6.1 sets for every package.
   and samples against that or the user's request: the mute earcon confirms the request before
   `MuteChanged { muted: true }`, and the unmute earcon follows `MuteChanged { muted: false }`.
 
-- A setup input, which `record trim` keeps from before its window, is one that leaves the core
-  in a standing state a fresh core started from the scenario's configuration and fixtures
-  lacks: `SetMute` and `ToggleMute`, `Memory`, the `Activity` states (other audio, the
-  microphone taken, the session locked, a presentation), `Settings` `FileChanged` and `Voice`
-  `Calibration`. Section 3.3.16 names setup inputs without listing them; the list is
-  `trim::is_setup`, and trim keeps every one, not only the latest of each, so the order of
-  changes survives.
-- A blob's reference count is a small file beside it, written beside its name and renamed into
-  place, rather than a database row: the store stays std and zstd only, and a crash between the
-  blob and its count over-counts (a blob kept too long), never under-counts.
-- `eileen-record` turns on serde_json's `float_roundtrip`, so a float in a recorded line reads
-  back exactly; the default parser can be a unit in the last place off, which would break the
-  exact inverse the crate doc promises.
+- A setup input is one that leaves the core in a standing state a fresh core started from the
+  scenario's configuration and fixtures lacks: `SetMute` and `ToggleMute`, `Memory`, the
+  `Activity` states (other audio, the microphone taken, the session locked, a presentation),
+  `Settings` `FileChanged` and `Voice` `Calibration`. Section 3.3.16 names setup inputs without
+  listing them; the list is `trim::setup_kind`, an exhaustive match. Before the first kept input
+  trim keeps only the latest of each kind (for mute, the latest `SetMute` and every `ToggleMute`
+  after it), since a recording kept for days holds thousands of memory readings and scenario
+  mode would schedule every one. Between the first and the last kept input it keeps every setup
+  input no other turn or job claims, since those change the state while the turn and its jobs
+  run.
+- Trim selects by trace context, the turns and jobs a manifest lists (section 3.11: "that turn
+  and its jobs"), not by a range of sequence numbers, so another turn's inputs never reach a
+  shared scenario and a job's inputs after its turn's last one are kept. This needs the
+  recorder to stamp each input with the turn or job it belongs to; turn IDs are minted by the
+  speech process at the speech onset, so a turn's first input carries its own.
+- A blob's reference count is a small file beside it, written beside its name, synced and
+  renamed into place, rather than a database row: the store stays std and zstd only. Every
+  failure leaves a count too high (a blob kept too long), never too low: a crash between the
+  blob and its count, a line that fails to write part way, a damaged count file (read as
+  `blob::UNKNOWN_COUNT`) and a stub `release_blobs` cannot find in a damaged line. The blobs so
+  kept wait for a sweep that recomputes every count from every referrer (recordings, incidents,
+  trajectories and the learning store's blobs), which eileen-learn's forget owns (section 2.10
+  item 12); until it exists they are kept, never deleted early.
+- Deleting a recording renames it to a tombstone, releases its blobs once with
+  `release_blobs`, and deletes the tombstone, because releasing is not idempotent. The runtime's
+  flight recorder and `eileen record` do this when they are wired.
+- `float_roundtrip` on serde_json makes a float in a recorded line read back exactly; the
+  default parser can be a unit in the last place off, which would break the exact inverse the
+  crate doc promises. Features unify across a build, so it belongs in the root manifest's
+  `serde_json` entry, which is an amendment; `eileen-record` turns it on in its own manifest
+  only until that amendment merges.
 
 ## Outcome
 

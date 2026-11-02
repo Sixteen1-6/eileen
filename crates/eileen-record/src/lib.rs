@@ -22,12 +22,19 @@
 //! - `record::stub_blobs` and `record::resolve_blobs` are exact inverses, so a written line
 //!   reads back to the `RecordLine` that was written, through the disk store as through the
 //!   memory one (`it::round_trip::*`, property tests).
-//! - `trim` keeps every input of its window, every setup input before it and each kept hook
-//!   input's answer, in their order, and nothing else (`it::trim::*`).
+//! - `trim` keeps every input of the chosen turns and jobs, the latest setup input of each kind
+//!   before the first of them, the setup inputs no other turn or job claims between the first
+//!   and the last, and each kept hook input's answer, in their order, and nothing else
+//!   (`it::trim::*`, and the `recording` fuzz target, which works the kept lines out on its own).
 //! - A blob is named by the BLAKE3 hash of its bytes, counts each reference a writer added, is
 //!   deleted with its last one, and reads as corrupt if it does not hash to its name
 //!   (`blob::tests::*`, `it::blobs::*`).
-//! - Lines are bounded by `line::MAX_LINE_BYTES` and blobs by `blob::MAX_BLOB_BYTES`.
+//! - A count is never too low: a line that is not written keeps no reference, `release_blobs`
+//!   releases each reference once or not at all, and a damaged count keeps its blob
+//!   (`line::tests::*`, `it::blobs::*`, `blob::tests::*`). A count may be too high, which only
+//!   keeps a blob until a sweep recounts it.
+//! - Lines are bounded by `line::MAX_LINE_BYTES` and `line::MAX_DEPTH`, so every line a writer
+//!   writes reads back, and blobs by `blob::MAX_BLOB_BYTES`.
 //! - `eileen record` is still a stub that writes nothing: every form says it is not built yet
 //!   (`eileen-cli`'s `it::commands::every_command_of_section_3_5_says_not_built_yet`).
 //!
@@ -57,7 +64,13 @@
 //!   recorder's job in `eileen-runtime`, before the line reaches the writer.
 //! - A blob is shared: never delete one by its file, only by releasing a reference, or a
 //!   recording, incident or trajectory that still names it stops reading.
-//! - One process, the core, writes a data directory's store, behind one lock.
+//! - A data directory's store is opened once and shared: `BlobStore::open` takes the exclusive
+//!   lock on `blobs/.lock`, and a second open fails rather than lose a count update.
+//! - `reader::release_blobs` is not idempotent. Rename a recording to a tombstone first, release
+//!   it once, then delete the tombstone; a retry after `Ok` releases every reference again.
+//! - `trim::setup_kind` names every `Input` variant and every variant of the enums it looks
+//!   into, with no catch-all arm, so a new input in the contracts fails to compile there until
+//!   someone decides whether it sets standing state a scenario must start from.
 //!
 //! # Logs and tracing
 //!
@@ -67,7 +80,7 @@
 //! # Do not change without a decision record
 //!
 //! - The blob reference form (`{"$blob": "b3:..."}`), the `{"$lit": ...}` escape and the
-//!   store's layout (`<2 hex>/<hash>.zst` and its `<hash>.refs` count).
+//!   store's layout (`<2 hex>/<hash>.zst`, its `<hash>.refs` count and the folder's `.lock`).
 
 #![forbid(unsafe_code)]
 
