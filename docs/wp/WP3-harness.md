@@ -267,8 +267,69 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   its seeds are the harness scripts cut to 4 KB and hand-written lines, replayed by
   `it::fuzz_corpus`. Part of acceptance 2; the pooled job and cancel come
   with `ClaudeWorker` running against the stub.
+- `wp3/claude-worker`: `ClaudeWorker` as a `WorkerDriver` without the pool (sections 3.3.8
+  and 6.5, as the amendment of 2026-11-01, #161, changes them). `start` refuses a spec that
+  asks for a plugin snapshot check, a snapshot restore, a worktree, a build slot or a job
+  memory limit, which come later, rather than starting without them; registers the session's
+  hook and shim tokens with the process's `Redactor` (`worker_for` takes it) for the
+  session's life; writes the run folder (`run/<session>/cwd`, the settings file and
+  `mcp.json` from `wp3/session-files`); spawns `HarnessConfig::claude_exe` through
+  `eileen_supervisor` in the Claude class (Job Object, below-normal priority) with exactly
+  the session's environment; and, within `HarnessConfig::init_deadline` (120 s by default),
+  asks `initialize`, then `mcp_status` until `eileen` is connected. A `failed` server refuses
+  the session, which is never bound. `bind` writes the first user line (the task, `Follow
+  skill eileen-learned:<id>` with any inline skill text, and the facts block) in the shape the
+  contract test wrote; `send` writes later turns, the interrupt through
+  `stream::control::Requests` once the first turn's init offers it, and cancels by killing
+  the Job Object and waiting for the job to empty. A write that fails or passes its deadline
+  ends the session, since part of a line may have reached the CLI. `next_event` gives the
+  first turn's `Init`, each line's worker events, settles control replies, and ends with
+  `Exited` and the exit code, so a crash before `TurnDone` fails the job in the core. Every
+  init is checked: one without `eileen` connected or with an auto-memory folder kills the
+  session at that line, before the model's first message, and logs `worker.refused` with the
+  reason. Open control requests are abandoned at each turn's end and each init, so a dropped
+  reply never fills the four the session may hold. `next_event` is cancel-safe: a partly read
+  line stays buffered, and a session being ended stays in the driver until its exit is seen.
+  `worker.fault` logs failed writes, unmatched or failed control replies, abandoned requests
+  and a kill whose exit was not seen. `worker_for(Route::Claude)` returns it; other routes
+  stay `RouteUnavailable`; `languages()` is `Any`. The stub answers `initialize` and
+  `mcp_status` (with its script's first init's servers). Its runs against the stub are in
+  `eileen-stub-harness::it::worker`, because Cargo names the stub's binary only to its own
+  package's tests: a job to completion with its events in order, narration, a `Skill` call, a
+  crash's exit code, cancel with the stub held at `await_user` (the exit code is the kill's;
+  on Linux the process is gone from `/proc`), a new session after a cancel that gives none of
+  the old one's events, a later turn with its second init and an interrupt, `eileen` failed
+  at `mcp_status`, a memory folder in the first turn's init and in a later turn's init, a tool
+  input quoting the session's token, and the environment the stub records
+  (`EILEEN_STUB_ENV_FILE`): no denylisted variable, the pass-through list, the user's `PATH`,
+  and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` though the user's own environment set it to 0. Each
+  test's folder is removed when it ends. `eileen-harness::it::real_claude` runs `start`
+  against the signed-in CLI on the owner's PC and expects `mcp_status` to report the missing
+  shim before any user line. Acceptance 2 except the pooled bind and the approval path;
+  acceptance 4's denylist and pass-through part (the `cargo --version` run in a coding
+  worker's shell and the file-access check for `.claude` paths are left); acceptance 8's
+  memory checks as amended. Left for later: `WorkerEvent::Ready` and `WorkerEvent::Refused`
+  with the core's bind on `Ready` (the amendment's contract change; until it lands a live job
+  does not bind), the pool, recycle, worktrees, the snapshot check and restore, build slots,
+  `JOB_OBJECT_LIMIT_JOB_MEMORY`, rate-limit events, and a stub grandchild to show the kill
+  takes the whole Job Object.
 
 ## Surprises
+
+- CLI 2.1.316 writes nothing on stdout, not even `system/init`, until the first user line
+  arrives (a probe on the owner's PC on 2026-11-01: `claude -p` with stream-json in and out,
+  `--setting-sources ""`, an empty strict MCP config and no tools, stdin held open for 12 s
+  with nothing written: no output, exit 0 when stdin closed). The approval runs wrote their
+  first user line at once, so they never showed it, and section 3.3.8's Start row ("wait for
+  `system/init`") and the core's bind on `WorkerEvent::Init` both assume init comes first.
+  Against the real CLI, `ClaudeWorker::start` would pass its init deadline. The same probe
+  found that the CLI answers two control requests before any user line, with no model turn:
+  `initialize` (a `control_response` whose response holds `capabilities`, `pid`,
+  `claude_code_version`, `current_permission_mode`, the models and the account, which must
+  never be logged; on this run `capabilities` was `ui_surface_v1` and
+  `mcp_call_result_not_for_model_v1`, not the list `system/init` gives) and `mcp_status`
+  (`{"mcpServers": [...]}`). The amendment of 2026-11-01 (#161) builds readiness on them and
+  moves the memory check to the first turn's init.
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
   though section 3.3 has each package's first pull request pin its own. `wp3/worker-tools`

@@ -229,6 +229,26 @@ fn open_requests_are_bounded_and_can_be_abandoned() {
 }
 
 #[test]
+fn unanswered_requests_closed_at_a_turns_end_leave_room_for_the_next_interrupt() {
+    let mut requests = Requests::default();
+    let offered = init(&RECORDED_CAPABILITIES);
+    // A CLI that never answers: four interrupts fill the cap.
+    for _ in 0..MAX_OPEN_REQUESTS {
+        requests.interrupt(&offered).unwrap();
+    }
+    assert_eq!(requests.interrupt(&offered), Err(SendError::Full), "at the cap");
+    assert_eq!(requests.abandon_all(), MAX_OPEN_REQUESTS, "the turn's end closes all four");
+    assert_eq!(requests.abandon_all(), 0, "nothing left open");
+    let line = requests.interrupt(&offered).unwrap();
+    assert!(line.contains(r#""request_id":"eileen_5""#), "a fifth goes out, numbered on: {line}");
+    assert_eq!(
+        settle(&mut requests, "eileen_4", None),
+        Err(SettleError::NotOpen),
+        "a late reply to an abandoned one settles nothing"
+    );
+}
+
+#[test]
 fn other_control_lines_parse_to_their_kind() {
     let redactor = Redactor::new();
     let cancel = br#"{"type":"control_cancel_request","request_id":"r"}"#;
