@@ -171,6 +171,7 @@ async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), Compone
     let mut more = false;
     loop {
         speech.rearm_accept();
+        let drains = speech.drains();
         let reading = speech.live.as_mut().and_then(|live| live.reading.as_mut());
         tokio::select! {
             biased;
@@ -193,7 +194,7 @@ async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), Compone
             // Before the replay's next batch, so a long replay still pings every second.
             _ = ping.tick() => speech.on_second().await,
             () = std::future::ready(()), if more => more = speech.pump().await,
-            _ = pump.tick(), if speech.drains() => more = speech.pump().await,
+            _ = pump.tick(), if drains => more = speech.pump().await,
         }
     }
     speech.finish().await;
