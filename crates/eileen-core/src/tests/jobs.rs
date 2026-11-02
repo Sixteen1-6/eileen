@@ -417,7 +417,7 @@ fn an_ml_project_is_refused_before_routing_and_admission_and_research_is_accepte
     });
     let result = result.expect("a reply");
     assert!(result.is_error, "returned as the call's error result");
-    let output = result.output.clone().expect("the error, structured").into_inner();
+    let output = result.output.expect("the error, structured").into_inner();
     let error: UserError = serde_json::from_value(output).expect("a UserError");
     assert_eq!(error.kind, UserErrorKind::JobKindUnavailable, "its kind");
     assert!(
