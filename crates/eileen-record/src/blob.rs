@@ -216,8 +216,15 @@ impl Blobs for BlobStore {
             Ok(Some(_)) => {}
             Ok(None) => {
                 Self::write_blob(&files, bytes)?;
-                // A count left from a blob deleted part way restarts with this one.
-                write_atomic(&files.refs, b"1\n")?;
+                // A count left beside a lost blob, or by a release cut part way, is counted on
+                // from rather than reset: recordings may still name the blob, and a count too
+                // high only keeps it longer.
+                let count = if exists(&files.refs)? {
+                    read_count(&files.refs)?.saturating_add(1)
+                } else {
+                    1
+                };
+                write_atomic(&files.refs, format!("{count}\n").as_bytes())?;
                 return Ok(blob);
             }
             // Damaged on disk: written again, its count kept, since recordings still name it.
@@ -246,7 +253,7 @@ impl Blobs for BlobStore {
     fn release(&mut self, blob: &BlobRef) -> Result<Released, BlobStoreError> {
         let files = self.files(blob);
         if !exists(&files.blob)? {
-            remove_all(&files)?;
+            remove_leftovers(&files);
             return Ok(Released::Absent);
         }
         let count = read_count(&files.refs)?;
@@ -255,7 +262,8 @@ impl Blobs for BlobStore {
             write_atomic(&files.refs, format!("{left}\n").as_bytes())?;
             return Ok(Released::Kept(left));
         }
-        remove_all(&files)?;
+        remove_if_there(&files.blob)?;
+        remove_leftovers(&files);
         Ok(Released::Deleted)
     }
 }
@@ -362,12 +370,13 @@ fn sync_folder(path: &Path) -> Result<(), BlobStoreError> {
     File::open(folder).and_then(|folder| folder.sync_all()).map_err(io("sync", folder))
 }
 
-/// Removes a blob's files, a `.part` file left by a crash included.
-fn remove_all(files: &Files) -> Result<(), BlobStoreError> {
-    remove_if_there(&files.blob)?;
-    remove_if_there(&files.refs)?;
-    remove_if_there(&part(&files.blob))?;
-    remove_if_there(&part(&files.refs))
+/// Removes what is left of a blob whose `.zst` is gone: its count and any `.part` file a crash
+/// left. Each is tried; one that stays is harmless, since the next `put` of the blob replaces
+/// a `.part` file and counts on from a count, so the blob is reported deleted all the same.
+fn remove_leftovers(files: &Files) {
+    for path in [files.refs.clone(), part(&files.blob), part(&files.refs)] {
+        let _left_if_failed = remove_if_there(&path);
+    }
 }
 
 fn remove_if_there(path: &Path) -> Result<(), BlobStoreError> {
@@ -472,6 +481,19 @@ mod tests {
         assert_eq!(store.put(text).unwrap(), blob, "the same name");
         assert_eq!(store.get(&blob).unwrap().as_deref(), Some(text.as_slice()), "repaired");
         assert_eq!(store.refs(&blob).unwrap(), 2, "the first reference kept");
+    }
+
+    #[test]
+    fn a_lost_blob_written_again_keeps_counting_from_its_count() {
+        let scratch = Scratch::new("blob-lost");
+        let mut store = BlobStore::open(scratch.path()).unwrap();
+        let text = b"named by two recordings, then lost";
+        let blob = store.put(text).unwrap();
+        store.put(text).unwrap();
+        let (zst, _) = paths(&store, &blob);
+        std::fs::remove_file(&zst).unwrap();
+        assert_eq!(store.put(text).unwrap(), blob, "written again");
+        assert_eq!(store.refs(&blob).unwrap(), 3, "the two earlier references kept");
     }
 
     #[test]

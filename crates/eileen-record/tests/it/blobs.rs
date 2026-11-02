@@ -173,3 +173,49 @@ fn a_line_the_output_refuses_part_way_releases_the_stubs_it_did_not_take() {
     assert_eq!(released, ReleaseReport { damaged: 1, ..report(1, 1) }, "the stub it took");
     assert_eq!(files(&store), Vec::<String>::new(), "nothing counted twice or left behind");
 }
+
+/// Takes bytes up to `fail_at`, fails once there, then takes everything.
+struct FailsOnce {
+    out: Vec<u8>,
+    fail_at: Option<usize>,
+}
+
+impl Write for FailsOnce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let Some(at) = self.fail_at else {
+            self.out.extend_from_slice(buf);
+            return Ok(buf.len());
+        };
+        if self.out.len() >= at {
+            self.fail_at = None;
+            return Err(std::io::Error::other("the disk was busy"));
+        }
+        let n = buf.len().min(at - self.out.len());
+        self.out.extend_from_slice(buf.get(..n).unwrap());
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_line_written_after_a_failed_one_starts_a_line_of_its_own() {
+    let scratch = Scratch::new("refcount-after");
+    let mut store = BlobStore::open(scratch.path().join("blobs")).unwrap();
+    let (cut, whole) = ("the line the disk cut, ".repeat(4), "the line after it, ".repeat(4));
+    let out = FailsOnce { out: Vec::new(), fail_at: Some(40) };
+    let mut writer = Writer::new(out, &mut store).with_max_inline(64);
+    assert!(matches!(writer.write(&typed(1, &cut)), Err(WriteError::Io(_))), "cut at 40 bytes");
+    writer.write(&typed(2, &whole)).unwrap();
+    let text = writer.finish().unwrap().0.out;
+    assert_eq!(store.refs(&blob_ref(cut.as_bytes())).unwrap(), 0, "the cut line's stub released");
+
+    let mut reader = Reader::new(Cursor::new(&text));
+    assert!(reader.next_line(&store).unwrap().is_err(), "the cut line reported");
+    assert_eq!(reader.next_line(&store).unwrap().unwrap(), typed(2, &whole), "the next read whole");
+    let released = release_blobs(Cursor::new(&text), &mut store).unwrap();
+    assert_eq!(released, ReleaseReport { damaged: 1, ..report(1, 1) }, "each stub once");
+    assert_eq!(files(&store), Vec::<String>::new(), "no blob left");
+}

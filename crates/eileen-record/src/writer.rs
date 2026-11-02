@@ -28,13 +28,16 @@ pub struct Writer<W, B> {
     blobs: B,
     max_inline: usize,
     lines: u64,
+    /// The output took part of a line and then failed, so the next line starts on a line of
+    /// its own.
+    cut: bool,
 }
 
 impl<W: Write, B: Blobs> Writer<W, B> {
     /// A writer to `out` that keeps strings over [`MAX_INLINE_BYTES`] in `blobs`.
     #[must_use]
     pub const fn new(out: W, blobs: B) -> Self {
-        Self { out, blobs, max_inline: MAX_INLINE_BYTES, lines: 0 }
+        Self { out, blobs, max_inline: MAX_INLINE_BYTES, lines: 0, cut: false }
     }
 
     /// The same writer with another inline limit, in bytes.
@@ -52,6 +55,11 @@ impl<W: Write, B: Blobs> Writer<W, B> {
     pub fn write(&mut self, record: &RecordLine) -> Result<(), WriteError> {
         let mut text = line::encode(record, self.max_inline, &mut self.blobs)?;
         text.push('\n');
+        if self.cut {
+            // Ends the part of a line a failed write left, so the reader reports that line and
+            // reads this one whole.
+            text.insert(0, '\n');
+        }
         let bytes = text.as_bytes();
         let mut taken = 0;
         while let Some(rest) = bytes.get(taken..).filter(|rest| !rest.is_empty()) {
@@ -62,6 +70,7 @@ impl<W: Write, B: Blobs> Writer<W, B> {
                 Err(error) => return Err(self.failed(bytes, taken, error)),
             }
         }
+        self.cut = false;
         self.lines = self.lines.saturating_add(1);
         Ok(())
     }
@@ -78,6 +87,9 @@ impl<W: Write, B: Blobs> Writer<W, B> {
             }
         }
         line::release_all(&mut self.blobs, &unwritten);
+        // Cut when the output took bytes of this line past the newline that ends an earlier one.
+        let lead = usize::from(self.cut);
+        self.cut = taken > lead || (self.cut && taken == 0);
         WriteError::Io(error)
     }
 
