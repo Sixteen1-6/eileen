@@ -39,6 +39,13 @@
 //! - The ring keeps every frame the speech process has not confirmed, up to 180 s, numbered from
 //!   the core's start (decision D81); a mute empties it, so nothing captured before a mute is
 //!   written after it (`ring::tests`).
+//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
+//!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
+//!   of a stopped utterance (`playback::tests`). Its queues are bounded: a PCM frame that does
+//!   not fit the sample or marker queue is refused and logged, and so is a new utterance past
+//!   the live limit, an early pause past the ones it remembers and an event the player reports
+//!   itself past the event limit; its render side allocates nothing
+//!   (`allocation_counter::measure` in the same tests).
 //!
 //! # Boundaries
 //!
@@ -51,10 +58,11 @@
 //!   [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The component never names the
 //!   pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
-//!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
-//!   target table; `rtrb` for the ring's handoff, `hound` for WAV files, and `loom` only under
-//!   `cfg(loom)`. `realfft` (the resamplers' measurements) and `allocation-counter` (decision
-//!   D82) are dev-dependencies, never outside `[dev-dependencies]`.
+//!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
+//!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
+//!   and `loom` only under `cfg(loom)`. `realfft` (the resamplers' measurements) and
+//!   `allocation-counter` (decision D82) are dev-dependencies, never outside
+//!   `[dev-dependencies]`.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -69,7 +77,9 @@
 //!   models run once on a real thread), the test sources and sinks under paused tokio time
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
-//!   again), and device tests on the owner's PC under `desktop.lock`.
+//!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
+//!   command, compared bit for bit with the interpolator over the whole clause), and device tests
+//!   on the owner's PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
@@ -95,10 +105,25 @@
 //!   stops its own stream deadlocks. A `CaptureSink`'s task runs from its first stream until the
 //!   file is completed, writing silence while no stream runs, so no restart writes a long gap in
 //!   one step.
+//! - Playback's `samples_played` counts the clause's own 24 kHz samples, as `ClauseReady.samples`
+//!   does, not the device's; and a paused utterance with audio left holds every utterance behind
+//!   it, so the core stops one before it speaks the next.
+//! - Playback's `Drained` means every sample queued so far for the utterance has played (the
+//!   queue ran dry, or a later utterance began), as the core reads it, not that the reply is
+//!   over: it comes once per dry spell, so more than once while synthesis is behind, and the
+//!   utterance keeps taking audio after it. `SpeakDone` ends nothing here; only the core knows
+//!   when a reply is closed.
 //!
 //! # Logs and tracing
 //!
-//! - None yet, and never inside the audio callback; WP4 reports through the tick ring.
+//! - `channel.full` when playback drops something for want of room, each `channel` with its own
+//!   `times`: a frame refused by the sample queue (`audio.playback`) or the marker queue
+//!   (`audio.playback.markers`), a new utterance past the live limit
+//!   (`audio.playback.utterances`), an early pause past the ones it remembers
+//!   (`audio.playback.waiting`), a `Stopped` the player reports itself past the event limit
+//!   (`audio.playback.reported`), and events its render side lost (`audio.playback.events`); all
+//!   logged from the component's side, never inside the audio callback. WP4 reports the
+//!   callbacks through the tick ring.
 //!
 //! # Do not change without a decision record
 //!
@@ -129,6 +154,10 @@ mod ring;
     expect(dead_code, reason = "the component wires the resamplers in a later part")
 )]
 mod resample;
+// The component plays the speech process's PCM through this in a later part; until then only its
+// tests use it.
+#[cfg_attr(not(test), expect(dead_code, reason = "the component wires playback in a later part"))]
+mod playback;
 
 pub mod pace;
 pub mod room;

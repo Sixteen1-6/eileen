@@ -765,12 +765,14 @@ dependencies = [
  "eileen-contracts",
  "eileen-rt",
  "eileen-stdx",
+ "eileen-trace",
  "hound",
  "loom",
  "realfft",
  "rtrb",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
