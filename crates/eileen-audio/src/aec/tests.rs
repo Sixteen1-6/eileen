@@ -64,7 +64,7 @@ impl Rng {
 
     /// A number in `[-1, 1)`.
     fn signed(&mut self) -> f32 {
-        2.0f32.mul_add(self.unit(), -1.0)
+        2.0_f32.mul_add(self.unit(), -1.0)
     }
 
     fn index(&mut self, len: usize) -> usize {
@@ -244,10 +244,16 @@ struct Listener {
     own: [f32; CHUNK],
     loopback: Option<[f32; CHUNK]>,
     window: Vec<f32>,
+    /// The microphone's samples of the same window.
+    window_in: Vec<f32>,
     window_other: bool,
+    /// Each window's level at the microphone and after the canceller, in dBFS.
+    levels: Vec<(f32, f32)>,
     chunks: Vec<Measured>,
     /// When each onset's window ended.
     onsets: Vec<Duration>,
+    /// The window of each onset, an index into `levels`.
+    onset_windows: Vec<usize>,
 }
 
 impl Listener {
@@ -260,13 +266,18 @@ impl Listener {
         self.chunks.push(Measured { mic: mean_square(mic), out: mean_square(&out), report });
 
         self.window.extend_from_slice(&out);
+        self.window_in.extend_from_slice(mic);
         self.window_other |= report.flags.other_audio;
         if self.window.len() >= WINDOW {
             let window: [f32; WINDOW] = self.window[..WINDOW].try_into().unwrap();
+            let level_in = db(mean_square(&self.window_in[..WINDOW]));
+            self.levels.push((level_in, db(mean_square(&window))));
             if self.detector.window(&window, self.window_other).onset {
                 self.onsets.push(at + ms(10));
+                self.onset_windows.push(self.levels.len() - 1);
             }
             self.window.drain(..WINDOW);
+            self.window_in.drain(..WINDOW);
             self.window_other = report.flags.other_audio && !self.window.is_empty();
         }
     }
@@ -278,9 +289,25 @@ type Shared = Arc<Mutex<Listener>>;
 struct Heard {
     chunks: Vec<Measured>,
     onsets: Vec<Duration>,
+    levels: Vec<(f32, f32)>,
+    onset_windows: Vec<usize>,
 }
 
 impl Heard {
+    /// Each onset's time with the levels, at the microphone and after the canceller, of the
+    /// windows that made it, for a failure's message.
+    fn onset_levels(&self) -> String {
+        let mut text = String::new();
+        for (at, &window) in self.onsets.iter().zip(&self.onset_windows) {
+            let levels: Vec<String> = self.levels[window.saturating_sub(3)..=window]
+                .iter()
+                .map(|(mic, out)| format!("{mic:.1}/{out:.1}"))
+                .collect();
+            text.push_str(&format!("{at:?}: {} dBFS; ", levels.join(" ")));
+        }
+        text
+    }
+
     /// The echo return loss enhancement over `chunks`, in dB.
     fn erle(&self, chunks: std::ops::Range<usize>) -> f32 {
         let chunks = &self.chunks[chunks];
@@ -332,9 +359,12 @@ fn start(scene: Scene) -> (Shared, Vec<Box<dyn AudioStream>>) {
         own: [0.0; CHUNK],
         loopback: None,
         window: Vec::with_capacity(2 * WINDOW),
+        window_in: Vec::with_capacity(2 * WINDOW),
         window_other: false,
+        levels: Vec::new(),
         chunks: Vec::new(),
         onsets: Vec::new(),
+        onset_windows: Vec::new(),
     }));
     let mut streams = Vec::new();
     if scene.loopback {
@@ -361,6 +391,8 @@ fn take(shared: &Shared) -> Heard {
     Heard {
         chunks: std::mem::take(&mut listener.chunks),
         onsets: std::mem::take(&mut listener.onsets),
+        levels: std::mem::take(&mut listener.levels),
+        onset_windows: std::mem::take(&mut listener.onset_windows),
     }
 }
 
@@ -492,8 +524,8 @@ async fn a_command_over_eileen_keeps_its_energy_and_the_detector_fires_on_its_on
     let first = heard.onsets.first().copied();
     assert!(
         first.is_some_and(|at| (ms(6_000)..=ms(6_250)).contains(&at)),
-        "no onset from Eileen's echo, then one at the command: {:?}",
-        heard.onsets
+        "no onset from Eileen's echo, then one at the command: {}",
+        heard.onset_levels()
     );
 }
 
@@ -616,7 +648,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_music_bed() {
         ..Scene::default()
     };
     let heard = listen(scene, 600).await;
-    assert!(heard.onsets.is_empty(), "false barge-in onsets over music: {:?}", heard.onsets);
+    assert!(heard.onsets.is_empty(), "false onsets over music: {}", heard.onset_levels());
 }
 
 #[tokio::test(start_paused = true)]
@@ -628,13 +660,17 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_speech_video_bed() 
         ..Scene::default()
     };
     let heard = listen(scene, 600).await;
-    assert!(heard.onsets.is_empty(), "false barge-in onsets over the video: {:?}", heard.onsets);
+    assert!(heard.onsets.is_empty(), "false onsets over the video: {}", heard.onset_levels());
 }
 
 // The callback's budget.
 
+/// sonora 0.2.0 allocates and frees as it processes, converged or not, so the canceller must not
+/// run inside an audio callback (the crate's invariant): the component part runs it on the
+/// capture side's reader. This pins that down, so a sonora that stops allocating shows here, and
+/// checks that each mode's heap use stays small and bounded.
 #[test]
-fn a_converged_chunk_allocates_nothing() {
+fn a_chunk_allocates_so_the_canceller_stays_out_of_the_callbacks() {
     let mut rng = Rng::new(9);
     let silence = [0.0; CHUNK];
     let mut canceller = EchoCanceller::new();
@@ -647,17 +683,25 @@ fn a_converged_chunk_allocates_nothing() {
     }
     let far = noise(&mut rng);
     let mic = far.map(|sample| 0.3 * sample);
-    let mut references = Vec::with_capacity(160);
-    let counted = allocation_counter::measure(|| {
-        for n in 0..160 {
-            let loopback = if n < 60 { Some(&far) } else { None };
-            let own = if n < 100 { &far } else { &silence };
-            let report = canceller.process(&mic, loopback, own, &mut out);
-            references.push(report.map(|report| report.reference));
-        }
-    });
-    assert_eq!(counted, allocation_counter::AllocationInfo::default(), "no allocation or free");
-    assert_eq!(references[0], Ok(Reference::Loopback), "against the loopback");
-    assert_eq!(references[60], Ok(Reference::OwnPcm), "against own PCM");
-    assert_eq!(references[159], Ok(Reference::Bypassed), "and bypassed");
+    let mut run = |loopback: Option<&[f32; CHUNK]>, own: &[f32; CHUNK], chunks: usize| {
+        let mut references = Vec::with_capacity(chunks);
+        let counted = allocation_counter::measure(|| {
+            for _ in 0..chunks {
+                let report = canceller.process(&mic, loopback, own, &mut out);
+                references.push(report.map(|report| report.reference));
+            }
+        });
+        (counted, references.last().copied())
+    };
+    let (on_loopback, reference) = run(Some(&far), &far, 50);
+    assert_eq!(reference, Some(Ok(Reference::Loopback)), "against the loopback");
+    let (on_own, reference) = run(None, &far, 50);
+    assert_eq!(reference, Some(Ok(Reference::OwnPcm)), "against own PCM");
+    let (bypassed, reference) = run(None, &silence, 100);
+    assert_eq!(reference, Some(Ok(Reference::Bypassed)), "bypassed");
+
+    assert!(on_loopback.count_total > 0, "sonora allocates: {on_loopback:?}");
+    for counted in [on_loopback, on_own, bypassed] {
+        assert!(counted.bytes_max < 64 * 1024, "at most 64 KiB live at once: {counted:?}");
+    }
 }

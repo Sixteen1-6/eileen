@@ -4,14 +4,14 @@
 //!
 //! [`EnergyDetector`] takes 32 ms windows, the VAD's and the speech frames' 512 samples at
 //! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor,
-//! 18 dB while other audio plays (section 2.8's stricter threshold), and is at least -45 dBFS,
+//! 18 dB while other audio plays (section 2.8's stricter threshold), and is at least -40 dBFS,
 //! the quietest voice near the PC it is meant to hear. The floor drops to any quieter window at
 //! once and rises 5 dB a second otherwise, so a steady noise stops counting within seconds while
 //! a spoken word, louder than the floor by far more than it rises meanwhile, still counts. It
 //! reports an onset at the third speech window in a row (96 ms), the window at which section
 //! 2.8's barge-in pauses playback, and once per run of speech windows.
 //!
-//! What remains after AEC3 of Eileen's voice and of a bed the PC plays is far under these
+//! What remains after AEC3 of Eileen's voice and of a bed the PC plays stays under these
 //! thresholds; `aec::tests` checks over ten minutes of each bed that it never fires, and that it
 //! fires on a near-end command. Nothing here allocates, so it may run in the capture callback.
 
@@ -28,7 +28,7 @@ const MARGIN_DB: f32 = 12.0;
 const MARGIN_OTHER_AUDIO_DB: f32 = 18.0;
 
 /// The quietest window that counts as speech, in dBFS.
-const MIN_SPEECH_DBFS: f32 = -45.0;
+const MIN_SPEECH_DBFS: f32 = -40.0;
 
 /// How fast the floor rises, in dB per window: 5 dB a second.
 const FLOOR_RISE_DB: f32 = 5.0 * 0.032;

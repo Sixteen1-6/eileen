@@ -18,7 +18,7 @@ fn feed(
 /// A detector whose floor settled on `dbfs`.
 fn settled_on(dbfs: f32) -> EnergyDetector {
     let mut detector = EnergyDetector::new();
-    let quiet = feed(&mut detector, &[at(dbfs); 10], false);
+    let quiet = feed(&mut detector, &vec![at(dbfs); 10], false);
     assert!(quiet.iter().all(|window| !window.speech), "the floor itself is not speech");
     detector
 }
@@ -42,27 +42,27 @@ fn an_onset_comes_at_the_third_speech_window_and_once_per_run() {
 #[test]
 fn other_audio_asks_six_more_decibels_over_the_floor() {
     // 15 dB over the floor: over the 12 dB margin, under the 18 dB one.
-    let mut detector = settled_on(-55.0);
-    let seen = feed(&mut detector, &[at(-40.0); 3], true);
+    let mut detector = settled_on(-52.0);
+    let seen = feed(&mut detector, &[at(-37.0); 3], true);
     assert!(seen.iter().all(|window| !window.speech), "not speech while other audio plays");
 
-    let mut detector = settled_on(-55.0);
-    let seen = feed(&mut detector, &[at(-40.0); 3], false);
+    let mut detector = settled_on(-52.0);
+    let seen = feed(&mut detector, &[at(-37.0); 3], false);
     assert!(seen.iter().all(|window| window.speech), "speech otherwise");
     assert!(seen[2].onset, "and an onset at the third");
 
-    let mut detector = settled_on(-55.0);
-    let seen = feed(&mut detector, &[at(-35.0); 3], true);
+    let mut detector = settled_on(-52.0);
+    let seen = feed(&mut detector, &[at(-32.0); 3], true);
     assert!(seen[2].onset, "20 dB over the floor counts with other audio too");
 }
 
 #[test]
-fn a_window_under_minus_45_dbfs_is_never_speech() {
+fn a_window_under_minus_40_dbfs_is_never_speech() {
     let mut detector = settled_on(-100.0);
-    let seen = feed(&mut detector, &[at(-46.0); 5], false);
-    assert!(seen.iter().all(|window| !window.speech), "54 dB over the floor, but too quiet");
-    let seen = feed(&mut detector, &[at(-44.0); 3], false);
-    assert!(seen[2].onset, "a voice at -44 dBFS counts");
+    let seen = feed(&mut detector, &[at(-41.0); 5], false);
+    assert!(seen.iter().all(|window| !window.speech), "59 dB over the floor, but too quiet");
+    let seen = feed(&mut detector, &[at(-39.0); 3], false);
+    assert!(seen[2].onset, "a voice at -39 dBFS counts");
 }
 
 #[test]
@@ -76,17 +76,17 @@ fn digital_silence_keeps_the_level_finite() {
 
 #[test]
 fn the_floor_rises_to_a_steady_noise_and_drops_at_once() {
-    // A fan that starts at -40 dBFS over a quiet room counts once, then stops counting as the
-    // floor rises 5 dB a second: 18 dB takes 3.6 s, 113 windows.
+    // A fan that starts at -35 dBFS over a quiet room counts once, then stops counting as the
+    // floor rises 5 dB a second: 23 dB takes 4.6 s, 144 windows.
     let mut detector = settled_on(-70.0);
-    let seen = feed(&mut detector, &[at(-40.0); 150], false);
+    let seen = feed(&mut detector, &vec![at(-35.0); 180], false);
     let onsets = seen.iter().filter(|window| window.onset).count();
     assert_eq!(onsets, 1, "one onset when the noise starts");
     let last_speech = seen.iter().rposition(|window| window.speech).unwrap();
-    assert!((100..=120).contains(&last_speech), "speech until window {last_speech}");
+    assert!((130..=150).contains(&last_speech), "speech until window {last_speech}");
 
     // The floor drops to a quieter window at once, so speech over the quiet room counts again.
-    let seen = feed(&mut detector, &[at(-70.0), at(-40.0), at(-40.0), at(-40.0)], false);
+    let seen = feed(&mut detector, &[at(-70.0), at(-35.0), at(-35.0), at(-35.0)], false);
     assert!(seen[3].onset, "an onset over the room's own floor");
 }
 
@@ -94,7 +94,7 @@ fn the_floor_rises_to_a_steady_noise_and_drops_at_once() {
 fn the_first_window_sets_the_floor() {
     // A noise present from the start never counts.
     let mut detector = EnergyDetector::new();
-    let seen = feed(&mut detector, &[at(-35.0); 50], false);
+    let seen = feed(&mut detector, &vec![at(-35.0); 50], false);
     assert!(seen.iter().all(|window| !window.speech), "a noise from the start is the floor");
 }
 
