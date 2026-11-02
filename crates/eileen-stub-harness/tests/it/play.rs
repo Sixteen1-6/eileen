@@ -75,13 +75,13 @@ impl Stub {
     /// Starts the stub on `script`, named by the argument.
     fn start(script: &Path) -> Self {
         Self::from_spec(
-            ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
+            &ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
                 .args([SCRIPT_ARG.into(), script.as_os_str().to_owned()]),
         )
     }
 
-    fn from_spec(spec: ChildSpec) -> Self {
-        let mut child = spawn(&spec).unwrap();
+    fn from_spec(spec: &ChildSpec) -> Self {
+        let mut child = spawn(spec).unwrap();
         let stdin = child.take_stdin();
         let lines = BufReader::new(child.take_stdout().unwrap()).lines();
         Self { child, stdin, lines }
@@ -309,7 +309,7 @@ async fn the_script_comes_from_the_environment_under_claudes_argv() {
     let spec = ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
         .args(CLAUDE_ARGV.iter().copied())
         .envs([(SCRIPT_ENV, script("worker-hello.ndjson"))]);
-    let mut stub = Stub::from_spec(spec);
+    let mut stub = Stub::from_spec(&spec);
     stub.send(USER_LINE).await;
     stub.close();
     let lines = stub.rest().await;
@@ -326,7 +326,7 @@ async fn failing(script: &Path, user: bool) -> (Vec<String>, String, Option<i32>
         ..ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
             .args([SCRIPT_ARG.into(), script.as_os_str().to_owned()])
     };
-    let mut stub = Stub::from_spec(spec);
+    let mut stub = Stub::from_spec(&spec);
     let mut stderr = stub.child.take_stderr().unwrap();
     if user {
         stub.send(USER_LINE).await;
@@ -362,7 +362,7 @@ async fn no_script_is_an_error() {
         ..ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
             .args(CLAUDE_ARGV.iter().copied())
     };
-    let mut stub = Stub::from_spec(spec);
+    let mut stub = Stub::from_spec(&spec);
     let mut stderr = stub.child.take_stderr().unwrap();
     stub.close();
     let mut text = String::new();
