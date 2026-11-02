@@ -7,7 +7,8 @@
 //! one, by `EILEEN_STUB_SCRIPT` ([`SCRIPT_ENV`]); every other argument is ignored, so
 //! `ClaudeWorker` can start the stub with the argv it gives the claude CLI. The whole script is
 //! loaded and checked before anything plays. Then each line plays in order: an `Event` is
-//! written as one stream-json line, a `Delay` waits, a `Crash` exits with its code, `Malformed`
+//! written as one stream-json line, its `json` text exactly as the script holds it (key order
+//! and number digits included); a `Delay` waits, a `Crash` exits with its code, `Malformed`
 //! writes its bytes as one line, a `Narration` is written as an assistant text message whose
 //! lines start with `> `, and `AwaitUser` holds until the next `user` line arrives on stdin.
 //! After the last line it waits for stdin to close, as the CLI waits for its next turn.
@@ -17,10 +18,14 @@
 //! - Playing a script: its lines in order, held where the script waits for a user line, with its
 //!   faults (crash, delay, malformed line).
 //! - Answering the stdio interrupt: a `control_request` of subtype `interrupt` gets a success
-//!   `control_response` with its `request_id`, in the shape the CLI's control replies take in
-//!   `docs/research/fixtures/wp3-approval/stdio-control.json`, whenever it arrives (between
-//!   lines, during a delay or while held). Any other request gets an error reply. The stub
-//!   answers and plays on; it does not cut the turn short.
+//!   `control_response` with its `request_id` whenever it arrives (between lines, during a
+//!   delay or while held). Any other request gets an error reply. The stub answers and plays
+//!   on; it does not cut the turn short. The reply copies the `control_response` envelope
+//!   Eileen sends the CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`,
+//!   `sent_to_cli`) without its inner `response` object. No reply the CLI wrote to an interrupt
+//!   has been recorded; WP3 acceptance 3's owner-run check records one, and it replaces this.
+//! - The `stub_script` fuzz target's entry (`fuzz_entry`): scripts and stdin lines, both
+//!   untrusted input (section 3.3.16 asks a fuzz target of every parser of its formats).
 //! - The binary `eileen run --stub-harness` starts in place of the claude CLI ([`run`]).
 //!
 //! # Does not own
@@ -36,6 +41,8 @@
 //! - Event shapes match the real CLI's: the nightly contract test compares them with the
 //!   scripts (`cargo xtask contract-claude` on the owner's PC, which WP3 builds).
 //! - A script that does not load plays nothing; the error names its line.
+//! - Every line played is one stdout line: `load` refuses a `Malformed` line whose bytes hold
+//!   `\n` or `\r`, and an `Event` with a `\r` between its tokens.
 //! - Every stdin line read is bounded ([`MAX_INPUT_LINE_BYTES`]), and so is the queue between
 //!   the reader thread and the player.
 //!
@@ -56,7 +63,8 @@
 //! - Fast command: `cargo xtask test -p eileen-stub-harness`.
 //! - Layers: unit tests of the player on in-memory stdio; integration tests that start the
 //!   binary through the supervisor and read its stdout with `eileen_harness::stream`; a corpus
-//!   test over `tests/harness-scripts/`; the harness's tests against it (WP3 acceptance 2).
+//!   test over `tests/harness-scripts/`; the `stub_script` corpus replay (`it::fuzz_corpus`);
+//!   the harness's tests against it (WP3 acceptance 2).
 //! - A bug here starts as a harness test that passes against the stub and fails against the
 //!   real CLI.
 //!
@@ -77,6 +85,8 @@
 
 #![forbid(unsafe_code)]
 
+#[doc(hidden)]
+pub mod fuzz_entry;
 mod play;
 mod script;
 
@@ -87,7 +97,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 
-pub use play::{Ending, MAX_INPUT_LINE_BYTES};
+pub use play::{Ending, InputError, MAX_INPUT_LINE_BYTES};
 pub use script::{Script, ScriptError, load};
 
 /// The argument that names the script: `--stub-script <path>` or `--stub-script=<path>`. Every
@@ -189,7 +199,7 @@ pub enum RunError {
     },
     /// Stdin carried a line that is not the protocol, or could not be read.
     #[error("stdin: {0}")]
-    Input(&'static str),
+    Input(#[from] InputError),
     /// A user line arrived after the script's last line: a turn the script does not have.
     #[error("a user line arrived after the script ended")]
     ScriptEnded,

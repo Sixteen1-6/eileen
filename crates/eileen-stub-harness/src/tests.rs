@@ -1,14 +1,14 @@
 //! The player on in-memory stdio, the script loader and the choice of script.
 
 use std::ffi::OsString;
-use std::io::Cursor;
+use std::io::{self, BufRead, Cursor, Read};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use serde_json::Value;
 
 use crate::play::{self, Input};
-use crate::{Ending, RunError, SCRIPT_ARG, ScriptError, load, script_path};
+use crate::{Ending, InputError, RunError, SCRIPT_ARG, ScriptError, load, script_path};
 
 /// Plays `script` with `inputs` already read and stdin closed after them, and gives its stdout
 /// lines and how it ended.
@@ -88,6 +88,31 @@ fn a_crash_code_outside_an_exit_code_is_refused_at_load() {
 }
 
 #[test]
+fn a_line_break_inside_one_stdout_line_is_refused_at_load() {
+    for bytes in [r"a\nb", r"a\rb", r"a\r\nb"] {
+        let script = format!(r#"{AWAIT}{}{{"kind":"malformed","bytes":"{bytes}"}}"#, '\n');
+        let error = load(&script).unwrap_err();
+        assert!(matches!(error, ScriptError::LineBreak { line: 2 }), "{bytes}: {error}");
+    }
+    let event = concat!(r#"{"kind":"event","json":{"type":"#, "\r", r#""system"}}"#);
+    let error = load(event).unwrap_err();
+    assert!(matches!(error, ScriptError::LineBreak { line: 1 }), "a CR between tokens: {error}");
+}
+
+#[test]
+fn an_event_is_written_byte_for_byte_as_the_script_holds_it() {
+    // Keys out of alphabetical order, a space after a colon, and numbers whose text a
+    // re-serialised value would change.
+    let json = concat!(
+        r#"{"type":"system","subtype":"init","apiKeySource":"none","session_id": "s1","#,
+        r#""total_cost_usd":0.30000000000000004,"duration_ms":1.0e2,"usage":{"z":1,"a":2}}"#,
+    );
+    let (lines, ending) = played(&format!(r#"{{"kind":"event","json":{json}}}"#), Vec::new());
+    assert_eq!(lines, [json], "the script's own bytes");
+    assert!(matches!(ending, Ok(Ending::Played)), "{ending:?}");
+}
+
+#[test]
 fn events_and_malformed_bytes_are_written_one_per_line() {
     let malformed = r#"{"kind":"malformed","bytes":"{\"ty"}"#;
     let (lines, ending) = played(&format!("{INIT}\n{malformed}"), Vec::new());
@@ -164,8 +189,8 @@ fn a_user_line_after_the_script_asks_for_a_turn_it_does_not_have() {
 
 #[test]
 fn a_broken_stdin_line_ends_the_run() {
-    let (_, ending) = played(AWAIT, vec![Input::Broken("x")]);
-    assert!(matches!(ending, Err(RunError::Input("x"))), "{ending:?}");
+    let (_, ending) = played(AWAIT, vec![Input::Broken(InputError::NotJson)]);
+    assert!(matches!(ending, Err(RunError::Input(InputError::NotJson))), "{ending:?}");
 }
 
 #[test]
@@ -190,13 +215,35 @@ fn stdin_lines_are_classified_as_the_protocol() {
     );
     assert_eq!(
         read(lines),
-        [
-            Input::User,
-            interrupt("a"),
-            Input::Other,
-            Input::Broken("a control_request without a request_id of 1 to 128 bytes"),
-        ],
+        [Input::User, interrupt("a"), Input::Other, Input::Broken(InputError::BadRequestId),],
         "blank lines skipped, and reading stops at the first broken line"
     );
-    assert_eq!(read("not json\n"), [Input::Broken("a stdin line that is not JSON")], "not JSON");
+    assert_eq!(read("not json\n"), [Input::Broken(InputError::NotJson)], "not JSON");
+    assert_eq!(read("{\"type\":1}\n"), [Input::Broken(InputError::NoType)], "no string type");
+}
+
+/// A reader whose every read fails.
+struct Failing;
+
+impl Read for Failing {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        Err(io::ErrorKind::BrokenPipe.into())
+    }
+}
+
+impl BufRead for Failing {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        Err(io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn consume(&mut self, _: usize) {}
+}
+
+#[test]
+fn a_failed_read_of_stdin_keeps_its_kind() {
+    let (queue, input) = mpsc::sync_channel(1);
+    play::read_input(Failing, &queue);
+    drop(queue);
+    let read: Vec<Input> = input.iter().collect();
+    assert_eq!(read, [Input::Broken(InputError::Read(io::ErrorKind::BrokenPipe))], "the kind");
 }

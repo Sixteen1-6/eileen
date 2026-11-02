@@ -23,7 +23,12 @@ doc = false
 eileen-contracts.workspace = true
 # The stdin reader's named thread, and the monotonic clock and sleep a `Delay` line uses.
 eileen-stdx.workspace = true
-serde_json.workspace = true
+# The private mirror of an `event` line that keeps its `json` text (`script::EventText`).
+serde.workspace = true
+# `raw_value` keeps each `event` line's text, so the stub writes the bytes the script holds and
+# not a re-serialised value with its keys sorted. It only adds a type, so turning it on here
+# changes nothing for the other crates in a build.
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 
 [dev-dependencies]

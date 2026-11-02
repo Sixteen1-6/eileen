@@ -1,7 +1,7 @@
 //! Playing a script: stream-json on stdout as the claude CLI writes it, user and control lines
 //! read from stdin on a thread of their own, and the interrupt answered whenever it arrives.
 
-use std::io::{BufRead, Read as _, Write};
+use std::io::{self, BufRead, Read as _, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use crate::{RunError, Script};
 pub const MAX_INPUT_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 /// The longest `request_id` a control request may carry, as the harness's parser allows.
-const MAX_REQUEST_ID_BYTES: usize = 128;
+pub(crate) const MAX_REQUEST_ID_BYTES: usize = 128;
 
 /// What starts a narration line in assistant text (BUILD.md section 2.5, "Narration").
 const NARRATION_PREFIX: &str = "> ";
@@ -49,8 +49,28 @@ pub(crate) enum Input {
     },
     /// Another line of the protocol (a `control_response` or a cancel), which the stub ignores.
     Other,
-    /// A line that is not the protocol; it ends the run.
-    Broken(&'static str),
+    /// A line that is not the protocol, or a failed read; it ends the run.
+    Broken(InputError),
+}
+
+/// Why a stdin line is not the protocol.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InputError {
+    /// The line is not JSON.
+    #[error("a stdin line that is not JSON")]
+    NotJson,
+    /// The line has no string `type`.
+    #[error("a stdin line without a string type")]
+    NoType,
+    /// A `control_request` whose `request_id` is missing, empty or longer than 128 bytes.
+    #[error("a control_request without a request_id of 1 to 128 bytes")]
+    BadRequestId,
+    /// The line is longer than [`MAX_INPUT_LINE_BYTES`].
+    #[error("a stdin line longer than MAX_INPUT_LINE_BYTES")]
+    TooLong,
+    /// Stdin could not be read. The kind, not the `io::Error`, so the line stays comparable.
+    #[error("stdin could not be read: {0}")]
+    Read(io::ErrorKind),
 }
 
 /// What a stdin line is, or `None` for a blank one.
@@ -60,7 +80,7 @@ pub(crate) fn classify(line: &[u8]) -> Option<Input> {
         return None;
     }
     let Ok(value) = serde_json::from_slice::<Value>(line) else {
-        return Some(Input::Broken("a stdin line that is not JSON"));
+        return Some(Input::Broken(InputError::NotJson));
     };
     let input = match value.get("type").and_then(Value::as_str) {
         Some("user") => Input::User,
@@ -70,10 +90,10 @@ pub(crate) fn classify(line: &[u8]) -> Option<Input> {
                 interrupt: value.pointer("/request/subtype").and_then(Value::as_str)
                     == Some("interrupt"),
             },
-            _ => Input::Broken("a control_request without a request_id of 1 to 128 bytes"),
+            _ => Input::Broken(InputError::BadRequestId),
         },
         Some(_) => Input::Other,
-        None => Input::Broken("a stdin line without a string type"),
+        None => Input::Broken(InputError::NoType),
     };
     Some(input)
 }
@@ -92,7 +112,7 @@ pub(crate) fn read_input(mut reader: impl BufRead, queue: &SyncSender<Input>) {
                 let body = line.strip_suffix(b"\n").unwrap_or(&line);
                 let body = body.strip_suffix(b"\r").unwrap_or(body);
                 if body.len() > MAX_INPUT_LINE_BYTES {
-                    Input::Broken("a stdin line longer than MAX_INPUT_LINE_BYTES")
+                    Input::Broken(InputError::TooLong)
                 } else {
                     match classify(body) {
                         Some(input) => input,
@@ -100,7 +120,7 @@ pub(crate) fn read_input(mut reader: impl BufRead, queue: &SyncSender<Input>) {
                     }
                 }
             }
-            Err(_) => Input::Broken("stdin could not be read"),
+            Err(error) => Input::Broken(InputError::Read(error.kind())),
         };
         let broken = matches!(input, Input::Broken(_));
         if queue.send(input).is_err() || broken {
@@ -117,12 +137,17 @@ pub(crate) fn play(
     out: &mut impl Write,
 ) -> Result<Ending, RunError> {
     let mut player = Player { input, out, users: 0, closed: false, session_id: None };
-    for (line, step) in script.lines() {
+    for (line, step, event) in script.steps() {
         player.drain()?;
         match step {
             StubScriptLine::Event { json } => {
                 player.note_session(json);
-                player.write(json.to_string().as_bytes())?;
+                // `load` keeps every event's text, so this writes the script's own bytes; the
+                // serialised value is only a fallback.
+                match event {
+                    Some(text) => player.write(text.as_bytes())?,
+                    None => player.write(json.to_string().as_bytes())?,
+                }
             }
             StubScriptLine::Delay { ms } => player.delay(*ms)?,
             // `load` refused a code outside 0 to 255.
@@ -137,7 +162,7 @@ pub(crate) fn play(
                 }
             }
             StubScriptLine::PermissionRequest { .. } => {
-                return Err(RunError::NotPlayed { line: *line });
+                return Err(RunError::NotPlayed { line });
             }
         }
     }
@@ -198,7 +223,12 @@ impl<W: Write> Player<'_, W> {
         self.write(event.to_string().as_bytes())
     }
 
-    /// Acts on one stdin line.
+    /// Acts on one stdin line. The interrupt's reply is the `control_response` envelope Eileen
+    /// sends the CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`, `sent_to_cli`)
+    /// without its inner `response` object: no reply the CLI wrote to an interrupt has been
+    /// recorded yet.
+    // FIXME(#5): WP3 acceptance 3's owner-run check records the CLI's own reply to an
+    // interrupt; that recording replaces this shape.
     fn serve(&mut self, input: Input) -> Result<(), RunError> {
         match input {
             Input::User => self.users = self.users.saturating_add(1),
@@ -212,7 +242,7 @@ impl<W: Write> Player<'_, W> {
                 self.write(reply.to_string().as_bytes())?;
             }
             Input::Other => {}
-            Input::Broken(reason) => return Err(RunError::Input(reason)),
+            Input::Broken(error) => return Err(error.into()),
         }
         Ok(())
     }
