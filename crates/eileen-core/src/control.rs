@@ -98,13 +98,15 @@ impl Core {
         let mut sent: Vec<(JobId, WorkerSessionId)> = Vec::new();
         for worker in workers {
             let Some(live) = self.jobs.live.get_mut(&worker) else { continue };
-            if !live.bound {
+            if live.bound {
+                if live.owed < STEERS_OWED {
+                    live.owed = live.owed.saturating_add(1);
+                    sent.push((worker, live.session));
+                }
+            } else {
                 let kept =
                     live.steer.take().map_or_else(|| text.clone(), |old| format!("{old}\n{text}"));
                 live.steer = Some(cut(&kept, TASK_CHARS));
-            } else if live.owed < STEERS_OWED {
-                live.owed = live.owed.saturating_add(1);
-                sent.push((worker, live.session));
             }
         }
         for (worker, session) in sent {
