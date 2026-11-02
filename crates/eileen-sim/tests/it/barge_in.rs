@@ -278,7 +278,7 @@ fn invariants_hold(world: &World) {
     let audio = world.audio();
     assert_eq!(barge_in_pauses_in_time(audio, world.now_ms()), Ok(()), "invariant 2");
     assert_eq!(heard_prefix_matches_playback(audio), Ok(()), "invariant 3");
-    assert_eq!(nothing_sounds_while_muted(audio), Ok(()), "invariant 9");
+    assert_eq!(nothing_sounds_while_muted(audio, world.now_ms()), Ok(()), "invariant 9");
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn a_mute_mid_sentence_counts_the_heard_prefix_a_character_short() {
     assert_eq!(error.number, 3, "invariant 3 sees the shortfall: {error}");
     let audio = world.audio();
     assert_eq!(barge_in_pauses_in_time(audio, world.now_ms()), Ok(()), "invariant 2");
-    assert_eq!(nothing_sounds_while_muted(audio), Ok(()), "invariant 9");
+    assert_eq!(nothing_sounds_while_muted(audio, world.now_ms()), Ok(()), "invariant 9");
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn eileen_keeps_speaking_while_another_app_uses_the_microphone() {
     settle(&mut world, 200);
     // FIXME(#152): the core ignores the call; she should fall silent and keep to the HUD.
     assert!(handed(world.audio(), speak) > before, "she plays on");
-    let error = nothing_sounds_while_muted(world.audio()).unwrap_err();
+    let error = nothing_sounds_while_muted(world.audio(), world.now_ms()).unwrap_err();
     assert_eq!(error.number, 9, "{error}");
     assert!(error.detail.contains("another app used the microphone"), "{error}");
 }

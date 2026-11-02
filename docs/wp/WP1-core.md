@@ -146,8 +146,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
   every record, its resume included; invariant 9 learns a mute from the user's request as well
   as the core's announcement and wants capture off within one 10 ms frame. `Turns::set_mute`
   now announces an unmute before its earcon, so no earcon sounds inside a mute. A world keeps
-  an audio trace (inputs, effects and each callback's samples while the device holds an
-  utterance) only when a test asks (`World::record_audio`), and `eileen-sim::it::barge_in`
+  an audio trace (inputs, effects, and each callback's samples while the device holds an
+  utterance and the first callback after) only when a test asks (`World::record_audio`), and `eileen-sim::it::barge_in`
   shows acceptance 4 through the real core: onset to silence within 96 ms plus one callback,
   the heard prefix the brain is told equal to the scripted sentence cut at the samples handed
   to the device, and a backchannel that resumes from the exact paused sample, with invariants

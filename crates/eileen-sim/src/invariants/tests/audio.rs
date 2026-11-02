@@ -255,30 +255,30 @@ fn invariant_9_holds_for_a_mute_and_an_unmute_with_their_earcons() {
     let mut trace = muted();
     trace.extend(unmuted(20));
     trace.extend([speaking(20), callback(30, 0, 240)]);
-    assert_eq!(nothing_sounds_while_muted(&trace), Ok(()), "{trace:?}");
+    assert_eq!(quiet(&trace), Ok(()), "{trace:?}");
 }
 
 #[test]
 fn invariant_9_fails_on_a_mute_or_unmute_earcon_inside_the_mute() {
     let mut stray = muted();
     stray.push(audio(20, AudioCmd::Earcon(Earcon::Muted)));
-    let error = nothing_sounds_while_muted(&stray).unwrap_err();
+    let error = quiet(&stray).unwrap_err();
     assert!(error.detail.contains("Muted earcon"), "{error}");
     let mut early = muted();
     let mut unmute = unmuted(20);
     unmute.swap(2, 3);
     early.extend(unmute);
-    let error = nothing_sounds_while_muted(&early).unwrap_err();
+    let error = quiet(&early).unwrap_err();
     assert!(error.detail.contains("Unmuted earcon played at 20 ms"), "before the change: {error}");
 }
 
 #[test]
 fn invariant_9_fails_when_a_mute_asked_for_leaves_capture_on_past_one_frame() {
     let ignored = vec![input(0, Input::User(UserInput::SetMute(true))), callback(10, 0, 0)];
-    assert_eq!(nothing_sounds_while_muted(&ignored), Ok(()), "one frame later: in time");
+    assert_eq!(quiet(&ignored), Ok(()), "one frame later: in time");
     let mut late = ignored;
     late.push(callback(20, 0, 0));
-    let error = nothing_sounds_while_muted(&late).unwrap_err();
+    let error = quiet(&late).unwrap_err();
     assert_eq!(error.number, 9, "{error}");
     assert!(error.detail.contains("asked for at 0 ms had not stopped capture by 20 ms"), "{error}");
 }
@@ -291,7 +291,7 @@ fn invariant_9_fails_on_samples_after_a_mute_the_core_never_announced() {
         audio(5, AudioCmd::SetCapture(false)),
         callback(10, 0, 240),
     ];
-    let error = nothing_sounds_while_muted(&trace).unwrap_err();
+    let error = quiet(&trace).unwrap_err();
     assert!(error.detail.contains("240 samples"), "{error}");
 }
 
@@ -299,7 +299,7 @@ fn invariant_9_fails_on_samples_after_a_mute_the_core_never_announced() {
 fn invariant_9_fails_when_capture_is_left_on_past_the_next_callback() {
     let mut trace = muted();
     trace.retain(|record| !is(record, &AudioCmd::SetCapture(false)));
-    let error = nothing_sounds_while_muted(&trace).unwrap_err();
+    let error = quiet(&trace).unwrap_err();
     assert_eq!(error.number, 9, "{error}");
     assert!(error.detail.contains("still captured"), "{error}");
 }
@@ -308,11 +308,11 @@ fn invariant_9_fails_when_capture_is_left_on_past_the_next_callback() {
 fn invariant_9_fails_on_speech_or_an_earcon_while_muted() {
     let mut speech = muted();
     speech.push(speaking(20));
-    let error = nothing_sounds_while_muted(&speech).unwrap_err();
+    let error = quiet(&speech).unwrap_err();
     assert!(error.detail.contains("began at 20 ms while muted"), "{error}");
     let mut earcon = muted();
     earcon.push(audio(20, AudioCmd::Earcon(Earcon::Routed)));
-    let error = nothing_sounds_while_muted(&earcon).unwrap_err();
+    let error = quiet(&earcon).unwrap_err();
     assert!(error.detail.contains("Routed earcon"), "{error}");
 }
 
@@ -322,6 +322,11 @@ fn invariant_9_fails_on_samples_played_while_another_app_uses_the_microphone() {
         input(0, Input::Activity(ActivityEvent::MicInUseElsewhere(true))),
         callback(10, 0, 240),
     ];
-    let error = nothing_sounds_while_muted(&trace).unwrap_err();
+    let error = quiet(&trace).unwrap_err();
     assert!(error.detail.contains("another app used the microphone"), "{error}");
+}
+
+/// Invariant 9 over `trace`, ending at its last record.
+fn quiet(trace: &[AudioRecord]) -> Result<(), super::super::Violation> {
+    nothing_sounds_while_muted(trace, trace.last().map_or(0, |record| record.at_ms))
 }

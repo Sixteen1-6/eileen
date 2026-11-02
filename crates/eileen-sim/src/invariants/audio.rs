@@ -91,21 +91,22 @@ pub fn heard_prefix_matches_playback(records: &[AudioRecord]) -> Result<(), Viol
     Ok(())
 }
 
-/// Invariant 9's mute and microphone parts over a trace: capture is off within one 10 ms frame
-/// of a mute the user asks for ([`CAPTURE_STOPS_MS`]) and by the first callback after any
-/// mute; and while muted (asked for or announced) or while another app uses the microphone, no
-/// utterance starts, nothing is sent to synthesis, no phrase plays and no sample reaches the
-/// device. No earcon plays while the core's announced mute holds: the earcon that confirms a
-/// mute comes before `MuteChanged { muted: true }`, and the one that confirms an unmute after
+/// Invariant 9's mute and microphone parts over a trace that ends at `now_ms`: capture is off
+/// within one 10 ms frame of a mute the user asks for ([`CAPTURE_STOPS_MS`]) and by the first
+/// callback after any mute; and while muted (asked for or announced) or while another app uses
+/// the microphone, no utterance starts, nothing is sent to synthesis, no phrase plays and no
+/// sample reaches the device. No earcon plays while the core's announced mute holds or while
+/// another app uses the microphone: the earcon that confirms a mute comes before
+/// `MuteChanged { muted: true }`, and the one that confirms an unmute after
 /// `MuteChanged { muted: false }`. The microphone part is checked here, but the core does not
 /// act on `MicInUseElsewhere` yet (#152). The call, cancel and input-lease parts join once the
 /// core has calls, worker interrupts and leases.
-pub fn nothing_sounds_while_muted(records: &[AudioRecord]) -> Result<(), Violation> {
+pub fn nothing_sounds_while_muted(records: &[AudioRecord], now_ms: u64) -> Result<(), Violation> {
     let mut watch = MuteWatch::default();
     for record in records {
         watch.see(record.at_ms, &record.event)?;
     }
-    Ok(())
+    watch.by(now_ms)
 }
 
 /// Where a barge-in stands, as invariant 2 follows it.
