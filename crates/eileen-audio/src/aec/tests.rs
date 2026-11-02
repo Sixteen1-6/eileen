@@ -1034,10 +1034,8 @@ async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_450_s() {
 /// Checks that AEC3 learned the room within 6 s and was not learning again after, so the
 /// detector judged the rest of the run rather than counting nothing.
 fn assert_learned_and_judged(heard: &Heard) {
-    let learned = learned_at(heard);
-    assert!(learned.is_some_and(|at| at <= 600), "AEC3 learned the room at chunk {learned:?}");
-    let again = heard.learning()[learned.unwrap()..].iter().filter(|&&l| l).count();
-    assert_eq!(again, 0, "chunks learning again after it had learned");
+    let last = heard.learning().iter().rposition(|&learning| learning);
+    assert!(last.is_some_and(|at| at < 600), "AEC3 last learning at chunk {last:?}");
 }
 
 /// Plays `bed` alone, Eileen silent, for a minute from a fresh canceller, as while the core
