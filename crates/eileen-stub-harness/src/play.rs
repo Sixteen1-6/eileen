@@ -106,7 +106,7 @@ pub(crate) fn classify(line: &[u8]) -> Option<Input> {
                     Some("interrupt") => Request::Interrupt,
                     Some("initialize") => Request::Initialize,
                     Some("mcp_status") => Request::McpStatus,
-                    _ => Request::Other,
+                    Some(_) | None => Request::Other,
                 },
             },
             _ => Input::Broken(InputError::BadRequestId),
@@ -157,10 +157,13 @@ pub(crate) fn play(
 ) -> Result<Ending, RunError> {
     let servers = script
         .steps()
-        .find_map(|(_, step, _)| match step {
-            StubScriptLine::Event { json } if is_init(json) => json.get("mcp_servers").cloned(),
-            _ => None,
-        })
+        .filter_map(
+            |(_, step, _)| {
+                if let StubScriptLine::Event { json } = step { Some(json) } else { None }
+            },
+        )
+        .find(|event| is_init(event))
+        .and_then(|init| init.get("mcp_servers").cloned())
         .unwrap_or_else(|| json!([]));
     let mut player = Player { input, out, users: 0, closed: false, session_id: None, servers };
     for (line, step, event) in script.steps() {

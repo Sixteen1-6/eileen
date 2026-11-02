@@ -241,9 +241,11 @@ fn only_the_reply_to_the_request_asked_is_taken() {
         Some(Err(())),
         "an error reply"
     );
-    assert_eq!(reply_to(reply("eileen_ready_1", "success").as_bytes(), "eileen_ready_2"), None);
-    assert_eq!(reply_to(br#"{"type":"system","subtype":"init"}"#, "eileen_ready_2"), None);
-    assert_eq!(reply_to(b"not json", "eileen_ready_2"), None);
+    let other = reply("eileen_ready_1", "success");
+    assert_eq!(reply_to(other.as_bytes(), "eileen_ready_2"), None, "another request's reply");
+    let init = br#"{"type":"system","subtype":"init"}"#;
+    assert_eq!(reply_to(init, "eileen_ready_2"), None, "not a reply");
+    assert_eq!(reply_to(b"not json", "eileen_ready_2"), None, "not JSON");
 }
 
 #[test]

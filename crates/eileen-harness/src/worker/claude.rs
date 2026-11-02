@@ -35,7 +35,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eileen_contracts::harness::{JobBinding, SessionSpec, WorkerCmd, WorkerEvent};
+use eileen_contracts::harness::{JobBinding, SessionSpec, SessionToken, WorkerCmd, WorkerEvent};
 use eileen_contracts::ids::WorkerSessionId;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::speech::LanguageSupport;
@@ -87,7 +87,7 @@ impl ClaudeWorker {
     /// from `locate`, and `redactor`, the process's shared one, redacts every line it parses;
     /// each session's tokens are registered with it while the session lives.
     #[must_use]
-    pub fn new(cfg: HarnessConfig, redactor: Arc<Redactor>) -> Self {
+    pub const fn new(cfg: HarnessConfig, redactor: Arc<Redactor>) -> Self {
         Self { cfg, redactor, session: None, ending: None, pending: VecDeque::new() }
     }
 
@@ -613,7 +613,7 @@ fn reply_to(line: &[u8], request_id: &str) -> Option<Result<Value, ()>> {
     }
     match response.get("subtype").and_then(Value::as_str) {
         Some("success") => Some(Ok(response.get("response").cloned().unwrap_or(Value::Null))),
-        _ => Some(Err(())),
+        Some(_) | None => Some(Err(())),
     }
 }
 
@@ -649,7 +649,7 @@ fn register_tokens(
 ) -> Result<Vec<LiteralGuard>, DriverError> {
     [&spec.hook_endpoint.token, &spec.shim.token]
         .into_iter()
-        .map(|token| token.expose())
+        .map(SessionToken::expose)
         .filter(|token| !token.is_empty())
         .map(|token| redactor.add_literal(token).map_err(|_| DriverError::SecretNotRegistered))
         .collect()
