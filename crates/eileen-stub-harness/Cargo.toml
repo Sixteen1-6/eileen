@@ -19,7 +19,21 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+# The script format, `StubScriptLine`.
+eileen-contracts.workspace = true
+# The stdin reader's named thread, and the monotonic clock and sleep a `Delay` line uses.
+eileen-stdx.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The stream-json parser and the interrupt `Requests`, which read the stub's stdout back.
+eileen-harness.workspace = true
+# Starts the binary as `ClaudeWorker` will.
+eileen-supervisor.workspace = true
+# The Redactor: every script passes through it unchanged.
+eileen-trace.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

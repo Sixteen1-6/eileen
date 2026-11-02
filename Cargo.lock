@@ -1131,7 +1131,14 @@ dependencies = [
 name = "eileen-stub-harness"
 version = "0.0.0"
 dependencies = [
+ "eileen-contracts",
+ "eileen-harness",
+ "eileen-stdx",
+ "eileen-supervisor",
+ "eileen-trace",
+ "serde_json",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
