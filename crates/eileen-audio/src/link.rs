@@ -331,7 +331,7 @@ impl Link {
         if let Effect::Speech(cmd) = body {
             self.on_command(SpeechCommandFrame { ctx, span: 0, cmd }).await;
         } else if let Effect::Audio(cmd) = body {
-            self.on_audio(cmd);
+            self.on_audio(&cmd);
         } else {
             tracing::warn!(
                 ?family,
@@ -340,9 +340,9 @@ impl Link {
         }
     }
 
-    fn on_audio(&mut self, cmd: AudioCmd) {
+    fn on_audio(&mut self, cmd: &AudioCmd) {
         match cmd {
-            AudioCmd::SetCapture(on) => self.set_capture(on),
+            AudioCmd::SetCapture(on) => self.set_capture(*on),
             AudioCmd::Duck { .. }
             | AudioCmd::Unduck
             | AudioCmd::Pause { .. }
