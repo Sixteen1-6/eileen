@@ -35,6 +35,23 @@ never the CLI's, and `eileen-stub-harness::it::corpus` fails on one in any `even
 | `worker-malformed.ndjson` | A truncated assistant line between `system/init` and a normal answer | `stream-pt-allow.json`'s `system/init`, closing assistant text and `result`; the malformed line is the first bytes of an assistant line |
 | `brain-two-turns.ndjson` | A brain conversation of two turns, each streamed as text deltas and ended by a `result` | `stream-events.json`'s `system/init` (with no tools, as the brain runs) and `result`, and the assistant message shape of `stream-pt-allow.json`. The approval runs did not pass `--include-partial-messages`, so no `stream_event` line was recorded; those lines follow the Anthropic streaming events the CLI wraps (`message_start`, `content_block_start`, `content_block_delta` with `text_delta`, `content_block_stop`, `message_delta`, `message_stop`), as `docs/research/2026-10-subscription-harnesses.md` describes them. The owner-run recording replaces them |
 
+The `driver-` scripts are the ones `ClaudeWorker` runs jobs against
+(`eileen-stub-harness::it::worker`). Each writes `system/init` before it waits for the first
+user line, because section 3.3.8's driver starts a session and waits for its init before it
+binds a job. The recorded runs wrote the first user line at once, so they never showed that
+order, and CLI 2.1.316 writes nothing on stdout until a user line arrives
+(`docs/wp/WP3-harness.md`, "Surprises"); these scripts, and the driver's start, change with
+the amendment that settles it.
+
+| Script | What it plays | Source |
+|---|---|---|
+| `driver-job.ndjson` | `worker-hello.ndjson` with its `system/init` before the first user line | `worker-hello.ndjson` |
+| `driver-skill.ndjson` | `worker-skill.ndjson` with its `system/init` before the first user line | `worker-skill.ndjson` |
+| `driver-crash.ndjson` | `worker-crash.ndjson` with its `system/init` before the first user line | `worker-crash.ndjson` |
+| `driver-hold.ndjson` | A job that narrates and holds for a second user turn, narrates again and holds until the session is cancelled | `worker-hello.ndjson`'s `system/init`; the narration lines are the stub's own `narration` kind |
+| `driver-no-eileen.ndjson` | A session whose `system/init` lists `eileen` as `failed`, which is never bound | `worker-hello.ndjson`'s `system/init` with the server's status changed |
+| `driver-memory-path.ndjson` | A session whose `system/init` reports an auto-memory folder (`memory_paths.auto`), which is never bound | `worker-hello.ndjson`'s `system/init` with `memory_paths` added; the field's name is the one `eileen_harness::stream` reads, and the path is a placeholder |
+
 Scripts recorded from new real sessions on the owner's PC, including the partial messages of a
 brain turn, come with the owner-run pull request, and `cargo xtask contract-claude` compares
 these scripts' event shapes with the real CLI's every night.
