@@ -188,7 +188,7 @@ The parts of the audio series, in merge order, as each opens:
    reply in two batches playing both and draining after each; the clause counts of `Played`;
    the refusals and the logged drops, each queue with its own count; and the render callback
    inside `allocation_counter::measure`).
-7. `wp4/s1-audio-aec` (#162, draft): echo cancellation and the energy barge-in fallback,
+7. `wp4/s1-audio-aec` (#162, merged 2026-11-02): echo cancellation and the energy barge-in fallback,
    crate-private in `eileen-audio` (`aec`, `energy`) until the component takes them.
    `EchoCanceller` wraps sonora 0.2.0 at the speech pipe's 16 kHz mono in 10 ms chunks: AEC3
    with noise suppression and the high-pass filter against the loopback while it sounds,
@@ -210,6 +210,26 @@ The parts of the audio series, in merge order, as each opens:
    `eileen_audio::energy::tests` (the window assembly, the detector's rules, and both inside
    `allocation_counter::measure`). Acceptance 1's transcript-level check needs the recognizer
    and comes after both series (W2).
+8. `wp4/s1-audio-link` (draft): the connection half of the component. `eileen_audio::component`
+   now returns the audio component, which takes the audio and speech effect families, captures
+   from `AudioConfig::capture` (a `SharedSource`, new) into the ring from its start, and serves
+   each connection `AudioConfig::speech` gives: the latest `SetMode` and `SetHotwords` first,
+   then the commands held while none was up, then the ring's unconfirmed frames with their flags,
+   then live frames. It sends a `Ping` every second and answers the speech process's, reports
+   each `Pong` as `Input::Sidecar(SidecarId::Speech, Heartbeat)`, confirms through the ring from
+   each `Pong` and `EndOfTurn`, forwards every event as `Input::Voice`, and hands a connection
+   back when it breaks or the codec refuses a frame. `SetCapture` stops and starts the capture
+   stream, and a mute empties the ring. While no connection is up it answers `Speak` with
+   `SpeakDone` and `Check` with `CheckResult` `Unavailable`, and holds other commands (at most
+   64). The capture callback (`capture::Framer`) downmixes, converts to 16 kHz with part 4's
+   resamplers and cuts 512-sample frames with their capture times, allocating nothing. Evidence:
+   the integration tests in `tests/it/speech_pipe.rs` (acceptance 15's late connect, kill,
+   reload, latest mode and hotwords, overrun and mute pieces, the heartbeat and confirmation, a
+   refused frame, and the `Speak` answer while no connection is up) and the unit tests in
+   `eileen_audio::capture::tests`. Still to come in later parts: PCM into playback and the
+   playback commands, echo cancellation and the capture flags, the energy fallback while no
+   connection is up, `PlayPhrase` and `Record` as `never!`, and `Bench` and `Providers` to the
+   machine link, which waits for those events in `eileen_contracts::speech`.
 
 The speech series has not opened yet.
 
@@ -505,6 +525,35 @@ The speech series has not opened yet.
   her PCM moves AEC3's reference by 20 ms. A loopback that carries her at another volume is
   tested on the canceller directly. Lining the loopback's buffers up with the microphone's is
   the component's: the canceller takes `None` only while no loopback stream runs.
+
+- The speech link runs in the component's one task. Its pending accept, read and effect are
+  owned futures (each takes its half, source or transport handle and gives it back), so they
+  live across the loop's turns and none is dropped part way; this also lets a read in flight be
+  awaited when a write fails, so the halves rejoin before the connection goes back. A reader
+  task per connection was weighed: it would read while a long replay writes, but it needs its
+  own channel and a way to hand its half back. Writes go a second of audio at a time instead,
+  with the loop reading between batches.
+- A read that misses its one-second deadline is started again, never a failure: silence is the
+  core's business, counted as missed heartbeats, and during a reload it counts none until the
+  120 s load deadline. A write that misses its two-second deadline ends the connection, as
+  the writer can no longer tell where the stream is.
+- While no connection is up the ring is drained from the handoff every 10 ms, so the handoff
+  never fills; on a connection the same tick writes what the ring holds.
+- Commands held while no connection is up go to the next connection after the latest `SetMode`
+  and `SetHotwords` and before any audio; a full queue refuses the new command, logged as
+  `channel.full` on `audio.speech.held`. `Speak` and `Check` are never held, since they are
+  answered at once.
+- Inputs leave the component with `seq`, `at` and `mono` zero: only the runtime's input queue
+  can give an input its place in the core-wide replay order, and the component reads no clock.
+  `eileen-runtime` has no `InputSink` yet; WP2's queue fills them when it takes an input.
+- The capture callback takes a buffer in chunks of 480 device frames (10 ms at 48 kHz) into
+  scratch buffers allocated once, so a device buffer of any length allocates nothing. A frame's
+  capture time is the buffer's plus its first sample's place in it at 16 kHz; the resampler's
+  own delay (under 3 ms) is not subtracted. Every frame carries no capture flag until echo
+  cancellation joins.
+- The integration tests take the `fake` feature through a dev-dependency of `eileen-audio` on
+  itself, so `cargo nextest run --workspace` builds them without a feature flag and no shipped
+  binary carries the memory transport.
 
 ## Outcome
 

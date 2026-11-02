@@ -847,6 +847,7 @@ version = "0.0.0"
 dependencies = [
  "allocation-counter",
  "cpal",
+ "eileen-audio",
  "eileen-contracts",
  "eileen-rt",
  "eileen-stdx",
