@@ -140,7 +140,7 @@ impl EchoCanceller {
         own: &[f32; CHUNK],
         out: &mut [f32; CHUNK],
     ) -> Result<ChunkReport, AecError> {
-        let loopback_energy = loopback.map_or(0.0, |chunk| mean_square(chunk));
+        let loopback_energy = loopback.map_or(0.0, mean_square);
         let own_energy = mean_square(own);
         self.loopback_quiet = next_quiet(self.loopback_quiet, loopback_energy);
         self.own_quiet = next_quiet(self.own_quiet, own_energy);

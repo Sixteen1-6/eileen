@@ -616,7 +616,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_music_bed() {
         ..Scene::default()
     };
     let heard = listen(scene, 600).await;
-    assert_eq!(heard.onsets, [], "false barge-in onsets over music");
+    assert!(heard.onsets.is_empty(), "false barge-in onsets over music: {:?}", heard.onsets);
 }
 
 #[tokio::test(start_paused = true)]
@@ -628,7 +628,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_speech_video_bed() 
         ..Scene::default()
     };
     let heard = listen(scene, 600).await;
-    assert_eq!(heard.onsets, [], "false barge-in onsets over the video");
+    assert!(heard.onsets.is_empty(), "false barge-in onsets over the video: {:?}", heard.onsets);
 }
 
 // The callback's budget.

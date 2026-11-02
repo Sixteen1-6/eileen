@@ -171,7 +171,7 @@ The parts of the audio series, in merge order, as each opens:
    the speaker stopped, a room stopped and started again with an echo still due, one past due
    and the bed the speakers played meanwhile, and the setup checks). The tests make their audio;
    no recorded fixture is checked in.
-6. `wp4/s1-audio-playback` (#158, draft): playback, crate-private in `eileen-audio`
+6. `wp4/s1-audio-playback` (#158, merged 2026-11-01): playback, crate-private in `eileen-audio`
    (`playback`) until the component takes it. The `Player`, the component's half, takes PCM
    frames straight from the speech connection, never through `Core::step` (section 3.3.7),
    converts them from 24 kHz with part 4's interpolator (a fresh one per utterance), and queues
@@ -188,6 +188,23 @@ The parts of the audio series, in merge order, as each opens:
    reply in two batches playing both and draining after each; the clause counts of `Played`;
    the refusals and the logged drops, each queue with its own count; and the render callback
    inside `allocation_counter::measure`).
+7. `wp4/s1-audio-aec` (#162, draft): echo cancellation and the energy barge-in fallback,
+   crate-private in `eileen-audio` (`aec`, `energy`) until the component takes them.
+   `EchoCanceller` wraps sonora 0.2.0 at the speech pipe's 16 kHz mono in 10 ms chunks: AEC3
+   with noise suppression and the high-pass filter against the loopback while it sounds,
+   against Eileen's own PCM once the loopback has been silent for 500 ms or delivers no chunk,
+   and bypassed (a second pipeline with only the high-pass filter and noise suppression) once
+   both have been silent for 500 ms. Each chunk yields the `playback` and `other_audio` capture
+   flags. `EnergyDetector` judges 32 ms windows of the echo-cancelled audio against an adaptive
+   floor and reports an onset at the third speech window in a row. Evidence: the unit tests in
+   `eileen_audio::aec::tests`, over a 16 kHz `RoomMixer` with synthetic voices, music and a
+   speech video (an ERLE floor of 20 dB against the loopback, against own PCM, after the
+   loopback stops and after an idle spell; a near-end command's energy kept alone and over
+   Eileen, with the detector's onset within 250 ms of it; the reference switch exact to the
+   chunk; the flags; and no onset in ten minutes of Eileen over each bed), and in
+   `eileen_audio::energy::tests` (the detector's rules, and a window judged inside
+   `allocation_counter::measure`). Acceptance 1's transcript-level check needs the recognizer
+   and comes after both series (W2).
 
 The speech series has not opened yet.
 
@@ -358,6 +375,41 @@ The speech series has not opened yet.
   logged by the player when it next reads (`audio.playback.events`).
 - `Earcon` stays for a later part: `Player::apply` serves only duck, unduck, pause, resume and
   stop, and reports any other command as not its own.
+
+- Echo cancellation runs at 16 kHz mono, after the capture resampler, as section 2.2 step 1
+  orders it: a third of the cost of 48 kHz, and the band the recognizer hears. The loopback
+  and Eileen's own PCM take the same conversion to reach it.
+- The reference: the loopback while it sounds; Eileen's own PCM once the loopback has been
+  silent for 500 ms, or gave no chunk, while her PCM sounds; bypassed once both have been
+  silent for 500 ms. Section 2.2 step 1 bypasses on 500 ms of loopback silence alone, which,
+  read literally, would bypass AEC3 under her voice when the loopback does not carry it (a
+  broken loopback, or playback on another endpoint); while the loopback works the two readings
+  agree, since her voice is in it. The pull request proposes a sentence for section 2.2 under
+  "Suggested guidance changes". A chunk is silent under -60 dBFS.
+- The bypass runs a second sonora pipeline (high-pass filter and noise suppression) and leaves
+  the AEC3 pipeline untouched, rather than switching AEC3 off in one pipeline with
+  `apply_config`: sonora's `Config` warns that changing it during processing resets
+  submodules, so AEC3 would learn the room again at the start of every reply and leak echo
+  meanwhile. The cost is the second pipeline's
+  memory and a noise estimate in each that goes stale while the other runs.
+- The `playback` flag holds for 200 ms after Eileen's PCM falls silent, since her echo still
+  reaches the microphone. The `other_audio` flag compares energies summed over 100 ms, not
+  samples: on a real endpoint the loopback lags her stream by a buffer or more and may be
+  scaled by the stream's volume, so a sample difference would leave her own voice behind. It
+  needs more than twice the energy she played (3 dB), turns on after 200 ms and off after 1 s,
+  so other audio quieter than her voice shows in her pauses and the hold bridges them.
+- The energy fallback works on the 32 ms windows the VAD and the speech frames use. A window
+  is speech at 12 dB over an adaptive floor (18 dB while other audio plays, section 2.8's
+  stricter threshold) and at least -45 dBFS; the floor starts at the first window, drops to any
+  quieter window and rises 5 dB a second, so a steady noise stops counting within seconds. An
+  onset is the third speech window in a row, where barge-in pauses playback, once per run. It
+  returns windows and onsets; turning them into the core's barge-in input is the component
+  part's, since no contract carries the fallback yet.
+- The tests run the room at 16 kHz, so each buffer is one chunk and ten minutes of a bed stay
+  within the test lane's time; the resamplers are measured on their own. Their audio is
+  synthetic speech (harmonic syllables on vowel formants with word gaps), music (plucked
+  chords and hi-hat bursts) and a video (a man talking over quiet music), since AEC3's delay
+  estimator and noise suppression treat steady tones differently from speech.
 
 ## Outcome
 
