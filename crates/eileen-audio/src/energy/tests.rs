@@ -80,7 +80,10 @@ fn a_window_the_canceller_took_more_than_6_db_from_is_not_speech() {
         (0..3).map(|_| detector.window(&cancelled, &heard, false, false)).collect();
     assert!(seen[2].onset, "8 dB suppressed with AEC3 bypassed: a voice");
 
-    // A voice over the echo: -23 dBFS after the canceller, from -21 dBFS.
+    // A voice over the echo, after a quiet window ends that run: -23 dBFS after the canceller,
+    // from -21 dBFS.
+    let quiet = at(-70.0);
+    assert!(!detector.window(&quiet, &quiet, false, true).speech, "a quiet window");
     let (cancelled, heard) = (at(-23.0), at(-21.0));
     let seen: Vec<EnergyWindow> =
         (0..3).map(|_| detector.window(&cancelled, &heard, false, true)).collect();
