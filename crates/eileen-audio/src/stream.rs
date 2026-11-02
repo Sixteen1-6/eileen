@@ -1,7 +1,8 @@
 //! Where captured audio comes from and where playback goes (BUILD.md section 4.7): production
 //! opens the WASAPI endpoints through cpal, and tests use a WAV file, a capture to a WAV and a
 //! mixer that feeds playback back into the input, so the end-to-end tests run without a sound
-//! card. Later parts of WP4's audio series build those implementations.
+//! card: [`WavSource`](crate::WavSource), [`CaptureSink`](crate::CaptureSink) and
+//! [`RoomMixer`](crate::RoomMixer). A later part of WP4's audio series builds the cpal ones.
 //!
 //! A source or sink owns its thread and its timing, as cpal's streams do, and calls the
 //! component's callback once per buffer. The callback is the component's code on the audio
@@ -90,4 +91,9 @@ pub enum AudioError {
     /// The device or file failed.
     #[error("the audio stream failed")]
     Io(#[source] io::Error),
+    /// A source or sink was asked for something it cannot do: a second stream while one runs, a
+    /// test mixer's gain that is not a finite non-negative number, or a test stream outside a
+    /// tokio runtime.
+    #[error("the audio source or sink cannot do this: {0}")]
+    Setup(&'static str),
 }

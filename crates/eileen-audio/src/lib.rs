@@ -9,8 +9,9 @@
 //! - The audio [`component`]: capture, render and loopback (cpal only under the Windows target
 //!   table, the logic around it neutral), sonora's AEC, resampling, the ring buffer, and every
 //!   frame of the speech pipe, over connections taken from a [`SpeechTransport`].
-//! - [`AudioSource`] and [`AudioSink`] with `WavSource`, `CaptureSink` and `RoomMixer`, and the
-//!   in-memory speech transport (`fake`), so the end-to-end tests run without a sound card.
+//! - [`AudioSource`] and [`AudioSink`] with [`WavSource`], [`CaptureSink`] and [`RoomMixer`] on
+//!   paced virtual time ([`Pace`]), and the in-memory speech transport (`fake`), so the end-to-end
+//!   tests run without a sound card.
 //! - Samples-played accounting, the energy barge-in fallback and the audio heartbeat.
 //!
 //! # Does not own
@@ -43,14 +44,16 @@
 //!
 //! - Called by `eileen-cli`, which builds the component and implements [`SpeechTransport`] over
 //!   WP2's transport; WP2's tests use `fake`. Cross-crate items: [`SpeechTransport`],
-//!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`] and
-//!   [`AudioConfig`]. The component never names the pipe, spawns a process or sees the token.
+//!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`],
+//!   [`AudioConfig`], and the test audio `eileen run --audio-source wav:<file> --audio-sink
+//!   capture:<file>` selects and other crates' tests use: [`WavClip`], [`WavSource`],
+//!   [`CaptureSink`], [`RoomMixer`] and its halves, and [`Pace`]. The component never names the
+//!   pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
-//!   target table; `rtrb` for the ring's handoff, and `loom` only under `cfg(loom)`. Today
-//!   `eileen-rt` is used only by `fake`, so it is optional and the feature turns it on, and a
-//!   dev-dependency for this crate's own tests, as are `eileen-stdx`, `realfft` (the resamplers'
-//!   measurements) and `allocation-counter` (decision D82: never outside `[dev-dependencies]`).
+//!   target table; `rtrb` for the ring's handoff, `hound` for WAV files, and `loom` only under
+//!   `cfg(loom)`. `realfft` (the resamplers' measurements) and `allocation-counter` (decision
+//!   D82) are dev-dependencies, never outside `[dev-dependencies]`.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
 //!   rmcp, nor know vendor CLI flags (section 3.1); nor on any other `-win` or `-linux` crate, or
 //!   on `eileen-audio-win` or `cpal` outside the Windows target table (check 15).
@@ -62,8 +65,9 @@
 //! - Layers: unit tests for the DSP, the ring's rules and the memory transport (paused tokio
 //!   time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with `--lib
 //!   ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the same
-//!   models run once on a real thread), `RoomMixer` echo tests, and device tests on the owner's
-//!   PC under `desktop.lock`.
+//!   models run once on a real thread), the test sources and sinks under paused tokio time
+//!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, and the room's delay and
+//!   attenuation on an impulse), and device tests on the owner's PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
@@ -83,6 +87,10 @@
 //!   Windows' converter, and synthesis keeps its own 147:80. Other rates are unsupported for now.
 //! - A speech connection's halves need a tokio runtime with its timer; a failed write leaves the
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
+//! - The test sources and sinks pace their buffers on the tokio clock and take their buffers'
+//!   times from sample positions, so under paused tokio time a test's audio moves only when the
+//!   test waits. Their callbacks run under the device's lock: a callback that stops its own
+//!   stream deadlocks.
 //!
 //! # Logs and tracing
 //!
@@ -117,9 +125,17 @@ mod ring;
     expect(dead_code, reason = "the component wires the resamplers in a later part")
 )]
 mod resample;
-pub mod stream;
-pub mod transport;
 
+pub mod pace;
+pub mod room;
+pub mod stream;
+#[cfg(test)]
+mod testing;
+pub mod transport;
+pub mod wav;
+
+pub use pace::Pace;
+pub use room::{Bed, RoomConfig, RoomMixer, RoomSink, RoomSource};
 pub use stream::{
     AudioError, AudioSink, AudioSource, AudioStream, CaptureCallback, CaptureInfo, RenderCallback,
     RenderInfo, StreamFormat,
@@ -128,6 +144,7 @@ pub use transport::{
     AcceptError, ByteRead, ByteWrite, ConnectionError, ConnectionId, SpeechConnection,
     SpeechReader, SpeechTransport, SpeechWriter,
 };
+pub use wav::{CaptureSink, WavClip, WavSource};
 
 /// What the audio component reads at start. Later parts of WP4's audio series add the source
 /// and sink choices.

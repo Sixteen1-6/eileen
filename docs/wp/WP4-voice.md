@@ -132,7 +132,7 @@ The parts of the audio series, in merge order, as each opens:
    (each rule, WP4 acceptance 15's overrun and mute pieces at the unit layer, and the push inside
    `allocation_counter::measure`) and the loom tests in `eileen_audio::ring::concurrency`, which run
    once on a real thread without `--cfg loom`.
-4. `wp4/s1-audio-resample` (draft): the resamplers, crate-private in `eileen-audio`
+4. `wp4/s1-audio-resample` (#148, merged 2026-11-01): the resamplers, crate-private in `eileen-audio`
    (`resample`) until the component takes them. One polyphase engine, a Kaiser-windowed sinc
    split into phases, serves four conversions: capture from 48 kHz to 16 kHz (the 3:1
    decimator, 128 taps) and from 44.1 kHz (up 160, down 441, 120 taps per phase), and 24 kHz
@@ -145,6 +145,21 @@ The parts of the audio series, in merge order, as each opens:
    all four conversions inside `allocation_counter::measure`. The cost bar is the `owner_pc::`
    benchmark in the same module, still to be run on the owner's PC; its result goes on the pull
    request's `owner-run:` line and here.
+5. `wp4/s1-audio-sources` (draft): the test audio of section 4.7, "End to end without a sound
+   card", public in `eileen-audio` for `eileen run --audio-source wav:<file> --audio-sink
+   capture:<file>` and other crates' tests. `WavClip` holds a WAV file's samples (integer up to
+   32 bits or 32-bit float, read through `hound` 3.5.1, section 4.1's pin, at most 20 minutes);
+   `WavSource` captures one as a microphone would, then silence; `CaptureSink` writes what Eileen
+   plays to a WAV of 32-bit floats; `RoomMixer` joins a speaker and a microphone so the input is
+   the near-end talker, plus a looped music or speech-video bed, plus the playback delayed and
+   attenuated. All run on `Pace`d virtual time: one task per device calls its callbacks once per
+   10 ms buffer when the tokio clock reaches it, and each buffer's time comes from its sample
+   position. Evidence: the unit tests in `eileen_audio::wav::tests` (a float WAV round trip
+   through the sink and the source, integer WAVs at full scale, the pacing and a faster pace on
+   paused tokio time, a stop and restart, silence after the clip, a pause kept in the capture)
+   and `eileen_audio::room::tests` (an impulse's echo exact to the sample at 37 ms and 12 dB
+   down, a zero delay, the talker and the looped bed, each half stopping alone, and the setup
+   checks). The tests make their audio; no recorded fixture is checked in.
 
 The speech series has not opened yet.
 
@@ -237,6 +252,25 @@ The speech series has not opened yet.
   resampler. Until the part of this series that first opens a cpal stream decides what then
   happens (refuse the endpoint with a logged reason, or add the conversions, measured against
   the same bar), such an endpoint is unsupported.
+
+- The test sources and sinks pace on the tokio clock, not on `eileen_stdx::clock::ManualClock`.
+  The component's speech connections take their deadlines from tokio's timer, so a source on
+  another clock would let paused tokio time jump past those deadlines while the source waited;
+  on one clock, a test's audio and its deadlines move together, and paused tokio time is the
+  manual clock the tests move. A buffer's time on the device's clock comes from its sample
+  position, so a busy runtime that runs a buffer late changes nothing a test sees.
+- A device's timeline runs on while its stream is stopped, as a room does: a `WavSource`
+  started again skips the clip's stretch that played meanwhile, as a muted microphone hears
+  none of it, and a `CaptureSink` writes the stretch as silence, so a sample's place in the file
+  is its time.
+- `RoomMixer` runs both halves in one task, the speaker first in each buffer, so the echo is
+  exact to the sample at any delay, zero included, and every run gives the same samples. Both
+  halves share one format, the room's; a clip in another format is refused rather than
+  converted.
+- `AudioError` gains `Setup`, for a second stream while one runs, a mixer gain that is not a
+  finite non-negative number, an echo delay over 1 s, or a test stream outside a tokio runtime.
+- `eileen-rt`, `eileen-stdx` and `hound` are ordinary dependencies of `eileen-audio` now, since
+  the test audio ships for `eileen run`; the `fake` feature no longer needs to turn `eileen-rt` on.
 
 ## Outcome
 
