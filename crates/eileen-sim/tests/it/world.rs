@@ -253,7 +253,7 @@ fn a_worker_that_stops_part_way_fails_its_job() {
 }
 
 #[test]
-fn a_bus_subscriber_that_never_drains_is_told_it_lagged() {
+fn a_bus_subscriber_that_stalls_at_every_step_keeps_the_invariants() {
     let mut world = world_with("default", Faults::every(&[BUS_STALL]).unwrap());
     settle(&mut world, LOAD_MS);
     for n in 1..=20 {
