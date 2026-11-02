@@ -1,0 +1,420 @@
+//! The playback queue's rules, each over a `CaptureSink` on paused tokio time, so what the
+//! renderer hands the device is read back from the WAV file it wrote, and the render callback's
+//! code inside `allocation_counter::measure`.
+
+use std::path::Path;
+use std::time::Duration;
+
+use allocation_counter::AllocationInfo;
+use eileen_contracts::core_io::{AudioCmd, PlaybackEvent};
+use eileen_contracts::ids::SpeakId;
+use eileen_contracts::speech::{PCM_BODY_MAX, PCM_HEADER_MAX, PcmHeader};
+use eileen_trace::names;
+use tokio::time::sleep;
+
+use super::{PlayError, Player, Renderer, SYNTH_RATE, default_queue, playback};
+use crate::pace::Pace;
+use crate::resample::{Conversion, Resampler};
+use crate::stream::{AudioSink as _, AudioStream, RenderInfo, StreamFormat};
+use crate::testing::{BUFFER, MONO_48K, Scratch, bits, ms};
+use crate::wav::{CaptureSink, WavClip};
+
+/// The queue the tests give a player: 2 s at 48 kHz.
+const QUEUE: usize = 96_000;
+
+fn speak(n: u128) -> SpeakId {
+    SpeakId::from_parts(1_700_000_000_000, n)
+}
+
+fn header(speak: SpeakId, clause: u16) -> PcmHeader {
+    PcmHeader { speak, clause, sample_rate: SYNTH_RATE }
+}
+
+/// `len` synthesized samples of a tone that starts at sample `from`.
+#[expect(clippy::cast_possible_truncation, reason = "a test tone within i16")]
+fn tone(from: usize, len: usize) -> Vec<i16> {
+    (from..from + len)
+        .map(|n| (f64::from(u32::try_from(n).unwrap()) * 0.13).sin() * 12_000.0)
+        .map(|sample| sample as i16)
+        .collect()
+}
+
+/// What the renderer should hand the device for `input`, played without a break: the same
+/// interpolator over the whole input in one call, which gives the same samples bit for bit as
+/// any cut into buffers.
+fn upsampled(input: &[i16]) -> Vec<f32> {
+    let mut resampler = Resampler::new(Conversion::From24kTo48k);
+    let floats: Vec<f32> = input.iter().map(|&s| f32::from(s) / 32_768.0).collect();
+    let mut out = vec![0.0; resampler.output_len(floats.len())];
+    let n = resampler.process(&floats, &mut out).unwrap();
+    out.truncate(n);
+    out
+}
+
+/// A player and a `CaptureSink` running its renderer from time zero.
+struct Rig {
+    player: Player,
+    sink: CaptureSink,
+    stream: Box<dyn AudioStream>,
+    _dir: Scratch,
+    path: std::path::PathBuf,
+}
+
+impl Rig {
+    fn start(test: &str) -> Self {
+        let dir = Scratch::new(test);
+        let path = dir.join("played.wav");
+        let (player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+        let mut sink = CaptureSink::create(&path, MONO_48K, Pace::RealTime).unwrap();
+        let stream = sink
+            .start(Box::new(move |out: &mut [f32], info: RenderInfo| renderer.fill(out, info)))
+            .unwrap();
+        Self { player, sink, stream, _dir: dir, path }
+    }
+
+    /// Stops the sink and returns every sample it wrote.
+    fn finish(self) -> (Player, Vec<f32>) {
+        self.stream.stop();
+        self.sink.finish().unwrap();
+        (self.player, read(&self.path))
+    }
+}
+
+fn read(path: &Path) -> Vec<f32> {
+    WavClip::read(path).unwrap().samples().to_vec()
+}
+
+fn events(player: &mut Player) -> Vec<PlaybackEvent> {
+    std::iter::from_fn(|| player.next_event()).collect()
+}
+
+/// Buffers start at 0, 10, 20 ms; a command given at 25 ms applies from the 30 ms buffer, the
+/// 1440th sample.
+const AT_30_MS: usize = 3 * BUFFER;
+
+#[tokio::test(start_paused = true)]
+async fn pcm_plays_upsampled_from_the_next_buffer_and_silence_after_it() {
+    let input = tone(0, 2_000);
+    let mut rig = Rig::start("plays");
+    sleep(ms(25)).await;
+    rig.player.push(header(speak(1), 0), &input).unwrap();
+    sleep(ms(200)).await;
+    let (_, played) = rig.finish();
+
+    let mut expected = vec![0.0; AT_30_MS];
+    expected.extend(upsampled(&input));
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "silence, the clause at twice its rate, silence");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_duck_applies_at_the_next_callback_and_an_unduck_lifts_it() {
+    let input = tone(0, 12_000);
+    let mut rig = Rig::start("duck");
+    rig.player.push(header(speak(1), 0), &input).unwrap();
+    sleep(ms(25)).await;
+    assert!(rig.player.apply(&AudioCmd::Duck { db: -20 }), "a playback command");
+    sleep(ms(30)).await;
+    assert!(rig.player.apply(&AudioCmd::Unduck), "a playback command");
+    sleep(ms(100)).await;
+    let (_, played) = rig.finish();
+
+    let full = upsampled(&input);
+    let ramp = super::ramp_frames(48_000);
+    let gain = 10_f32.powf(-1.0);
+    // The 0 to 20 ms buffers play at full gain, exactly.
+    assert_eq!(bits(&played[..AT_30_MS]), bits(&full[..AT_30_MS]), "before the duck");
+    // The 30 ms buffer ramps down over its first millisecond, then holds the duck.
+    let ramped = AT_30_MS..AT_30_MS + ramp;
+    for (heard, whole) in played[ramped.clone()].iter().zip(&full[ramped]) {
+        assert!(heard.abs() <= whole.abs() + f32::EPSILON, "the ramp only lowers");
+    }
+    let ducked = AT_30_MS + ramp..6 * BUFFER;
+    let expected: Vec<f32> = full[ducked.clone()].iter().map(|s| s * gain).collect();
+    assert_eq!(bits(&played[ducked]), bits(&expected), "20 dB down from the next callback on");
+    // The unduck at 55 ms applies from the 60 ms buffer, after its ramp.
+    let lifted = 6 * BUFFER + ramp..10 * BUFFER;
+    assert_eq!(bits(&played[lifted.clone()]), bits(&full[lifted]), "full gain again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_stops_at_a_sample_and_resume_starts_at_exactly_that_sample() {
+    let input = tone(0, 6_000);
+    let mut rig = Rig::start("pause");
+    let one = speak(1);
+    rig.player.push(header(one, 3), &input).unwrap();
+    sleep(ms(25)).await;
+    assert!(rig.player.apply(&AudioCmd::Pause { speak: one }), "a playback command");
+    sleep(ms(40)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [PlaybackEvent::Paused { speak: one, clause: 3, samples_played: 720 }],
+        "paused after 1440 device samples, 720 of the clause's own"
+    );
+    assert!(rig.player.apply(&AudioCmd::Resume { speak: one }), "a playback command");
+    sleep(ms(300)).await;
+    let (_, played) = rig.finish();
+
+    // Paused through the 30, 40, 50 and 60 ms buffers; resumed from the 70 ms one.
+    let full = upsampled(&input);
+    let gap = 4 * BUFFER;
+    let mut expected = full[..AT_30_MS].to_vec();
+    expected.extend(std::iter::repeat_n(0.0, gap));
+    expected.extend(&full[AT_30_MS..]);
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "the clause cut at a sample and continued from it");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_drops_the_utterance_and_the_next_one_plays() {
+    let mut rig = Rig::start("stop");
+    let (one, two) = (speak(1), speak(2));
+    rig.player.push(header(one, 0), &tone(0, 4_000)).unwrap();
+    rig.player.push(header(one, 1), &tone(4_000, 4_000)).unwrap();
+    sleep(ms(25)).await;
+    assert!(rig.player.apply(&AudioCmd::Stop { speak: one }), "a playback command");
+    assert_eq!(
+        rig.player.push(header(one, 2), &tone(8_000, 100)),
+        Err(PlayError::Ended),
+        "a stopped utterance takes no more audio"
+    );
+    sleep(ms(20)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 720 }],
+        "stopped in its first clause"
+    );
+    let next = tone(0, 1_000);
+    rig.player.push(header(two, 0), &next).unwrap();
+    sleep(ms(100)).await;
+    let (_, played) = rig.finish();
+
+    // Silent from the 30 ms buffer until the second utterance starts with the 50 ms one.
+    let mut expected = upsampled(&tone(0, 4_000))[..AT_30_MS].to_vec();
+    expected.resize(5 * BUFFER, 0.0);
+    expected.extend(upsampled(&next));
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "nothing more of the stopped utterance");
+}
+
+#[tokio::test(start_paused = true)]
+async fn played_reports_each_clause_every_50_ms_and_drained_ends_the_utterance() {
+    let mut rig = Rig::start("played");
+    let one = speak(1);
+    // Clause 0 holds 3000 device samples, clause 1 holds 4000.
+    rig.player.push(header(one, 0), &tone(0, 1_500)).unwrap();
+    rig.player.push(header(one, 1), &tone(1_500, 2_000)).unwrap();
+    rig.player.finish(one);
+    sleep(ms(200)).await;
+    let (mut player, _) = rig.finish();
+    assert_eq!(
+        events(&mut player),
+        [
+            // After 2400 device samples, the 50 ms boundary, in clause 0.
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 },
+            // After 4800: clause 1 began at 3000, so 1800 of its samples are in.
+            PlaybackEvent::Played { speak: one, clause: 1, samples_played: 900 },
+            PlaybackEvent::Drained { speak: one },
+        ],
+        "at most every 50 ms, each clause counted from its start"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_before_any_audio_holds_the_utterance_until_it_resumes() {
+    let mut rig = Rig::start("early-pause");
+    let one = speak(1);
+    assert!(rig.player.apply(&AudioCmd::Pause { speak: one }), "a playback command");
+    let input = tone(0, 1_000);
+    rig.player.push(header(one, 0), &input).unwrap();
+    sleep(ms(25)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 0 }],
+        "held at its first sample"
+    );
+    assert!(rig.player.apply(&AudioCmd::Resume { speak: one }), "a playback command");
+    sleep(ms(100)).await;
+    let (_, played) = rig.finish();
+
+    let mut expected = vec![0.0; AT_30_MS];
+    expected.extend(upsampled(&input));
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "it starts at the buffer after the resume");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_before_any_audio_reports_nothing_played_and_refuses_its_audio() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let one = speak(1);
+    assert!(player.apply(&AudioCmd::Stop { speak: one }), "a playback command");
+    assert_eq!(
+        events(&mut player),
+        [PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 0 }],
+        "nothing of it played"
+    );
+    assert_eq!(player.push(header(one, 0), &tone(0, 10)), Err(PlayError::Ended), "refused");
+}
+
+#[test]
+fn audio_of_an_utterance_after_a_later_one_began_is_refused() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    player.push(header(speak(1), 0), &tone(0, 10)).unwrap();
+    player.push(header(speak(2), 0), &tone(0, 10)).unwrap();
+    assert_eq!(
+        player.push(header(speak(1), 1), &tone(10, 10)),
+        Err(PlayError::Ended),
+        "utterances play in order, each whole"
+    );
+}
+
+#[test]
+fn pcm_at_another_rate_and_commands_of_other_parts_are_not_taken() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let pcm = PcmHeader { speak: speak(1), clause: 0, sample_rate: 22_050 };
+    assert_eq!(
+        player.push(pcm, &tone(0, 10)),
+        Err(PlayError::Rate { sample_rate: 22_050 }),
+        "synthesis comes at 24 kHz"
+    );
+    assert!(!player.apply(&AudioCmd::SetCapture(false)), "capture is not playback's");
+}
+
+#[test]
+fn a_device_rate_without_a_conversion_is_refused() {
+    let format = StreamFormat { sample_rate_hz: 96_000, channels: 2 };
+    assert!(
+        matches!(playback(format, QUEUE), Err(PlayError::Rate { sample_rate: 96_000 })),
+        "no 24 to 96 kHz conversion"
+    );
+}
+
+#[test]
+fn a_full_queue_refuses_the_frame_and_logs_the_drop() {
+    let (mut player, _renderer) = playback(MONO_48K, 4_800).unwrap();
+    let one = speak(1);
+    player.push(header(one, 0), &tone(0, 2_000)).unwrap();
+    let (refused, captured) =
+        eileen_trace::test_support::capture(|| player.push(header(one, 1), &tone(2_000, 500)));
+    assert_eq!(refused, Err(PlayError::Full { samples: 1_000 }), "4000 queued, 1000 do not fit");
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "one drop logged: {captured:?}");
+    let fields = &logged[0].fields;
+    assert_eq!(fields["channel"], "audio.playback", "the queue named");
+    assert_eq!(fields["capacity"], 4_800, "its capacity");
+    assert_eq!(fields["times"], 1, "the first drop");
+    // Room for what fits is still taken.
+    player.push(header(one, 1), &tone(2_000, 300)).unwrap();
+}
+
+#[test]
+fn an_utterance_past_the_live_limit_is_refused_and_logged() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    // The renderer has reached none, so seven may wait.
+    for n in 1..=7 {
+        player.push(header(speak(n), 0), &tone(0, 10)).unwrap();
+    }
+    let (refused, captured) =
+        eileen_trace::test_support::capture(|| player.push(header(speak(8), 0), &tone(0, 10)));
+    assert_eq!(refused, Err(PlayError::Full { samples: 20 }), "an eighth does not fit");
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "the drop logged: {captured:?}");
+    assert_eq!(logged[0].fields["channel"], "audio.playback.utterances", "the limit named");
+}
+
+#[test]
+fn the_default_queue_holds_the_largest_pcm_frame() {
+    let largest = (usize::try_from(PCM_BODY_MAX).unwrap() - PCM_HEADER_MAX) / 2;
+    for rate in [48_000, 44_100] {
+        let format = StreamFormat { sample_rate_hz: rate, channels: 2 };
+        let (mut player, _renderer) = playback(format, default_queue(format)).unwrap();
+        player.push(header(speak(1), 0), &vec![0; largest]).unwrap();
+    }
+}
+
+#[test]
+fn a_stereo_device_hears_each_sample_on_both_channels() {
+    let format = StreamFormat { sample_rate_hz: 48_000, channels: 2 };
+    let (mut player, mut renderer) = playback(format, QUEUE).unwrap();
+    let input = tone(0, 240);
+    player.push(header(speak(1), 0), &input).unwrap();
+    let mut out = vec![1.0; 2 * BUFFER];
+    renderer.fill(&mut out, RenderInfo { plays_at: Duration::ZERO });
+    let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+    let right: Vec<f32> = out.iter().skip(1).step_by(2).copied().collect();
+    assert_eq!(bits(&left), bits(&upsampled(&input)), "the left channel");
+    assert_eq!(bits(&right), bits(&left), "the right channel the same");
+}
+
+/// Fills one buffer inside `allocation_counter::measure` and asserts it allocated nothing.
+fn fill_measured(renderer: &mut Renderer, out: &mut [f32], what: &str) {
+    let counted =
+        allocation_counter::measure(|| renderer.fill(out, RenderInfo { plays_at: Duration::ZERO }));
+    assert_eq!(counted, AllocationInfo::default(), "no allocation or free while {what}");
+}
+
+#[test]
+fn the_render_callback_allocates_and_frees_nothing() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let (one, two) = (speak(1), speak(2));
+    player.push(header(one, 0), &tone(0, 6_000)).unwrap();
+    player.push(header(one, 1), &tone(6_000, 6_000)).unwrap();
+    player.finish(one);
+    player.push(header(two, 0), &tone(0, 6_000)).unwrap();
+    let mut out = vec![0.0; BUFFER];
+    fill_measured(&mut renderer, &mut out, "playing");
+    player.duck(-20);
+    fill_measured(&mut renderer, &mut out, "ramping to a duck");
+    for _ in 0..10 {
+        fill_measured(&mut renderer, &mut out, "reporting Played");
+    }
+    player.pause(one);
+    fill_measured(&mut renderer, &mut out, "pausing");
+    fill_measured(&mut renderer, &mut out, "paused");
+    player.resume(one);
+    fill_measured(&mut renderer, &mut out, "resuming");
+    player.stop(one);
+    fill_measured(&mut renderer, &mut out, "dropping a stopped utterance");
+    for _ in 0..100 {
+        fill_measured(&mut renderer, &mut out, "draining and running dry");
+    }
+    // Played every 2400 samples handed, counted across the pause; the stop drops the rest of
+    // the first utterance, and the second, given no finish, reports no Drained.
+    assert_eq!(
+        events(&mut player),
+        [
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 },
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 2_400 },
+            PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 2_880 },
+            PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 3_120 },
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 480 },
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 1_680 },
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 2_880 },
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 4_080 },
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 5_280 },
+        ],
+        "every path above ran"
+    );
+}
+
+#[test]
+fn a_full_event_queue_counts_what_it_lost_and_logs_it() {
+    let (mut player, mut renderer) = super::playback_with(MONO_48K, QUEUE, 2).unwrap();
+    for n in 0..4 {
+        let utterance = speak(n);
+        player.push(header(utterance, 0), &tone(0, 10)).unwrap();
+        player.finish(utterance);
+    }
+    let mut out = vec![0.0; BUFFER];
+    fill_measured(&mut renderer, &mut out, "losing events");
+    let (reported, captured) = eileen_trace::test_support::capture(|| events(&mut player));
+    assert_eq!(
+        reported,
+        [PlaybackEvent::Drained { speak: speak(0) }, PlaybackEvent::Drained { speak: speak(1) }],
+        "the two that fit"
+    );
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "the loss logged: {captured:?}");
+    assert_eq!(logged[0].fields["channel"], "audio.playback.events", "the event queue named");
+    assert_eq!(logged[0].fields["times"], 2, "two lost");
+}

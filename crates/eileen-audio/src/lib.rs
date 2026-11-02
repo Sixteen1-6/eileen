@@ -129,6 +129,10 @@ mod ring;
     expect(dead_code, reason = "the component wires the resamplers in a later part")
 )]
 mod resample;
+// The component plays the speech process's PCM through this in a later part; until then only its
+// tests use it.
+#[cfg_attr(not(test), expect(dead_code, reason = "the component wires playback in a later part"))]
+mod playback;
 
 pub mod pace;
 pub mod room;

@@ -29,11 +29,14 @@ eileen-contracts.workspace = true
 eileen-rt.workspace = true
 # Their numeric conversions.
 eileen-stdx.workspace = true
+# The event names playback logs a dropped frame under.
+eileen-trace.workspace = true
 # WavSource and CaptureSink read and write WAV files.
 hound.workspace = true
 rtrb.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cpal.workspace = true
@@ -47,6 +50,8 @@ loom.workspace = true
 # The capture side's no-allocation check (decision D82): a dev-dependency only, so its global
 # allocator reaches only this crate's test binaries.
 allocation-counter.workspace = true
+# Playback's tests read the drop it logs.
+eileen-trace = { workspace = true, features = ["testing"] }
 # The resamplers' tests measure each conversion's spectrum against BUILD.md section 6.6's bar.
 realfft.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
