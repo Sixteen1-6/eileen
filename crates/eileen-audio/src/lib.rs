@@ -93,7 +93,7 @@
 //!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
 //!   and a speech video, made bit for bit the same on every platform, with the loopback two
 //!   chunks behind her stream (`aec::tests`: an ERLE floor against the loopback and against own
-//!   PCM, across both handovers and after a NaN, a near-end command's energy kept alone, over
+//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a near-end command's energy kept alone, over
 //!   Eileen and over each bed, the reference switch to the chunk, the learning time, the flags,
 //!   and no false onset in ten minutes of each bed, counted from a fresh canceller, in four runs
 //!   of 153 s that each stay under the test profiles' time limit), the window assembly and the

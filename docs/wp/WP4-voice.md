@@ -202,8 +202,8 @@ The parts of the audio series, in merge order, as each opens:
    unit tests in `eileen_audio::aec::tests`, over a 16 kHz `RoomMixer` with synthetic voices,
    music and a speech video made bit for bit the same on every platform, the loopback two
    chunks behind her stream (an ERLE floor of 20 dB against the loopback, against own PCM,
-   after the loopback stops, after it falls silent under her voice, after a NaN and after an
-   idle spell; a near-end command's energy kept alone, over Eileen and over Eileen with each
+   after the loopback stops or falls silent under her voice once AEC3 has learned her PCM's
+   delay afresh, after a NaN and after an idle spell; a near-end command's energy kept alone, over Eileen and over Eileen with each
    bed, with the detector's onset within 250 ms of it; the reference switch exact to the chunk;
    the learning time; the flags; and no onset in ten minutes of Eileen over each bed, in four
    runs of 153 s from a fresh canceller, nor in a minute of each bed alone), and in
@@ -267,6 +267,31 @@ The speech series has not opened yet.
   passes. Applied with AEC3 bypassed too, the test held back a command spoken into a silent
   room by 400 ms, as noise suppression took more than 6 dB from its first syllables.
 
+- With the loopback two chunks behind her stream, a handover to her PCM moves AEC3's reference
+  20 ms, and AEC3 has to find the new delay: from 500 ms after the switch until it had heard
+  3 s of her PCM, the ERLE was 14.9 dB when the loopback stopped and 11.3 dB when it fell
+  silent under her voice, under the 20 dB floor, and 61.3 to 62.6 dB after. So a change of
+  reference restarts the learning time, in which the fallback counts no speech, and the tests
+  hold the floor from its end. Holding her PCM back by the loopback's lag would shorten the
+  relearning, but the lag is the endpoint's; that is for the component part to measure on the
+  owner's PC.
+- The margins each room test had in CI run 41395786735, the same on both runners to 0.01 dB
+  but where noted, since the test audio is now the same bits everywhere and only sonora's
+  SIMD kernels, chosen by the runner's CPU, can differ. ERLE (floor 20 dB): 32.1 dB for Eileen
+  against the loopback over 3 to 12 s, 44.0 (Windows) and 44.1 (Linux) for the music bed,
+  61.5 for the video bed, 58.4 against her own PCM, 59.3 in the first second after an idle
+  spell, 60.8 after a NaN, and under a command without it 32.0 over Eileen, 48.3 over her and
+  the music, 70.0 over her and the video. A command keeps -2.70 dB alone (bound -3 dB, the
+  tightest margin), and -0.50, -0.85 and -1.24 dB over Eileen, with the music and with the
+  video (bound -6 dB); its onset comes 120, 150, 180 and 210 ms after it starts (bound
+  250 ms). The detector's closest approach to a false onset (over every three windows in a
+  row, the most any fell short of speech, then the least of that) was 2.6 dB in the music run
+  from 450 s, 26.1 to 42.7 dB in the other music runs, 42.5 to 53.2 dB in the video runs,
+  11.8 (Windows) and 11.7 dB (Linux) for the music bed alone and 49.7 dB for the video bed
+  alone. AEC3 learned the room at chunk 431 of Eileen over the loopback. A runner whose
+  arithmetic moved AEC3 would show first in the command alone and the music run from 450 s.
+- Each 153 s bed run took 5.3 to 5.9 s on Windows CI and 2.1 to 5.2 s on Linux, inside the
+  default profile's 10 s slow mark.
 - `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
   first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
 
