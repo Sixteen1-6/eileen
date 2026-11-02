@@ -266,6 +266,43 @@ const fn depth_name(depth: Depth) -> &'static str {
     }
 }
 
+/// A job a worker is to run: what it asks for, its name, the session whose folder it works in
+/// when not its own (a reroute's), and whether it takes the focus.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NewWorker {
+    pub(crate) spec: JobSpec,
+    pub(crate) naming: Naming,
+    pub(crate) folder: Option<WorkerSessionId>,
+    pub(crate) focus: bool,
+}
+
+/// The result of a dispatch that accepted `jobs`, the first being the one job or the fan-out's
+/// parent: a sentence, and the structured output with the ack the brain says.
+fn started(jobs: &[Job]) -> Option<ToolResult> {
+    let first = jobs.first()?;
+    let ack = if first.spec.fanout > 1 {
+        let count = NUMBERS.get(usize::from(first.spec.fanout).saturating_sub(1));
+        let count = count.copied().unwrap_or("several");
+        format!("Starting {count} {} workers on {}.", first.route.display_name(), first.name)
+    } else {
+        format!("Starting {}.", first.name)
+    };
+    let output = JobsDispatchOutput {
+        jobs: jobs
+            .iter()
+            .map(|job| DispatchedJob {
+                job: job.id,
+                name: job.name.clone(),
+                ordinal: job.ordinal,
+                queued: false,
+            })
+            .collect(),
+        ack,
+    };
+    let text = format!("Started {} ({}).", first.name, first.id);
+    Some(text_result(text, false, serde_json::to_value(output).ok()))
+}
+
 /// A new job's row, `queued` and not yet the focus.
 pub(crate) fn new_job(
     id: JobId,
@@ -418,42 +455,23 @@ impl Core {
             chrome: false,
         };
         let jobs = if fanout > 1 {
-            self.fan_out(cx, spec, &routed)
+            self.fan_out(cx, &spec, &routed)
         } else {
             let hint = spec.title_hint.clone();
             let naming = self.jobs.registry.naming(hint.as_deref(), spec.kind, None, cx.at).ok();
             naming
-                .and_then(|naming| self.start_worker(cx, spec, &routed, naming, None, true))
+                .and_then(|naming| {
+                    let worker = NewWorker { spec, naming, folder: None, focus: true };
+                    self.start_worker(cx, worker, &routed)
+                })
                 .map(|job| vec![job])
         };
-        let jobs = jobs.ok_or_else(|| refusal(FULL))?;
-        let first = jobs.first().ok_or_else(|| refusal(FULL))?;
-        let ack = if fanout > 1 {
-            let count =
-                NUMBERS.get(usize::from(fanout).saturating_sub(1)).copied().unwrap_or("several");
-            format!("Starting {count} {} workers on {}.", first.route.display_name(), first.name)
-        } else {
-            format!("Starting {}.", first.name)
-        };
-        let text = format!("Started {} ({}).", first.name, first.id);
-        let output = JobsDispatchOutput {
-            jobs: jobs
-                .iter()
-                .map(|job| DispatchedJob {
-                    job: job.id,
-                    name: job.name.clone(),
-                    ordinal: job.ordinal,
-                    queued: false,
-                })
-                .collect(),
-            ack,
-        };
-        Ok(text_result(text, false, serde_json::to_value(output).ok()))
+        jobs.as_deref().and_then(started).ok_or_else(|| refusal(FULL))
     }
 
     /// A fan-out: its parent, which takes the focus, then one child per worker, each with its
     /// own session, the whole task in `compete` mode and its own sub-task in `split` mode.
-    fn fan_out(&mut self, cx: &mut Cx<'_>, spec: JobSpec, routed: &Routed) -> Option<Vec<Job>> {
+    fn fan_out(&mut self, cx: &mut Cx<'_>, spec: &JobSpec, routed: &Routed) -> Option<Vec<Job>> {
         let id = JobId::from_parts(cx.mint(), cx.random());
         let hint = spec.title_hint.as_deref();
         let naming = self.jobs.registry.naming(hint, spec.kind, None, cx.at).ok()?;
@@ -470,22 +488,21 @@ impl Core {
             let child =
                 JobSpec { task, fanout: 1, subtasks: Vec::new(), parent: Some(id), ..spec.clone() };
             let naming = self.jobs.registry.naming(None, spec.kind, Some(id), cx.at).ok()?;
-            jobs.push(self.start_worker(cx, child, routed, naming, None, false)?);
+            let worker = NewWorker { spec: child, naming, folder: None, focus: false };
+            jobs.push(self.start_worker(cx, worker, routed)?);
         }
         Some(jobs)
     }
 
-    /// Accepts a job a worker runs and starts its cold session, in its own folder or in
-    /// `folder`'s. Nothing when the registry refuses it.
+    /// Accepts a job a worker runs and starts its cold session, in its own folder or in the
+    /// folder `worker` names. Nothing when the registry refuses it.
     pub(crate) fn start_worker(
         &mut self,
         cx: &mut Cx<'_>,
-        spec: JobSpec,
+        worker: NewWorker,
         routed: &Routed,
-        naming: Naming,
-        folder: Option<WorkerSessionId>,
-        focus: bool,
     ) -> Option<Job> {
+        let NewWorker { spec, naming, folder, focus } = worker;
         let id = JobId::from_parts(cx.mint(), cx.random());
         let session = WorkerSessionId::from_parts(cx.mint(), cx.random());
         let turn = spec.authorized_by;

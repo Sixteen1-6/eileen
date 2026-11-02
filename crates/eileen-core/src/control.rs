@@ -18,7 +18,7 @@ use eileen_contracts::ids::{JobId, MonoTime, TurnId, WorkerSessionId};
 use eileen_contracts::jobs::{Depth, JobKind, JobSpec, Route};
 use eileen_contracts::tools::brain::{JobAction, JobRef, JobsControl};
 
-use crate::job::{Routed, TASK_CHARS, cut, refusal, text_result};
+use crate::job::{NewWorker, Routed, TASK_CHARS, cut, refusal, text_result};
 use crate::lifecycle::Pick;
 use crate::speech::Owner;
 use crate::{Core, Cx, job_ctx};
@@ -28,6 +28,14 @@ pub(crate) const NOT_FOUND: &str = "I can't find that job.";
 
 /// What Eileen says when she stops tracking an app's own work, which she cannot stop for it.
 const APP_LEFT: &str = "I stopped tracking that; the app is still running it.";
+
+/// The route, model and depth a reroute asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Asked {
+    route: Option<Route>,
+    model: Option<String>,
+    depth: Option<Depth>,
+}
 
 /// The most steers one worker may owe a turn for: past it the worker is told nothing more
 /// until it catches up.
@@ -61,7 +69,7 @@ impl Core {
             }
             JobAction::Steer { text } => self.steer(cx, id, &text),
             JobAction::Reroute { route, model, depth } => {
-                self.reroute(cx, turn, id, route, model, depth)
+                self.reroute(cx, turn, id, Asked { route, model, depth })
             }
             JobAction::Interrupt | JobAction::ShowChanges | JobAction::Keep | JobAction::Undo => {
                 Err(refusal("I can't do that to a job yet."))
@@ -120,10 +128,9 @@ impl Core {
         cx: &mut Cx<'_>,
         turn: TurnId,
         id: JobId,
-        route: Option<Route>,
-        model: Option<String>,
-        depth: Option<Depth>,
+        asked: Asked,
     ) -> Result<ToolResult, ToolResult> {
+        let Asked { route, model, depth } = asked;
         let (Some(old), Some(live)) =
             (self.jobs.registry.get(id).cloned(), self.jobs.live.get(&id).cloned())
         else {
@@ -138,8 +145,9 @@ impl Core {
             JobSpec { depth: routed.depth, route, model, authorized_by: turn, ..old.spec.clone() };
         let reason = format!("rerouted from {}: {}", old.slug, routed.reason);
         let routed = Routed { reason, ..routed };
+        let worker = NewWorker { spec, naming, folder: Some(live.folder), focus: true };
         let job = self
-            .start_worker(cx, spec, &routed, naming, Some(live.folder), true)
+            .start_worker(cx, worker, &routed)
             .ok_or_else(|| refusal("Too many jobs are open; cancel one and ask again."))?;
         self.cancel(cx, id, CancelSource::Voice);
         let text = format!("Moved {} to the {} model.", job.name, job.model);

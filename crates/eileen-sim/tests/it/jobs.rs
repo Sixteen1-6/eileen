@@ -87,19 +87,18 @@ fn ends(events: &[BusEvent], job: JobId) -> usize {
     events.iter().filter(ended).count()
 }
 
-#[test]
-fn three_parallel_jobs_run_side_by_side_and_each_ends_in_one_state() {
-    let mut world = world();
-    world.set_worker_ms(WORK_MS);
+/// Three jobs dispatched in three turns, each running when the next starts; returns them,
+/// with their names, in accept order.
+fn start_three(world: &mut World) -> Vec<(JobId, String)> {
     let titles =
         [("general", "the report"), ("research", "the price check"), ("coding", "the parser fix")];
     for (n, (kind, title)) in [1_u64, 2, 3].into_iter().zip(titles) {
         let args = json!({ "kind": kind, "task": format!("do {title}"), "title_hint": title });
         world.script_brain(BrainReply::text(&["Starting it now. "]).dispatching_args(args));
-        say(&mut world, n, &format!("Eileen, start {title}"));
-        settle(&mut world, 3_000);
+        say(world, n, &format!("Eileen, start {title}"));
+        settle(world, 3_000);
     }
-    let all = events(&world);
+    let all = events(world);
     let accepted: Vec<(JobId, String)> = all
         .iter()
         .filter_map(|event| {
@@ -118,30 +117,54 @@ fn three_parallel_jobs_run_side_by_side_and_each_ends_in_one_state() {
     for (job, name) in &accepted {
         assert_eq!(ends(&all, *job), 0, "{name} still runs");
     }
-    let (report, price, parser) = (accepted[0].0, accepted[1].0, accepted[2].0);
+    accepted
+}
 
-    let parser_session = session_of(&world, parser).expect("the parser fix's session");
+/// The brain steers `job` through `jobs_control`; returns what its session was sent.
+fn steer(world: &mut World, job: JobId) -> Vec<WorkerCmd> {
+    let session = session_of(world, job).expect("the job's session");
     world.script_brain(BrainReply::text(&["I will tell it. "]).controlling(json!({
         "job": { "name": "the parser fix" },
         "action": { "steer": { "text": "only look at the parser" } }
     })));
     let from = world.effects().len();
-    say(&mut world, 4, "Eileen, tell the parser fix to only look at the parser");
-    settle(&mut world, 3_000);
-    let sent: Vec<WorkerCmd> = world.effects()[from..]
+    say(world, 4, "Eileen, tell the parser fix to only look at the parser");
+    settle(world, 3_000);
+    world.effects()[from..]
         .iter()
         .filter_map(|effect| {
-            if let Effect::Worker(session, cmd) = &effect.body
-                && *session == parser_session
+            if let Effect::Worker(to, cmd) = &effect.body
+                && *to == session
             {
                 Some(cmd.clone())
             } else {
                 None
             }
         })
-        .collect();
+        .collect()
+}
+
+/// What Eileen announced so far.
+fn announced(all: &[BusEvent]) -> Vec<String> {
+    all.iter()
+        .filter_map(|event| {
+            if let BusEvent::Speaking { cause: SpeakCause::Announcement, text, .. } = event {
+                Some(text.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn three_parallel_jobs_run_side_by_side_and_each_ends_in_one_state() {
+    let mut world = world();
+    world.set_worker_ms(WORK_MS);
+    let accepted = start_three(&mut world);
+    let (report, price, parser) = (accepted[0].0, accepted[1].0, accepted[2].0);
     assert_eq!(
-        sent,
+        steer(&mut world, parser),
         [WorkerCmd::Interrupt, WorkerCmd::Prompt { text: "only look at the parser".to_owned() }],
         "the steer reached the parser fix's bound session"
     );
@@ -168,16 +191,7 @@ fn three_parallel_jobs_run_side_by_side_and_each_ends_in_one_state() {
             all.iter().any(|e| matches!(e, BusEvent::JobCompleted { job: j, .. } if *j == job));
         assert!(completed, "{job} completed");
     }
-    let announced: Vec<String> = all
-        .iter()
-        .filter_map(|event| {
-            if let BusEvent::Speaking { cause: SpeakCause::Announcement, text, .. } = event {
-                Some(text.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let announced = announced(&all);
     assert_eq!(announced.len(), 2, "two completions, each once: {announced:?}");
     assert!(announced.iter().any(|t| t.starts_with("The report is done.")), "{announced:?}");
     assert!(
