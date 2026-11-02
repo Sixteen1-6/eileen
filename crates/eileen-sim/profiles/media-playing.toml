@@ -32,10 +32,10 @@ cpu_busy_pct = 25
 power = "battery"
 
 [eileen]
-core_mb = 60
-speech_mb = 1250
-brain_mb = 400
-worker_mb = 400
+core = 60
+speech = 1250
+brain = 400
+worker = 400
 
 [brain]
 first_ms = 800

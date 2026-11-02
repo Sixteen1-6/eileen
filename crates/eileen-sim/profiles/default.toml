@@ -33,10 +33,10 @@ power = "ac"
 
 # Section 4.4's figures: the core, the speech process with its models, a claude session each.
 [eileen]
-core_mb = 60
-speech_mb = 1250
-brain_mb = 400
-worker_mb = 400
+core = 60
+speech = 1250
+brain = 400
+worker = 400
 
 [brain]
 first_ms = 800

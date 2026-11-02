@@ -75,9 +75,12 @@ fn readings(world: &World) -> Vec<(u64, MemoryPressure)> {
     world
         .inputs()
         .iter()
-        .filter_map(|record| match &record.input {
-            Input::Memory(reading) => Some((record.mono.0 / 1_000_000, reading.clone())),
-            _ => None,
+        .filter_map(|record| {
+            if let Input::Memory(reading) = &record.input {
+                Some((record.mono.0 / 1_000_000, reading.clone()))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -87,9 +90,12 @@ fn spoken(world: &World) -> Vec<String> {
     world
         .effects()
         .iter()
-        .filter_map(|effect| match &effect.body {
-            Effect::Speech(SpeechCmd::Speak { clauses, .. }) => Some(clauses.clone()),
-            _ => None,
+        .filter_map(|effect| {
+            if let Effect::Speech(SpeechCmd::Speak { clauses, .. }) = &effect.body {
+                Some(clauses.clone())
+            } else {
+                None
+            }
         })
         .flatten()
         .collect()

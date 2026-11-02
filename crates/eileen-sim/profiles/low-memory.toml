@@ -40,10 +40,10 @@ closes_at_s = 120
 cpu_pct = 60
 
 [eileen]
-core_mb = 60
-speech_mb = 1250
-brain_mb = 400
-worker_mb = 400
+core = 60
+speech = 1250
+brain = 400
+worker = 400
 
 # Answers come slower on a PC that pages.
 [brain]

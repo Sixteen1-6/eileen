@@ -152,18 +152,18 @@ pub struct HeavyApp {
     pub cpu_pct: u8,
 }
 
-/// What Eileen's own processes hold, MB (section 4.4).
+/// What Eileen's own processes hold, each in MB (section 4.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EileenCosts {
     /// The core process.
-    pub core_mb: u32,
+    pub core: u32,
     /// The speech process, from its start until it ends.
-    pub speech_mb: u32,
+    pub speech: u32,
     /// The brain session.
-    pub brain_mb: u32,
+    pub brain: u32,
     /// Each worker session, from its start until it exits.
-    pub worker_mb: u32,
+    pub worker: u32,
 }
 
 /// How the fake brain backend answers a turn.
@@ -198,7 +198,7 @@ pub struct FaultProfile {
 impl FaultProfile {
     /// Whether any fault can fire.
     #[must_use]
-    pub const fn on(&self) -> bool {
+    pub const fn on(self) -> bool {
         self.activate_per_mille > 0 && self.fire_per_mille > 0
     }
 }
@@ -279,7 +279,7 @@ impl PcProfile {
     /// The rules a PC keeps: the other apps fit in it, the biggest is one of them, a percent
     /// is at most 100, and a heavy app has a name, a peak and a growth, and closes after it
     /// opens.
-    fn check(&self) -> Result<(), &'static str> {
+    const fn check(&self) -> Result<(), &'static str> {
         if self.physical_mb == 0 || self.commit_limit_mb < self.physical_mb {
             return Err("the commit limit is at least the physical memory, which is not 0");
         }

@@ -76,11 +76,11 @@ impl Pc {
     /// while it runs, and each live worker session.
     #[must_use]
     pub fn eileen_mb(&self, using: EileenUse) -> u32 {
-        let speech = if using.speech { self.costs.speech_mb } else { 0 };
-        let workers = u64::from(self.costs.worker_mb).saturating_mul(u64::from(using.workers));
+        let speech = if using.speech { self.costs.speech } else { 0 };
+        let workers = u64::from(self.costs.worker).saturating_mul(u64::from(using.workers));
         clamp(
-            u64::from(self.costs.core_mb)
-                .saturating_add(u64::from(self.costs.brain_mb))
+            u64::from(self.costs.core)
+                .saturating_add(u64::from(self.costs.brain))
                 .saturating_add(u64::from(speech))
                 .saturating_add(workers),
         )
@@ -144,7 +144,7 @@ mod tests {
     use super::{EileenUse, Pc};
     use crate::profile::{Power, Profile};
 
-    fn pc(name: &str) -> Pc {
+    fn pc_of(name: &str) -> Pc {
         let profile = Profile::load(name).unwrap();
         Pc::new(&profile.pc, profile.eileen)
     }
@@ -157,19 +157,19 @@ mod tests {
     #[test]
     fn the_heavy_app_opens_grows_holds_and_closes() {
         // low-memory: opens at 20 s, 50 MB/s up to 2,000 MB, closes at 120 s.
-        let pc = pc("low-memory");
+        let pc = pc_of("low-memory");
         assert_eq!(pc.heavy_app_mb(19_999), 0, "not yet open");
         assert_eq!(pc.heavy_app_mb(20_000), 0, "opens with nothing");
         assert_eq!(pc.heavy_app_mb(30_000), 500, "10 s at 50 MB/s");
         assert_eq!(pc.heavy_app_mb(60_000), 2_000, "at its peak after 40 s");
         assert_eq!(pc.heavy_app_mb(119_999), 2_000, "holds its peak");
         assert_eq!(pc.heavy_app_mb(120_000), 0, "closed");
-        assert_eq!(pc("default").heavy_app_mb(60_000), 0, "the default PC has none");
+        assert_eq!(pc_of("default").heavy_app_mb(60_000), 0, "the default PC has none");
     }
 
     #[test]
     fn memory_follows_the_apps_and_eileen() {
-        let pc = pc("low-memory");
+        let pc = pc_of("low-memory");
         let idle = EileenUse { speech: true, workers: 0 };
         // 16,384 less 12,600 others, 60 core, 400 brain and 1,250 speech.
         let before = pc.reading(0, idle);
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn the_biggest_process_is_the_heavy_app_once_it_outgrows_the_browser() {
-        let pc = pc("low-memory");
+        let pc = pc_of("low-memory");
         assert_eq!(largest(&pc, 0), ("browser".to_owned(), 3_000), "the browser at first");
         assert_eq!(largest(&pc, 60_000), ("browser".to_owned(), 3_000), "2,000 is smaller");
         let roomy = Profile::load("default").unwrap();
@@ -211,13 +211,13 @@ mod tests {
 
     #[test]
     fn the_cpu_carries_the_heavy_app_while_it_is_open() {
-        let pc = pc("low-memory");
+        let pc = pc_of("low-memory");
         let before = pc.load(0);
         assert_eq!((before.cpu_busy_pct, before.heavy_app_open), (30, false), "{before:?}");
         let open = pc.load(50_000);
         assert_eq!((open.cpu_busy_pct, open.heavy_app_open), (90, true), "30 plus 60: {open:?}");
         assert_eq!(pc.load(120_000).cpu_busy_pct, 30, "back once it closed");
         assert_eq!(before.power, Power::Ac, "on mains");
-        assert_eq!(pc("media-playing").load(0).power, Power::Battery);
+        assert_eq!(pc_of("media-playing").load(0).power, Power::Battery);
     }
 }

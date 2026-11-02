@@ -765,10 +765,8 @@ impl World {
     /// faults that fire for it.
     fn brain_turn(&mut self) -> BrainTurn {
         let brain = self.profile.brain;
-        let jitter = match brain.first_jitter_ms {
-            0 => 0,
-            most => self.parts_rng.below(u64::from(most).saturating_add(1)),
-        };
+        let most = u64::from(brain.first_jitter_ms);
+        let jitter = if most == 0 { 0 } else { self.parts_rng.below(most.saturating_add(1)) };
         let dispatch =
             brain.dispatch_pct > 0 && self.parts_rng.chance(u32::from(brain.dispatch_pct), 100);
         let stall = fault!(self, "sim.brain.stall").then_some(u64::from(brain.stall_ms));

@@ -31,10 +31,10 @@ cpu_busy_pct = 10
 power = "ac"
 
 [eileen]
-core_mb = 60
-speech_mb = 1250
-brain_mb = 400
-worker_mb = 400
+core = 60
+speech = 1250
+brain = 400
+worker = 400
 
 # The first text comes sooner but varies, so a window often lands just as a reply starts.
 [brain]
