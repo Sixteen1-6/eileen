@@ -91,7 +91,7 @@ fn a_recording_that_does_not_read_to_its_end_releases_nothing() {
     let (one, two) = ("the first long answer, ".repeat(4), "the second long answer, ".repeat(4));
     let text = write(&[typed(1, &one), typed(2, &two), typed(3, &one)], &mut store);
     let first_line = text.iter().position(|byte| *byte == b'\n').unwrap() + 1;
-    let input = BufReader::new(FailsAfter { head: text.get(..first_line + 20).unwrap() });
+    let input = BufReader::new(FailsAfter { head: &text[..first_line + 20] });
     assert!(release_blobs(input, &mut store).is_err(), "the read failed");
     assert_eq!(store.refs(&blob_ref(one.as_bytes())).unwrap(), 2, "no count changed");
     assert_eq!(store.refs(&blob_ref(two.as_bytes())).unwrap(), 1, "no count changed");
@@ -145,7 +145,7 @@ impl Write for Full {
             return Err(std::io::Error::other("the disk is full"));
         }
         let n = buf.len().min(room);
-        self.taken.extend_from_slice(buf.get(..n).unwrap());
+        self.taken.extend_from_slice(&buf[..n]);
         Ok(n)
     }
 
@@ -191,7 +191,7 @@ impl Write for FailsOnce {
             return Err(std::io::Error::other("the disk was busy"));
         }
         let n = buf.len().min(at - self.out.len());
-        self.out.extend_from_slice(buf.get(..n).unwrap());
+        self.out.extend_from_slice(&buf[..n]);
         Ok(n)
     }
 
