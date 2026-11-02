@@ -21,13 +21,16 @@
 //!
 //! - Playing a script: its lines in order, held where the script waits for a user line, with its
 //!   faults (crash, delay, malformed line).
-//! - Answering the stdio interrupt: a `control_request` of subtype `interrupt` gets a success
-//!   `control_response` with its `request_id` whenever it arrives (between lines, during a
-//!   delay or while held). Any other request gets an error reply. The stub answers and plays
-//!   on; it does not cut the turn short. The reply copies the `control_response` envelope
-//!   Eileen sends the CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`,
-//!   `sent_to_cli`) without its inner `response` object. No reply the CLI wrote to an interrupt
-//!   has been recorded; WP3 acceptance 3's owner-run check records one, and it replaces this.
+//! - Answering the control requests the driver sends, whenever they arrive (before the first
+//!   user line, between lines, during a delay or while held), as CLI 2.1.316 answers them
+//!   before any user line: `interrupt` and `initialize` get a success `control_response` with
+//!   their `request_id`, and `mcp_status` one whose `response` is `{"mcpServers": [...]}`, the
+//!   `mcp_servers` of the script's first `system/init`. Any other request gets an error reply.
+//!   The stub answers and plays on; it does not cut the turn short. The replies copy the
+//!   `control_response` envelope Eileen sends the CLI
+//!   (`docs/research/fixtures/wp3-approval/stdio-control.json`, `sent_to_cli`). No reply the
+//!   CLI wrote to an interrupt or to `mcp_status` has been recorded; WP3 acceptance 3's
+//!   owner-run check records them, and they replace these.
 //! - The `stub_script` fuzz target's entry (`fuzz_entry`): scripts and stdin lines, both
 //!   untrusted input (section 3.3.16 asks a fuzz target of every parser of its formats).
 //! - The binary `eileen run --stub-harness` starts in place of the claude CLI ([`run`]).
