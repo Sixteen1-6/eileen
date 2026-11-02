@@ -3,7 +3,7 @@
 //! replaced by its placeholder); the writer keeps what it is given exactly, so the reader gives
 //! back the line that was written.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 
 use eileen_contracts::record::RecordLine;
 
@@ -45,13 +45,40 @@ impl<W: Write, B: Blobs> Writer<W, B> {
     }
 
     /// Writes one line and its newline. The line's blobs are stored first, so a crash part way
-    /// leaves a line whose blobs are all there, or a cut line the reader reports.
+    /// leaves a line whose blobs are all there, or a cut line whose complete stubs
+    /// [`release_blobs`](crate::reader::release_blobs) finds and releases. When the output
+    /// fails part way, the references of the stubs it did not take are released here, and
+    /// those it took are left for `release_blobs`, so none is released twice.
     pub fn write(&mut self, record: &RecordLine) -> Result<(), WriteError> {
         let mut text = line::encode(record, self.max_inline, &mut self.blobs)?;
         text.push('\n');
-        self.out.write_all(text.as_bytes()).map_err(WriteError::Io)?;
+        let bytes = text.as_bytes();
+        let mut taken = 0;
+        while let Some(rest) = bytes.get(taken..).filter(|rest| !rest.is_empty()) {
+            match self.out.write(rest) {
+                Ok(0) => return Err(self.failed(bytes, taken, ErrorKind::WriteZero.into())),
+                Ok(n) => taken += n,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => return Err(self.failed(bytes, taken, error)),
+            }
+        }
         self.lines = self.lines.saturating_add(1);
         Ok(())
+    }
+
+    /// Releases the references of the stubs past the first `taken` bytes of a line the output
+    /// failed to take whole: those are in no file, and the ones before are left to whoever
+    /// releases the recording.
+    fn failed(&mut self, line: &[u8], taken: usize, error: std::io::Error) -> WriteError {
+        let whole = line.strip_suffix(b"\n").unwrap_or(line);
+        let mut unwritten = line::stub_refs(whole).unwrap_or_default();
+        for blob in line::scan_refs(line.get(..taken).unwrap_or_default()) {
+            if let Some(at) = unwritten.iter().position(|left| *left == blob) {
+                unwritten.swap_remove(at);
+            }
+        }
+        line::release_all(&mut self.blobs, &unwritten);
+        WriteError::Io(error)
     }
 
     /// The number of lines written.
