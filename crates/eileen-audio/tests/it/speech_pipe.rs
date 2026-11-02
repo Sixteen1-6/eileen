@@ -175,10 +175,9 @@ impl Rig {
 fn voice(inputs: &[Input]) -> Vec<VoiceEvent> {
     inputs
         .iter()
-        .filter_map(|input| match input {
-            Input::Voice(event) => Some(event.clone()),
-            _ => None,
-        })
+        .filter_map(
+            |input| if let Input::Voice(event) = input { Some(event.clone()) } else { None },
+        )
         .collect()
 }
 
@@ -186,9 +185,12 @@ fn voice(inputs: &[Input]) -> Vec<VoiceEvent> {
 fn ends(inputs: &[Input]) -> Vec<String> {
     voice(inputs)
         .into_iter()
-        .filter_map(|event| match event {
-            VoiceEvent::EndOfTurn { text, .. } => Some(text.into_inner()),
-            _ => None,
+        .filter_map(|event| {
+            if let VoiceEvent::EndOfTurn { text, .. } = event {
+                Some(text.into_inner())
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -217,7 +219,7 @@ struct Heard {
 /// A turn a stand-in recognised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Turn {
-    turn: TurnId,
+    id: TurnId,
     level: i16,
     replayed: bool,
     /// The frame whose silence ended it.
@@ -301,7 +303,9 @@ impl StandIn {
                 self.last_pong_seq = self.newest;
             }
             FrameBody::Pong => self.got.push(Got::Pong),
-            other => panic!("the core may not send {other:?}"),
+            other @ (FrameBody::Event(_) | FrameBody::Pcm { .. } | FrameBody::Hello(_)) => {
+                panic!("the core may not send {other:?}")
+            }
         }
     }
 
@@ -330,7 +334,7 @@ impl StandIn {
             Some(open) if heard.level == 0 => {
                 self.open = None;
                 self.turns.push(Turn {
-                    turn: open.turn,
+                    id: open.turn,
                     level: open.level,
                     replayed: open.replayed,
                     ended_at: heard.seq,
@@ -365,11 +369,12 @@ impl StandIn {
     fn audio(&self) -> Vec<Heard> {
         self.got
             .iter()
-            .filter_map(|got| match got {
-                Got::Audio { seq, flags, level } => {
+            .filter_map(|got| {
+                if let Got::Audio { seq, flags, level } = got {
                     Some(Heard { seq: *seq, flags: *flags, level: *level })
+                } else {
+                    None
                 }
-                _ => None,
             })
             .collect()
     }
@@ -408,9 +413,12 @@ async fn a_stand_in_that_connects_late_recognises_an_earlier_command_once_as_rep
     let inputs = rig.inputs();
     let started: Vec<bool> = voice(&inputs)
         .into_iter()
-        .filter_map(|event| match event {
-            VoiceEvent::SpeechStarted { replayed, .. } => Some(replayed),
-            _ => None,
+        .filter_map(|event| {
+            if let VoiceEvent::SpeechStarted { replayed, .. } = event {
+                Some(replayed)
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(started, [true], "one SpeechStarted reached the core, marked replayed");
@@ -480,7 +488,7 @@ async fn after_a_kill_no_finished_turn_is_recognised_again_and_an_open_one_once_
     assert!(audio.iter().all(|heard| heard.level != FIRST), "the finished command is not resent");
     assert_eq!(second.turns.len(), 1, "the open command is recognised once: {:?}", second.turns);
     assert_eq!(second.turns[0].level, SECOND);
-    assert_ne!(second.turns[0].turn, open.turn, "under a new turn ID");
+    assert_ne!(second.turns[0].id, open.turn, "under a new turn ID");
     assert!(second.turns[0].replayed, "from replayed frames");
     assert_eq!(ends(&rig.inputs()), [text_of(FIRST), text_of(SECOND)], "each command once");
     rig.stop().await;
