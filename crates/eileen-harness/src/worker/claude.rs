@@ -306,12 +306,12 @@ impl WorkerDriver for ClaudeWorker {
                 continue;
             }
             let session = self.session.as_mut()?;
-            let line = match session.process.stdout.next().await {
-                Some(body) => stream::parse(body, &self.redactor),
-                None => {
-                    self.end(false).await;
-                    continue;
-                }
+            let redactor = &self.redactor;
+            let parsed =
+                session.process.stdout.next().await.map(|body| stream::parse(body, redactor));
+            let Some(line) = parsed else {
+                self.end(false).await;
+                continue;
             };
             self.on_line(line).await;
         }
