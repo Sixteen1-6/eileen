@@ -1,6 +1,6 @@
-//! The one job through `Core::step`: dispatch, its cold session, its hooks, its end and its
+//! A job through `Core::step`: dispatch, its cold session, its hooks, its end and its
 //! announcement; the refusal of a kind not built, a restart, slugs, the folder a coding job
-//! works in, and cancel by name.
+//! works in, and cancel by name. Many jobs at once are in `steering`.
 
 use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, UserErrorKind};
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
@@ -18,9 +18,9 @@ use serde_json::{Value, json};
 
 use super::{Harness, ask_brain, brain_turn, done, events, ready, speech, spoken, timer_set};
 
-const BRAIN: Caller = Caller::Shim { connection: 1, role: ShimRole::Brain };
+pub(super) const BRAIN: Caller = Caller::Shim { connection: 1, role: ShimRole::Brain };
 
-fn hello() -> Value {
+pub(super) fn hello() -> Value {
     json!({
         "kind": "general",
         "task": "create hello.txt containing hi",
@@ -29,7 +29,7 @@ fn hello() -> Value {
 }
 
 /// A `jobs_dispatch` call from `caller`, claiming `origin`.
-fn dispatch_from(caller: Caller, origin: CallOrigin, args: Value) -> Input {
+pub(super) fn dispatch_from(caller: Caller, origin: CallOrigin, args: Value) -> Input {
     Input::ToolCall(ToolCallRequest {
         caller,
         origin,
@@ -41,15 +41,15 @@ fn dispatch_from(caller: Caller, origin: CallOrigin, args: Value) -> Input {
     })
 }
 
-fn addressed(turn: TurnId) -> CallOrigin {
+pub(super) fn addressed(turn: TurnId) -> CallOrigin {
     CallOrigin::Brain { turn, authority: TurnAuthority::Addressed }
 }
 
-fn dispatch(turn: TurnId) -> Input {
+pub(super) fn dispatch(turn: TurnId) -> Input {
     dispatch_from(BRAIN, addressed(turn), hello())
 }
 
-fn tool_reply(effects: &[Effect]) -> Option<(bool, String)> {
+pub(super) fn tool_reply(effects: &[Effect]) -> Option<(bool, String)> {
     effects.iter().find_map(|e| {
         if let Effect::ToolReply { result, .. } = e {
             let text = result
@@ -64,7 +64,7 @@ fn tool_reply(effects: &[Effect]) -> Option<(bool, String)> {
     })
 }
 
-fn started_session(effects: &[Effect]) -> Option<WorkerSessionId> {
+pub(super) fn started_session(effects: &[Effect]) -> Option<WorkerSessionId> {
     effects.iter().find_map(|e| {
         if let Effect::Worker(session, WorkerCmd::Start(_)) = e { Some(*session) } else { None }
     })
@@ -104,7 +104,7 @@ fn hook_decision(effects: &[Effect]) -> Option<HookDecision> {
     })
 }
 
-fn init() -> WorkerEvent {
+pub(super) fn init() -> WorkerEvent {
     WorkerEvent::Init {
         session_id: "s1".to_owned(),
         pid: 42,
@@ -117,7 +117,7 @@ fn init() -> WorkerEvent {
 }
 
 #[test]
-fn one_job_runs_and_a_second_dispatch_is_refused_with_a_sentence() {
+fn a_job_runs_and_a_second_dispatch_runs_beside_it() {
     let mut h = Harness::new();
     let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
     let effects = h.step(dispatch(turn));
@@ -143,12 +143,12 @@ fn one_job_runs_and_a_second_dispatch_is_refused_with_a_sentence() {
     );
     let (is_error, text) = tool_reply(&effects).unwrap();
     assert!(!is_error && text.contains(&job.to_string()), "the reply carries the job's id: {text}");
-    let (is_error, text) = tool_reply(&h.step(dispatch(turn))).unwrap();
-    assert!(is_error, "refused");
-    assert_eq!(
-        text, "the hello file is still running; I can start another when it finishes.",
-        "said why"
-    );
+    let second = h.step(dispatch(turn));
+    let (is_error, _) = tool_reply(&second).unwrap();
+    assert!(!is_error, "a second job starts while the first runs: {second:?}");
+    let (other, _) = accepted(&second).expect("accepted");
+    assert_ne!(other, job, "a job of its own");
+    assert_ne!(started_session(&second), Some(session), "with a session of its own");
     let effects = h.step(Input::Worker(session, init()));
     assert!(
         effects.iter().any(
@@ -325,7 +325,14 @@ fn a_dispatch_is_refused_with_a_sentence_unless_an_addressed_brain_turn_asked() 
         ("a worker origin", BRAIN, Some(from_worker), hello()),
         ("the session origin", BRAIN, Some(CallOrigin::Session), hello()),
         ("a turn the core never sent", BRAIN, Some(unknown), hello()),
-        ("a fanout of two", BRAIN, None, with(json!({ "fanout": 2 }))),
+        ("a fanout of nine", BRAIN, None, with(json!({ "fanout": 9 }))),
+        ("a fanout of none", BRAIN, None, with(json!({ "fanout": 0 }))),
+        (
+            "split with too few sub-tasks",
+            BRAIN,
+            None,
+            with(json!({ "fanout": 2, "mode": "split", "subtasks": ["a"] })),
+        ),
         ("a kind the core runs itself", BRAIN, None, with(json!({ "kind": "librarian" }))),
         ("the reserved kind", BRAIN, None, with(json!({ "kind": "ml_project" }))),
         ("a route not built", BRAIN, None, with(json!({ "route": "codex" }))),
@@ -362,7 +369,7 @@ fn a_dispatch_after_stop_or_after_the_turn_ended_is_refused() {
 }
 
 /// The job a step accepted, with its spoken name.
-fn accepted(effects: &[Effect]) -> Option<(JobId, String)> {
+pub(super) fn accepted(effects: &[Effect]) -> Option<(JobId, String)> {
     events(effects).into_iter().find_map(|e| {
         if let BusEvent::JobAccepted { job, name, .. } = e {
             Some((*job, name.clone()))
@@ -373,7 +380,7 @@ fn accepted(effects: &[Effect]) -> Option<(JobId, String)> {
 }
 
 /// The spec of the session a step started.
-fn start_spec(effects: &[Effect]) -> Option<SessionSpec> {
+pub(super) fn start_spec(effects: &[Effect]) -> Option<SessionSpec> {
     effects.iter().find_map(|e| {
         if let Effect::Worker(_, WorkerCmd::Start(spec)) = e {
             Some((**spec).clone())
@@ -384,7 +391,7 @@ fn start_spec(effects: &[Effect]) -> Option<SessionSpec> {
 }
 
 /// The job rows a step persisted.
-fn persisted(effects: &[Effect]) -> Vec<Job> {
+pub(super) fn persisted(effects: &[Effect]) -> Vec<Job> {
     effects
         .iter()
         .filter_map(|e| {
@@ -397,7 +404,7 @@ fn persisted(effects: &[Effect]) -> Vec<Job> {
         .collect()
 }
 
-fn finished() -> WorkerEvent {
+pub(super) fn finished() -> WorkerEvent {
     WorkerEvent::TurnDone {
         cost: Cost::default(),
         is_error: false,
