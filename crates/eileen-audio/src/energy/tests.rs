@@ -225,7 +225,8 @@ fn judging_a_window_allocates_nothing() {
 #[test]
 fn assembling_windows_allocates_nothing() {
     let mut assembler = WindowAssembler::new();
-    let loud: [f32; CHUNK] = std::array::from_fn(|n| if n % 2 == 0 { 0.03 } else { -0.03 });
+    let loud: [f32; CHUNK] =
+        std::array::from_fn(|n| if n.is_multiple_of(2) { 0.03 } else { -0.03 });
     let quiet = [0.0; CHUNK];
     let mut windows = 0;
     let counted = allocation_counter::measure(|| {
