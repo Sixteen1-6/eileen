@@ -223,6 +223,35 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   executable, a version newer than the tested one, and signed in. Still to do there: that run,
   and recording here the exit code `claude auth status` gives when signed out.
 
+- `wp3/stub-play`: `eileen-stub-harness` plays `StubScriptLine` scripts (section 6.5's item
+  for it). The script is named by `--stub-script <path>` or, when no argument names one, by
+  `EILEEN_STUB_SCRIPT`; every other argument is ignored, so `ClaudeWorker` can start the stub
+  with the claude CLI's own argv. The whole script loads before anything plays, and a line
+  that does not parse, or a `crash` code outside 0 to 255, is a typed error naming the line.
+  `event` lines are written as stream-json, `malformed` bytes as one line, a `narration` as an
+  assistant text message whose lines start with `> `, `delay` waits, `crash` exits with its
+  code, and `await_user` holds until the next stream-json user line; after the last line the
+  stub waits for stdin to close, and a user line then (a turn the script lacks) is an error.
+  A named thread reads stdin into a bounded queue, lines capped at 16 MB as the harness caps
+  the CLI's. An interrupt `control_request` gets a success `control_response` with its id, the
+  shape `stdio-control.json` recorded and `Requests::settle` accepts, whenever it arrives;
+  any other request gets an error reply. The stub answers and plays on: what the real CLI
+  does to the turn after an interrupt is acceptance 3's owner-run check, and a script can
+  then carry it. A `permission_request` line ends the run with `RunError::NotPlayed` and
+  plays nothing after it, never a silent allow, until `wp3/approval-contract` plays the
+  guard and `approve` (above). The first five scripts in `tests/harness-scripts/` (a worker
+  job that writes `hello.txt` and narrates, a `Skill` call, a crash mid-turn, a malformed line
+  and a two-turn brain conversation with text deltas) are derived from the approval contract
+  test's recorded runs, and the folder's README names each one's source. The brain script's
+  `stream_event` lines are not recorded, since those runs did not ask for partial messages;
+  the owner-run recordings replace them. Integration tests start the binary through
+  `eileen_supervisor` and read its stdout back through `eileen_harness::stream`: each script's
+  worker or brain events, the crash's exit code, the hold at `await_user` with interrupts
+  answered before and between turns, the script from the environment under claude's argv,
+  and the typed errors; a corpus test checks every script loads, passes the `Redactor`
+  unchanged and is named in the README. Part of acceptance 2; the pooled job and cancel come
+  with `ClaudeWorker` running against the stub.
+
 ## Surprises
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
