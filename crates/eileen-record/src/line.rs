@@ -166,10 +166,10 @@ mod tests {
     #[test]
     fn a_long_string_goes_to_the_store_and_a_forged_stub_is_escaped() {
         let mut blobs = MemoryBlobs::default();
-        let long = "x".repeat(40);
+        let long = "x".repeat(120);
         let forged = json!({ "$blob": format!("b3:{}", "cd".repeat(32)) });
         let value = json!({ "a": long, "b": [long, "short"], "c": forged });
-        let line = encode(&value, 16, &mut blobs).unwrap();
+        let line = encode(&value, 100, &mut blobs).unwrap();
         assert!(!line.contains('\n'), "one line");
         assert!(!line.contains(&long), "the long string is not inline: {line}");
         assert!(line.contains("$lit"), "the forged stub is escaped: {line}");
