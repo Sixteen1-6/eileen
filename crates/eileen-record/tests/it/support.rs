@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use eileen_contracts::core_io::{Input, UserInput};
 use eileen_contracts::harness::{HookDecision, HookReply, HookRequest};
-use eileen_contracts::ids::{MonoTime, Personal, TraceCtx, Untrusted, WallTime, WorkerSessionId};
+use eileen_contracts::ids::{
+    JobId, MonoTime, Personal, TraceCtx, TurnId, Untrusted, WallTime, WorkerSessionId,
+};
 use eileen_contracts::record::{HookAnswerRecord, InputRecord, RecordLine};
 use serde_json::Value;
 
@@ -48,6 +50,25 @@ pub(crate) fn input(seq: u64, input: Input) -> RecordLine {
         ctx: TraceCtx::default(),
         input,
     }))
+}
+
+/// The turn numbered `n`, from 0 to 99.
+pub(crate) fn turn(n: u8) -> TurnId {
+    format!("turn_01K8ZQ3V2X4Y5Z6A7B8C9D0E{n:02}").parse().unwrap()
+}
+
+/// The job numbered `n`, from 0 to 99.
+pub(crate) fn job(n: u8) -> JobId {
+    format!("job_01K8ZQ3V2X4Y5Z6A7B8C9D0E{n:02}").parse().unwrap()
+}
+
+/// `line`, an input, attributed to a turn and a job.
+pub(crate) fn of(mut line: RecordLine, turn: Option<TurnId>, job: Option<JobId>) -> RecordLine {
+    if let RecordLine::Input(record) = &mut line {
+        record.ctx.turn = turn;
+        record.ctx.job = job;
+    }
+    line
 }
 
 /// Text typed into Eileen's own window.
