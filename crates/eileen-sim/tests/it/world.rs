@@ -14,7 +14,6 @@ use eileen_sim::faults::{
 };
 use eileen_sim::invariants::ChildEvent;
 use eileen_sim::parts::{LOAD_MS, Process, SLOW_LOAD_MS};
-use eileen_sim::profile::Power;
 use eileen_sim::world::StepOutcome;
 use eileen_sim::{BrainReply, Profile, World};
 
@@ -150,8 +149,11 @@ fn the_cpu_and_power_follow_the_profile_and_the_heavy_app() {
     assert!(!world.load().heavy_app_open, "not yet open");
     settle(&mut world, 30_000);
     assert_eq!(world.load().cpu_busy_pct, 90, "the heavy app adds 60 percent");
-    assert_eq!(world.load().power, Power::Ac, "on mains");
-    assert_eq!(ready("media-playing").load().power, Power::Battery, "on battery");
+    assert!(!world.load().power.has_battery, "a desktop");
+    assert!(!world.load().build_slot_held, "no build yet");
+    settle(&mut world, 40_000);
+    assert!(world.load().build_slot_held, "a build holds a slot from 60 s until 100 s");
+    assert!(ready("media-playing").load().power.on_battery, "a laptop on its battery");
 }
 
 #[test]
@@ -217,16 +219,23 @@ fn a_slow_load_readies_the_speech_process_later() {
 fn a_speech_process_that_crashes_at_each_heartbeat_is_restarted_with_backoff() {
     let mut world = world_with("default", Faults::every(&[SPEECH_CRASH]).unwrap());
     settle(&mut world, 180_000);
-    let downs = world.children().iter().filter(|c| c.event == ChildEvent::Down).count();
-    assert!(downs >= 3, "it crashed again and again: {:?}", world.children());
-    let restarts: Vec<u64> = world
-        .children()
-        .iter()
-        .filter(|c| c.child == SidecarId::Speech && c.event == ChildEvent::Restarted)
-        .map(|c| c.at_ms)
-        .collect();
+    let speech = |event: ChildEvent| {
+        world
+            .children()
+            .iter()
+            .filter(|c| c.child == SidecarId::Speech && c.event == event)
+            .map(|c| c.at_ms)
+            .collect::<Vec<u64>>()
+    };
+    let downs = speech(ChildEvent::Down);
+    assert!(downs.len() >= 5, "it crashed again and again: {:?}", world.children());
+    let restarts = speech(ChildEvent::Restarted);
+    assert!(restarts.len() >= 5, "and was restarted each time: {:?}", world.children());
+    // Each gap is a load, a heartbeat and the backoff step of 1 s doubling to 60 s, so the
+    // fourth gap's step is at least 8 s longer than the first's.
     let gaps: Vec<u64> = restarts.windows(2).map(|pair| pair[1] - pair[0]).collect();
     assert!(gaps.windows(2).all(|pair| pair[1] >= pair[0]), "the restarts space out: {gaps:?}");
+    assert!(gaps[3] >= gaps[0] + 8_000, "by a doubling step: {gaps:?}");
     assert!(
         world.inputs().iter().any(|record| matches!(
             record.input,
