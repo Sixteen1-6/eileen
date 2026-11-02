@@ -110,8 +110,10 @@ async fn a_faster_pace_runs_more_buffers_with_the_same_times() {
         WavSource::new(ramp_clip(48_000), Pace::Faster(NonZeroU32::new(4).unwrap())).unwrap();
     let (callback, heard) = recorder();
     let stream = source.start(callback).unwrap();
-    // Four times faster: a buffer every 2.5 ms, so ten by 23 ms.
-    sleep(ms(23)).await;
+    // Four times faster: a buffer every 2.5 ms, so ten by 24 ms. Tokio's timer rounds a deadline
+    // up to the next millisecond, so the tenth, due at 22.5 ms, runs at 23 ms and the eleventh at
+    // 25 ms.
+    sleep(ms(24)).await;
     stream.stop();
     assert_eq!(times(&heard), every_10_ms(0, 10), "times count audio, not the pace");
 }
