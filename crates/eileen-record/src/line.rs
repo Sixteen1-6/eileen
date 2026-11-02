@@ -135,7 +135,7 @@ fn collect_refs(value: &Value, refs: &mut Vec<BlobRef>) -> Result<(), LineError>
                 refs.push(text.parse().map_err(|_| LineError::Malformed)?);
                 Ok(())
             }
-            Some((BLOB_KEY, _) | (LITERAL_KEY, _)) => match map.get(LITERAL_KEY) {
+            Some((BLOB_KEY | LITERAL_KEY, _)) => match map.get(LITERAL_KEY) {
                 Some(Value::Object(inner)) => {
                     inner.values().try_for_each(|field| collect_refs(field, refs))
                 }

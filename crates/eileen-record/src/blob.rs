@@ -266,7 +266,7 @@ impl Blobs for MemoryBlobs {
 }
 
 /// An IO error's mapping, naming what was done to which file.
-fn io(op: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> BlobStoreError + '_ {
+fn io<'a>(op: &'static str, path: &'a Path) -> impl FnOnce(std::io::Error) -> BlobStoreError + 'a {
     move |source| BlobStoreError::Io { op, path: path.to_path_buf(), source }
 }
 
