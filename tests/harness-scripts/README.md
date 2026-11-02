@@ -10,8 +10,21 @@ Each script is derived from the real runs of the approval contract test on CLI 2
 `docs/research/2026-10-wp3-approval-contract.md`). Those fixtures were already redacted
 (the user's folders, transcript paths and plan usage removed); every line here also passes
 through `eileen_trace::Redactor` unchanged, which `eileen-stub-harness::it::corpus` checks.
-Tool use ids, message ids and the prose are rewritten for each script's task; the field sets,
-the `system/init` shape and the `result` shape are the recorded ones.
+Tool use ids, message ids and the prose are rewritten for each script's task; the field sets
+and the `result` shape are the recorded ones.
+
+`system/init` is the recorded one with one difference. The fixtures kept only the fields an
+approval parser reads and listed the names of the others under a `$omitted` key, which the CLI
+never writes, so the scripts drop that key and put back, with placeholder values, the fields
+whose types the Agent SDK documents for this message: `cwd` (the fixtures' redacted scratch
+path, `<runs>\pt-allow\proj` for the workers and `<runs>\brain` for the brain),
+`slash_commands`, `skills` and `plugins` (empty lists) and `output_style` (`"default"`). The
+other names the fixtures list are left out, because no recording holds their values or types:
+`additional_directories`, `analytics_disabled`, `fast_mode_disabled_reason`, `fast_mode_state`,
+`messaging_socket_path`, `original_cwd`, `per_turn_effort_active`, `powershell_path`,
+`product_feedback_disabled`, `terminal_slash_commands` and `view_mode`. The owner-run recording
+puts back the real values of all of them. A key that starts with `$` is a fixture's annotation,
+never the CLI's, and `eileen-stub-harness::it::corpus` fails on one in any `event` line.
 
 | Script | What it plays | Source |
 |---|---|---|

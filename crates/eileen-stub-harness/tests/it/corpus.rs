@@ -1,12 +1,15 @@
 //! The scripts under `tests/harness-scripts/`: every one parses as `StubScriptLine`, passes
-//! through the `Redactor` unchanged, and is named with its source in the folder's README.
+//! through the `Redactor` unchanged, holds no fixture annotation, and is named with its source
+//! in the folder's README.
 
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use eileen_contracts::record::StubScriptLine;
 use eileen_stub_harness::load;
 use eileen_trace::Redactor;
+use serde_json::Value;
 
 fn folder() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/harness-scripts")
@@ -56,5 +59,34 @@ fn the_readme_names_every_script() {
     let readme = fs::read_to_string(folder().join("README.md")).unwrap();
     for (name, _) in scripts() {
         assert!(readme.contains(&format!("`{name}`")), "README.md names {name} and its source");
+    }
+}
+
+/// The first key, at any depth, that starts with `$`.
+fn annotation(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(map) => map.iter().find_map(|(key, inner)| {
+            key.starts_with('$').then_some(key.as_str()).or_else(|| annotation(inner))
+        }),
+        Value::Array(items) => items.iter().find_map(annotation),
+        _ => None,
+    }
+}
+
+/// A research fixture marks what it left out with keys such as `$omitted`; the CLI never
+/// writes one, and the stub writes every `event` as it is, so none may reach a script.
+#[test]
+fn no_event_holds_a_fixture_annotation() {
+    for (name, text) in scripts() {
+        let script = load(&text).unwrap();
+        for (line, step) in script.lines() {
+            if let StubScriptLine::Event { json } = step {
+                assert_eq!(
+                    annotation(json),
+                    None,
+                    "{name} line {line} holds a fixture's annotation"
+                );
+            }
+        }
     }
 }

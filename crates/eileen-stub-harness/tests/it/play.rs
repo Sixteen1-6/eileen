@@ -359,8 +359,10 @@ async fn a_permission_request_ends_the_run_and_is_never_allowed() {
 async fn no_script_is_an_error() {
     let spec = ChildSpec {
         raw_stderr: true,
+        // An empty value names no script, whatever the environment the tests run in sets.
         ..ChildSpec::new("eileen-stub-harness", env!("CARGO_BIN_EXE_eileen-stub-harness"))
             .args(CLAUDE_ARGV.iter().copied())
+            .envs([(SCRIPT_ENV, "")])
     };
     let mut stub = Stub::from_spec(&spec);
     let mut stderr = stub.child.take_stderr().unwrap();
@@ -369,4 +371,51 @@ async fn no_script_is_an_error() {
     timeout(HANG, stderr.read_to_string(&mut text)).await.expect("stderr stayed open").unwrap();
     assert!(text.contains(SCRIPT_ENV), "it says how to name a script: {text}");
     assert_eq!(stub.exit_code().await, Some(1), "a failure");
+}
+
+/// The interrupt is answered while a `delay` line runs, not only between lines: the script's
+/// delay is ten minutes, so a reply within `HANG` can only come from inside it. The stub is then
+/// dropped, which kills it (the supervisor's `Child`); closing its stdin instead would leave it
+/// sleeping out the delay.
+#[tokio::test]
+async fn an_interrupt_during_a_delay_is_answered_at_once() {
+    let mut stub = Stub::start(&fixture("interrupt-in-delay.ndjson"));
+    stub.send(USER_LINE).await;
+    let init: serde_json::Value = serde_json::from_str(&stub.next().await.unwrap()).unwrap();
+    assert_eq!(init["subtype"], "init", "the turn started, so the delay is running");
+    let interrupt =
+        r#"{"type":"control_request","request_id":"in_delay_1","request":{"subtype":"interrupt"}}"#;
+    stub.send(&format!("{interrupt}\n")).await;
+    let reply = stub.next().await.unwrap();
+    let Line::Control(Message::Response { request_id, error }) = parsed(&reply) else {
+        panic!("the reply to the interrupt, during the delay: {reply}");
+    };
+    assert_eq!((request_id.as_str(), error), ("in_delay_1", None), "a success for that request");
+    drop(stub);
+}
+
+/// Starts the stub on `script`, writes one user line and leaves stdin open, as `ClaudeWorker`
+/// does for a whole session, so the stub stops while its reader thread still waits on stdin.
+/// Gives stdout's lines and the exit code; stdin closes only when the stub is dropped after.
+async fn stdin_left_open(script: &Path) -> (Vec<String>, Option<i32>) {
+    let mut stub = Stub::start(script);
+    stub.send(USER_LINE).await;
+    let lines = stub.rest().await;
+    let code = stub.exit_code().await;
+    assert!(stub.stdin.is_some(), "stdin stayed open throughout");
+    (lines, code)
+}
+
+#[tokio::test]
+async fn a_crash_with_stdin_open_still_exits_with_its_code() {
+    let (lines, code) = stdin_left_open(&script("worker-crash.ndjson")).await;
+    assert_eq!(worker(&lines).len(), 3, "the lines before the crash: {lines:?}");
+    assert_eq!(code, Some(3), "the script's exit code, with the reader still in a read");
+}
+
+#[tokio::test]
+async fn a_permission_request_with_stdin_open_still_exits_as_a_failure() {
+    let (lines, code) = stdin_left_open(&fixture("permission-request.ndjson")).await;
+    assert_eq!(worker(&lines), ["narration Starting"], "the lines before it");
+    assert_eq!(code, Some(1), "a failure, with the reader still in a read");
 }
