@@ -128,9 +128,10 @@ fn next_read(mut reader: SpeechReader, mut buf: Box<[u8]>) -> Owned<ReadDone> {
     })
 }
 
-fn next_effect(
-    mut effects: Box<dyn EffectSource>,
-) -> Owned<(Box<dyn EffectSource>, Option<Envelope<Effect>>)> {
+/// A finished wait for an effect, with the source it came from.
+type EffectDone = (Box<dyn EffectSource>, Option<Envelope<Effect>>);
+
+fn next_effect(mut effects: Box<dyn EffectSource>) -> Owned<EffectDone> {
     Box::pin(async move {
         let effect = effects.recv().await;
         (effects, effect)
@@ -326,26 +327,43 @@ impl Link {
 
     async fn on_effect(&mut self, envelope: Envelope<Effect>) {
         let Envelope { ctx, body, .. } = envelope;
-        match body {
-            Effect::Speech(cmd) => self.on_command(SpeechCommandFrame { ctx, span: 0, cmd }).await,
-            Effect::Audio(AudioCmd::SetCapture(on)) => self.set_capture(on),
-            Effect::Audio(cmd) => {
+        let family = body.family();
+        if let Effect::Speech(cmd) = body {
+            self.on_command(SpeechCommandFrame { ctx, span: 0, cmd }).await;
+        } else if let Effect::Audio(cmd) = body {
+            self.on_audio(cmd);
+        } else {
+            tracing::warn!(
+                ?family,
+                "an effect routed to the audio component that it does not take"
+            );
+        }
+    }
+
+    fn on_audio(&mut self, cmd: AudioCmd) {
+        match cmd {
+            AudioCmd::SetCapture(on) => self.set_capture(on),
+            AudioCmd::Duck { .. }
+            | AudioCmd::Unduck
+            | AudioCmd::Pause { .. }
+            | AudioCmd::Resume { .. }
+            | AudioCmd::Stop { .. }
+            | AudioCmd::PlayPhrase { .. }
+            | AudioCmd::Earcon(_)
+            | AudioCmd::Record { .. } => {
                 tracing::debug!(
                     ?cmd,
                     "this audio command is served by a later part of the audio series"
                 );
             }
-            other => {
-                tracing::warn!(family = ?other.family(), "an effect routed to the audio component that it does not take");
-            }
         }
     }
 
     async fn on_command(&mut self, command: SpeechCommandFrame) {
-        match &command.cmd {
-            SpeechCmd::SetMode(_) => self.mode = Some(command.clone()),
-            SpeechCmd::SetHotwords { .. } => self.hotwords = Some(command.clone()),
-            _ => {}
+        if matches!(command.cmd, SpeechCmd::SetMode(_)) {
+            self.mode = Some(command.clone());
+        } else if matches!(command.cmd, SpeechCmd::SetHotwords { .. }) {
+            self.hotwords = Some(command.clone());
         }
         if self.live.is_some() {
             self.encode_command(command);
@@ -358,14 +376,21 @@ impl Link {
         match command.cmd {
             SpeechCmd::SetMode(_) | SpeechCmd::SetHotwords { .. } => {}
             SpeechCmd::Speak { speak, .. } => {
-                self.send(Input::Voice(VoiceEvent::SpeakDone { speak }), ctx)
+                self.send(Input::Voice(VoiceEvent::SpeakDone { speak }), ctx);
             }
             SpeechCmd::Check { request, .. } => {
                 let result =
                     SpeechCheck::Unavailable { reason: "speech is not connected".to_owned() };
                 self.send(Input::Voice(VoiceEvent::CheckResult { request, result }), ctx);
             }
-            _ => self.hold(command),
+            SpeechCmd::Cancel { .. }
+            | SpeechCmd::Resume { .. }
+            | SpeechCmd::Embed { .. }
+            | SpeechCmd::LoadModel { .. }
+            | SpeechCmd::UnloadModel { .. }
+            | SpeechCmd::Enroll { .. }
+            | SpeechCmd::CloneFromRecording { .. }
+            | SpeechCmd::DeleteVoice { .. } => self.hold(command),
         }
     }
 
@@ -592,7 +617,7 @@ impl Link {
             (Ok(connection), Some(transport)) => transport.close(connection),
             (Ok(connection), None) => drop(connection),
             (Err(halves), _) => {
-                tracing::warn!(error = %halves, "a connection's halves did not rejoin")
+                tracing::warn!(error = %halves, "a connection's halves did not rejoin");
             }
         }
     }
