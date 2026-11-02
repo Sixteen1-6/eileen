@@ -58,6 +58,11 @@ impl Brain {
     pub(crate) fn live_turn(&self) -> Option<(TurnId, TurnAuthority)> {
         self.live.as_ref().map(|live| (live.turn, live.authority))
     }
+
+    /// The user's words the turn in flight holds, for an override it passes on.
+    pub(crate) fn live_words(&self) -> Option<&str> {
+        self.live.as_ref().map(|live| live.transcript.as_str())
+    }
 }
 
 impl Core {

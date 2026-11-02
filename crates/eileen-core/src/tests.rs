@@ -109,6 +109,10 @@ impl IntentResolver for Scripted {
             "cancel the other file" => {
                 Some(CoreCommand::Cancel { job: Some(JobRef::Name("the other file".to_owned())) })
             }
+            "cancel the render" | "cancel the research" | "cancel it" | "cancel claude's job" => {
+                let words = utterance.trim_start_matches("cancel ").to_owned();
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name(words)) })
+            }
             "how's it going" => Some(CoreCommand::HowsItGoing),
             "forget that" => Some(CoreCommand::Forget(ForgetTarget::Fact { id: "f1".to_owned() })),
             "off the record" => Some(CoreCommand::OffTheRecord(true)),
@@ -796,3 +800,4 @@ fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
 
 mod jobs;
 mod life;
+mod steering;

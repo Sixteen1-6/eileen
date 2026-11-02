@@ -89,6 +89,12 @@ pub(crate) fn completed(name: &str, route: &str, summary: &str) -> String {
     }
 }
 
+/// What Eileen says when every worker of a fan-out has ended and at least one completed.
+pub(crate) fn gathered(name: &str, finished: usize, total: usize) -> String {
+    let agents = if total == 1 { "agent" } else { "agents" };
+    format!("{} is done: {finished} of {total} {agents} finished.", capitalised(name))
+}
+
 /// What Eileen says when a job fails.
 pub(crate) fn failed(name: &str, why: &str) -> String {
     format!("{} failed: {why}.", capitalised(name))
@@ -132,7 +138,7 @@ fn first_sentence(text: &str) -> String {
 mod tests {
     use eileen_contracts::ids::{JobId, MonoTime};
 
-    use super::{Announcement, CAPACITY, Due, QUIET_NS, Queue, completed, failed};
+    use super::{Announcement, CAPACITY, Due, QUIET_NS, Queue, completed, failed, gathered};
 
     fn line(n: u64) -> Announcement {
         Announcement { job: JobId::from_parts(n, u128::from(n)), text: format!("line {n}") }
@@ -184,6 +190,11 @@ mod tests {
             failed("the job", "the worker stopped"),
             "The job failed: the worker stopped.",
             "failure"
+        );
+        assert_eq!(
+            gathered("flaky login tests", 2, 3),
+            "Flaky login tests is done: 2 of 3 agents finished.",
+            "a fan-out, with no worker's words"
         );
     }
 }
