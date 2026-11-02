@@ -2,9 +2,10 @@
 //! lifecycle, written apart from the core's own code, agrees with
 //! `eileen_core::lifecycle::Registry` on random command sequences (proptest-state-machine).
 //! The model holds section 2.5's graph as a table of edges, each job's state and approval
-//! deadline, its name, slug and fan-out ordinal, the decline at the approval deadline, a
-//! restart, the job a cancel names, and where a coding job works. How `Core::step` drives the
-//! registry is checked by the core's own tests (`tests::jobs`), not by this model yet.
+//! deadline, its name, slug and fan-out ordinal, the jobs dropped to make room and the
+//! refusals, the decline at the approval deadline, a restart, the job a cancel names, and
+//! where a coding job works. How `Core::step` drives the registry is checked by the core's own
+//! tests (`tests::jobs`), not by this model yet.
 
 use std::collections::BTreeMap;
 
@@ -209,6 +210,7 @@ struct ModelJob {
     slug: String,
     kind: JobKind,
     repo: Option<String>,
+    created: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -263,7 +265,9 @@ impl Model {
         if !taken(&base) {
             return base;
         }
-        (2..).map(|n| format!("{base}-{n}")).find(|slug| !taken(slug)).expect("a free suffix")
+        let last = self.given.len() + 2;
+        let free = (2..=last).map(|n| format!("{base}-{n}")).find(|slug| !taken(slug));
+        free.expect("one of more suffixes than there are slugs is free")
     }
 
     fn accept(
@@ -325,6 +329,7 @@ impl Model {
             slug: slug.clone(),
             kind,
             repo,
+            created: self.now,
         });
         Expect::Accept { name, slug, ordinal, place, kept: true }
     }
@@ -362,7 +367,8 @@ impl Model {
             interrupted.push(job.id);
         }
         let jobs = &self.jobs;
-        self.given.retain(|(_, slug)| jobs.iter().any(|job| job.slug == *slug));
+        self.given
+            .retain(|(at, slug)| jobs.iter().any(|job| job.created == *at && job.slug == *slug));
         Expect::Ids(interrupted)
     }
 
@@ -440,9 +446,10 @@ impl ReferenceStateMachine for Lifecycle {
     }
 
     fn preconditions(state: &Model, transition: &Cmd) -> bool {
-        match transition {
-            Cmd::Again(id) => state.jobs.iter().any(|job| job.id == *id),
-            _ => true,
+        if let Cmd::Again(id) = transition {
+            state.jobs.iter().any(|job| job.id == *id)
+        } else {
+            true
         }
     }
 
@@ -713,10 +720,11 @@ impl StateMachineTest for Lifecycle {
 }
 
 prop_state_machine! {
+    // Up to 200 commands, so a sequence often fills the 32 kept jobs and drops finished ones.
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn the_registry_agrees_with_the_reference_model(sequential 1..60 => Lifecycle);
+    fn the_registry_agrees_with_the_reference_model(sequential 1..200 => Lifecycle);
 }
 
 /// Names and keeps the `n`th job, of `title`, at the start of the clock.

@@ -181,7 +181,7 @@ impl Core {
             | CallOrigin::Core => None,
         };
         let result = if request.tool.as_str() == "jobs_dispatch" {
-            match self.dispatch(cx, &request) {
+            match self.dispatch(cx, &request, call) {
                 Ok(result) | Err(result) => result,
             }
         } else {
@@ -202,6 +202,7 @@ impl Core {
         &mut self,
         cx: &mut Cx<'_>,
         request: &ToolCallRequest,
+        call: CallId,
     ) -> Result<ToolResult, ToolResult> {
         let from_brain = matches!(request.caller, Caller::Shim { role: ShimRole::Brain, .. });
         let CallOrigin::Brain { turn, .. } = &request.origin else {
@@ -222,7 +223,7 @@ impl Core {
         if !args.kind.built_in_v0_1() {
             let error = user_error::job_kind_unavailable();
             let sentence = error.sentence.clone();
-            let ctx = TraceCtx { turn: Some(turn), job: None, call: None };
+            let ctx = TraceCtx { turn: Some(turn), job: None, call: Some(call) };
             cx.emit(ctx, BusEvent::UserError(error));
             return Err(text_result(sentence, true, None));
         }
@@ -353,9 +354,9 @@ impl Core {
 /// `lifecycle::Registry::checkout` says, in place behind `refs/eileen/<job id>` or in a
 /// worktree, once the harness records that snapshot before the session starts and creates the
 /// worktree, and `SessionSpec.snapshot_ref` is documented as the ref to record rather than one
-/// to restore. Until then no session works in the user's checkout, so no job row claims a
-/// snapshot that was never taken, and no repository path reaches `cwd`, which is not personal
-/// data.
+/// to restore, and the runtime refuses a checkout inside Eileen's own data folder. Until then
+/// no session works in the user's checkout, so no job row claims a snapshot that was never
+/// taken, and no repository path reaches `cwd`, which is not personal data.
 fn session_spec(session: WorkerSessionId, job: &Job) -> SessionSpec {
     let route = job.route.display_name();
     let builtin_tools = session_tools(job.spec.kind);

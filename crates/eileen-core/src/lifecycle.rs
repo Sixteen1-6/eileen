@@ -153,7 +153,8 @@ impl std::error::Error for Refused {}
 pub struct Naming {
     /// Its spoken name, two to four words.
     pub name: String,
-    /// Its slug, which no job of the last seven days holds.
+    /// Its slug, which no job of the last seven days holds: none since the core started,
+    /// and none of the jobs a snapshot kept before it.
     pub slug: String,
     /// Its ordinal, for a fan-out's child.
     pub ordinal: Option<u8>,
@@ -454,7 +455,10 @@ fn slug_of(name: &str) -> String {
 }
 
 /// Whether `repo` is an absolute path with no `.` or `..` part: a drive letter and a separator,
-/// a UNC path, or a leading `/`. A drive-relative path such as `D:demo` is not one.
+/// a UNC path, or a leading `/`. A drive-relative path such as `D:demo` is not one. A leading
+/// `/` is a Linux path; on Windows it names the root of the current drive, and whether a path
+/// lies inside Eileen's own data folder is the runtime's to check, since the core does not know
+/// where that folder is.
 fn absolute(repo: &str) -> bool {
     let repo = repo.trim();
     let bytes = repo.as_bytes();
