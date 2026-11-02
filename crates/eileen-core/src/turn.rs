@@ -1,8 +1,9 @@
 //! Turn-taking (BUILD.md sections 2.2 and 2.8): who holds the floor, Eileen's utterance and
 //! its playback accounting, barge-in with pause-then-decide, the heard prefix and mute.
 //!
-//! [`Turns`] is pure and cloneable: `Core::step` delegates every turn-taking input to it, and an
-//! exhaustive test can clone a state to share each prefix of the sequences it enumerates. It
+//! [`Turns`] is pure, cloneable and hashable: `Core::step` delegates every turn-taking input to
+//! it, and `turn::exhaustive` (`eileen-sim`'s `exhaustive` module) clones a state to share each
+//! prefix of the sequences it enumerates and hashes it to skip states already explored. It
 //! decides nothing about meaning. Whether an utterance was addressed, a backchannel or "stop" is
 //! the core's call, handed back through [`Turns::resolve_barge_in`] and [`Turns::stop`]; what
 //! the machine wants done comes out as [`Out`] values the core turns into effects.
@@ -102,7 +103,7 @@ pub enum Out {
 }
 
 /// One clause of an utterance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Clause {
     text: String,
     /// Its samples, once the speech process reported it ready.
@@ -110,7 +111,7 @@ struct Clause {
 }
 
 /// Where a barge-in stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Barge {
     None,
     /// Ducked; `run` consecutive windows so far, the last numbered `window`.
@@ -123,7 +124,7 @@ enum Barge {
 }
 
 /// The utterance holding the floor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Utterance {
     speak: SpeakId,
     clauses: Vec<Clause>,
@@ -198,8 +199,9 @@ fn join<S: AsRef<str>>(pieces: impl IntoIterator<Item = S>) -> String {
     out
 }
 
-/// Turn-taking state: pure, with no IO and no clock of its own.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Turn-taking state: pure, with no IO and no clock of its own. It hashes, so an exhaustive
+/// search can key the states it has explored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Turns {
     muted: bool,
     hearing: Option<TurnId>,
@@ -299,21 +301,24 @@ impl Turns {
     }
 
     /// Mutes or unmutes; muting stops Eileen mid-sentence. Returns whether anything changed.
+    /// Each earcon sounds outside the mute it confirms (invariant 9): the mute's before the
+    /// change is announced, the unmute's after.
     pub fn set_mute(&mut self, muted: bool, out: &mut Vec<Out>) -> bool {
         if self.muted == muted {
             return false;
         }
+        self.muted = muted;
         if muted {
             self.stop(true, out);
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Muted)));
             out.push(Out::Audio(AudioCmd::SetCapture(false)));
             self.hearing = None;
+            out.push(Out::Muted(true));
         } else {
             out.push(Out::Audio(AudioCmd::SetCapture(true)));
+            out.push(Out::Muted(false));
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Unmuted)));
         }
-        self.muted = muted;
-        out.push(Out::Muted(muted));
         true
     }
 

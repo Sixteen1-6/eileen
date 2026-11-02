@@ -65,8 +65,8 @@
 //!
 //! - Fast command: `cargo xtask test -p eileen-core`.
 //! - Layers: unit tests per module with a scripted resolver (`tests`), exhaustive turn-taking
-//!   (`turn::exhaustive`, next), the simulator's slice tests (`eileen-sim::it::slice`), seeds
-//!   and regressions, and scenario replay.
+//!   (`eileen-sim::it::turn::exhaustive`), the simulator's slice and barge-in tests (`it::slice`,
+//!   `it::barge_in`), seeds and regressions, and scenario replay.
 //! - A bug here starts as a failing simulator seed or a scenario whose expectation broke.
 //!
 //! # Traps

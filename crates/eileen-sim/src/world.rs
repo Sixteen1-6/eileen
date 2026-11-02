@@ -31,7 +31,9 @@ use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::collect::Collector;
 use crate::hash::TraceHash;
-use crate::invariants::{self, ChildEvent, ChildRecord, Delivery, Violation};
+use crate::invariants::{
+    self, AudioEvent, AudioRecord, ChildEvent, ChildRecord, Delivery, Violation,
+};
 use crate::parts::Brain as BrainPart;
 use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Process, Speech, Workers};
 use crate::profile::Profile;
@@ -144,6 +146,9 @@ pub struct World {
     hud: Option<HudState>,
     effects: Vec<Envelope<Effect>>,
     published: Vec<Envelope<BusEvent>>,
+    /// The inputs, effects and playback callbacks in time order (invariants 2, 3 and 9), kept
+    /// only once a test asks for them ([`World::record_audio`], which says which callbacks).
+    audio: Option<Vec<AudioRecord>>,
     bus: Bus,
     inputs: Vec<InputRecord>,
     log: String,
@@ -212,6 +217,7 @@ impl World {
             hud: None,
             effects: Vec::new(),
             published: Vec::new(),
+            audio: None,
             bus,
             inputs: Vec::new(),
             log: String::new(),
@@ -255,6 +261,27 @@ impl World {
     #[must_use]
     pub fn effects(&self) -> &[Envelope<Effect>] {
         &self.effects
+    }
+
+    /// Keeps the audio trace from now on. Runs do not keep it by default: it holds a record
+    /// for every input and effect and for most 10 ms callbacks, and the per-step check does
+    /// not read it.
+    pub fn record_audio(&mut self) {
+        self.audio.get_or_insert_with(Vec::new);
+    }
+
+    /// Every input and effect since [`World::record_audio`], with each playback callback while
+    /// the device holds an utterance and the first one after it holds none, in time order, as
+    /// invariants 2, 3 and 9 read them; empty when the trace is not kept.
+    #[must_use]
+    pub fn audio(&self) -> &[AudioRecord] {
+        self.audio.as_deref().unwrap_or_default()
+    }
+
+    fn note(&mut self, event: AudioEvent) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.push(AudioRecord { at_ms: self.now_ms, event });
+        }
     }
 
     /// The simulated playback device.
@@ -360,7 +387,18 @@ impl World {
                 (self.now_ms / CALLBACK_MS).saturating_add(1).saturating_mul(CALLBACK_MS);
             self.now_ms = next_tick.min(target);
             if self.now_ms == next_tick {
-                self.device.callback(self.now_ms, &mut self.due);
+                // While the device holds nothing, which is most of a run, the trace keeps only
+                // the first callback: the one after a stop or a mute, which invariants 2 and 9
+                // judge. A paused utterance's empty callbacks all stay, being the silence
+                // invariant 2 checks.
+                let idle = self.audio.is_some() && self.device.speaking().is_empty();
+                let handed = self.device.callback(self.now_ms, &mut self.due);
+                let idle_again = idle && self.audio().last().is_some_and(
+                    |record| matches!(&record.event, AudioEvent::Callback(last) if last.is_empty()),
+                );
+                if !idle_again {
+                    self.note(AudioEvent::Callback(handed));
+                }
             }
             if let Some(input) = self.take_due() {
                 return Some(input);
@@ -429,6 +467,9 @@ impl World {
         let record = InputRecord { seq: self.seq, mono, at, ctx, input: input.clone() };
         self.hash.record(&serde_json::to_vec(&record).unwrap_or_default());
         self.apply_input(&input);
+        if self.audio.is_some() {
+            self.note(AudioEvent::Input(input.clone()));
+        }
         self.inputs.push(record);
         let envelope = Envelope { seq: self.seq, at, mono, ctx, body: input };
         let mut effects = Vec::new();
@@ -503,6 +544,9 @@ impl World {
 
     fn apply_effect(&mut self, effect: Envelope<Effect>) {
         let now = self.now_ms;
+        if self.audio.is_some() {
+            self.note(AudioEvent::Effect(effect.body.clone()));
+        }
         match &effect.body {
             Effect::Emit(event) => {
                 self.bus.publish(effect.seq);
