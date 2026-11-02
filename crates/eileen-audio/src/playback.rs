@@ -32,7 +32,7 @@
 //! - `samples_played` counts the clause's own samples, at the 24 kHz of its `PcmHeader`, as
 //!   `ClauseReady.samples` does, so the core maps it straight to characters: the device's samples
 //!   since the clause began, times 24 kHz over the device's rate. `Played` comes at most every
-//!   50 ms of audio handed to the device, and `Paused` and `Stopped` once each. An utterance
+//!   50 ms of audio handed to the device, `Paused` once per pause and `Stopped` once. An utterance
 //!   paused before its audio reaches the renderer is held at its first sample (`Paused` with 0
 //!   played), and one stopped before any audio arrived is reported by the player itself
 //!   (`Stopped` with 0 played).
@@ -41,7 +41,10 @@
 //!   dry spell, so more than once when synthesis falls behind, and the utterance keeps taking
 //!   audio after it. A reply is one utterance whose clauses arrive in batches as its text
 //!   streams, and only the core knows when the reply is closed, so nothing here ends an
-//!   utterance's intake but a `Stop` or a later utterance.
+//!   utterance's intake but a `Stop` or a later utterance. The player drops a `Drained` that the
+//!   newest utterance's later audio has made stale (samples were queued after the renderer ran
+//!   dry), since the core, reading it after that audio's `ClauseReady`, would end a closed reply
+//!   with its last clause unplayed; the next dry spell is reported instead.
 //!
 //! The halves share three `rtrb` SPSC queues (samples, markers and events) and a few atomics: the
 //! target gain, the newest utterance the renderer has reached, and one hold (playing, paused or
@@ -109,7 +112,7 @@ pub(crate) enum PlayError {
     },
     /// The sample or marker queue cannot hold the frame; the frame is dropped and the drop
     /// logged. Room comes back as the renderer plays.
-    #[error("the playback queue cannot hold {samples} more samples")]
+    #[error("the playback queue has no room for a frame of {samples} samples")]
     Full {
         /// Device samples the frame needed.
         samples: usize,
@@ -536,7 +539,21 @@ impl Player {
         }
         let head = self.shared.head.load(Ordering::SeqCst);
         self.utterances.retain(|_, u| u.ordinal.is_none_or(|ordinal| ordinal >= head));
-        self.reported.pop_front().or_else(|| self.events.pop().ok())
+        if let Some(event) = self.reported.pop_front() {
+            return Some(event);
+        }
+        loop {
+            let event = self.events.pop().ok()?;
+            // A `Drained` for the newest utterance with samples queued since is stale: the
+            // renderer ran dry before that audio came. Passed on after the audio's
+            // `ClauseReady`, it would end a closed reply in the core with its last clause
+            // unplayed. The renderer reports the next dry spell when that audio has played.
+            let stale = matches!(event, PlaybackEvent::Drained { speak } if self.newest == Some(speak))
+                && self.samples.slots() < self.capacity;
+            if !stale {
+                return Some(event);
+            }
+        }
     }
 }
 
@@ -641,6 +658,11 @@ impl Renderer {
                 self.current = None;
                 continue;
             }
+            if hold == Hold::Playing && current.paused {
+                // Resumed: the next pause is reported, even one that comes while it is dry.
+                current.paused = false;
+                self.current = Some(current);
+            }
             if current.left == 0 {
                 match self.markers.peek().copied() {
                     Ok(Marker { ordinal, clause, frames, .. }) if ordinal == current.ordinal => {
@@ -678,7 +700,6 @@ impl Renderer {
             if hold == Hold::Paused {
                 return self.hold_paused(current);
             }
-            current.paused = false;
             self.current = Some(current);
             return Step::Play(current.left);
         }

@@ -341,7 +341,10 @@ The speech series has not opened yet.
   `SpeechCmd::Speak` batches as its text streams, and the speech process answers each batch
   with a `SpeakDone`, so `SpeakDone` ends nothing in playback: the core alone knows when a reply
   is closed, and ends it on the `Drained` after that. The player has no call that marks an
-  utterance's last audio.
+  utterance's last audio. It drops a `Drained` for the newest utterance while samples queued
+  after it wait: the renderer ran dry before that audio came, and the core, reading the event
+  after the audio's `ClauseReady`, would end a closed reply with its last clause unplayed. The
+  next dry spell is reported instead.
 - A pause cuts at a sample, with no fade: the duck at the first barge-in window (about 20 dB,
   section 2.8) comes two windows earlier, so the cut is quiet, and "resume from the paused
   sample" stays exact. A duck moves the gain over the first millisecond of frames from the next

@@ -635,3 +635,52 @@ fn stops_before_any_audio_past_the_event_limit_are_logged() {
     assert_eq!(logged[0].fields["times"], 1, "its first drop");
     assert_eq!(player.reported.len(), EVENTS, "the list holds no more than its size");
 }
+
+/// Fills `count` buffers of `BUFFER` samples.
+fn fill_buffers(renderer: &mut Renderer, count: usize) {
+    let mut out = vec![0.0; BUFFER];
+    for _ in 0..count {
+        renderer.fill(&mut out, RenderInfo { plays_at: Duration::ZERO });
+    }
+}
+
+#[test]
+fn a_drained_made_stale_by_later_audio_is_not_passed_on() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let one = speak(1);
+    player.push(header(one, 0), &tone(0, 100)).unwrap();
+    // The renderer runs dry and reports `Drained`, then the next batch's audio is queued before
+    // the component reads it, as when the batch's `ClauseReady` reaches the core first.
+    fill_buffers(&mut renderer, 1);
+    player.push(header(one, 1), &tone(100, 100)).unwrap();
+    assert!(events(&mut player).is_empty(), "the stale Drained is dropped while audio waits");
+    fill_buffers(&mut renderer, 1);
+    assert_eq!(
+        events(&mut player),
+        [PlaybackEvent::Drained { speak: one }],
+        "the next dry spell is reported once the later audio has played"
+    );
+}
+
+#[test]
+fn a_second_pause_while_dry_is_reported() {
+    let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let one = speak(1);
+    player.push(header(one, 0), &tone(0, 100)).unwrap();
+    fill_buffers(&mut renderer, 1);
+    player.pause(one);
+    fill_buffers(&mut renderer, 1);
+    player.resume(one);
+    fill_buffers(&mut renderer, 1);
+    player.pause(one);
+    fill_buffers(&mut renderer, 1);
+    assert_eq!(
+        events(&mut player),
+        [
+            PlaybackEvent::Drained { speak: one },
+            PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 100 },
+            PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 100 },
+        ],
+        "each pause reported, though nothing played between them"
+    );
+}
