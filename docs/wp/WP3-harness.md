@@ -189,6 +189,40 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   and that no path lies under a `.claude` folder. This is the environment half of acceptance 4
   and the CI half of acceptance 8 ("every session spawns with vendor memory off").
 
+- `wp3/claude-locate`: the CLI's location and `eileen doctor claude`. `eileen_harness::locate`
+  walks the worker's `PATH` in order, then npm's folder under `%APPDATA%` and the native
+  installer's `~/.local/bin`. It accepts only the two layouts section 2.5 names: npm's package
+  binary, reached through a shim (`claude.cmd`, `claude.ps1`, or npm's link on Unix) read for
+  the package's `bin\claude.exe`, and the native installer's `~/.local/bin` executable or one
+  of its releases. Anything else is passed over and named: a shim that runs `cli.js` through
+  node, the Claude desktop app's bundled copy (its `Claude-Data`, `AnthropicClaude` and MSIX
+  folders, or any `claude-code\<version>` folder), a folder under `.claude`, and any other
+  `claude` on `PATH` ("not an npm or native-installer copy"). Links and junctions are followed
+  by reading each one, with every target refused by name (desktop app, `.claude`) before
+  anything there is looked at. The version comes from the layout where it is exact: the
+  package's `package.json`, or the release a Unix link leads to. The native installer's
+  `claude.exe` on Windows is a copy of some release, not always the newest in its versions
+  folder, so its version comes from `claude --version`.
+  `cli::doctor_claude` builds a coding worker's environment with the same code a worker's
+  session uses (`session::worker_env`) and looks for the CLI and the toolchains on its `PATH`.
+  Until WP2's runtime reads the registry's `PATH` and the toolchain folders, that `PATH` is the
+  shell's, and the report says so. Every probe is a short tool run through `eileen_supervisor`
+  with a deadline. `claude auth status` (20 s) is read by its exit code only: 0 is signed in,
+  and any other code is signed out, because only 0 is recorded (D4, the subscription harness
+  report); the report names the code. Signed out, it prints the `claude auth login` suggestion
+  and starts nothing else; signed in, it asks `claude --version` when the layout gave no
+  version and looks for `cargo` and `node` on the worker's `PATH` and the MSVC tools through
+  vswhere. It reports the version against the floor (`MIN_CLI`, 2.1.284) and the tested
+  release (`TESTED_CLI`, 2.1.304), names the npm shim or the native installer and the
+  executable, and compares the running sessions' versions with the installed one once WP2's
+  status endpoint can report them (until then it says it did not check). The tests run against
+  fake npm and native layouts in a temporary folder, a scripted probe runner, and the real
+  supervised runner against this test binary run again as a chatty child. This is acceptance 5
+  and the doctor half of the D77 floor. The owner's PC has the native installer (2.1.316 when
+  this was written), so its run should report the native installer, the `.localin`
+  executable, a version newer than the tested one, and signed in. Still to do there: that run,
+  and recording here the exit code `claude auth status` gives when signed out.
+
 ## Surprises
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
@@ -214,6 +248,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   match before it becomes a `]`-ended mark. The parser redacts each string until it settles,
   at most 8 times, and a string still changing then becomes `[redacted:unsettled]`. The
   trace's log writer redacts once, so a log can keep such a token.
+
+- npm's shim names the real binary relative to its own folder (`"%dp0%\node_modules\..."`
+  in the `.cmd`, `"$basedir/node_modules/..."` in the `.ps1`), so reading the shim finds the
+  binary without running node. The desktop app keeps each bundled CLI in a
+  `claude-code\<version>` folder, which no npm or native layout uses.
 
 ## Decisions
 

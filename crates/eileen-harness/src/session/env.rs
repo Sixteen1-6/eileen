@@ -177,14 +177,18 @@ pub fn mcp_tool_timeout_ms(hook_hold_s: u16) -> u32 {
 
 pub(super) fn session_env(spec: &SessionSpec, cfg: &HarnessConfig, host: &HostEnv) -> SessionEnv {
     let mut env = match spec.env {
-        EnvPolicy::WorkerDenylist => worker_base(spec, host),
+        EnvPolicy::WorkerDenylist => worker_env(spec.kind, host),
         EnvPolicy::ConstructedAllowlist => brain_base(host),
     };
     add_session_vars(&mut env, spec, cfg);
     env
 }
 
-fn worker_base(spec: &SessionSpec, host: &HostEnv) -> SessionEnv {
+/// A worker's environment for a job of `kind`, before the session's own variables: the user's
+/// without the denylist, `PATH` from the registry when the runtime read it, the toolchain
+/// folders in front for a coding job, and the git configuration. `eileen doctor claude` checks
+/// the CLI and the toolchains in this same environment, so the two cannot drift apart.
+pub(crate) fn worker_env(kind: JobKind, host: &HostEnv) -> SessionEnv {
     let mut env = SessionEnv::new(host.names_ignore_case);
     for (name, value) in &host.vars {
         if !is_denylisted(name) {
@@ -194,7 +198,7 @@ fn worker_base(spec: &SessionSpec, host: &HostEnv) -> SessionEnv {
     if let Some(path) = &host.registry_path {
         env.set("PATH", path.clone());
     }
-    if spec.kind == JobKind::Coding {
+    if kind == JobKind::Coding {
         let path = env.get("PATH").unwrap_or_default().to_owned();
         let missing: Vec<&str> = host
             .toolchain_dirs
