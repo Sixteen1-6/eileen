@@ -187,7 +187,10 @@ fn summary(event: &WorkerEvent) -> String {
             format!("turn_done error={is_error} {}", summary.get())
         }
         WorkerEvent::Exited { code } => format!("exited {code:?}"),
-        other => format!("{other:?}"),
+        other @ (WorkerEvent::MemoryLimit { .. }
+        | WorkerEvent::RateLimit(_)
+        | WorkerEvent::AuthFailed { .. }
+        | WorkerEvent::Malformed { .. }) => format!("{other:?}"),
     }
 }
 
@@ -235,9 +238,8 @@ async fn narration_lines_become_narration_and_other_text_stays_text() {
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     let narration: Vec<&str> = events
         .iter()
-        .filter_map(|e| match e {
-            WorkerEvent::Narration { line } => Some(line.get().as_str()),
-            _ => None,
+        .filter_map(|e| {
+            if let WorkerEvent::Narration { line } = e { Some(line.get().as_str()) } else { None }
         })
         .collect();
     assert_eq!(narration, ["Creating hello.txt in the scratch repository"], "without the prefix");
