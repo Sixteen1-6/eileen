@@ -108,8 +108,8 @@ stub_worker!(
 /// Every worker driver, dispatched by variant.
 #[derive(Debug)]
 pub enum AnyWorker {
-    /// Claude.
-    Claude(ClaudeWorker),
+    /// Claude, boxed: its session and config make it far larger than the designed slots.
+    Claude(Box<ClaudeWorker>),
     /// The Codex app server.
     Codex(CodexWorker),
     /// An ACP agent.
@@ -170,7 +170,7 @@ impl WorkerDriver for AnyWorker {
 /// alone. Claude's runs `cfg.claude_exe`.
 pub fn worker_for(route: Route, cfg: &HarnessConfig) -> Result<AnyWorker, DriverError> {
     match route {
-        Route::Claude => Ok(AnyWorker::Claude(ClaudeWorker::new(cfg.clone()))),
+        Route::Claude => Ok(AnyWorker::Claude(Box::new(ClaudeWorker::new(cfg.clone())))),
         Route::Codex | Route::Grok | Route::DeepSeek | Route::Local => {
             Err(DriverError::RouteUnavailable { route })
         }

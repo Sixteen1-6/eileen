@@ -213,11 +213,26 @@ impl WorkerDriver for ClaudeWorker {
                         session.init = *init;
                     }
                 }
-                Line::Control(Message::Response { request_id, error }) => {
-                    // A reply to a request that is not open settles nothing.
-                    let _settled: Result<_, _> = session.requests.settle(&request_id, error);
+                Line::Control(message) => {
+                    // Only replies matter: a reply to a request that is not open settles
+                    // nothing, and v0.1 answers no request the CLI makes.
+                    if let Message::Response { request_id, error } = message {
+                        let _settled: Result<_, _> = session.requests.settle(&request_id, error);
+                    }
                 }
-                other => self.pending.extend(stream::worker_events(other, session.process.pid)),
+                other @ (Line::Assistant(_)
+                | Line::ToolResults(_)
+                | Line::TextDelta(_)
+                | Line::Partial
+                | Line::RateLimit(_)
+                | Line::HookStarted(_)
+                | Line::HookResponse(..)
+                | Line::PermissionDenied(_)
+                | Line::Result(_)
+                | Line::Unknown { .. }
+                | Line::Malformed { .. }) => {
+                    self.pending.extend(stream::worker_events(other, session.process.pid));
+                }
             }
         }
     }
