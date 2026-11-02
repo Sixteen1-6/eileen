@@ -324,19 +324,22 @@ mod tests {
             let (kind, draw) =
                 generator.next(&mut bytes, &ACTIVITY_ONLY, step, &mut rng, &[]).unwrap();
             assert_eq!(kind, InputKind::Activity, "the mix allows only activity");
-            match draw {
-                Some(Input::Activity(ActivityEvent::OtherAudio { playing: now })) => {
+            let Some(Input::Activity(event)) = &draw else { panic!("the generator drew {draw:?}") };
+            match *event {
+                ActivityEvent::OtherAudio { playing: now } => {
                     assert_ne!(now, playing, "each report changes the state");
                     playing = now;
                     seen[0] = true;
                 }
-                Some(Input::Activity(ActivityEvent::MicInUseElsewhere(now))) => {
+                ActivityEvent::MicInUseElsewhere(now) => {
                     assert_ne!(now, taken, "each report changes the state");
                     taken = now;
                     seen[1] = true;
                 }
-                Some(Input::Activity(ActivityEvent::PhysicalInput)) => seen[2] = true,
-                other => panic!("the generator drew {other:?}"),
+                ActivityEvent::PhysicalInput => seen[2] = true,
+                other @ (ActivityEvent::SessionLocked(_) | ActivityEvent::Presentation(_)) => {
+                    panic!("the generator drew {other:?}")
+                }
             }
         }
         assert_eq!(seen, [true; 3], "every kind of activity is drawn");

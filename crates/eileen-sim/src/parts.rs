@@ -1035,14 +1035,15 @@ mod tests {
         let mut deltas = Vec::new();
         let mut done = None;
         for (at, input) in items {
-            match input {
-                Input::Brain(BrainEvent::TextDelta { turn: t, .. }) if *t == turn => {
-                    deltas.push(*at);
-                }
-                Input::Brain(BrainEvent::TurnDone { turn: t, is_error, .. }) if *t == turn => {
-                    done = Some((*at, *is_error));
-                }
-                _ => {}
+            if let Input::Brain(BrainEvent::TextDelta { turn: t, .. }) = input
+                && *t == turn
+            {
+                deltas.push(*at);
+            }
+            if let Input::Brain(BrainEvent::TurnDone { turn: t, is_error, .. }) = input
+                && *t == turn
+            {
+                done = Some((*at, *is_error));
             }
         }
         (deltas, done)

@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "barge_in_pct": {
-      "description": "The chance, in percent, that a voice input drawn while Eileen speaks is a barge-in window rather than the next event of the user's turn.",
+      "description": "The chance, in percent, that a voice input drawn while Eileen speaks is a barge-in\nwindow rather than the next event of the user's turn.",
       "type": "integer",
       "format": "uint8",
       "maximum": 255,
@@ -177,7 +177,7 @@
       ]
     },
     "FaultProfile": {
-      "description": "How often the world's fault points fire (`eileen_stdx::buggify`): each site is switched on for a whole run with the first chance, decided from the seed and the site's name, and an active site fires each time it is reached with the second. Both are per mille; a 0 leaves every site off.",
+      "description": "How often the world's fault points fire (`eileen_stdx::buggify`): each site is switched on\nfor a whole run with the first chance, decided from the seed and the site's name, and an\nactive site fires each time it is reached with the second. Both are per mille; a 0 leaves\nevery site off.",
       "type": "object",
       "properties": {
         "activate_per_mille": {
@@ -200,7 +200,7 @@
       ]
     },
     "HeavyApp": {
-      "description": "An app that opens, grows to its peak, holds it and closes: a video editor rendering, a virtual machine starting. Times are seconds of virtual time from the start of the run.",
+      "description": "An app that opens, grows to its peak, holds it and closes: a video editor rendering, a\nvirtual machine starting. Times are seconds of virtual time from the start of the run.",
       "type": "object",
       "properties": {
         "closes_at_s": {
@@ -254,7 +254,7 @@
       "type": "object",
       "properties": {
         "activity": {
-          "description": "What the PC and the room do: other audio starting and stopping, physical input, and another app taking the microphone.",
+          "description": "What the PC and the room do: other audio starting and stopping, physical input, and\nanother app taking the microphone.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -294,7 +294,7 @@
       ]
     },
     "PcProfile": {
-      "description": "The simulated PC: its memory, its paging, its CPU and its power, and the other apps on it. Every figure is in MB unless its name says otherwise.",
+      "description": "The simulated PC: its memory, its paging, its CPU and its power, and the other apps on it.\nEvery figure is in MB unless its name says otherwise.",
       "type": "object",
       "properties": {
         "commit_limit_mb": {

@@ -125,8 +125,7 @@ fn a_heavy_app_grows_pushes_memory_into_paging_and_closes() {
         readings(&world)
             .into_iter()
             .find(|(when, _)| *when == ms)
-            .map(|(_, reading)| reading)
-            .unwrap_or_else(|| panic!("a reading at {ms} ms"))
+            .map_or_else(|| panic!("a reading at {ms} ms"), |(_, reading)| reading)
     };
     assert_eq!(at(20_000).available_mb, 2_074, "opens with nothing at 20 s");
     assert_eq!(at(30_000).available_mb, 1_574, "500 MB after 10 s at 50 MB/s");
