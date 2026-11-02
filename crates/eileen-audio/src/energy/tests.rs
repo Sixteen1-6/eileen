@@ -163,7 +163,7 @@ fn a_window_pairs_its_samples_and_carries_the_flags_of_every_chunk_it_spans() {
     let mut windows = Vec::new();
     for k in 0..16 {
         let mic: [f32; CHUNK] =
-            std::array::from_fn(|n| if (k * CHUNK + n) % 2 == 0 { 0.1 } else { -0.1 });
+            std::array::from_fn(|n| if (k * CHUNK + n).is_multiple_of(2) { 0.1 } else { -0.1 });
         let out = mic.map(|sample| 0.5 * sample);
         let flags = report(k == 9, k == 3);
         windows.extend(assembler.push(&out, &mic, flags));
