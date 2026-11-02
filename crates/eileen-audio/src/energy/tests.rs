@@ -13,7 +13,7 @@ fn feed(
     windows: &[[f32; WINDOW]],
     other: bool,
 ) -> Vec<EnergyWindow> {
-    windows.iter().map(|window| detector.window(window, window, other)).collect()
+    windows.iter().map(|window| detector.window(window, window, other, true)).collect()
 }
 
 /// A detector whose floor settled on `dbfs`.
@@ -72,13 +72,18 @@ fn a_window_the_canceller_took_more_than_6_db_from_is_not_speech() {
     let mut detector = settled_on(-70.0);
     let (cancelled, heard) = (at(-30.0), at(-22.0));
     let seen: Vec<EnergyWindow> =
-        (0..5).map(|_| detector.window(&cancelled, &heard, false)).collect();
+        (0..5).map(|_| detector.window(&cancelled, &heard, false, true)).collect();
     assert!(seen.iter().all(|window| !window.speech), "8 dB cancelled: echo, not a voice");
+
+    // Bypassed, the 8 dB came off in noise suppression, which a voice can lose as it starts.
+    let seen: Vec<EnergyWindow> =
+        (0..3).map(|_| detector.window(&cancelled, &heard, false, false)).collect();
+    assert!(seen[2].onset, "8 dB suppressed with AEC3 bypassed: a voice");
 
     // A voice over the echo: -23 dBFS after the canceller, from -21 dBFS.
     let (cancelled, heard) = (at(-23.0), at(-21.0));
     let seen: Vec<EnergyWindow> =
-        (0..3).map(|_| detector.window(&cancelled, &heard, false)).collect();
+        (0..3).map(|_| detector.window(&cancelled, &heard, false, true)).collect();
     assert!(seen[2].onset, "2 dB cancelled: a voice");
 }
 
@@ -124,7 +129,7 @@ fn judging_a_window_allocates_nothing() {
     let counted = allocation_counter::measure(|| {
         for n in 0..64 {
             let window = if n % 8 < 5 { &loud } else { &quiet };
-            onsets += u32::from(detector.window(window, window, n % 16 < 8).onset);
+            onsets += u32::from(detector.window(window, window, n % 16 < 8, n % 4 < 2).onset);
         }
     });
     assert_eq!(counted, allocation_counter::AllocationInfo::default(), "no allocation or free");

@@ -250,6 +250,8 @@ struct Listener {
     /// The microphone's samples of the same window.
     window_in: Vec<f32>,
     window_other: bool,
+    /// Whether AEC3 ran for any chunk of the window.
+    window_aec3: bool,
     /// Each window's level at the microphone and after the canceller, in dBFS.
     levels: Vec<(f32, f32)>,
     chunks: Vec<Measured>,
@@ -273,17 +275,21 @@ impl Listener {
         self.window.extend_from_slice(&out);
         self.window_in.extend_from_slice(mic);
         self.window_other |= report.flags.other_audio;
+        self.window_aec3 |= report.reference != Reference::Bypassed;
         if self.window.len() >= WINDOW {
             let window: [f32; WINDOW] = self.window[..WINDOW].try_into().unwrap();
             let heard: [f32; WINDOW] = self.window_in[..WINDOW].try_into().unwrap();
             self.levels.push((db(mean_square(&heard)), db(mean_square(&window))));
-            if self.detector.window(&window, &heard, self.window_other).onset {
+            let verdict =
+                self.detector.window(&window, &heard, self.window_other, self.window_aec3);
+            if verdict.onset {
                 self.onsets.push(at + ms(10));
                 self.onset_windows.push(self.levels.len() - 1);
             }
             self.window.drain(..WINDOW);
             self.window_in.drain(..WINDOW);
             self.window_other = report.flags.other_audio && !self.window.is_empty();
+            self.window_aec3 = report.reference != Reference::Bypassed && !self.window.is_empty();
         }
     }
 }
@@ -371,6 +377,7 @@ fn start(scene: Scene) -> (Shared, Vec<Box<dyn AudioStream>>) {
         window: Vec::with_capacity(2 * WINDOW),
         window_in: Vec::with_capacity(2 * WINDOW),
         window_other: false,
+        window_aec3: false,
         levels: Vec::new(),
         chunks: Vec::new(),
         onsets: Vec::new(),

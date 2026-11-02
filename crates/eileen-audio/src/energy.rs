@@ -3,11 +3,13 @@
 //! microphone stands in for it. The component part feeds it and acts on what it reports.
 //!
 //! [`EnergyDetector`] takes 32 ms windows, the VAD's and the speech frames' 512 samples at
-//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor, is
-//! at least -40 dBFS, the quietest voice near the PC it is meant to hear, and lost at most 6 dB
-//! to the canceller: a voice in the room passes the canceller nearly whole, while a window it
-//! took more from was mostly echo, whose remainder can still be loud while AEC3 converges or
-//! briefly loses the room. While other audio plays the margin is 18 dB: section 2.8 makes
+//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor and
+//! is at least -40 dBFS, the quietest voice near the PC it is meant to hear, and, while AEC3 ran
+//! for it, lost at most 6 dB to the canceller: a voice in the room passes AEC3 nearly whole,
+//! while a window it took more from was mostly echo, whose remainder can still be loud while
+//! AEC3 converges or briefly loses the room. Bypassed, only noise suppression runs, which takes
+//! more than that from the first syllables after a silence as it learns them, so the test does
+//! not apply. While other audio plays the margin is 18 dB: section 2.8 makes
 //! barge-in stricter then (two VAD windows over its threshold), and a bed's residual after AEC3
 //! is less steady than a room's noise. The floor
 //! drops to any quieter window at once and rises 5 dB a second otherwise, so a steady noise stops
@@ -82,12 +84,14 @@ impl EnergyDetector {
     }
 
     /// Judges one window of echo-cancelled 16 kHz audio, `cancelled`, against the microphone's
-    /// window it came from, `heard`. `other_audio` is the capture flag of the same time.
+    /// window it came from, `heard`. `other_audio` is the capture flag of the same time, and
+    /// `aec3` whether AEC3 ran for any of the window's chunks, rather than the bypass.
     pub(crate) fn window(
         &mut self,
         cancelled: &[f32; WINDOW],
         heard: &[f32; WINDOW],
         other_audio: bool,
+        aec3: bool,
     ) -> EnergyWindow {
         let level = level_dbfs(cancelled);
         let floor = match self.floor_db {
@@ -98,7 +102,7 @@ impl EnergyDetector {
         let margin = if other_audio { MARGIN_OTHER_AUDIO_DB } else { MARGIN_DB };
         let speech = level >= MIN_SPEECH_DBFS
             && level >= floor + margin
-            && level >= level_dbfs(heard) - MAX_CANCELLED_DB;
+            && (!aec3 || level >= level_dbfs(heard) - MAX_CANCELLED_DB);
         self.run = if speech { self.run.saturating_add(1) } else { 0 };
         EnergyWindow { speech, run: self.run, onset: self.run == ONSET_WINDOWS }
     }
