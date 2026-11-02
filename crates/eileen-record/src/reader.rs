@@ -60,6 +60,7 @@ pub struct Reader<R> {
 
 impl<R: BufRead> Reader<R> {
     /// A reader at the start of `input`.
+    #[must_use]
     pub const fn new(input: R) -> Self {
         Self { input, line: 0, stopped: false }
     }

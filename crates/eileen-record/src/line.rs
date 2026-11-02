@@ -98,13 +98,13 @@ where
     let json: Value = serde_json::from_slice(line).map_err(LineError::Json)?;
     let mut failed = None;
     let resolved = resolve_blobs(json, &mut |blob: &BlobRef| match blobs.get(blob) {
-        Ok(Some(bytes)) => match String::from_utf8(bytes) {
-            Ok(text) => Some(text),
-            Err(_) => {
+        Ok(Some(bytes)) => {
+            let text = String::from_utf8(bytes).ok();
+            if text.is_none() {
                 failed = failed.take().or_else(|| Some(LineError::NotText(blob.clone())));
-                Some(String::new())
             }
-        },
+            Some(text.unwrap_or_default())
+        }
         Ok(None) => None,
         Err(error) => {
             failed = failed.take().or(Some(LineError::Store(error)));

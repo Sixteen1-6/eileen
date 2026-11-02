@@ -32,6 +32,7 @@ pub struct Writer<W, B> {
 
 impl<W: Write, B: Blobs> Writer<W, B> {
     /// A writer to `out` that keeps strings over [`MAX_INLINE_BYTES`] in `blobs`.
+    #[must_use]
     pub const fn new(out: W, blobs: B) -> Self {
         Self { out, blobs, max_inline: MAX_INLINE_BYTES, lines: 0 }
     }
