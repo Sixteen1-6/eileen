@@ -95,7 +95,8 @@ fn integer_wavs_read_at_full_scale() {
     assert_eq!(bits(eight.samples()), bits(&expected), "8-bit samples over 128");
 
     let thirty_two = write("32.wav", 32, &[i32::MIN, 1 << 30, -1, i32::MAX]);
-    let expected: [f32; 4] = [-1.0, 0.5, -1.0 / 2_147_483_648.0, 1.0];
+    let least = 0.5_f32.powi(31);
+    let expected: [f32; 4] = [-1.0, 0.5, -least, 1.0];
     assert_eq!(bits(thirty_two.samples()), bits(&expected), "32-bit samples over 2^31, to f32");
 }
 

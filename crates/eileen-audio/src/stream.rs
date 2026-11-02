@@ -93,7 +93,7 @@ pub enum AudioError {
     #[error("the audio stream failed")]
     Io(#[source] io::Error),
     /// A source or sink was asked for something it cannot do.
-    #[error("the audio source or sink cannot do this: {0}")]
+    #[error("the audio source or sink cannot do this")]
     Setup(#[source] SetupError),
 }
 
