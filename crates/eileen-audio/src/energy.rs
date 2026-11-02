@@ -3,21 +3,34 @@
 //! microphone stands in for it. The component part feeds it and acts on what it reports.
 //!
 //! [`EnergyDetector`] takes 32 ms windows, the VAD's and the speech frames' 512 samples at
-//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor,
-//! 18 dB while other audio plays (section 2.8's stricter threshold), and is at least -40 dBFS,
-//! the quietest voice near the PC it is meant to hear. The floor drops to any quieter window at
-//! once and rises 5 dB a second otherwise, so a steady noise stops counting within seconds while
-//! a spoken word, louder than the floor by far more than it rises meanwhile, still counts. It
-//! reports an onset at the third speech window in a row (96 ms), the window at which section
-//! 2.8's barge-in pauses playback, and once per run of speech windows.
+//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor and
+//! is at least -40 dBFS, the quietest voice near the PC it is meant to hear. While other audio
+//! plays the margin is 18 dB: section 2.8 makes barge-in stricter then (two VAD windows over its
+//! threshold), and a bed's residual after AEC3 is less steady than a room's noise. The floor
+//! drops to any quieter window at once and rises 5 dB a second otherwise, so a steady noise stops
+//! counting within seconds while a spoken word, louder than the floor by far more than it rises
+//! meanwhile, still counts. On noise-suppressed audio in a quiet room the floor sits low and the
+//! -40 dBFS minimum decides; over a noisy room the margin does. It reports an onset at the third
+//! speech window in a row (96 ms), the window at which section 2.8's barge-in pauses playback,
+//! and once per run of speech windows.
 //!
 //! What remains after a converged AEC3 of Eileen's voice and of a bed the PC plays stays under
 //! these thresholds; `aec::tests` checks over ten minutes of each bed, from 3 s on, that it never
 //! fires, and that it fires on a near-end command. In AEC3's first seconds, before it has
-//! learned the room, the echo can still reach them. Nothing here allocates, so it may run in the capture callback.
+//! learned the room, the echo can still reach them.
+//!
+//! A detector's floor is the room's while it is fed, so the component makes a fresh one each
+//! time the speech process disconnects: a floor kept from before would be stale. Nothing here
+//! allocates.
+
+use eileen_contracts::speech::AUDIO_FRAME_SAMPLES;
 
 /// Samples in one window: 32 ms at 16 kHz, a speech frame.
-pub(crate) const WINDOW: usize = eileen_contracts::speech::AUDIO_FRAME_SAMPLES;
+pub(crate) const WINDOW: usize = AUDIO_FRAME_SAMPLES;
+
+/// [`WINDOW`] as a divisor.
+#[expect(clippy::cast_precision_loss, reason = "512 is exact in f32")]
+const WINDOW_LEN: f32 = WINDOW as f32;
 
 /// Speech windows in a row that make an onset: 96 ms, where barge-in pauses playback.
 pub(crate) const ONSET_WINDOWS: u32 = 3;
@@ -81,7 +94,7 @@ impl EnergyDetector {
 /// A window's level: its mean square in dB relative to full scale.
 fn level_dbfs(samples: &[f32; WINDOW]) -> f32 {
     let sum: f32 = samples.iter().map(|sample| sample * sample).sum();
-    let mean_square = sum / 512.0;
+    let mean_square = sum / WINDOW_LEN;
     if mean_square > 0.0 { (10.0 * mean_square.log10()).max(SILENCE_DBFS) } else { SILENCE_DBFS }
 }
 

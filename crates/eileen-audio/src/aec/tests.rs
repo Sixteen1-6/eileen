@@ -203,15 +203,16 @@ fn command() -> Vec<f32> {
     voice(7, (110.0, 160.0), 2.0, 0.08)
 }
 
-/// The music bed the PC plays.
+/// The music bed the PC plays, 47 s looped: no length shares a factor with Eileen's minute, so
+/// ten minutes of the two never repeat a stretch.
 fn music_bed() -> Bed {
-    bed(music(3, 60.0, 0.1), BedSource::Speakers)
+    bed(music(3, 47.0, 0.1), BedSource::Speakers)
 }
 
-/// The speech-video bed the PC plays: a man talking over quiet music.
+/// The speech-video bed the PC plays, 53 s looped: a man talking over quiet music.
 fn video_bed() -> Bed {
-    let talk = voice(11, (90.0, 150.0), 60.0, 0.09);
-    let under = music(12, 60.0, 0.03);
+    let talk = voice(11, (90.0, 150.0), 53.0, 0.09);
+    let under = music(12, 53.0, 0.03);
     bed(talk.iter().zip(&under).map(|(a, b)| a + b).collect(), BedSource::Speakers)
 }
 
@@ -599,6 +600,37 @@ fn own_pcm_is_the_reference_once_the_loopback_is_silent_for_500_ms_or_gone() {
     assert_eq!(stopped, expected, "own PCM through its echo tail, then bypassed");
 }
 
+#[test]
+fn a_loopback_that_lags_and_scales_eileen_is_not_other_audio_and_a_bed_in_it_is() {
+    // On a real endpoint the loopback lags her stream by a buffer or two and may carry it at
+    // another volume: two chunks late at full and at half gain, her voice alone never sets the
+    // flag, and music under it sets it in her pauses.
+    let voice = eileen();
+    let bed = music(4, 12.0, 0.05);
+    let chunk = |samples: &[f32], k: usize| -> [f32; CHUNK] {
+        samples[k * CHUNK..(k + 1) * CHUNK].try_into().unwrap()
+    };
+    for (gain, with_bed) in [(1.0, false), (0.5, false), (1.0, true)] {
+        let mut canceller = EchoCanceller::new();
+        let mut out = [0.0; CHUNK];
+        let mut other = Vec::new();
+        for k in 0..1_200 {
+            let own = chunk(&voice, k);
+            let lagged = if k < 2 { [0.0; CHUNK] } else { chunk(&voice, k - 2) };
+            let under = if with_bed { chunk(&bed, k) } else { [0.0; CHUNK] };
+            let looped: [f32; CHUNK] = std::array::from_fn(|n| gain * lagged[n] + under[n]);
+            let report = canceller.process(&[0.0; CHUNK], Some(&looped), &own, &mut out);
+            other.push(report.unwrap().flags.other_audio);
+        }
+        let set = other.iter().filter(|&&o| o).count();
+        if with_bed {
+            assert!(set > 100, "music under her voice set the flag in {set} chunks");
+        } else {
+            assert_eq!(set, 0, "her voice at gain {gain}, two chunks late, set the flag");
+        }
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn without_a_loopback_eileen_is_cancelled_against_her_own_pcm() {
     let scene = Scene { eileen: Some(eileen()), ..Scene::default() };
@@ -678,7 +710,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_speech_video_bed() 
 
 // The callback's budget.
 
-/// sonora 0.2.0 allocates and frees as it processes, converged or not, so the canceller must not
+/// sonora 0.2.0 allocates and frees as it runs AEC3, converged too, so the canceller must not
 /// run inside an audio callback (the crate's invariant): the component part runs it on the
 /// capture side's reader. This pins that down, so a sonora that stops allocating shows here, and
 /// checks that each mode's heap use stays small and bounded.
@@ -713,7 +745,7 @@ fn a_chunk_allocates_so_the_canceller_stays_out_of_the_callbacks() {
     let (bypassed, reference) = run(None, &silence, 100);
     assert_eq!(reference, Some(Ok(Reference::Bypassed)), "bypassed");
 
-    assert!(on_loopback.count_total > 0, "sonora allocates: {on_loopback:?}");
+    assert!(on_loopback.count_total >= 50, "more than once a chunk: {on_loopback:?}");
     for counted in [on_loopback, on_own, bypassed] {
         assert!(counted.bytes_max < 64 * 1024, "at most 64 KiB live at once: {counted:?}");
     }

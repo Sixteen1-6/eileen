@@ -229,9 +229,10 @@ The speech series has not opened yet.
 - realfft's newest release, 3.5.1, came out on 2026-10-26, inside the cooling-off period, so the
   lock holds 3.5.0, the release section 4.1 names.
 
-- sonora 0.2.0 allocates and frees on every chunk it processes, converged or not: about 33
-  allocations and 13 KiB a chunk on Windows CI (`allocation_counter::measure` in
-  `aec::tests`), at most 6 KiB live at once. So the echo canceller cannot run inside the capture
+- sonora 0.2.0 allocates and frees as it runs AEC3, converged too: about 33 allocations and
+  13 KiB a chunk on average on Windows CI (`allocation_counter::measure` in `aec::tests`, over
+  converged chunks against the loopback, own PCM and in the bypass), at most 6 KiB live at
+  once. So the echo canceller cannot run inside the capture
   callback, which allocates nothing (D82). The callbacks hand their 16 kHz chunks (microphone,
   loopback, own PCM) on, and the component part runs the canceller beside the ring's reader,
   numbering frames after it; the ring's `CaptureWriter` then takes cancelled audio from that
@@ -396,7 +397,7 @@ The speech series has not opened yet.
   orders it: a third of the cost of 48 kHz, and the band the recognizer hears. The loopback
   and Eileen's own PCM take the same conversion to reach it.
 - The reference: the loopback while it sounds; Eileen's own PCM once the loopback has been
-  silent for 500 ms, or gave no chunk, while her PCM sounds; bypassed once both have been
+  silent for 500 ms while her PCM sounds, or while no loopback stream runs; bypassed once both have been
   silent for 500 ms. Section 2.2 step 1 bypasses on 500 ms of loopback silence alone, which,
   read literally, would bypass AEC3 under her voice when the loopback does not carry it (a
   broken loopback, or playback on another endpoint); while the loopback works the two readings
@@ -408,24 +409,34 @@ The speech series has not opened yet.
   submodules, so AEC3 would learn the room again at the start of every reply and leak echo
   meanwhile. The cost is the second pipeline's
   memory and a noise estimate in each that goes stale while the other runs.
-- The `playback` flag holds for 200 ms after Eileen's PCM falls silent, since her echo still
-  reaches the microphone. The `other_audio` flag compares energies summed over 100 ms, not
+- The `playback` flag is set while Eileen's PCM sounded in the chunk or the 190 ms before it,
+  since her echo still reaches the microphone. Her PCM is placed by its buffer's time on the
+  render clock, so the device's output latency does not eat into that hold; a room whose
+  reverberation outlasts it is for the owner-PC tests to show. The `other_audio` flag compares energies summed over 100 ms, not
   samples: on a real endpoint the loopback lags her stream by a buffer or more and may be
   scaled by the stream's volume, so a sample difference would leave her own voice behind. It
   needs more than twice the energy she played (3 dB), turns on after 200 ms and off after 1 s,
   so other audio quieter than her voice shows in her pauses and the hold bridges them.
 - The energy fallback works on the 32 ms windows the VAD and the speech frames use. A window
-  is speech at 12 dB over an adaptive floor (18 dB while other audio plays, section 2.8's
-  stricter threshold) and at least -40 dBFS; the floor starts at the first window, drops to any
+  is speech at 12 dB over an adaptive floor and at least -40 dBFS, with an 18 dB margin while
+  other audio plays (section 2.8 asks barge-in for two VAD windows over its threshold then; the
+  fallback's onset already takes three, so it raises its margin instead); the floor starts at the first window, drops to any
   quieter window and rises 5 dB a second, so a steady noise stops counting within seconds. An
-  onset is the third speech window in a row, where barge-in pauses playback, once per run. It
-  returns windows and onsets; turning them into the core's barge-in input is the component
+  onset is the third speech window in a row, where barge-in pauses playback, once per run. In a
+  quiet room the floor sits low under noise suppression, so the -40 dBFS minimum decides; the
+  margin decides over a noisy one. The component makes a fresh detector each time the speech
+  process disconnects, so no stale floor carries over. It returns windows and onsets; turning them into the core's barge-in input is the component
   part's, since no contract carries the fallback yet.
 - The tests run the room at 16 kHz, so each buffer is one chunk and ten minutes of a bed stay
   within the test lane's time; the resamplers are measured on their own. Their audio is
   synthetic speech (harmonic syllables on vowel formants with word gaps), music (plucked
   chords and hi-hat bursts) and a video (a man talking over quiet music), since AEC3's delay
-  estimator and noise suppression treat steady tones differently from speech.
+  estimator and noise suppression treat steady tones differently from speech. Eileen's voice
+  loops every 60 s, the music every 47 s and the video every 53 s, so ten minutes of her over a
+  bed never repeat a stretch. The room delivers the loopback in the microphone's buffer, so a
+  loopback that lags her stream and carries her at another volume is tested on the canceller
+  directly. Lining the loopback's buffers up with the microphone's is the component's: the
+  canceller takes `None` only while no loopback stream runs.
 
 ## Outcome
 

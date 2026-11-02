@@ -26,10 +26,11 @@
 //!   Eileen's own voice shows only in her pauses, which the hold bridges.
 //!
 //! The capture side calls [`EchoCanceller::process`] once per 10 ms of microphone audio, with the
-//! loopback and the own PCM of the same time. sonora allocates and frees as it processes, on
-//! every chunk and converged or not (`tests` pins it), so the canceller cannot run inside an
-//! audio callback, which allocates nothing: the callbacks hand their 16 kHz chunks on, and the
-//! component part runs the canceller where the ring's reader runs.
+//! loopback and the own PCM of the same time, each placed by its buffer's time on its device's
+//! clock. sonora allocates and frees as it runs AEC3, converged too (more than once a chunk on
+//! average, `tests` pins it), so the canceller cannot run inside an audio callback, which
+//! allocates nothing: the callbacks hand their 16 kHz chunks on, and the component part runs the
+//! canceller where the ring's reader runs.
 
 use sonora::config::{EchoCanceller as Aec3, HighPassFilter, NoiseSuppression};
 use sonora::{AudioProcessing, Config, StreamConfig};
@@ -42,6 +43,10 @@ pub(crate) const RATE_HZ: u32 = 16_000;
 /// Samples in one chunk: 10 ms at 16 kHz, sonora's unit of work.
 pub(crate) const CHUNK: usize = 160;
 
+/// [`CHUNK`] as a divisor.
+#[expect(clippy::cast_precision_loss, reason = "160 is exact in f32")]
+const CHUNK_LEN: f32 = CHUNK as f32;
+
 /// Chunks of silence after which a reference counts as gone: 500 ms.
 pub(crate) const SILENT_CHUNKS: u32 = 50;
 
@@ -53,6 +58,10 @@ const PLAYBACK_HOLD_CHUNKS: u32 = 20;
 
 /// Chunks the other-audio comparison sums: 100 ms.
 const OTHER_WINDOW_CHUNKS: usize = 10;
+
+/// The least summed energy of a sounding loopback over that window: silent chunks' worth.
+#[expect(clippy::cast_precision_loss, reason = "10 is exact in f32")]
+const OTHER_WINDOW_SILENT: f32 = SILENT_MEAN_SQUARE * OTHER_WINDOW_CHUNKS as f32;
 
 /// How much more energy than Eileen played the loopback must carry to count as other audio.
 const OTHER_RATIO: f32 = 2.0;
@@ -133,8 +142,10 @@ impl EchoCanceller {
     }
 
     /// Cancels the echo in one chunk of microphone audio into `out`. `loopback` is the loopback's
-    /// chunk of the same time, `None` when no loopback runs, and `own` what Eileen's playback
-    /// handed the device for that time, silence while she is quiet.
+    /// chunk of the same time, and `own` what Eileen's playback handed the device for that time,
+    /// silence while she is quiet. `None` means no loopback stream runs, and makes own PCM the
+    /// reference at once: the caller lines the loopback's buffers up with the microphone's and
+    /// passes `None` only while no loopback stream runs, never for a buffer that is late.
     pub(crate) fn process(
         &mut self,
         mic: &[f32; CHUNK],
@@ -217,7 +228,7 @@ impl OtherAudio {
             .window
             .iter()
             .fold((0.0, 0.0), |(l, o), &(chunk_l, chunk_o)| (l + chunk_l, o + chunk_o));
-        let sounding = loopback >= SILENT_MEAN_SQUARE * 10.0;
+        let sounding = loopback >= OTHER_WINDOW_SILENT;
         if sounding && loopback > OTHER_RATIO * own {
             self.unexplained = self.unexplained.saturating_add(1);
             self.explained = 0;
@@ -236,7 +247,7 @@ impl OtherAudio {
 
 /// A chunk's mean square.
 fn mean_square(chunk: &[f32; CHUNK]) -> f32 {
-    chunk.iter().map(|sample| sample * sample).sum::<f32>() / 160.0
+    chunk.iter().map(|sample| sample * sample).sum::<f32>() / CHUNK_LEN
 }
 
 /// The count of silent chunks after one of `energy`.

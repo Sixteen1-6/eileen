@@ -47,10 +47,10 @@
 //!   itself past the event limit; its render side allocates nothing
 //!   (`allocation_counter::measure` in the same tests).
 //! - Echo cancellation runs on the speech pipe's 16 kHz mono in 10 ms chunks, against the
-//!   loopback while it sounds, Eileen's own PCM once the loopback has been silent for 500 ms or is
-//!   not running, and bypassed (high-pass filter and noise suppression only) once both have been
+//!   loopback while it sounds, Eileen's own PCM once the loopback has been silent for 500 ms or
+//!   while none runs, and bypassed (high-pass filter and noise suppression only) once both have been
 //!   silent for 500 ms; the bypass leaves AEC3's state alone, so the next reply is cancelled from
-//!   its first words (`aec::tests`). sonora allocates on every chunk, so echo cancellation runs
+//!   its first words (`aec::tests`). sonora allocates as it runs AEC3, so echo cancellation runs
 //!   off the audio callbacks (`aec::tests` pins it). The energy barge-in fallback reports one
 //!   onset per run of speech windows, at the third (`energy::tests`), and allocates nothing.
 //!
@@ -97,7 +97,7 @@
 //! # Traps
 //!
 //! - Echo cancellation is bypassed after 500 ms of loopback silence and Eileen's own PCM becomes
-//!   the reference: once the loopback has been silent for 500 ms (or delivers no chunk) while
+//!   the reference: once the loopback has been silent for 500 ms (or no loopback runs) while
 //!   her own PCM sounds, it does not carry her, so her PCM is the reference; once both have been
 //!   silent for 500 ms, AEC3 is bypassed. While the loopback works the two rules are one, since
 //!   her voice is in it. Starting from the bypass, AEC3 runs again in the first chunk that
