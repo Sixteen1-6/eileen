@@ -1,4 +1,6 @@
-use super::{EnergyDetector, EnergyWindow, ONSET_WINDOWS, WINDOW};
+use super::{Canceller, EnergyDetector, EnergyWindow, ONSET_WINDOWS, WINDOW, WindowAssembler};
+use crate::aec::{CHUNK, ChunkReport, Reference};
+use crate::ring::CaptureFlags;
 
 /// A window whose level is `dbfs`: a square wave, whose mean square is its amplitude squared.
 fn at(dbfs: f32) -> [f32; WINDOW] {
@@ -13,7 +15,10 @@ fn feed(
     windows: &[[f32; WINDOW]],
     other: bool,
 ) -> Vec<EnergyWindow> {
-    windows.iter().map(|window| detector.window(window, window, other, true)).collect()
+    windows
+        .iter()
+        .map(|window| detector.window(window, window, other, Canceller::Converged))
+        .collect()
 }
 
 /// A detector whose floor settled on `dbfs`.
@@ -72,21 +77,21 @@ fn a_window_the_canceller_took_more_than_6_db_from_is_not_speech() {
     let mut detector = settled_on(-70.0);
     let (cancelled, heard) = (at(-30.0), at(-22.0));
     let seen: Vec<EnergyWindow> =
-        (0..5).map(|_| detector.window(&cancelled, &heard, false, true)).collect();
+        (0..5).map(|_| detector.window(&cancelled, &heard, false, Canceller::Converged)).collect();
     assert!(seen.iter().all(|window| !window.speech), "8 dB cancelled: echo, not a voice");
 
     // Bypassed, the 8 dB came off in noise suppression, which a voice can lose as it starts.
     let seen: Vec<EnergyWindow> =
-        (0..3).map(|_| detector.window(&cancelled, &heard, false, false)).collect();
+        (0..3).map(|_| detector.window(&cancelled, &heard, false, Canceller::Bypassed)).collect();
     assert!(seen[2].onset, "8 dB suppressed with AEC3 bypassed: a voice");
 
     // A voice over the echo, after a quiet window ends that run: -23 dBFS after the canceller,
     // from -21 dBFS.
     let quiet = at(-70.0);
-    assert!(!detector.window(&quiet, &quiet, false, true).speech, "a quiet window");
+    assert!(!detector.window(&quiet, &quiet, false, Canceller::Converged).speech, "a quiet window");
     let (cancelled, heard) = (at(-23.0), at(-21.0));
     let seen: Vec<EnergyWindow> =
-        (0..3).map(|_| detector.window(&cancelled, &heard, false, true)).collect();
+        (0..3).map(|_| detector.window(&cancelled, &heard, false, Canceller::Converged)).collect();
     assert!(seen[2].onset, "2 dB cancelled: a voice");
 }
 
@@ -124,17 +129,112 @@ fn the_first_window_sets_the_floor() {
 }
 
 #[test]
+fn no_window_is_speech_while_aec3_learns_the_room() {
+    // Echo AEC3 has not learned yet: as loud as a voice, and little taken.
+    let mut detector = settled_on(-70.0);
+    let loud = at(-25.0);
+    let seen: Vec<EnergyWindow> =
+        (0..5).map(|_| detector.window(&loud, &loud, false, Canceller::Learning)).collect();
+    assert!(seen.iter().all(|window| !window.speech), "nothing counts while AEC3 learns");
+    assert!(seen.iter().all(|window| window.short_db.is_infinite()), "and nothing comes close");
+
+    // Once it has learned the room, the same windows count.
+    let seen = feed(&mut detector, &[loud; 3], false);
+    assert!(seen[2].onset, "an onset once AEC3 has converged");
+    assert!(seen.iter().all(|window| window.short_db <= 0.0), "speech is short by nothing");
+}
+
+/// A report of a chunk cancelled against the loopback.
+const fn report(learning: bool, other_audio: bool) -> ChunkReport {
+    ChunkReport {
+        reference: Reference::Loopback,
+        learning,
+        repaired: false,
+        flags: CaptureFlags { playback: false, other_audio },
+    }
+}
+
+#[test]
+fn a_window_pairs_its_samples_and_carries_the_flags_of_every_chunk_it_spans() {
+    // Sixteen 10 ms chunks make five 32 ms windows. Chunk 3 (samples 480 to 640) spans windows 0
+    // and 1, and chunk 9 (1,440 to 1,600) windows 2 and 3. The canceller passes each chunk at
+    // half amplitude, 6.02 dB down.
+    let mut assembler = WindowAssembler::new();
+    let mut windows = Vec::new();
+    for k in 0..16 {
+        let mic: [f32; CHUNK] =
+            std::array::from_fn(|n| if (k * CHUNK + n) % 2 == 0 { 0.1 } else { -0.1 });
+        let out = mic.map(|sample| 0.5 * sample);
+        let flags = report(k == 9, k == 3);
+        windows.extend(assembler.push(&out, &mic, flags));
+    }
+    assert_eq!(windows.len(), 5, "a window every 512 samples");
+    let other: Vec<bool> = windows.iter().map(|window| window.other_audio).collect();
+    assert_eq!(other, [true, true, false, false, false], "chunk 3's other audio in both windows");
+    let canceller: Vec<Canceller> = windows.iter().map(|window| window.canceller).collect();
+    let (converged, learning) = (Canceller::Converged, Canceller::Learning);
+    assert_eq!(
+        canceller,
+        [converged, converged, learning, learning, converged],
+        "chunk 9's learning in both windows"
+    );
+    for window in &windows {
+        let taken = window.heard_dbfs - window.level_dbfs;
+        assert!((taken - 6.02).abs() < 0.01, "each window beside its own microphone samples");
+        assert!((window.heard_dbfs + 20.0).abs() < 0.01, "the microphone at -20 dBFS");
+    }
+}
+
+#[test]
+fn a_bypassed_chunk_leaves_a_window_bypassed_only_if_all_its_chunks_were() {
+    let bypassed = ChunkReport { reference: Reference::Bypassed, ..report(false, false) };
+    let mut assembler = WindowAssembler::new();
+    let silence = [0.0; CHUNK];
+    let mut windows = Vec::new();
+    for k in 0..16 {
+        let chunk = if k == 10 { report(false, false) } else { bypassed };
+        windows.extend(assembler.push(&silence, &silence, chunk));
+    }
+    let canceller: Vec<Canceller> = windows.iter().map(|window| window.canceller).collect();
+    let (bypassed, converged) = (Canceller::Bypassed, Canceller::Converged);
+    assert_eq!(
+        canceller,
+        [bypassed, bypassed, bypassed, converged, bypassed],
+        "chunk 10's AEC3, inside window 3"
+    );
+}
+
+#[test]
 fn judging_a_window_allocates_nothing() {
     let mut detector = settled_on(-70.0);
     let loud = at(-30.0);
     let quiet = at(-70.0);
+    let cancellers = [Canceller::Converged, Canceller::Bypassed, Canceller::Learning];
     let mut onsets = 0;
     let counted = allocation_counter::measure(|| {
         for n in 0..64 {
             let window = if n % 8 < 5 { &loud } else { &quiet };
-            onsets += u32::from(detector.window(window, window, n % 16 < 8, n % 4 < 2).onset);
+            let canceller = cancellers[(n / 8) % 3];
+            onsets += u32::from(detector.window(window, window, n % 16 < 8, canceller).onset);
         }
     });
     assert_eq!(counted, allocation_counter::AllocationInfo::default(), "no allocation or free");
     assert!(onsets > 0, "the loop judged speech");
+}
+
+#[test]
+fn assembling_windows_allocates_nothing() {
+    let mut assembler = WindowAssembler::new();
+    let loud: [f32; CHUNK] = std::array::from_fn(|n| if n % 2 == 0 { 0.03 } else { -0.03 });
+    let quiet = [0.0; CHUNK];
+    let mut windows = 0;
+    let counted = allocation_counter::measure(|| {
+        for k in 0..200 {
+            let chunk = if k % 40 < 20 { &loud } else { &quiet };
+            let judged = assembler.push(chunk, chunk, report(k < 10, k % 50 < 25));
+            windows += u32::from(judged.is_some());
+        }
+    });
+    assert_eq!(counted, allocation_counter::AllocationInfo::default(), "no allocation or free");
+    assert_eq!(windows, 62, "a window every 3.2 chunks");
 }

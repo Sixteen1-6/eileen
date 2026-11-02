@@ -3,27 +3,43 @@
 //!
 //! [`EchoCanceller`] runs sonora 0.2.0's AEC3 with its noise suppression and high-pass filter.
 //! Its far-end reference is the loopback, the mix the speakers play: Eileen's voice and any
-//! video or music beside her, so whatever the PC plays is cancelled. Once the loopback has been
-//! silent for 500 ms, or is not running, Eileen's own PCM, what the render callback handed the
-//! device, is the reference instead; and once both have been silent for 500 ms, AEC3 is bypassed
-//! and only the high-pass filter and noise suppression run, which keeps idle cost low. A chunk in
-//! which either sounds again brings its reference back at once. "Silent" is a chunk under
-//! -60 dBFS.
+//! video or music beside her, so whatever the PC plays is cancelled. Eileen's own PCM, what the
+//! render callback handed the device, is the reference instead while no loopback stream runs, or
+//! once her PCM has sounded for 50 ms (five chunks) since the loopback last did: a loopback that
+//! runs but does not carry her (it broke, or the default endpoint changed under it) would leave
+//! AEC3 cancelling against silence. The 50 ms covers the loopback lagging her stream by a
+//! buffer or two. Once the reference and her PCM have both been silent for 500 ms, AEC3 is
+//! bypassed and only the high-pass filter and noise suppression run, which keeps idle cost low;
+//! a chunk in which either sounds again brings AEC3 back at once. "Silent" is a chunk under
+//! -60 dBFS, and "sounding" a chunk at or over it.
 //!
 //! Two sonora pipelines carry this, one with AEC3 and one without. The bypass runs the second and
 //! leaves the first untouched, so AEC3 keeps its estimate of the echo path through an idle spell
 //! and cancels the first words Eileen speaks after one; switching AEC3 off and on in one pipeline
 //! would reset it, and leak echo while it learned the room again.
 //!
-//! Each chunk also yields the capture flags the speech frames carry (decision D81):
+//! AEC3 learns the room from the reference it hears: until it has run against 3 s of sounding
+//! reference, since it started or since its reference last changed between the loopback and her
+//! PCM (whose delays to the microphone differ), the report says it is learning, and the energy
+//! fallback counts no speech in that time, since what AEC3 leaves of the echo then is as loud as
+//! a voice.
 //!
-//! - `playback` while Eileen's own PCM sounded in this chunk or the 190 ms before it, since her
-//!   echo still reaches the microphone after the speaker falls silent.
+//! Each chunk also yields the capture flags the speech frames carry (decision D81), each true of
+//! the chunk's own time:
+//!
+//! - `playback` while Eileen's own PCM for the chunk sounds. Her echo still reaches the
+//!   microphone for a while after, which the canceller handles itself: her PCM stays the
+//!   reference for 500 ms after it falls silent.
 //! - `other_audio` while the loopback carries energy her own PCM does not explain: over the last
 //!   100 ms, more than twice the energy she played (3 dB), a window long enough to cover the
 //!   loopback lagging her stream by a buffer or two. It turns on after 200 ms of such energy and
 //!   off after 1 s without, so a quiet bar of a song does not flip it. Other audio quieter than
 //!   Eileen's own voice shows only in her pauses, which the hold bridges.
+//!
+//! The devices' samples are untrusted: a NaN or infinite sample in the microphone, the loopback or
+//! her PCM is replaced with silence before any of it reaches sonora or the flags, and the report
+//! says so. AEC3's state is never reset, so one such sample reaching its filter would spoil it
+//! for the rest of the process.
 //!
 //! The capture side calls [`EchoCanceller::process`] once per 10 ms of microphone audio, with the
 //! loopback and the own PCM of the same time, each placed by its buffer's time on its device's
@@ -50,11 +66,15 @@ const CHUNK_LEN: f32 = CHUNK as f32;
 /// Chunks of silence after which a reference counts as gone: 500 ms.
 pub(crate) const SILENT_CHUNKS: u32 = 50;
 
+/// Chunks in which Eileen's PCM sounds while the loopback does not, since it last did, after
+/// which her PCM is the reference: 50 ms, past a loopback a buffer or two behind her stream.
+pub(crate) const MISSING_CHUNKS: u32 = 5;
+
+/// Chunks of sounding reference after which AEC3 has learned the room: 3 s.
+pub(crate) const LEARNING_CHUNKS: u32 = 300;
+
 /// A chunk under this mean square is silent: -60 dBFS.
 const SILENT_MEAN_SQUARE: f32 = 1e-6;
-
-/// Chunks the playback flag outlasts Eileen's own PCM, this one included: 200 ms.
-const PLAYBACK_HOLD_CHUNKS: u32 = 20;
 
 /// Chunks the other-audio comparison sums: 100 ms.
 const OTHER_WINDOW_CHUNKS: usize = 10;
@@ -77,10 +97,10 @@ const OTHER_OFF_CHUNKS: u32 = 100;
 pub(crate) enum Reference {
     /// The loopback: everything the speakers play.
     Loopback,
-    /// Eileen's own PCM, while the loopback is silent or not running.
+    /// Eileen's own PCM, while the loopback does not carry her or does not run.
     OwnPcm,
-    /// Neither sounded for 500 ms: AEC3 did not run, only the high-pass filter and noise
-    /// suppression.
+    /// The reference and her PCM were silent for 500 ms: AEC3 did not run, only the high-pass
+    /// filter and noise suppression.
     Bypassed,
 }
 
@@ -89,6 +109,11 @@ pub(crate) enum Reference {
 pub(crate) struct ChunkReport {
     /// The reference used.
     pub(crate) reference: Reference,
+    /// AEC3 ran and has not yet heard 3 s of sounding reference since it started or since its
+    /// reference changed: what it leaves of the echo can be as loud as a voice.
+    pub(crate) learning: bool,
+    /// A NaN or infinite input sample was replaced with silence.
+    pub(crate) repaired: bool,
     /// The capture flags.
     pub(crate) flags: CaptureFlags,
 }
@@ -107,10 +132,22 @@ pub(crate) struct EchoCanceller {
     light: AudioProcessing,
     /// Where sonora writes the render side's copy, which nothing reads.
     render_out: [f32; CHUNK],
+    /// The inputs with their non-finite samples replaced, silence for a loopback that does not
+    /// run.
+    mic: [f32; CHUNK],
+    loopback: [f32; CHUNK],
+    own: [f32; CHUNK],
     /// Chunks since the loopback last sounded, counting a chunk with no loopback.
     loopback_quiet: u32,
     /// Chunks since Eileen's own PCM last sounded.
     own_quiet: u32,
+    /// Chunks in which her PCM sounded since the loopback last did.
+    missing: u32,
+    /// The reference AEC3 last ran against.
+    last_reference: Option<Reference>,
+    /// Chunks of sounding reference AEC3 heard since it started or since its reference changed,
+    /// up to [`LEARNING_CHUNKS`].
+    learned: u32,
     other: OtherAudio,
 }
 
@@ -135,8 +172,14 @@ impl EchoCanceller {
             full: pipeline(Some(Aec3::default())),
             light: pipeline(None),
             render_out: [0.0; CHUNK],
+            mic: [0.0; CHUNK],
+            loopback: [0.0; CHUNK],
+            own: [0.0; CHUNK],
             loopback_quiet: SILENT_CHUNKS,
             own_quiet: SILENT_CHUNKS,
+            missing: 0,
+            last_reference: None,
+            learned: 0,
             other: OtherAudio::new(),
         }
     }
@@ -153,34 +196,66 @@ impl EchoCanceller {
         own: &[f32; CHUNK],
         out: &mut [f32; CHUNK],
     ) -> Result<ChunkReport, AecError> {
-        let loopback_energy = loopback.map_or(0.0, mean_square);
-        let own_energy = mean_square(own);
-        self.loopback_quiet = next_quiet(self.loopback_quiet, loopback_energy);
-        self.own_quiet = next_quiet(self.own_quiet, own_energy);
+        let mut repaired = finite_into(mic, &mut self.mic);
+        repaired |= finite_into(own, &mut self.own);
+        let running = loopback.is_some();
+        if let Some(chunk) = loopback {
+            repaired |= finite_into(chunk, &mut self.loopback);
+        } else {
+            self.loopback = [0.0; CHUNK];
+        }
+
+        let loopback_energy = mean_square(&self.loopback);
+        let own_energy = mean_square(&self.own);
+        let loopback_sounds = loopback_energy >= SILENT_MEAN_SQUARE;
+        let own_sounds = own_energy >= SILENT_MEAN_SQUARE;
+        self.loopback_quiet = next_quiet(self.loopback_quiet, loopback_sounds);
+        self.own_quiet = next_quiet(self.own_quiet, own_sounds);
+        self.missing =
+            if loopback_sounds { 0 } else { self.missing.saturating_add(u32::from(own_sounds)) };
         let flags = CaptureFlags {
-            playback: self.own_quiet < PLAYBACK_HOLD_CHUNKS,
+            playback: own_sounds,
             other_audio: self.other.update(loopback_energy, own_energy),
         };
 
-        let (reference, far) = match loopback {
-            Some(chunk) if self.loopback_quiet < SILENT_CHUNKS => (Reference::Loopback, chunk),
-            _ if self.own_quiet < SILENT_CHUNKS => (Reference::OwnPcm, own),
-            _ => (Reference::Bypassed, own),
-        };
-        let processed = if reference == Reference::Bypassed {
-            self.light.process_capture_f32(&[mic.as_slice()], &mut [out.as_mut_slice()])
+        let carries_her = running && self.missing < MISSING_CHUNKS;
+        let reference = if carries_her
+            && (self.loopback_quiet < SILENT_CHUNKS || self.own_quiet < SILENT_CHUNKS)
+        {
+            Reference::Loopback
+        } else if self.own_quiet < SILENT_CHUNKS {
+            Reference::OwnPcm
         } else {
+            Reference::Bypassed
+        };
+
+        let processed = if reference == Reference::Bypassed {
+            self.light.process_capture_f32(&[self.mic.as_slice()], &mut [out.as_mut_slice()])
+        } else {
+            let (far, sounds) = if reference == Reference::Loopback {
+                (&self.loopback, loopback_sounds)
+            } else {
+                (&self.own, own_sounds)
+            };
+            if self.last_reference != Some(reference) {
+                self.last_reference = Some(reference);
+                self.learned = 0;
+            }
+            if sounds {
+                self.learned = self.learned.saturating_add(1).min(LEARNING_CHUNKS);
+            }
             self.full
                 .process_render_f32(&[far.as_slice()], &mut [self.render_out.as_mut_slice()])
                 .and_then(|()| {
-                    self.full.process_capture_f32(&[mic.as_slice()], &mut [out.as_mut_slice()])
+                    self.full.process_capture_f32(&[self.mic.as_slice()], &mut [out.as_mut_slice()])
                 })
         };
         if let Err(error) = processed {
-            out.copy_from_slice(mic);
+            out.copy_from_slice(&self.mic);
             return Err(AecError(error));
         }
-        Ok(ChunkReport { reference, flags })
+        let learning = reference != Reference::Bypassed && self.learned < LEARNING_CHUNKS;
+        Ok(ChunkReport { reference, learning, repaired, flags })
     }
 }
 
@@ -189,6 +264,9 @@ impl std::fmt::Debug for EchoCanceller {
         f.debug_struct("EchoCanceller")
             .field("loopback_quiet", &self.loopback_quiet)
             .field("own_quiet", &self.own_quiet)
+            .field("missing", &self.missing)
+            .field("last_reference", &self.last_reference)
+            .field("learned", &self.learned)
             .field("other", &self.other)
             .finish_non_exhaustive()
     }
@@ -250,9 +328,24 @@ fn mean_square(chunk: &[f32; CHUNK]) -> f32 {
     chunk.iter().map(|sample| sample * sample).sum::<f32>() / CHUNK_LEN
 }
 
-/// The count of silent chunks after one of `energy`.
-const fn next_quiet(quiet: u32, energy: f32) -> u32 {
-    if energy >= SILENT_MEAN_SQUARE { 0 } else { quiet.saturating_add(1) }
+/// The count of silent chunks after one that `sounds` or not.
+const fn next_quiet(quiet: u32, sounds: bool) -> u32 {
+    if sounds { 0 } else { quiet.saturating_add(1) }
+}
+
+/// Copies `from` into `to` with each NaN or infinite sample made silence, and says whether there
+/// was one.
+fn finite_into(from: &[f32; CHUNK], to: &mut [f32; CHUNK]) -> bool {
+    let mut repaired = false;
+    for (sample, &value) in to.iter_mut().zip(from) {
+        if value.is_finite() {
+            *sample = value;
+        } else {
+            *sample = 0.0;
+            repaired = true;
+        }
+    }
+    repaired
 }
 
 #[cfg(test)]

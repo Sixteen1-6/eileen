@@ -2,17 +2,23 @@
 //! transcript check, which needs the recognizer), and the reference switch on its own.
 //!
 //! The room runs at the speech pipe's 16 kHz mono, so each 10 ms buffer is one chunk: the
-//! resamplers that bring a 48 kHz endpoint there are measured in `resample::tests`. The voices,
-//! music and video are synthetic and made here, the same on every run.
+//! resamplers that bring a 48 kHz endpoint there are measured in `resample::tests`. The loopback
+//! reaches the canceller two chunks after Eileen's own stream, as a real endpoint's lags it. The
+//! voices, music and video are synthetic and made here from additions, multiplications,
+//! divisions and square roots alone, whose results IEEE 754 fixes to the bit, so every run on
+//! every platform hears the same audio; the platform's `sin` and `exp` differ between C runtimes.
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::time::sleep;
 
-use super::{CHUNK, ChunkReport, EchoCanceller, RATE_HZ, Reference, SILENT_CHUNKS};
-use crate::energy::{EnergyDetector, WINDOW};
+use super::{
+    CHUNK, ChunkReport, EchoCanceller, LEARNING_CHUNKS, MISSING_CHUNKS, RATE_HZ, Reference,
+    SILENT_CHUNKS,
+};
+use crate::energy::{EnergyWindow, ONSET_WINDOWS, WindowAssembler};
 use crate::pace::Pace;
 use crate::room::{Bed, BedSource, RoomConfig, RoomMixer};
 use crate::stream::{
@@ -29,11 +35,13 @@ const RATE: f32 = 16_000.0;
 const ECHO_DELAY: Duration = ms(30);
 const ECHO_GAIN: f32 = 0.3;
 
+/// Chunks the loopback reaches the canceller after Eileen's own stream.
+const LOOPBACK_LAG: usize = 2;
+
 /// The least echo return loss enhancement the canceller must reach once it has converged.
 const ERLE_FLOOR_DB: f32 = 20.0;
 
-/// Chunks of the first 3 s, in which AEC3 learns the room and the tests do not measure it
-/// ([`CONVERGED_AT`]).
+/// Chunks of the first 3 s, in which AEC3 learns the room and the ERLE floors are not measured.
 const CONVERGED: usize = 300;
 
 // Generators.
@@ -60,12 +68,12 @@ impl Rng {
     }
 
     fn between(&mut self, low: f32, high: f32) -> f32 {
-        (high - low).mul_add(self.unit(), low)
+        (high - low) * self.unit() + low
     }
 
     /// A number in `[-1, 1)`.
     fn signed(&mut self) -> f32 {
-        2.0_f32.mul_add(self.unit(), -1.0)
+        2.0 * self.unit() - 1.0
     }
 
     fn index(&mut self, len: usize) -> usize {
@@ -85,6 +93,26 @@ const fn float(n: usize) -> f32 {
 )]
 const fn samples_in(seconds: f32) -> usize {
     (seconds * RATE + 0.5) as usize
+}
+
+/// `sin(x)` to about 1e-7 from IEEE 754's exactly rounded operations alone: `x` brought into
+/// `[-pi/2, pi/2]`, then its Taylor series to the eleventh power.
+fn sine(x: f32) -> f32 {
+    const C3: f32 = -1.0 / 6.0;
+    const C5: f32 = 1.0 / 120.0;
+    const C7: f32 = -1.0 / 5_040.0;
+    const C9: f32 = 1.0 / 362_880.0;
+    const C11: f32 = -1.0 / 39_916_800.0;
+    let turned = x - TAU * (x / TAU).round();
+    let x = if turned > FRAC_PI_2 {
+        PI - turned
+    } else if turned < -FRAC_PI_2 {
+        -PI - turned
+    } else {
+        turned
+    };
+    let x2 = x * x;
+    x * (1.0 + x2 * (C3 + x2 * (C5 + x2 * (C7 + x2 * (C9 + x2 * C11)))))
 }
 
 /// Vowels' first two formants, Hz.
@@ -125,8 +153,11 @@ fn syllable(rng: &mut Rng, pitch: (f32, f32), out: &mut Vec<f32>) {
     let mut phase = 0.0_f32;
     for n in 0..len {
         let t = float(n) / float(len);
-        let f0 = (to - from).mul_add(t, from);
-        phase = (phase + TAU * f0 / RATE) % TAU;
+        let f0 = (to - from) * t + from;
+        phase += TAU * f0 / RATE;
+        if phase >= TAU {
+            phase -= TAU;
+        }
         let mut sample = 0.0;
         for k in 1..=24_u16 {
             let hz = f32::from(k) * f0;
@@ -134,9 +165,9 @@ fn syllable(rng: &mut Rng, pitch: (f32, f32), out: &mut Vec<f32>) {
                 break;
             }
             let gain = resonance(hz, f1) + 0.5 * resonance(hz, f2) + 0.02;
-            sample += gain * (f32::from(k) * phase).sin();
+            sample += gain * sine(f32::from(k) * phase);
         }
-        sample *= (PI * t).sin();
+        sample *= sine(PI * t);
         if n < burst {
             sample += 0.5 * rng.signed() * (1.0 - float(n) / float(burst));
         }
@@ -145,29 +176,36 @@ fn syllable(rng: &mut Rng, pitch: (f32, f32), out: &mut Vec<f32>) {
 }
 
 /// `seconds` of synthetic music, scaled to `rms`: a chord of three notes every 500 ms from a
-/// pentatonic scale, each note six harmonics decaying like a plucked string, and a burst of
-/// noise on every 250 ms beat, like a hi-hat. It never pauses.
+/// pentatonic scale in just intonation, each note six harmonics decaying like a plucked string,
+/// and a burst of noise on every 250 ms beat, like a hi-hat. It never pauses.
 fn music(seed: u64, seconds: f32, rms: f32) -> Vec<f32> {
-    const SCALE: [f32; 7] = [0.0, 3.0, 5.0, 7.0, 10.0, 12.0, 15.0];
+    const SCALE: [(f32, f32); 7] =
+        [(1.0, 1.0), (6.0, 5.0), (4.0, 3.0), (3.0, 2.0), (9.0, 5.0), (2.0, 1.0), (12.0, 5.0)];
+    /// A plucked string's decay each sample: about `exp(-3 t)`.
+    const DECAY: f32 = 1.0 - 3.0 / RATE;
     let (chord, beat, hat) = (samples_in(0.5), samples_in(0.25), samples_in(0.03));
     let mut rng = Rng::new(seed);
     let mut notes = [220.0_f32; 3];
+    let mut decay = 1.0_f32;
     let mut out = Vec::with_capacity(samples_in(seconds));
     for n in 0..samples_in(seconds) {
         if n % chord == 0 {
             for note in &mut notes {
-                *note = 220.0 * 2.0_f32.powf(SCALE[rng.index(SCALE.len())] / 12.0);
+                let (over, under) = SCALE[rng.index(SCALE.len())];
+                *note = 220.0 * over / under;
             }
+            decay = 1.0;
         }
         let t = float(n % chord) / RATE;
         let mut sample = 0.0;
         for note in notes {
             for h in 1..=6_u16 {
                 let h = f32::from(h);
-                sample += (TAU * note * h * t).sin() / h;
+                sample += sine(TAU * note * h * t) / h;
             }
         }
-        sample *= (-3.0 * t).exp();
+        sample *= decay;
+        decay *= DECAY;
         if n % beat < hat {
             sample += 0.8 * rng.signed() * (1.0 - float(n % beat) / float(hat));
         }
@@ -193,6 +231,13 @@ fn db(ratio: f32) -> f32 {
     10.0 * ratio.log10()
 }
 
+/// `samples` starting `seconds` in, looped.
+fn starting_at(mut samples: Vec<f32>, seconds: u64) -> Vec<f32> {
+    let start = usize::try_from(seconds).unwrap() * samples_in(1.0) % samples.len();
+    samples.rotate_left(start);
+    samples
+}
+
 /// Eileen's voice from the speakers: a minute, looped, at -26 dBFS, so that with a bed under it
 /// the speakers' mix peaks near -6 dBFS and never clips, as a device's mix cannot.
 fn eileen() -> Vec<f32> {
@@ -204,21 +249,22 @@ fn command() -> Vec<f32> {
     voice(7, (110.0, 160.0), 2.0, 0.08)
 }
 
-/// The music bed the PC plays, 47 s looped: no length shares a factor with Eileen's minute, so
-/// ten minutes of the two never repeat a stretch.
-fn music_bed() -> Bed {
-    bed(music(3, 47.0, 0.05), BedSource::Speakers)
+/// The music the PC plays, 47 s looped: no length shares a factor with Eileen's minute, so ten
+/// minutes of the two never repeat a stretch.
+fn music_samples() -> Vec<f32> {
+    music(3, 47.0, 0.05)
 }
 
-/// The speech-video bed the PC plays, 53 s looped: a man talking over quiet music.
-fn video_bed() -> Bed {
+/// The speech video the PC plays, 53 s looped: a man talking over quiet music.
+fn video_samples() -> Vec<f32> {
     let talk = voice(11, (90.0, 150.0), 53.0, 0.045);
     let under = music(12, 53.0, 0.015);
-    bed(talk.iter().zip(&under).map(|(a, b)| a + b).collect(), BedSource::Speakers)
+    talk.iter().zip(&under).map(|(a, b)| a + b).collect()
 }
 
-fn bed(samples: Vec<f32>, from: BedSource) -> Bed {
-    Bed { clip: WavClip::new(MONO_16K, samples).unwrap(), gain: 1.0, from }
+/// A bed the speakers play.
+fn played(samples: Vec<f32>) -> Bed {
+    Bed { clip: WavClip::new(MONO_16K, samples).unwrap(), gain: 1.0, from: BedSource::Speakers }
 }
 
 /// `clip` after `seconds` of silence.
@@ -239,57 +285,48 @@ struct Measured {
     report: ChunkReport,
 }
 
-/// The capture side: the canceller and the energy detector, fed as the component will feed
+/// The capture side: the canceller and the energy fallback, fed as the component will feed
 /// them, from the loopback's and the speaker's buffers of the same time.
 struct Listener {
     canceller: EchoCanceller,
-    detector: EnergyDetector,
+    assembler: WindowAssembler,
     own: [f32; CHUNK],
     loopback: Option<[f32; CHUNK]>,
-    window: Vec<f32>,
-    /// The microphone's samples of the same window.
-    window_in: Vec<f32>,
-    window_other: bool,
-    /// Whether AEC3 ran for any chunk of the window.
-    window_aec3: bool,
-    /// Each window's level at the microphone and after the canceller, in dBFS.
-    levels: Vec<(f32, f32)>,
+    /// The loopback's last chunks, which reach the canceller [`LOOPBACK_LAG`] chunks late.
+    lag: [[f32; CHUNK]; LOOPBACK_LAG],
+    next_lag: usize,
+    /// The loopback runs but carries silence, as when the default endpoint changes under it.
+    loopback_silent: bool,
+    /// The chunk whose microphone, loopback and own PCM each get a NaN or infinite sample.
+    poison_at: Option<usize>,
     chunks: Vec<Measured>,
-    /// When each onset's window ended.
-    onsets: Vec<Duration>,
+    windows: Vec<EnergyWindow>,
+    /// When each onset's window ended, and its index into `windows`.
+    onsets: Vec<(Duration, usize)>,
     /// The loudest sample the loopback carried: what the speakers played.
     loudest: f32,
-    /// The window of each onset, an index into `levels`.
-    onset_windows: Vec<usize>,
 }
 
 impl Listener {
     fn hear(&mut self, buffer: &[f32], at: Duration) {
-        let mic: &[f32; CHUNK] = buffer.try_into().unwrap();
-        let loopback = self.loopback.take();
-        let own = std::mem::replace(&mut self.own, [0.0; CHUNK]);
-        let mut out = [0.0; CHUNK];
-        let report = self.canceller.process(mic, loopback.as_ref(), &own, &mut out).unwrap();
-        self.chunks.push(Measured { mic: mean_square(mic), out: mean_square(&out), report });
-
-        self.window.extend_from_slice(&out);
-        self.window_in.extend_from_slice(mic);
-        self.window_other |= report.flags.other_audio;
-        self.window_aec3 |= report.reference != Reference::Bypassed;
-        if self.window.len() >= WINDOW {
-            let window: [f32; WINDOW] = self.window[..WINDOW].try_into().unwrap();
-            let heard: [f32; WINDOW] = self.window_in[..WINDOW].try_into().unwrap();
-            self.levels.push((db(mean_square(&heard)), db(mean_square(&window))));
-            let verdict =
-                self.detector.window(&window, &heard, self.window_other, self.window_aec3);
-            if verdict.onset {
-                self.onsets.push(at + ms(10));
-                self.onset_windows.push(self.levels.len() - 1);
+        let mut mic: [f32; CHUNK] = buffer.try_into().unwrap();
+        let mut loopback = self.loopback.take();
+        let mut own = std::mem::replace(&mut self.own, [0.0; CHUNK]);
+        if self.poison_at == Some(self.chunks.len()) {
+            mic[0] = f32::NAN;
+            own[7] = f32::NAN;
+            if let Some(chunk) = &mut loopback {
+                chunk[5] = f32::INFINITY;
             }
-            self.window.drain(..WINDOW);
-            self.window_in.drain(..WINDOW);
-            self.window_other = report.flags.other_audio && !self.window.is_empty();
-            self.window_aec3 = report.reference != Reference::Bypassed && !self.window.is_empty();
+        }
+        let mut out = [0.0; CHUNK];
+        let report = self.canceller.process(&mic, loopback.as_ref(), &own, &mut out).unwrap();
+        self.chunks.push(Measured { mic: mean_square(&mic), out: mean_square(&out), report });
+        if let Some(window) = self.assembler.push(&out, &mic, report) {
+            self.windows.push(window);
+            if window.onset {
+                self.onsets.push((at + ms(10), self.windows.len() - 1));
+            }
         }
     }
 }
@@ -299,29 +336,39 @@ type Shared = Arc<Mutex<Listener>>;
 /// What a room run heard.
 struct Heard {
     chunks: Vec<Measured>,
-    onsets: Vec<Duration>,
+    windows: Vec<EnergyWindow>,
+    onsets: Vec<(Duration, usize)>,
     loudest: f32,
-    levels: Vec<(f32, f32)>,
-    onset_windows: Vec<usize>,
 }
 
 impl Heard {
     /// Each onset's time with the levels, at the microphone and after the canceller, of the
     /// windows that made it, for a failure's message.
     fn onset_levels(&self) -> String {
-        let onsets = self.onsets.iter().zip(&self.onset_windows).map(|(at, &window)| {
-            let levels: Vec<String> = self.levels[window.saturating_sub(3)..=window]
+        let onsets = self.onsets.iter().map(|&(at, window)| {
+            let run = usize::try_from(ONSET_WINDOWS).unwrap();
+            let levels: Vec<String> = self.windows[window + 1 - run..=window]
                 .iter()
-                .map(|(mic, out)| format!("{mic:.1}/{out:.1}"))
+                .map(|w| format!("{:.1}/{:.1}", w.heard_dbfs, w.level_dbfs))
                 .collect();
             format!("{at:?}: {} dBFS", levels.join(" "))
         });
         onsets.collect::<Vec<_>>().join("; ")
     }
 
-    /// The onsets from `from` on.
-    fn onsets_from(&self, from: Duration) -> Vec<Duration> {
-        self.onsets.iter().copied().filter(|&at| at >= from).collect()
+    /// The first onset's time.
+    fn first_onset(&self) -> Option<Duration> {
+        self.onsets.first().map(|&(at, _)| at)
+    }
+
+    /// How close the detector came to an onset where it judged energy: over each run of
+    /// [`ONSET_WINDOWS`] windows in a row, the most any of them fell short of speech, and the
+    /// least of that over the run, in dB. Under 0 means it fired.
+    fn closest_approach(&self) -> f32 {
+        self.windows
+            .windows(usize::try_from(ONSET_WINDOWS).unwrap())
+            .map(|run| run.iter().map(|w| w.short_db).fold(f32::NEG_INFINITY, f32::max))
+            .fold(f32::INFINITY, f32::min)
     }
 
     /// The echo return loss enhancement over `chunks`, in dB.
@@ -332,8 +379,17 @@ impl Heard {
         db(mic / out.max(1e-30))
     }
 
+    /// The canceller's summed output over `chunks`.
+    fn out(&self, chunks: std::ops::Range<usize>) -> f32 {
+        self.chunks[chunks].iter().map(|chunk| chunk.out).sum()
+    }
+
     fn references(&self, chunks: std::ops::Range<usize>) -> Vec<Reference> {
         self.chunks[chunks].iter().map(|chunk| chunk.report.reference).collect()
+    }
+
+    fn learning(&self) -> Vec<bool> {
+        self.chunks.iter().map(|chunk| chunk.report.learning).collect()
     }
 
     fn other_audio(&self) -> Vec<bool> {
@@ -355,6 +411,7 @@ struct Scene {
     bed: Option<Bed>,
     /// Whether the loopback runs.
     loopback: bool,
+    poison_at: Option<usize>,
 }
 
 /// A room playing `scene`, its streams started, and the listener on its microphone. The first
@@ -371,18 +428,17 @@ fn start(scene: Scene) -> (Shared, Vec<Box<dyn AudioStream>>) {
     let mixer = RoomMixer::new(config).unwrap();
     let shared = Arc::new(Mutex::new(Listener {
         canceller: EchoCanceller::new(),
-        detector: EnergyDetector::new(),
+        assembler: WindowAssembler::new(),
         own: [0.0; CHUNK],
         loopback: None,
-        window: Vec::with_capacity(2 * WINDOW),
-        window_in: Vec::with_capacity(2 * WINDOW),
-        window_other: false,
-        window_aec3: false,
-        levels: Vec::new(),
+        lag: [[0.0; CHUNK]; LOOPBACK_LAG],
+        next_lag: 0,
+        loopback_silent: false,
+        poison_at: scene.poison_at,
         chunks: Vec::new(),
+        windows: Vec::new(),
         onsets: Vec::new(),
         loudest: 0.0,
-        onset_windows: Vec::new(),
     }));
     let mut streams = Vec::new();
     if scene.loopback {
@@ -408,10 +464,9 @@ fn take(shared: &Shared) -> Heard {
     let mut listener = shared.lock().unwrap();
     Heard {
         chunks: std::mem::take(&mut listener.chunks),
+        windows: std::mem::take(&mut listener.windows),
         onsets: std::mem::take(&mut listener.onsets),
         loudest: listener.loudest,
-        levels: std::mem::take(&mut listener.levels),
-        onset_windows: std::mem::take(&mut listener.onset_windows),
     }
 }
 
@@ -433,7 +488,12 @@ fn loopback(shared: &Shared) -> CaptureCallback {
         let mut listener = shared.lock().unwrap();
         let loudest = buffer.iter().fold(listener.loudest, |most, sample| most.max(sample.abs()));
         listener.loudest = loudest;
-        listener.loopback = Some(buffer.try_into().unwrap());
+        let chunk: [f32; CHUNK] =
+            if listener.loopback_silent { [0.0; CHUNK] } else { buffer.try_into().unwrap() };
+        let slot = listener.next_lag;
+        let lagged = std::mem::replace(&mut listener.lag[slot], chunk);
+        listener.next_lag = (slot + 1) % LOOPBACK_LAG;
+        listener.loopback = Some(lagged);
     })
 }
 
@@ -444,12 +504,14 @@ fn microphone(shared: &Shared) -> CaptureCallback {
     })
 }
 
-/// The playback flag each chunk of `voice` should carry: it sounded in the chunk or the 19
-/// before it.
-fn expected_playback(voice: &[f32], chunks: usize) -> Vec<bool> {
-    let sounded: Vec<bool> =
-        (0..chunks).map(|k| mean_square(&voice[k * CHUNK..(k + 1) * CHUNK]) >= 1e-6).collect();
-    (0..chunks).map(|k| sounded[k.saturating_sub(19)..=k].iter().any(|&s| s)).collect()
+/// Whether each of the first `chunks` of `voice` sounds: the playback flag it should carry.
+fn sounding(voice: &[f32], chunks: usize) -> Vec<bool> {
+    (0..chunks).map(|k| mean_square(&voice[k * CHUNK..(k + 1) * CHUNK]) >= 1e-6).collect()
+}
+
+/// The first chunk AEC3 had learned the room by.
+fn learned_at(heard: &Heard) -> Option<usize> {
+    heard.learning().iter().position(|&learning| !learning)
 }
 
 // AEC3 against the loopback.
@@ -462,34 +524,42 @@ async fn eileen_speaking_is_cancelled_past_the_erle_floor_against_the_loopback()
 
     let erle = heard.erle(CONVERGED..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB, under the {ERLE_FLOOR_DB} dB floor");
+    // Her first two chunks reach the loopback after she sounds, inside the 50 ms allowance.
     let references = heard.references(0..1_200);
     assert!(references.iter().all(|&r| r == Reference::Loopback), "the loopback throughout");
-    assert_eq!(
-        heard.playback()[..1_200].to_vec(),
-        expected_playback(&voice, 1_200),
-        "playback while she sounds"
-    );
+    assert_eq!(heard.playback()[..1_200].to_vec(), sounding(&voice, 1_200), "while she sounds");
     assert!(heard.other_audio().iter().all(|&o| !o), "her own voice is not other audio");
+    let learned = learned_at(&heard);
+    let least = usize::try_from(LEARNING_CHUNKS).unwrap() + LOOPBACK_LAG - 1;
+    assert!(
+        learned.is_some_and(|at| (least..600).contains(&at)),
+        "learning until 3 s of her voice reached AEC3: {learned:?}"
+    );
+    assert!(heard.learning()[learned.unwrap()..].iter().all(|&l| !l), "and not again");
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_music_bed_from_the_speakers_is_cancelled_and_sets_other_audio() {
-    let scene = Scene { bed: Some(music_bed()), loopback: true, ..Scene::default() };
+    let scene = Scene { bed: Some(played(music_samples())), loopback: true, ..Scene::default() };
     let heard = listen(scene, 12).await;
 
     let erle = heard.erle(CONVERGED..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB, under the {ERLE_FLOOR_DB} dB floor");
     let references = heard.references(0..1_200);
-    assert!(references.iter().all(|&r| r == Reference::Loopback), "the loopback throughout");
+    let (silent, arrived) = references.split_at(LOOPBACK_LAG);
+    assert!(silent.iter().all(|&r| r == Reference::Bypassed), "bypassed till it arrives");
+    assert!(arrived.iter().all(|&r| r == Reference::Loopback), "then the loopback throughout");
+    // 200 ms of it from the first chunk that reaches the canceller.
     let other = heard.other_audio();
-    assert!(other[..19].iter().all(|&o| !o), "not before 200 ms of it");
-    assert!(other[19..].iter().all(|&o| o), "other audio from 200 ms on");
+    let on = LOOPBACK_LAG + 19;
+    assert!(other[..on].iter().all(|&o| !o), "not before 200 ms of it");
+    assert!(other[on..].iter().all(|&o| o), "other audio from 200 ms on");
     assert!(heard.playback().iter().all(|&p| !p), "Eileen played nothing");
 }
 
 #[tokio::test(start_paused = true)]
 async fn the_speech_video_bed_from_the_speakers_is_cancelled() {
-    let scene = Scene { bed: Some(video_bed()), loopback: true, ..Scene::default() };
+    let scene = Scene { bed: Some(played(video_samples())), loopback: true, ..Scene::default() };
     let heard = listen(scene, 12).await;
 
     let erle = heard.erle(CONVERGED..1_200);
@@ -499,7 +569,7 @@ async fn the_speech_video_bed_from_the_speakers_is_cancelled() {
 
 #[tokio::test(start_paused = true)]
 async fn a_bed_in_the_room_is_not_other_audio_and_leaves_aec3_bypassed() {
-    let video = video_bed();
+    let video = played(video_samples());
     let scene = Scene {
         bed: Some(Bed { from: BedSource::Room, ..video }),
         loopback: true,
@@ -522,33 +592,96 @@ async fn a_command_alone_keeps_its_energy_and_the_detector_fires_on_its_onset() 
     let command = &heard.chunks[100..300];
     let kept =
         db(command.iter().map(|c| c.out).sum::<f32>() / command.iter().map(|c| c.mic).sum::<f32>());
-    assert!(kept >= -3.0, "the command kept {kept:.1} dB of its energy");
-    let first = heard.onsets.first().copied();
+    assert!((-3.0..=0.5).contains(&kept), "the command kept {kept:.1} dB of its energy");
+    let first = heard.first_onset();
     assert!(first.is_some_and(|at| (ms(1_000)..=ms(1_250)).contains(&at)), "onset at {first:?}");
+}
+
+/// What the canceller made of a command spoken at 6 s over what `scene` plays.
+struct OverCommand {
+    /// The command's energy kept, in dB: the canceller's output with the command less its
+    /// output without it, over the command's two seconds, against the command's own energy at
+    /// the microphone.
+    kept: f32,
+    /// The ERLE over those two seconds without the command: the echo under it was removed.
+    erle: f32,
+    /// The run with the command.
+    heard: Heard,
+}
+
+/// Runs `scene` for 9 s with and without the command at 6 s, by when AEC3 has learned the room.
+/// The room and the canceller are deterministic, so the two runs differ only by the command.
+async fn command_over(scene: fn() -> Scene) -> OverCommand {
+    let spoken = command();
+    let near: f32 = spoken.chunks(CHUNK).map(mean_square).sum();
+    let with = listen(Scene { near: Some(after(6.0, &spoken)), ..scene() }, 9).await;
+    let without = listen(scene(), 9).await;
+    let kept = db((with.out(600..800) - without.out(600..800)) / near);
+    OverCommand { kept, erle: without.erle(600..800), heard: with }
+}
+
+/// Checks a command over the far end: its energy kept within -6 and +1 dB, the echo under it
+/// removed past the floor, and an onset within 250 ms of its start and none before.
+fn assert_command_heard(over: &OverCommand) {
+    let OverCommand { kept, erle, heard } = over;
+    assert!((-6.0..=1.0).contains(kept), "the command kept {kept:.1} dB of its energy");
+    assert!(*erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB under the command, without it");
+    let first = heard.first_onset();
+    assert!(
+        first.is_some_and(|at| (ms(6_000)..=ms(6_250)).contains(&at)),
+        "no onset from the far end, then one at the command: {}",
+        heard.onset_levels()
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_command_over_eileen_keeps_its_energy_and_the_detector_fires_on_its_onset() {
-    let spoken = command();
-    let scene = Scene {
+    let over =
+        command_over(|| Scene { eileen: Some(eileen()), loopback: true, ..Scene::default() }).await;
+    assert_command_heard(&over);
+}
+
+/// A bed the speakers play 6 dB over Eileen's voice, so that its energy stands over hers
+/// through her syllables and the other-audio flag stays on under the whole command.
+fn louder(samples: Vec<f32>) -> Bed {
+    Bed { gain: 2.0, ..played(samples) }
+}
+
+/// Checks that other audio played across the whole command, so that the windows that made its
+/// onset were judged with the stricter margin.
+fn assert_judged_as_other_audio(heard: &Heard) {
+    let other = heard.other_audio()[600..800].iter().filter(|&&o| o).count();
+    assert_eq!(other, 200, "other audio in {other} of the command's 200 chunks");
+    let (_, onset) = heard.onsets[0];
+    let run = usize::try_from(ONSET_WINDOWS).unwrap();
+    let judged = &heard.windows[onset + 1 - run..=onset];
+    assert!(judged.iter().all(|w| w.other_audio), "judged with the other-audio margin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_command_over_eileen_and_the_music_bed_is_kept_and_its_onset_detected() {
+    let over = command_over(|| Scene {
         eileen: Some(eileen()),
-        near: Some(after(6.0, &spoken)),
+        bed: Some(louder(music_samples())),
         loopback: true,
         ..Scene::default()
-    };
-    let heard = listen(scene, 9).await;
+    })
+    .await;
+    assert_command_heard(&over);
+    assert_judged_as_other_audio(&over.heard);
+}
 
-    // The command's own energy at the microphone, apart from the echo under it.
-    let near: f32 = spoken.chunks(CHUNK).map(mean_square).sum();
-    let out: f32 = heard.chunks[600..800].iter().map(|chunk| chunk.out).sum();
-    let kept = db(out / near);
-    assert!(kept >= -6.0, "the command kept {kept:.1} dB of its energy over Eileen");
-    let first = heard.onsets.first().copied();
-    assert!(
-        first.is_some_and(|at| (ms(6_000)..=ms(6_250)).contains(&at)),
-        "no onset from Eileen's echo, then one at the command: {}",
-        heard.onset_levels()
-    );
+#[tokio::test(start_paused = true)]
+async fn a_command_over_eileen_and_the_video_bed_is_kept_and_its_onset_detected() {
+    let over = command_over(|| Scene {
+        eileen: Some(eileen()),
+        bed: Some(louder(video_samples())),
+        loopback: true,
+        ..Scene::default()
+    })
+    .await;
+    assert_command_heard(&over);
+    assert_judged_as_other_audio(&over.heard);
 }
 
 // The reference switch.
@@ -559,13 +692,21 @@ fn noise(rng: &mut Rng) -> [f32; CHUNK] {
 }
 
 /// Runs one chunk of silence at the microphone with this loopback and own PCM.
+fn report_of(
+    canceller: &mut EchoCanceller,
+    loopback: Option<&[f32; CHUNK]>,
+    own: &[f32; CHUNK],
+) -> ChunkReport {
+    let mut out = [0.0; CHUNK];
+    canceller.process(&[0.0; CHUNK], loopback, own, &mut out).unwrap()
+}
+
 fn reference_of(
     canceller: &mut EchoCanceller,
     loopback: Option<&[f32; CHUNK]>,
     own: &[f32; CHUNK],
 ) -> Reference {
-    let mut out = [0.0; CHUNK];
-    canceller.process(&[0.0; CHUNK], loopback, own, &mut out).unwrap().reference
+    report_of(canceller, loopback, own).reference
 }
 
 #[test]
@@ -591,7 +732,7 @@ fn aec3_is_bypassed_after_500_ms_of_loopback_silence_and_returns_at_once() {
 }
 
 #[test]
-fn own_pcm_is_the_reference_once_the_loopback_is_silent_for_500_ms_or_gone() {
+fn own_pcm_is_the_reference_once_she_sounds_for_50_ms_without_the_loopback_or_it_is_gone() {
     let mut rng = Rng::new(6);
     let silence = [0.0; CHUNK];
     let mut canceller = EchoCanceller::new();
@@ -599,12 +740,18 @@ fn own_pcm_is_the_reference_once_the_loopback_is_silent_for_500_ms_or_gone() {
         let (looped, own) = (noise(&mut rng), noise(&mut rng));
         assert_eq!(reference_of(&mut canceller, Some(&looped), &own), Reference::Loopback);
     }
-    // A loopback that falls silent while Eileen speaks: own PCM from the 50th silent chunk.
+    // A loopback that falls silent while Eileen speaks: own PCM from her fifth chunk without it.
     let switched: Vec<Reference> =
         (0..60).map(|_| reference_of(&mut canceller, Some(&silence), &noise(&mut rng))).collect();
-    let mut expected = vec![Reference::Loopback; 49];
+    let mut expected = vec![Reference::Loopback; usize::try_from(MISSING_CHUNKS).unwrap() - 1];
     expected.resize(60, Reference::OwnPcm);
-    assert_eq!(switched, expected, "49 chunks on the silent loopback, then own PCM");
+    assert_eq!(switched, expected, "four chunks on the silent loopback, then own PCM");
+    // Her pauses do not bring the silent loopback back, and its first sound does.
+    let paused: Vec<Reference> =
+        (0..20).map(|_| reference_of(&mut canceller, Some(&silence), &silence)).collect();
+    assert!(paused.iter().all(|&r| r == Reference::OwnPcm), "own PCM through her pause");
+    let chunk = noise(&mut rng);
+    assert_eq!(reference_of(&mut canceller, Some(&chunk), &silence), Reference::Loopback);
 
     // No loopback at all: own PCM at once, and bypassed 500 ms after she stops.
     let chunk = noise(&mut rng);
@@ -614,6 +761,87 @@ fn own_pcm_is_the_reference_once_the_loopback_is_silent_for_500_ms_or_gone() {
     let mut expected = vec![Reference::OwnPcm; 49];
     expected.resize(60, Reference::Bypassed);
     assert_eq!(stopped, expected, "own PCM through its echo tail, then bypassed");
+}
+
+#[test]
+fn a_loopback_two_chunks_behind_her_stream_stays_the_reference() {
+    // Each time she starts after a pause, her first two chunks reach the loopback late.
+    let mut rng = Rng::new(8);
+    let silence = [0.0; CHUNK];
+    let mut canceller = EchoCanceller::new();
+    let mut lag = [[0.0; CHUNK]; 2];
+    for k in 0..1_000 {
+        let own = if k % 50 < 20 { noise(&mut rng) } else { silence };
+        let looped = std::mem::replace(&mut lag[k % 2], own);
+        let reference = reference_of(&mut canceller, Some(&looped), &own);
+        assert_ne!(reference, Reference::OwnPcm, "chunk {k}: the loopback carries her");
+    }
+}
+
+#[test]
+fn aec3_learns_for_3_s_of_sounding_reference_and_again_when_its_reference_changes() {
+    let mut rng = Rng::new(10);
+    let silence = [0.0; CHUNK];
+    let mut canceller = EchoCanceller::new();
+    let learned = usize::try_from(LEARNING_CHUNKS).unwrap();
+    let learning: Vec<bool> = (0..learned + 10)
+        .map(|_| report_of(&mut canceller, Some(&noise(&mut rng)), &silence).learning)
+        .collect();
+    let mut expected = vec![true; learned - 1];
+    expected.resize(learned + 10, false);
+    assert_eq!(learning, expected, "learning through the 299th chunk of sound");
+
+    // An idle spell keeps what it learned: the bypass leaves AEC3 alone.
+    for _ in 0..100 {
+        let report = report_of(&mut canceller, Some(&silence), &silence);
+        assert!(!report.learning, "nothing to learn, or bypassed");
+    }
+    let report = report_of(&mut canceller, Some(&noise(&mut rng)), &silence);
+    assert_eq!((report.reference, report.learning), (Reference::Loopback, false), "kept");
+
+    // Her own PCM has another delay to the microphone: AEC3 learns it afresh.
+    let report = report_of(&mut canceller, None, &noise(&mut rng));
+    assert_eq!((report.reference, report.learning), (Reference::OwnPcm, true), "afresh");
+}
+
+#[test]
+fn a_nan_or_infinite_input_sample_becomes_silence_and_the_report_says_so() {
+    let mut rng = Rng::new(12);
+    let mut canceller = EchoCanceller::new();
+    let mut out = [0.0; CHUNK];
+    let mut echo = [0.0; CHUNK];
+    for _ in 0..300 {
+        let far = noise(&mut rng);
+        let report = canceller.process(&echo, Some(&far), &far, &mut out).unwrap();
+        assert!(!report.repaired, "finite input is left alone");
+        echo = far.map(|sample| 0.3 * sample);
+    }
+    for poisoned in 0..3 {
+        let (mut mic, mut far, mut own) = (echo, noise(&mut rng), noise(&mut rng));
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][poisoned];
+        match poisoned {
+            0 => mic[17] = bad,
+            1 => far[17] = bad,
+            _ => own[17] = bad,
+        }
+        let report = canceller.process(&mic, Some(&far), &own, &mut out).unwrap();
+        assert!(report.repaired, "input {poisoned} carried {bad}");
+        assert!(out.iter().all(|sample| sample.is_finite()), "the output stays finite");
+        echo = far.map(|sample| 0.3 * sample);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_nan_from_the_devices_leaves_the_echo_cancelled() {
+    let scene =
+        Scene { eileen: Some(eileen()), loopback: true, poison_at: Some(600), ..Scene::default() };
+    let heard = listen(scene, 12).await;
+
+    assert!(heard.chunks[600].report.repaired, "the poisoned chunk was repaired");
+    assert!(heard.chunks.iter().all(|chunk| chunk.out.is_finite()), "every output finite");
+    let erle = heard.erle(650..1_200);
+    assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the NaN");
+    assert!(heard.onsets.is_empty(), "no onset: {}", heard.onset_levels());
 }
 
 #[test]
@@ -656,10 +884,12 @@ async fn without_a_loopback_eileen_is_cancelled_against_her_own_pcm() {
     assert!(references.iter().all(|&r| r == Reference::OwnPcm), "own PCM throughout");
     let erle = heard.erle(CONVERGED..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB, under the {ERLE_FLOOR_DB} dB floor");
+    assert!(heard.onsets.is_empty(), "no onset: {}", heard.onset_levels());
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_loopback_that_stops_hands_over_to_own_pcm_and_the_echo_stays_cancelled() {
+    // The loopback is two chunks behind her stream, so the switch moves AEC3's reference 20 ms.
     let scene = Scene { eileen: Some(eileen()), loopback: true, ..Scene::default() };
     let (shared, mut streams) = start(scene);
     sleep(ms(6_005)).await;
@@ -672,6 +902,28 @@ async fn a_loopback_that_stops_hands_over_to_own_pcm_and_the_echo_stays_cancelle
     assert!(heard.references(602..1_200).iter().all(|&r| r == Reference::OwnPcm), "then own");
     let erle = heard.erle(650..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
+    assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_loopback_that_falls_silent_under_her_voice_hands_over_within_50_ms() {
+    // The loopback keeps running but carries silence from 6 s, as when the default endpoint
+    // changes under it while Eileen speaks.
+    let scene = Scene { eileen: Some(eileen()), loopback: true, ..Scene::default() };
+    let (shared, streams) = start(scene);
+    sleep(ms(6_005)).await;
+    shared.lock().unwrap().loopback_silent = true;
+    sleep(ms(6_000)).await;
+    let heard = take(&shared);
+    drop(streams);
+
+    assert!(heard.references(0..600).iter().all(|&r| r == Reference::Loopback), "first");
+    let switched = heard.references(600..1_200).iter().position(|&r| r == Reference::OwnPcm);
+    assert!(switched.is_some_and(|at| at <= 60), "own PCM {switched:?} chunks after 6 s");
+    assert!(heard.references(700..1_200).iter().all(|&r| r == Reference::OwnPcm), "and kept");
+    let erle = heard.erle(650..1_200);
+    assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
+    assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
 }
 
 #[tokio::test(start_paused = true)]
@@ -686,44 +938,101 @@ async fn an_idle_spell_keeps_aec3_converged_for_the_next_reply() {
     let heard = listen(scene, 11).await;
 
     assert!(heard.references(700..800).iter().all(|&r| r == Reference::Bypassed), "idle");
+    let back = heard.references(800..900);
+    assert!(back.iter().all(|&r| r != Reference::OwnPcm), "the loopback, never her PCM");
+    assert!(heard.learning()[800..].iter().all(|&l| !l), "nothing to learn again");
     let erle = heard.erle(800..900);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB in the first second after the spell");
 }
 
 // The energy detector over the beds.
 
-/// When AEC3 has converged: the ERLE floors are measured from here, and so are false onsets.
-/// Before it, 2.2 s into Eileen over music, the canceller took only about 5 dB off her echo and
-/// the bed, and the detector fired once; AEC3 learns the room once after the core starts, since
-/// the bypass keeps its state.
-const CONVERGED_AT: Duration = ms(3_000);
+/// The seconds each run of a bed lasts. Four runs, starting 0, 150, 300 and 450 s into Eileen's
+/// voice and the bed, cover ten minutes and 3 s of the two together, each from a fresh canceller
+/// that has to learn the room as at the core's start; split this way, each run stays inside the
+/// test profiles' time limit on a loaded PC.
+const BED_RUN_SECONDS: u64 = 153;
 
-#[tokio::test(start_paused = true)]
-async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_music_bed() {
+/// Plays Eileen over `bed` from `start_s` seconds into both for [`BED_RUN_SECONDS`], and checks
+/// that the energy detector never fires, from the first chunk on.
+async fn assert_no_onset_over(bed: Vec<f32>, start_s: u64) {
     let scene = Scene {
-        eileen: Some(eileen()),
-        bed: Some(music_bed()),
+        eileen: Some(starting_at(eileen(), start_s)),
+        bed: Some(played(starting_at(bed, start_s))),
         loopback: true,
         ..Scene::default()
     };
-    let heard = listen(scene, 603).await;
+    let heard = listen(scene, BED_RUN_SECONDS).await;
     assert!(heard.loudest < 1.0, "the speakers' mix clipped at {}", heard.loudest);
-    let late = heard.onsets_from(CONVERGED_AT);
-    assert!(late.is_empty(), "false onsets over music: {}", heard.onset_levels());
+    let closest = heard.closest_approach();
+    assert!(
+        heard.onsets.is_empty(),
+        "false onsets from {start_s} s: {} (closest approach {closest:.1} dB)",
+        heard.onset_levels()
+    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_speech_video_bed() {
-    let scene = Scene {
-        eileen: Some(eileen()),
-        bed: Some(video_bed()),
-        loopback: true,
-        ..Scene::default()
-    };
-    let heard = listen(scene, 603).await;
-    assert!(heard.loudest < 1.0, "the speakers' mix clipped at {}", heard.loudest);
-    let late = heard.onsets_from(CONVERGED_AT);
-    assert!(late.is_empty(), "false onsets over the video: {}", heard.onset_levels());
+async fn no_barge_in_onset_over_eileen_and_the_music_bed_from_0_s() {
+    assert_no_onset_over(music_samples(), 0).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_music_bed_from_150_s() {
+    assert_no_onset_over(music_samples(), 150).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_music_bed_from_300_s() {
+    assert_no_onset_over(music_samples(), 300).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_music_bed_from_450_s() {
+    assert_no_onset_over(music_samples(), 450).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_0_s() {
+    assert_no_onset_over(video_samples(), 0).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_150_s() {
+    assert_no_onset_over(video_samples(), 150).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_300_s() {
+    assert_no_onset_over(video_samples(), 300).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_450_s() {
+    assert_no_onset_over(video_samples(), 450).await;
+}
+
+/// Plays `bed` alone, Eileen silent, for a minute from a fresh canceller, as while the core
+/// starts and the speech process loads its models, and checks that the detector never fires.
+async fn assert_no_onset_over_alone(bed: Vec<f32>) {
+    let scene = Scene { bed: Some(played(bed)), loopback: true, ..Scene::default() };
+    let heard = listen(scene, 60).await;
+    let closest = heard.closest_approach();
+    assert!(
+        heard.onsets.is_empty(),
+        "false onsets: {} (closest approach {closest:.1} dB)",
+        heard.onset_levels()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_in_a_minute_of_the_music_bed_alone_from_a_fresh_canceller() {
+    assert_no_onset_over_alone(music_samples()).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_barge_in_onset_in_a_minute_of_the_video_bed_alone_from_a_fresh_canceller() {
+    assert_no_onset_over_alone(video_samples()).await;
 }
 
 // The callback's budget.
