@@ -51,7 +51,7 @@ async fn the_echo_is_the_playback_delayed_and_attenuated() {
     speaker.stop();
 
     let mut expected = vec![0.0; 10 * BUFFER];
-    *expected.get_mut(100 + 1_776).unwrap() = 0.25;
+    expected[100 + 1_776] = 0.25;
     assert_eq!(bits(&samples(&heard)), bits(&expected), "one echo, 37 ms late and 12 dB down");
     let ticks: Vec<Duration> = (0..10).map(|k| ms(10 * k)).collect();
     assert_eq!(times(&heard), ticks, "the microphone's buffers every 10 ms");
@@ -67,7 +67,7 @@ async fn an_echo_without_delay_arrives_in_the_same_buffer() {
     let _microphone = mixer.source().start(callback).unwrap();
     sleep(ms(5)).await;
     let mut expected = vec![0.0; BUFFER];
-    *expected.get_mut(7).unwrap() = 0.5;
+    expected[7] = 0.5;
     assert_eq!(
         bits(&samples(&heard)),
         bits(&expected),
