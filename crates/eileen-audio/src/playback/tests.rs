@@ -12,7 +12,7 @@ use eileen_contracts::speech::{PCM_BODY_MAX, PCM_HEADER_MAX, PcmHeader};
 use eileen_trace::names;
 use tokio::time::sleep;
 
-use super::{PlayError, Player, Renderer, SYNTH_RATE, default_queue, playback};
+use super::{EVENTS, MARKERS, PlayError, Player, Renderer, SYNTH_RATE, default_queue, playback};
 use crate::pace::Pace;
 use crate::resample::{Conversion, Resampler};
 use crate::stream::{AudioSink as _, AudioStream, RenderInfo, StreamFormat};
@@ -198,13 +198,12 @@ async fn a_stop_drops_the_utterance_and_the_next_one_plays() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn played_reports_each_clause_every_50_ms_and_drained_ends_the_utterance() {
+async fn played_reports_each_clause_every_50_ms_and_drained_comes_when_the_queue_runs_dry() {
     let mut rig = Rig::start("played");
     let one = speak(1);
     // Clause 0 holds 3000 device samples, clause 1 holds 4000.
     rig.player.push(header(one, 0), &tone(0, 1_500)).unwrap();
     rig.player.push(header(one, 1), &tone(1_500, 2_000)).unwrap();
-    rig.player.finish(one);
     sleep(ms(200)).await;
     let (mut player, _) = rig.finish();
     assert_eq!(
@@ -218,6 +217,82 @@ async fn played_reports_each_clause_every_50_ms_and_drained_ends_the_utterance()
         ],
         "at most every 50 ms, each clause counted from its start"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reply_in_two_batches_plays_both_and_drains_after_each() {
+    // One reply, one SpeakId: the speech process synthesizes the first batch of clauses and
+    // reports `SpeakDone` for it, which reaches no player call, and the second batch comes
+    // after the first has played out.
+    let mut rig = Rig::start("batches");
+    let one = speak(1);
+    let input = tone(0, 2_000);
+    rig.player.push(header(one, 0), &input[..1_000]).unwrap();
+    sleep(ms(65)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [PlaybackEvent::Drained { speak: one }],
+        "the first batch's 2000 device samples played out in the 40 ms buffer"
+    );
+    rig.player.push(header(one, 1), &input[1_000..]).unwrap();
+    sleep(ms(100)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [
+            // 2000 samples of clause 0 and 480 of clause 1 cross the 50 ms mark.
+            PlaybackEvent::Played { speak: one, clause: 1, samples_played: 240 },
+            PlaybackEvent::Drained { speak: one },
+        ],
+        "the second batch plays and drains again"
+    );
+    let (_, played) = rig.finish();
+
+    // The second batch continues the first's interpolator from the 70 ms buffer.
+    let full = upsampled(&input);
+    let mut expected = full[..2_000].to_vec();
+    expected.resize(7 * BUFFER, 0.0);
+    expected.extend(&full[2_000..]);
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "both batches, a gap between them");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_paused_utterance_holds_the_next_until_it_stops() {
+    let mut rig = Rig::start("pause-holds");
+    let (one, two) = (speak(1), speak(2));
+    let first = tone(0, 4_000);
+    let next = tone(0, 1_000);
+    rig.player.push(header(one, 0), &first).unwrap();
+    rig.player.push(header(two, 0), &next).unwrap();
+    sleep(ms(25)).await;
+    assert!(rig.player.apply(&AudioCmd::Pause { speak: one }), "a playback command");
+    sleep(ms(60)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 720 }],
+        "the first paused, and nothing of the second played"
+    );
+    assert!(rig.player.apply(&AudioCmd::Stop { speak: one }), "a playback command");
+    sleep(ms(100)).await;
+    assert_eq!(
+        events(&mut rig.player),
+        [
+            PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 720 },
+            // 1440 samples of the first and 960 of the second cross the 50 ms mark.
+            PlaybackEvent::Played { speak: two, clause: 0, samples_played: 480 },
+            PlaybackEvent::Drained { speak: two },
+        ],
+        "stopped where it paused, then the second played out"
+    );
+    let (_, played) = rig.finish();
+
+    // Silent from the 30 ms buffer while paused; the stop at 85 ms lets the second play from
+    // the 90 ms buffer.
+    let mut expected = upsampled(&first)[..AT_30_MS].to_vec();
+    expected.resize(9 * BUFFER, 0.0);
+    expected.extend(upsampled(&next));
+    expected.resize(played.len(), 0.0);
+    assert_eq!(bits(&played), bits(&expected), "nobody talks over the paused utterance");
 }
 
 #[tokio::test(start_paused = true)]
@@ -308,6 +383,45 @@ fn a_full_queue_refuses_the_frame_and_logs_the_drop() {
 }
 
 #[test]
+fn each_queue_counts_its_own_drops() {
+    let (mut player, _renderer) = playback(MONO_48K, 4_800).unwrap();
+    let one = speak(1);
+    player.push(header(one, 0), &tone(0, 2_000)).unwrap();
+    for n in 100..116 {
+        player.pause(speak(n));
+    }
+    let ((), captured) = eileen_trace::test_support::capture(|| {
+        assert!(player.push(header(one, 1), &tone(0, 500)).is_err(), "the samples do not fit");
+        player.pause(speak(116));
+        assert!(player.push(header(one, 1), &tone(0, 500)).is_err(), "still no room");
+    });
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    let expected = [("audio.playback", 1), ("audio.playback.waiting", 1), ("audio.playback", 2)];
+    assert_eq!(logged.len(), expected.len(), "three drops logged: {captured:?}");
+    for (event, (channel, times)) in logged.iter().zip(expected) {
+        assert_eq!(event.fields["channel"], channel, "the channel named");
+        assert_eq!(event.fields["times"], times, "a drop on one channel does not count another's");
+    }
+}
+
+#[test]
+fn a_full_marker_queue_refuses_the_frame_and_logs_it() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let one = speak(1);
+    for clause in 0..MARKERS {
+        player.push(header(one, u16::try_from(clause).unwrap()), &tone(0, 1)).unwrap();
+    }
+    let (refused, captured) =
+        eileen_trace::test_support::capture(|| player.push(header(one, 0), &tone(0, 1)));
+    assert_eq!(refused, Err(PlayError::Full { samples: 2 }), "a marker per frame, and none left");
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "the drop logged: {captured:?}");
+    assert_eq!(logged[0].fields["channel"], "audio.playback.markers", "the marker queue named");
+    assert_eq!(logged[0].fields["capacity"], MARKERS, "its size, not the sample queue's");
+    assert_eq!(logged[0].fields["times"], 1, "its first drop");
+}
+
+#[test]
 fn an_utterance_past_the_live_limit_is_refused_and_logged() {
     let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
     // The renderer has reached none, so seven may wait.
@@ -316,7 +430,7 @@ fn an_utterance_past_the_live_limit_is_refused_and_logged() {
     }
     let (refused, captured) =
         eileen_trace::test_support::capture(|| player.push(header(speak(8), 0), &tone(0, 10)));
-    assert_eq!(refused, Err(PlayError::Full { samples: 20 }), "an eighth does not fit");
+    assert_eq!(refused, Err(PlayError::Utterances { live: 7 }), "an eighth does not fit");
     let logged = captured.events_named(names::CHANNEL_FULL);
     assert_eq!(logged.len(), 1, "the drop logged: {captured:?}");
     assert_eq!(logged[0].fields["channel"], "audio.playback.utterances", "the limit named");
@@ -354,20 +468,18 @@ fn fill_measured(renderer: &mut Renderer, out: &mut [f32], what: &str) {
 }
 
 #[test]
-fn a_late_command_for_a_finished_utterance_leaves_the_one_in_its_slot_alone() {
+fn a_late_command_for_a_played_out_utterance_leaves_the_one_in_its_slot_alone() {
     let (mut player, mut renderer) = playback(MONO_48K, QUEUE).unwrap();
     let mut out = vec![0.0; BUFFER];
-    // The first utterance plays out and the renderer reaches the second.
+    // The first utterance plays out and the renderer reaches the second, which runs dry.
     player.push(header(speak(1), 0), &tone(0, 10)).unwrap();
-    player.finish(speak(1));
     player.push(header(speak(2), 0), &tone(0, 10)).unwrap();
     fill_measured(&mut renderer, &mut out, "moving to the second utterance");
-    // Seven more, the last in the first one's hold slot; only the last is finished, so the
-    // others drain when the next begins.
+    // Seven more, the last in the first one's hold slot; each drains when the next begins, the
+    // second's dry spell is reported once, and the last drains when the queue runs dry.
     for n in 3..=9 {
         player.push(header(speak(n), 0), &tone(0, 10)).unwrap();
     }
-    player.finish(speak(9));
     player.pause(speak(1));
     player.stop(speak(1));
     fill_measured(&mut renderer, &mut out, "moving from one utterance to the next");
@@ -446,7 +558,6 @@ fn the_render_callback_allocates_and_frees_nothing() {
     let (one, two) = (speak(1), speak(2));
     player.push(header(one, 0), &tone(0, 6_000)).unwrap();
     player.push(header(one, 1), &tone(6_000, 6_000)).unwrap();
-    player.finish(one);
     player.push(header(two, 0), &tone(0, 6_000)).unwrap();
     let mut out = vec![0.0; BUFFER];
     fill_measured(&mut renderer, &mut out, "playing");
@@ -460,25 +571,29 @@ fn the_render_callback_allocates_and_frees_nothing() {
     fill_measured(&mut renderer, &mut out, "paused");
     player.resume(one);
     fill_measured(&mut renderer, &mut out, "resuming");
+    player.pause(one);
+    fill_measured(&mut renderer, &mut out, "pausing again");
     player.stop(one);
-    fill_measured(&mut renderer, &mut out, "dropping a stopped utterance");
+    fill_measured(&mut renderer, &mut out, "dropping a paused, stopped utterance");
     for _ in 0..100 {
         fill_measured(&mut renderer, &mut out, "draining and running dry");
     }
-    // Played every 2400 samples handed, counted across the pause; the stop drops the rest of
-    // the first utterance, and the second, given no finish, reports no Drained.
+    // Played every 2400 samples handed, counted across the pauses; the stop drops the rest of
+    // the first utterance, and the second plays out and reports its dry spell.
     assert_eq!(
         events(&mut player),
         [
             PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 },
             PlaybackEvent::Played { speak: one, clause: 0, samples_played: 2_400 },
             PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 2_880 },
+            PlaybackEvent::Paused { speak: one, clause: 0, samples_played: 3_120 },
             PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 3_120 },
             PlaybackEvent::Played { speak: two, clause: 0, samples_played: 480 },
             PlaybackEvent::Played { speak: two, clause: 0, samples_played: 1_680 },
             PlaybackEvent::Played { speak: two, clause: 0, samples_played: 2_880 },
             PlaybackEvent::Played { speak: two, clause: 0, samples_played: 4_080 },
             PlaybackEvent::Played { speak: two, clause: 0, samples_played: 5_280 },
+            PlaybackEvent::Drained { speak: two },
         ],
         "every path above ran"
     );
@@ -490,7 +605,6 @@ fn a_full_event_queue_counts_what_it_lost_and_logs_it() {
     for n in 0..4 {
         let utterance = speak(n);
         player.push(header(utterance, 0), &tone(0, 10)).unwrap();
-        player.finish(utterance);
     }
     let mut out = vec![0.0; BUFFER];
     fill_measured(&mut renderer, &mut out, "losing events");
@@ -504,4 +618,20 @@ fn a_full_event_queue_counts_what_it_lost_and_logs_it() {
     assert_eq!(logged.len(), 1, "the loss logged: {captured:?}");
     assert_eq!(logged[0].fields["channel"], "audio.playback.events", "the event queue named");
     assert_eq!(logged[0].fields["times"], 2, "two lost");
+}
+
+#[test]
+fn stops_before_any_audio_past_the_event_limit_are_logged() {
+    let (mut player, _renderer) = playback(MONO_48K, QUEUE).unwrap();
+    let limit = u128::try_from(EVENTS).unwrap();
+    for n in 0..limit {
+        player.stop(speak(n));
+    }
+    let ((), captured) = eileen_trace::test_support::capture(|| player.stop(speak(limit)));
+    let logged = captured.events_named(names::CHANNEL_FULL);
+    assert_eq!(logged.len(), 1, "the dropped report logged: {captured:?}");
+    assert_eq!(logged[0].fields["channel"], "audio.playback.reported", "the list named");
+    assert_eq!(logged[0].fields["capacity"], EVENTS, "its size");
+    assert_eq!(logged[0].fields["times"], 1, "its first drop");
+    assert_eq!(player.reported.len(), EVENTS, "the list holds no more than its size");
 }

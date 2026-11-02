@@ -42,8 +42,10 @@
 //! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
 //!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
 //!   of a stopped utterance (`playback::tests`). Its queues are bounded: a PCM frame that does
-//!   not fit is refused and logged, and so is a new utterance past the live limit; its render side
-//!   allocates nothing (`allocation_counter::measure` in the same tests).
+//!   not fit the sample or marker queue is refused and logged, and so is a new utterance past
+//!   the live limit, an early pause past the ones it remembers and an event the player reports
+//!   itself past the event limit; its render side allocates nothing
+//!   (`allocation_counter::measure` in the same tests).
 //!
 //! # Boundaries
 //!
@@ -106,13 +108,22 @@
 //! - Playback's `samples_played` counts the clause's own 24 kHz samples, as `ClauseReady.samples`
 //!   does, not the device's; and a paused utterance with audio left holds every utterance behind
 //!   it, so the core stops one before it speaks the next.
+//! - Playback's `Drained` means every sample queued so far for the utterance has played (the
+//!   queue ran dry, or a later utterance began), as the core reads it, not that the reply is
+//!   over: it comes once per dry spell, so more than once while synthesis is behind, and the
+//!   utterance keeps taking audio after it. `SpeakDone` ends nothing here; only the core knows
+//!   when a reply is closed.
 //!
 //! # Logs and tracing
 //!
-//! - `channel.full` when playback refuses a frame (`channel` `audio.playback`, or
-//!   `audio.playback.utterances` for the live-utterance limit) and when its render side lost
-//!   events (`audio.playback.events`), logged from the component's side, never inside the audio
-//!   callback; WP4 reports the callbacks through the tick ring.
+//! - `channel.full` when playback drops something for want of room, each `channel` with its own
+//!   `times`: a frame refused by the sample queue (`audio.playback`) or the marker queue
+//!   (`audio.playback.markers`), a new utterance past the live limit
+//!   (`audio.playback.utterances`), an early pause past the ones it remembers
+//!   (`audio.playback.waiting`), a `Stopped` the player reports itself past the event limit
+//!   (`audio.playback.reported`), and events its render side lost (`audio.playback.events`); all
+//!   logged from the component's side, never inside the audio callback. WP4 reports the
+//!   callbacks through the tick ring.
 //!
 //! # Do not change without a decision record
 //!

@@ -177,15 +177,17 @@ The parts of the audio series, in merge order, as each opens:
    converts them from 24 kHz with part 4's interpolator (a fresh one per utterance), and queues
    them with a marker per utterance and clause in a bounded queue (30 s of device samples by
    default, which holds the largest PCM frame), refusing and logging a frame that does not fit.
-   It serves `Duck`, `Unduck`, `Pause`, `Resume` and `Stop`, and `finish` marks an utterance's
-   last audio. The `Renderer`, the render callback's half, hands the samples to the device on
-   every channel, moves to a new gain over the first millisecond of the next callback, holds a
-   paused utterance at a sample, drops a stopped one, and reports `Played` (at most every 50 ms
-   of audio), `Paused`, `Stopped` and `Drained`. Evidence: the unit tests in
+   It serves `Duck`, `Unduck`, `Pause`, `Resume` and `Stop`. The `Renderer`, the render
+   callback's half, hands the samples to the device on every channel, moves to a new gain over
+   the first millisecond of the next callback, holds a paused utterance at a sample, drops a
+   stopped one, and reports `Played` (at most every 50 ms of audio), `Paused`, `Stopped` and
+   `Drained` (each time the utterance's queued audio runs out). Evidence: the unit tests in
    `eileen_audio::playback::tests` (each command over a `CaptureSink` on paused tokio time,
    compared bit for bit with the interpolator over the whole clause; a duck exact from the next
-   callback; a resume from exactly the paused sample; the clause counts of `Played`; the
-   refusals and the logged drops; and the render callback inside `allocation_counter::measure`).
+   callback; a resume from exactly the paused sample; a paused utterance holding the next; a
+   reply in two batches playing both and draining after each; the clause counts of `Played`;
+   the refusals and the logged drops, each queue with its own count; and the render callback
+   inside `allocation_counter::measure`).
 
 The speech series has not opened yet.
 
@@ -329,17 +331,28 @@ The speech series has not opened yet.
 - Utterances play in the order their audio arrived, each whole: audio of an utterance after a
   later one's began is refused, so a stopped or overtaken utterance never sounds again, and a
   paused utterance with audio left holds those behind it, so Eileen never talks over herself.
-  The renderer reports `Drained` at the end `Player::finish` marks (the component calls it on
-  `SpeakDone`) or, for an utterance overtaken by a later one, when it moves on.
+  A new utterance past the live limit is refused as `PlayError::Utterances`, not `Full`, since
+  room for it comes when the renderer moves on, not as samples play.
+- `Drained` keeps the core's meaning (`eileen-core`'s crate doc, and the simulator's device):
+  every sample queued so far for the utterance has played. The renderer reports it once each
+  time the queue runs dry while the utterance plays, and when a later utterance's audio begins
+  if that dry spell was not already reported, and keeps the utterance current, so its next
+  batch continues it with the same interpolator. A reply is one `SpeakId` sent as several
+  `SpeechCmd::Speak` batches as its text streams, and the speech process answers each batch
+  with a `SpeakDone`, so `SpeakDone` ends nothing in playback: the core alone knows when a reply
+  is closed, and ends it on the `Drained` after that. The player has no call that marks an
+  utterance's last audio.
 - A pause cuts at a sample, with no fade: the duck at the first barge-in window (about 20 dB,
   section 2.8) comes two windows earlier, so the cut is quiet, and "resume from the paused
   sample" stays exact. A duck moves the gain over the first millisecond of frames from the next
   callback, on into later buffers when that one is shorter, so the step does not click, and a
   positive `db` counts as 0, since a duck only lowers.
 - A frame that does not fit the queue is dropped whole, never cut, so each marker covers the
-  samples it names; the drop is logged as `channel.full` (`audio.playback`), an existing name,
-  so no name was added to `eileen_trace::names`. Events the render side cannot queue are counted
-  in an atomic and logged by the player when it next reads (`audio.playback.events`).
+  samples it names; the drop is logged as `channel.full`, an existing name, so no name was
+  added to `eileen_trace::names`. Each bounded queue or list logs under its own `channel` with
+  its own `times` and capacity (`audio.playback` for the samples, `.markers`, `.utterances`,
+  `.waiting` and `.reported`). Events the render side cannot queue are counted in an atomic and
+  logged by the player when it next reads (`audio.playback.events`).
 - `Earcon` stays for a later part: `Player::apply` serves only duck, unduck, pause, resume and
   stop, and reports any other command as not its own.
 

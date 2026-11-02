@@ -13,7 +13,7 @@
 //! The rules:
 //!
 //! - Utterances play in the order their audio arrived, each whole: audio of an utterance that
-//!   comes after a later one's began is refused, so a stopped or finished utterance never plays
+//!   comes after a later one's began is refused, so a stopped or overtaken utterance never plays
 //!   again. A paused utterance with audio left holds the ones behind it until it resumes or
 //!   stops, so Eileen never talks over herself.
 //! - `Duck { db }` and `Unduck` take effect in the next output callback (simulator invariant 2):
@@ -32,11 +32,16 @@
 //! - `samples_played` counts the clause's own samples, at the 24 kHz of its `PcmHeader`, as
 //!   `ClauseReady.samples` does, so the core maps it straight to characters: the device's samples
 //!   since the clause began, times 24 kHz over the device's rate. `Played` comes at most every
-//!   50 ms of audio handed to the device, `Paused` and `Stopped` once each, and `Drained` when the
-//!   renderer reaches the end [`Player::finish`] marked, or moves on to a later utterance. An
-//!   utterance paused before its audio reaches the renderer is held at its first sample (`Paused`
-//!   with 0 played), and one stopped or finished before any audio arrived is reported by the
-//!   player itself (`Stopped` with 0 played, or `Drained`).
+//!   50 ms of audio handed to the device, and `Paused` and `Stopped` once each. An utterance
+//!   paused before its audio reaches the renderer is held at its first sample (`Paused` with 0
+//!   played), and one stopped before any audio arrived is reported by the player itself
+//!   (`Stopped` with 0 played).
+//! - `Drained` means every sample queued so far for the utterance has played, as the core reads
+//!   it: the queue ran dry while it played, or a later utterance's audio began. It comes once per
+//!   dry spell, so more than once when synthesis falls behind, and the utterance keeps taking
+//!   audio after it. A reply is one utterance whose clauses arrive in batches as its text
+//!   streams, and only the core knows when the reply is closed, so nothing here ends an
+//!   utterance's intake but a `Stop` or a later utterance.
 //!
 //! The halves share three `rtrb` SPSC queues (samples, markers and events) and a few atomics: the
 //! target gain, the newest utterance the renderer has reached, and one hold (playing, paused or
@@ -74,7 +79,7 @@ pub(crate) const SYNTH_RATE: u32 = 24_000;
 /// holds the largest PCM frame (1 MiB, about 22 s at 24 kHz) with room for the next clause.
 const QUEUE_SECONDS: usize = 30;
 
-/// Markers the queue holds: one per PCM frame and one per finished utterance.
+/// Markers the queue holds: one per PCM frame.
 const MARKERS: usize = 1_024;
 
 /// Events the renderer can report before the component drains them; more are counted as lost.
@@ -102,14 +107,22 @@ pub(crate) enum PlayError {
         /// The rate refused.
         sample_rate: u32,
     },
-    /// The queue cannot hold the frame's samples, or the frame would start an utterance past
-    /// the live limit; the frame is dropped and the drop logged.
+    /// The sample or marker queue cannot hold the frame; the frame is dropped and the drop
+    /// logged. Room comes back as the renderer plays.
     #[error("the playback queue cannot hold {samples} more samples")]
     Full {
         /// Device samples the frame needed.
         samples: usize,
     },
-    /// The utterance was stopped or finished, or a later one's audio began after it.
+    /// The frame would start a new utterance while the most playback keeps are live; it is
+    /// dropped and the drop logged. Room comes back when the renderer moves on to a later
+    /// utterance, not as samples play.
+    #[error("playback already holds {live} live utterances, the most it keeps")]
+    Utterances {
+        /// Utterances live when the frame came.
+        live: u64,
+    },
+    /// The utterance was stopped, or a later one's audio began after it.
     #[error("the utterance takes no more audio")]
     Ended,
 }
@@ -133,19 +146,41 @@ impl Hold {
     }
 }
 
-/// An entry in the marker queue, after the samples it covers.
+/// An entry in the marker queue: `frames` device frames of one clause, after the samples it
+/// covers.
 #[derive(Debug, Clone, Copy)]
-enum Marker {
-    /// `frames` device frames of one clause.
-    Pcm { ordinal: u64, speak: SpeakId, clause: u16, frames: usize },
-    /// The utterance's last audio is queued.
-    End { ordinal: u64, speak: SpeakId },
+struct Marker {
+    ordinal: u64,
+    speak: SpeakId,
+    clause: u16,
+    frames: usize,
 }
 
-impl Marker {
-    const fn ordinal(&self) -> u64 {
-        match *self {
-            Self::Pcm { ordinal, .. } | Self::End { ordinal, .. } => ordinal,
+/// A bounded queue or list of the player's whose overflow it logs as `channel.full`.
+#[derive(Debug, Clone, Copy)]
+enum Queue {
+    /// The device samples.
+    Samples,
+    /// The markers, one per PCM frame.
+    Markers,
+    /// The live utterances and their hold slots.
+    Utterances,
+    /// Utterances paused before their audio.
+    Waiting,
+    /// Events the player reports itself.
+    Reported,
+}
+
+impl Queue {
+    const ALL: usize = 5;
+
+    const fn channel(self) -> &'static str {
+        match self {
+            Self::Samples => "audio.playback",
+            Self::Markers => "audio.playback.markers",
+            Self::Utterances => "audio.playback.utterances",
+            Self::Waiting => "audio.playback.waiting",
+            Self::Reported => "audio.playback.reported",
         }
     }
 }
@@ -229,8 +264,8 @@ pub(crate) fn playback_with(
         ended: VecDeque::new(),
         newest: None,
         next_ordinal: 1,
-        reported: VecDeque::new(),
-        full: 0,
+        reported: VecDeque::with_capacity(EVENTS),
+        drops: [0; Queue::ALL],
         lost: 0,
     };
     let renderer = Renderer {
@@ -281,10 +316,11 @@ pub(crate) struct Player {
     /// The utterance whose audio was queued last, which may take more.
     newest: Option<SpeakId>,
     next_ordinal: u64,
-    /// Events the player reports itself (an utterance stopped or finished before any audio).
+    /// Events the player reports itself (an utterance stopped before any audio), at most
+    /// [`EVENTS`].
     reported: VecDeque<PlaybackEvent>,
-    /// Frames refused for a full queue, for the log.
-    full: u64,
+    /// Drops counted per [`Queue`], for the log.
+    drops: [u64; Queue::ALL],
     /// Events the renderer lost, as last logged.
     lost: u64,
 }
@@ -307,11 +343,17 @@ impl Player {
         let needed = fresh.as_ref().unwrap_or(&self.resampler).output_len(samples.len());
         let head = self.shared.head.load(Ordering::SeqCst);
         if fresh.is_some() && ordinal.saturating_sub(head) >= UTTERANCES {
-            return Err(self.refuse(needed, "audio.playback.utterances", SLOTS));
+            self.note_full(Queue::Utterances);
+            // Before the renderer reaches any, ordinals start at 1.
+            return Err(PlayError::Utterances { live: ordinal.saturating_sub(head.max(1)) });
         }
-        // One marker stays free for `finish`.
-        if self.samples.slots() < needed || self.markers.slots() < 2 {
-            return Err(self.refuse(needed, "audio.playback", self.capacity));
+        if self.samples.slots() < needed {
+            self.note_full(Queue::Samples);
+            return Err(PlayError::Full { samples: needed });
+        }
+        if self.markers.is_full() {
+            self.note_full(Queue::Markers);
+            return Err(PlayError::Full { samples: needed });
         }
         if let Some(fresh) = fresh {
             self.begin(speak, ordinal, fresh);
@@ -324,7 +366,7 @@ impl Player {
         if self.samples.push_entire_slice(converted).is_err()
             || self
                 .markers
-                .push(Marker::Pcm { ordinal, speak, clause: header.clause, frames: written })
+                .push(Marker { ordinal, speak, clause: header.clause, frames: written })
                 .is_err()
         {
             // Both had room above, and only this half writes them.
@@ -365,11 +407,19 @@ impl Player {
         }
     }
 
-    /// Logs a frame refused for want of room in `channel`, and gives the error.
-    fn refuse(&mut self, samples: usize, channel: &'static str, capacity: usize) -> PlayError {
-        self.full += 1;
-        tracing::warn!(name: names::CHANNEL_FULL, channel, capacity, times = self.full);
-        PlayError::Full { samples }
+    /// Logs a drop for want of room in `queue`, with that queue's own count.
+    fn note_full(&mut self, queue: Queue) {
+        let capacity = match queue {
+            Queue::Samples => self.capacity,
+            Queue::Markers => MARKERS,
+            Queue::Utterances => SLOTS,
+            Queue::Waiting => WAITING,
+            Queue::Reported => EVENTS,
+        };
+        let Some(times) = self.drops.get_mut(queue as usize) else { return };
+        *times += 1;
+        let times = *times;
+        tracing::warn!(name: names::CHANNEL_FULL, channel = queue.channel(), capacity, times);
     }
 
     /// Serves a playback command and returns whether it was one.
@@ -411,7 +461,7 @@ impl Player {
             return;
         }
         if self.utterances.values().filter(|u| u.ordinal.is_none()).count() >= WAITING {
-            let _refused = self.refuse(0, "audio.playback.waiting", WAITING);
+            self.note_full(Queue::Waiting);
             return;
         }
         self.utterances.insert(speak, Utterance { ordinal: None, hold: Hold::Paused });
@@ -456,39 +506,17 @@ impl Player {
             }
             Some((None, _)) | None if !self.ended.contains(&speak) => {
                 self.utterances.remove(&speak);
-                self.reported.push_back(PlaybackEvent::Stopped {
-                    speak,
-                    clause: 0,
-                    samples_played: 0,
-                });
+                if self.reported.len() >= EVENTS {
+                    self.note_full(Queue::Reported);
+                } else {
+                    self.reported.push_back(PlaybackEvent::Stopped {
+                        speak,
+                        clause: 0,
+                        samples_played: 0,
+                    });
+                }
             }
             Some((None, _)) | None => {}
-        }
-        self.end(speak);
-    }
-
-    /// Marks `speak`'s audio as complete, so the renderer reports `Drained` after its last
-    /// sample.
-    pub(crate) fn finish(&mut self, speak: SpeakId) {
-        let utterance = self.utterances.get(&speak).copied();
-        match utterance {
-            Some(Utterance { ordinal: Some(ordinal), hold })
-                if hold != Hold::Stopped && !self.ended.contains(&speak) =>
-            {
-                // `push` keeps a marker free for this.
-                if self.markers.push(Marker::End { ordinal, speak }).is_err() {
-                    let _refused = self.refuse(0, "audio.playback", self.capacity);
-                }
-            }
-            // Stopped, or overtaken by a later utterance, which the renderer reports as drained
-            // when it moves on to the later one.
-            Some(Utterance { ordinal: Some(_), .. }) => {}
-            Some(Utterance { ordinal: None, .. }) | None => {
-                if !self.ended.contains(&speak) {
-                    self.utterances.remove(&speak);
-                    self.reported.push_back(PlaybackEvent::Drained { speak });
-                }
-            }
         }
         self.end(speak);
     }
@@ -524,6 +552,8 @@ struct Current {
     clause_frames: u64,
     /// Whether its pause was reported.
     paused: bool,
+    /// Whether the queue ran dry since its last marker was taken, and `Drained` was reported.
+    drained: bool,
 }
 
 /// What the renderer does next.
@@ -584,26 +614,19 @@ impl Renderer {
     fn step(&mut self) -> Step {
         loop {
             let Some(mut current) = self.current else {
-                match self.markers.pop() {
-                    Ok(Marker::Pcm { ordinal, speak, clause, frames }) => {
-                        self.reach(ordinal);
-                        self.current = Some(Current {
-                            ordinal,
-                            speak,
-                            clause,
-                            left: frames,
-                            clause_frames: 0,
-                            paused: false,
-                        });
-                    }
-                    Ok(Marker::End { ordinal, speak }) => {
-                        self.reach(ordinal);
-                        if self.shared.hold(ordinal) != Hold::Stopped {
-                            self.report(PlaybackEvent::Drained { speak });
-                        }
-                    }
-                    Err(_) => return Step::Silence,
-                }
+                let Ok(Marker { ordinal, speak, clause, frames }) = self.markers.pop() else {
+                    return Step::Silence;
+                };
+                self.reach(ordinal);
+                self.current = Some(Current {
+                    ordinal,
+                    speak,
+                    clause,
+                    left: frames,
+                    clause_frames: 0,
+                    paused: false,
+                    drained: false,
+                });
                 continue;
             };
             let hold = self.shared.hold(current.ordinal);
@@ -620,26 +643,35 @@ impl Renderer {
             }
             if current.left == 0 {
                 match self.markers.peek().copied() {
-                    Ok(Marker::Pcm { ordinal, clause, frames, .. })
-                        if ordinal == current.ordinal =>
-                    {
+                    Ok(Marker { ordinal, clause, frames, .. }) if ordinal == current.ordinal => {
                         let _taken = self.markers.pop();
                         if clause != current.clause {
                             current.clause = clause;
                             current.clause_frames = 0;
                         }
                         current.left = frames;
+                        current.drained = false;
                         self.current = Some(current);
                     }
-                    Ok(Marker::Pcm { .. }) => {
-                        // A later utterance began, so this one takes no more audio.
-                        self.report(PlaybackEvent::Drained { speak: current.speak });
+                    Ok(_) => {
+                        // A later utterance began, so this one takes no more audio. A dry spell
+                        // already reported is the same one, so it is not reported again.
+                        if !current.drained {
+                            self.report(PlaybackEvent::Drained { speak: current.speak });
+                        }
                         self.current = None;
                     }
-                    // Its end, which the step without a clause takes.
-                    Ok(Marker::End { .. }) => self.current = None,
                     Err(_) if hold == Hold::Paused => return self.hold_paused(current),
-                    Err(_) => return Step::Silence,
+                    Err(_) => {
+                        // Dry: every sample queued so far has played. The utterance stays
+                        // current, so its next batch continues it.
+                        if !current.drained {
+                            current.drained = true;
+                            self.current = Some(current);
+                            self.report(PlaybackEvent::Drained { speak: current.speak });
+                        }
+                        return Step::Silence;
+                    }
                 }
                 continue;
             }
@@ -716,13 +748,11 @@ impl Renderer {
     /// Drops the queued markers of `ordinal`, and their samples.
     fn skip_rest_of(&mut self, ordinal: u64) {
         while let Ok(marker) = self.markers.peek().copied() {
-            if marker.ordinal() != ordinal {
+            if marker.ordinal != ordinal {
                 break;
             }
             let _taken = self.markers.pop();
-            if let Marker::Pcm { frames, .. } = marker {
-                self.skip(frames);
-            }
+            self.skip(marker.frames);
         }
     }
 
