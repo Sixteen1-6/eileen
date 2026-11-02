@@ -293,7 +293,7 @@ impl Registry {
             return Err(Refused::Duplicate(job.id));
         }
         if let Some(parent) = job.spec.parent
-            && !self.get(parent).is_some_and(|of| !of.status.is_terminal())
+            && self.get(parent).is_none_or(|of| of.status.is_terminal())
         {
             return Err(Refused::NoParent(parent));
         }

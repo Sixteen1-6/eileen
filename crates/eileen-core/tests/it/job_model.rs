@@ -366,10 +366,15 @@ impl Model {
         Expect::Ids(interrupted)
     }
 
-    /// The newest unfinished job the target names is cancelled.
+    /// The newest unfinished job the target names is cancelled. A slug given again after
+    /// seven days names two kept jobs, and the newer unfinished one is meant.
     fn cancel(&mut self, target: &Target) -> Expect {
+        let slug_of =
+            |id: &JobId| self.jobs.iter().find(|job| job.id == *id).map(|job| job.slug.clone());
+        let slug = if let Target::SlugOf(id) = target { slug_of(id) } else { None };
         let named = |job: &&mut ModelJob| match target {
-            Target::Id(id) | Target::SlugOf(id) => job.id == *id,
+            Target::Id(id) => job.id == *id,
+            Target::SlugOf(_) => slug.as_ref().is_some_and(|slug| job.slug == *slug),
             Target::Name(title) => job.name.eq_ignore_ascii_case(TITLES[*title].2),
             Target::Agent(n) => job.ordinal == Some(*n),
         };
