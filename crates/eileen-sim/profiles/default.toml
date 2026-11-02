@@ -1,5 +1,6 @@
-# The default simulation profile (BUILD.md section 4.7): a balanced mix of inputs. Its schema is
-# profile.schema.json beside it, generated from eileen_sim::Profile.
+# The default simulation profile (BUILD.md section 4.7): a balanced mix of inputs on a 16 GB PC
+# with room to spare, and a few faults. Its schema is profile.schema.json beside it, generated
+# from eileen_sim::Profile.
 name = "default"
 steps = 2000
 seeds = 64
@@ -7,9 +8,44 @@ max_step_ms = 200
 speech_queue_max = 8
 bus_subscriber_capacity = 64
 bus_subscriber_drain = 2
+barge_in_pct = 33
 
 [input_mix]
 voice = 5
 user = 2
 playback = 2
 timer = 1
+activity = 1
+
+# Eileen's processes take about 2 GB of the 8 GB the other apps leave.
+[pc]
+physical_mb = 16384
+commit_limit_mb = 24576
+others_mb = 8000
+others_commit_mb = 9000
+largest = "browser"
+largest_mb = 2500
+paging_floor_mb = 1000
+paging_kb_s_per_mb = 40
+paging_limit_kb_s = 4000
+cpu_busy_pct = 10
+power = "ac"
+
+# Section 4.4's figures: the core, the speech process with its models, a claude session each.
+[eileen]
+core_mb = 60
+speech_mb = 1250
+brain_mb = 400
+worker_mb = 400
+
+[brain]
+first_ms = 800
+first_jitter_ms = 0
+delta_ms = 150
+dispatch_pct = 0
+stall_ms = 30000
+
+# A quarter of the fault sites are on in a run, and an active one fires one time in a hundred.
+[faults]
+activate_per_mille = 250
+fire_per_mille = 10

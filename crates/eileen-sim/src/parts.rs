@@ -7,17 +7,21 @@
 //!   apart, then `SpeakDone`; `Cancel` drops what it has not delivered. It answers the core's
 //!   `Start` and `Restart` with `Ready` after a load, and the audio component's pings with a
 //!   `Heartbeat` every second while it is ready; `HangDumpThenKill` ends it with `Exited`. A
-//!   test can hang it (no more heartbeats or clauses), crash it (`Exited` at once) or make its
-//!   loads never finish. While it is not ready the audio component answers `Speak` with
-//!   `SpeakDone` and no clause.
+//!   test or a fault can hang it (no more heartbeats or clauses), crash it (`Exited` at once),
+//!   slow its next load or make its loads never finish. While it is not ready the audio
+//!   component answers `Speak` with `SpeakDone` and no clause.
 //! - The device plays the clauses whose `ClauseReady` was delivered, in 10 ms callbacks of
 //!   240 samples (24 kHz), reports `Played` at most every 50 ms, and honours `Duck`, `Pause`
 //!   (with a `Paused` report), `Resume` and `Stop` (with a `Stopped` report). It reports
 //!   `Drained` when every sample it was given has played.
 //! - The brain answers each `Turn` with the next scripted reply (text in deltas, an optional
-//!   `jobs_dispatch` call, `TurnDone`); `Interrupt` drops the rest of the turn.
+//!   `jobs_dispatch` call, `TurnDone`), after a delay the profile draws ([`BrainTurn`]);
+//!   `Interrupt` drops the rest of the turn. A stalled turn sends nothing for the stall, then
+//!   its whole answer, and hears no interrupt until then; a turn after it waits for it, as a
+//!   stuck instance would. A failed turn ends in an error with no text.
 //! - A worker session answers `Start` with `Init`, `Bind` with one `PreToolUse` for a write in
-//!   its job folder and then `TurnDone`, and `Cancel` with `Exited`.
+//!   its job folder and then `TurnDone` (later when slow, or `Exited` part way when it
+//!   crashes), and `Cancel` with `Exited`.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -57,13 +61,26 @@ pub const HEARTBEAT_MS: u64 = 1_000;
 const EXIT_MS: u64 = 50;
 /// The exit code of a crashed speech process.
 const CRASH_CODE: i32 = 1;
-/// How long the brain takes to its first text, and between deltas, ms.
+/// How long the brain takes to its first text, and between deltas, ms, unless the profile
+/// says otherwise.
 const BRAIN_FIRST_MS: u64 = 800;
 const BRAIN_DELTA_MS: u64 = 150;
+/// How long after an interrupt the brain reports the turn done, ms.
+const BRAIN_INTERRUPT_MS: u64 = 50;
 /// How long a worker session takes to start, to ask its first hook and to finish, ms.
 const WORKER_START_MS: u64 = 500;
 const WORKER_HOOK_MS: u64 = 300;
 const WORKER_DONE_MS: u64 = 1_200;
+/// When a crashing worker session exits after its `Bind`, ms: after its hook, before its end.
+const WORKER_CRASH_MS: u64 = 600;
+/// The exit code of a crashed worker session.
+const WORKER_CRASH_CODE: i32 = 1;
+/// How much longer a slow load of the speech process takes, ms (the fault
+/// [`crate::faults::SPEECH_SLOW_LOAD`]): well inside the core's 120 s.
+pub const SLOW_LOAD_MS: u64 = 10_000;
+/// How much longer a slow worker session takes over its job, ms (the fault
+/// [`crate::faults::WORKER_SLOW`]).
+pub const SLOW_WORKER_MS: u64 = 5_000;
 
 /// Inputs the parts scheduled, in time order (ties in the order scheduled).
 #[derive(Debug, Default)]
@@ -137,6 +154,8 @@ pub struct Speech {
     /// How long a kill's `Exited` takes instead of [`EXIT_MS`] (a slow hang dump a test
     /// injects).
     exit_ms: Option<u64>,
+    /// The next load takes [`SLOW_LOAD_MS`] longer (a fault).
+    slow_load: bool,
 }
 
 /// What the speech process sends that stops when it ends or hangs: clauses, `SpeakDone`,
@@ -192,6 +211,11 @@ impl Speech {
         self.exit_ms = Some(ms);
     }
 
+    /// Makes the next load take [`SLOW_LOAD_MS`] longer than [`LOAD_MS`].
+    pub const fn slow_next_load(&mut self) {
+        self.slow_load = true;
+    }
+
     /// Answers the core's command for the process: `Start` and `Restart` load it, and
     /// `HangDumpThenKill` ends it.
     pub fn sidecar(&mut self, now_ms: u64, cmd: SidecarCmd, due: &mut Due) {
@@ -200,10 +224,13 @@ impl Speech {
                 due.drop_where(from_the_process);
                 self.utterances.clear();
                 self.process = Process::Loading;
+                let load =
+                    if self.slow_load { LOAD_MS.saturating_add(SLOW_LOAD_MS) } else { LOAD_MS };
+                self.slow_load = false;
                 if !self.stuck_loads
                     && let Some(ready) = ready()
                 {
-                    due.schedule(now_ms.saturating_add(LOAD_MS), ready);
+                    due.schedule(now_ms.saturating_add(load), ready);
                 }
             }
             SidecarCmd::HangDumpThenKill => {
@@ -492,6 +519,9 @@ pub struct BrainReply {
     pub dispatch: Option<Value>,
     /// Whether the turn ends in an error.
     pub fail: bool,
+    /// How long the brain sends nothing before this answer, ms: a stalled instance, which
+    /// hears no interrupt until the stall ends and then sends its whole answer.
+    pub stall_ms: Option<u64>,
 }
 
 impl BrainReply {
@@ -502,6 +532,7 @@ impl BrainReply {
             deltas: deltas.iter().map(|d| (*d).to_owned()).collect(),
             dispatch: None,
             fail: false,
+            stall_ms: None,
         }
     }
 
@@ -511,6 +542,42 @@ impl BrainReply {
         self.dispatch = Some(json!({ "kind": "general", "task": task, "title_hint": title }));
         self
     }
+
+    /// The same reply after the brain stalls for `ms`.
+    #[must_use]
+    pub const fn stalling(mut self, ms: u64) -> Self {
+        self.stall_ms = Some(ms);
+        self
+    }
+}
+
+/// How the brain answers one turn: its pace, which the profile draws, and the faults that
+/// fired for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrainTurn {
+    /// Time to the first text, ms.
+    pub first_ms: u64,
+    /// Time between two deltas, ms.
+    pub delta_ms: u64,
+    /// A reply nobody scripted dispatches a job.
+    pub dispatch: bool,
+    /// The turn stalls this long first, unless its scripted reply says otherwise.
+    pub stall_ms: Option<u64>,
+    /// The turn ends in an error with no text.
+    pub fail: bool,
+}
+
+impl Default for BrainTurn {
+    /// The fixed pace a world a test drives by hand uses, with no fault.
+    fn default() -> Self {
+        Self {
+            first_ms: BRAIN_FIRST_MS,
+            delta_ms: BRAIN_DELTA_MS,
+            dispatch: false,
+            stall_ms: None,
+            fail: false,
+        }
+    }
 }
 
 /// The scripted brain.
@@ -518,6 +585,10 @@ impl BrainReply {
 pub struct Brain {
     script: VecDeque<BrainReply>,
     live: Option<TurnId>,
+    /// The turn whose answer is stalled, which no interrupt reaches.
+    stalled: Option<TurnId>,
+    /// When the stalled instance is free again: a later turn's answer starts no sooner.
+    busy_until: u64,
 }
 
 impl Brain {
@@ -527,9 +598,9 @@ impl Brain {
     }
 
     /// The reply to a turn nobody scripted: a short answer, and a job when the user asked
-    /// for a file.
-    fn default_reply(message: &str) -> BrainReply {
-        if message.contains("file") {
+    /// for a file or `dispatch` says so.
+    fn default_reply(message: &str, dispatch: bool) -> BrainReply {
+        if dispatch || message.contains("file") {
             BrainReply::text(&["Sure, I will start that. ", "It takes a moment."])
                 .dispatching("the hello file", "create hello.txt containing hi")
         } else {
@@ -541,18 +612,36 @@ impl Brain {
         }
     }
 
-    /// Answers a brain command.
-    pub fn command(&mut self, now_ms: u64, cmd: &BrainCmd, due: &mut Due) {
+    /// Answers a brain command; `pace` says how a `Turn` is answered.
+    pub fn command(&mut self, now_ms: u64, cmd: &BrainCmd, pace: BrainTurn, due: &mut Due) {
         match cmd {
             BrainCmd::Turn { turn, message, authority, .. } => {
-                let reply = self.script.pop_front().unwrap_or_else(|| Self::default_reply(message));
+                let mut reply = self
+                    .script
+                    .pop_front()
+                    .unwrap_or_else(|| Self::default_reply(message, pace.dispatch));
+                if pace.fail {
+                    reply.deltas.clear();
+                    reply.dispatch = None;
+                    reply.fail = true;
+                }
+                reply.stall_ms = reply.stall_ms.or(pace.stall_ms);
+                let start = now_ms.max(self.busy_until);
                 self.live = Some(*turn);
-                answer(now_ms, *turn, *authority, &reply, due);
+                let end = answer(start, *turn, *authority, &reply, pace, due);
+                self.stalled = reply.stall_ms.map(|_| *turn);
+                if self.stalled.is_some() {
+                    self.busy_until = end;
+                }
             }
             BrainCmd::Interrupt { .. } => {
-                if let Some(turn) = self.live.take() {
+                // A stalled instance hears nothing: its whole answer still comes, late.
+                if let Some(turn) = self.live.take()
+                    && self.stalled != Some(turn)
+                {
                     due.drop_where(|input| of_brain_turn(input, turn));
-                    due.schedule(now_ms.saturating_add(50), Input::Brain(turn_done(turn, false)));
+                    let done = Input::Brain(turn_done(turn, false));
+                    due.schedule(now_ms.saturating_add(BRAIN_INTERRUPT_MS), done);
                 }
             }
             BrainCmd::Recycle { .. }
@@ -563,9 +652,18 @@ impl Brain {
     }
 }
 
-/// Schedules a reply's deltas, its dispatch and its end.
-fn answer(now_ms: u64, turn: TurnId, authority: TurnAuthority, reply: &BrainReply, due: &mut Due) {
-    let mut at = now_ms.saturating_add(BRAIN_FIRST_MS);
+/// Schedules a reply's deltas, its dispatch and its end, from `start_ms` at `pace`, after its
+/// stall; returns when it ends.
+fn answer(
+    start_ms: u64,
+    turn: TurnId,
+    authority: TurnAuthority,
+    reply: &BrainReply,
+    pace: BrainTurn,
+    due: &mut Due,
+) -> u64 {
+    let stall = reply.stall_ms.unwrap_or(0);
+    let mut at = start_ms.saturating_add(stall).saturating_add(pace.first_ms);
     for (index, text) in reply.deltas.iter().enumerate() {
         let delta = BrainEvent::TextDelta { instance: 1, turn, text: Untrusted::new(text.clone()) };
         due.schedule(at, Input::Brain(delta));
@@ -575,9 +673,10 @@ fn answer(now_ms: u64, turn: TurnId, authority: TurnAuthority, reply: &BrainRepl
         {
             due.schedule(at.saturating_add(20), Input::ToolCall(call));
         }
-        at = at.saturating_add(BRAIN_DELTA_MS);
+        at = at.saturating_add(pace.delta_ms);
     }
     due.schedule(at, Input::Brain(turn_done(turn, reply.fail)));
+    at
 }
 
 fn turn_done(turn: TurnId, is_error: bool) -> BrainEvent {
@@ -618,6 +717,19 @@ fn of_brain_turn(input: &Input, turn: TurnId) -> bool {
     text || call
 }
 
+/// How a worker session's job goes wrong (the faults [`crate::faults::WORKER_CRASH`] and
+/// [`crate::faults::WORKER_SLOW`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkerFault {
+    /// It does not.
+    #[default]
+    None,
+    /// The session exits after its hook, before it finishes.
+    Crash,
+    /// Everything after the `Bind` comes [`SLOW_WORKER_MS`] later.
+    Slow,
+}
+
 /// The scripted worker sessions.
 #[derive(Debug, Default)]
 pub struct Workers {
@@ -625,12 +737,13 @@ pub struct Workers {
 }
 
 impl Workers {
-    /// Answers a worker command.
+    /// Answers a worker command; `fault` says how a `Bind` goes wrong, if it does.
     pub fn command(
         &mut self,
         now_ms: u64,
         session: WorkerSessionId,
         cmd: &WorkerCmd,
+        fault: WorkerFault,
         due: &mut Due,
     ) {
         match cmd {
@@ -649,13 +762,20 @@ impl Workers {
             WorkerCmd::Bind(_) => {
                 self.hooks = self.hooks.saturating_add(1);
                 let hook = write_hook(self.hooks);
-                due.schedule(now_ms.saturating_add(WORKER_HOOK_MS), Input::Hook(session, hook));
+                let late = if fault == WorkerFault::Slow { SLOW_WORKER_MS } else { 0 };
+                let at = |ms: u64| now_ms.saturating_add(ms).saturating_add(late);
+                due.schedule(at(WORKER_HOOK_MS), Input::Hook(session, hook));
+                if fault == WorkerFault::Crash {
+                    let exited = WorkerEvent::Exited { code: Some(WORKER_CRASH_CODE) };
+                    due.schedule(at(WORKER_CRASH_MS), Input::Worker(session, exited));
+                    return;
+                }
                 let done = WorkerEvent::TurnDone {
                     cost: Cost::default(),
                     is_error: false,
                     summary: Untrusted::new("Created hello.txt with hi.".to_owned()),
                 };
-                due.schedule(now_ms.saturating_add(WORKER_DONE_MS), Input::Worker(session, done));
+                due.schedule(at(WORKER_DONE_MS), Input::Worker(session, done));
             }
             WorkerCmd::Cancel => {
                 due.drop_where(|input| of_session(input, session));
@@ -701,10 +821,15 @@ fn of_session(input: &Input, session: WorkerSessionId) -> bool {
 mod tests {
     use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
     use eileen_contracts::core_io::{AudioCmd, Input, PlaybackEvent};
-    use eileen_contracts::ids::SpeakId;
+    use eileen_contracts::harness::{BrainCmd, BrainEvent, BrainSlot};
+    use eileen_contracts::ids::{SpeakId, TurnId};
+    use eileen_contracts::jobs::TurnAuthority;
     use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 
-    use super::{CALLBACK_MS, Device, Due, HEARTBEAT_MS, LOAD_MS, Process, Speech};
+    use super::{
+        Brain, BrainReply, BrainTurn, CALLBACK_MS, Device, Due, HEARTBEAT_MS, LOAD_MS, Process,
+        SLOW_LOAD_MS, Speech,
+    };
 
     const fn speak() -> SpeakId {
         SpeakId::from_parts(1, 1)
@@ -886,5 +1011,93 @@ mod tests {
             "a stop is reported where it stopped"
         );
         assert!(device.speaking().is_empty(), "and forgotten");
+    }
+
+    fn turn(n: u128) -> (TurnId, BrainCmd) {
+        let turn = TurnId::from_parts(0, n);
+        let cmd = BrainCmd::Turn {
+            slot: BrainSlot::Primary,
+            turn,
+            message: "[heard] tell me about rivers".to_owned(),
+            authority: TurnAuthority::Addressed,
+        };
+        (turn, cmd)
+    }
+
+    /// Everything scheduled, in time order, with when it comes.
+    fn all(due: &mut Due) -> Vec<(u64, Input)> {
+        std::iter::from_fn(|| due.next_at().and_then(|at| due.pop(at).map(|input| (at, input))))
+            .collect()
+    }
+
+    /// When each of `turn`'s text deltas and its end come, and whether it ended in an error.
+    fn timeline(items: &[(u64, Input)], turn: TurnId) -> (Vec<u64>, Option<(u64, bool)>) {
+        let mut deltas = Vec::new();
+        let mut done = None;
+        for (at, input) in items {
+            match input {
+                Input::Brain(BrainEvent::TextDelta { turn: t, .. }) if *t == turn => {
+                    deltas.push(*at);
+                }
+                Input::Brain(BrainEvent::TurnDone { turn: t, is_error, .. }) if *t == turn => {
+                    done = Some((*at, *is_error));
+                }
+                _ => {}
+            }
+        }
+        (deltas, done)
+    }
+
+    #[test]
+    fn the_brain_answers_at_its_pace_and_an_interrupt_ends_the_turn() {
+        let mut due = Due::default();
+        let mut brain = Brain::default();
+        let pace = BrainTurn { first_ms: 300, delta_ms: 100, ..BrainTurn::default() };
+        let (one, cmd) = turn(1);
+        brain.script(BrainReply::text(&["One. ", "Two. ", "Three."]));
+        brain.command(1_000, &cmd, pace, &mut due);
+        let (deltas, done) = timeline(&all(&mut due), one);
+        assert_eq!(deltas, [1_300, 1_400, 1_500], "first text after 300 ms, then every 100");
+        assert_eq!(done, Some((1_600, false)), "done after the last delta");
+        let (two, cmd) = turn(2);
+        brain.command(2_000, &cmd, pace, &mut due);
+        brain.command(2_100, &BrainCmd::Interrupt { slot: BrainSlot::Primary }, pace, &mut due);
+        let (deltas, done) = timeline(&all(&mut due), two);
+        assert!(deltas.is_empty(), "an interrupt drops what was not sent: {deltas:?}");
+        assert_eq!(done, Some((2_150, false)), "and ends the turn 50 ms later");
+    }
+
+    #[test]
+    fn a_stalled_brain_sends_its_whole_answer_late_and_hears_no_interrupt() {
+        let mut due = Due::default();
+        let mut brain = Brain::default();
+        let pace = BrainTurn { first_ms: 300, delta_ms: 100, ..BrainTurn::default() };
+        let (one, cmd) = turn(1);
+        brain.script(BrainReply::text(&["One. ", "Two."]).stalling(20_000));
+        brain.command(0, &cmd, pace, &mut due);
+        brain.command(5_000, &BrainCmd::Interrupt { slot: BrainSlot::Primary }, pace, &mut due);
+        let (two, cmd) = turn(2);
+        brain.command(5_000, &cmd, pace, &mut due);
+        let items = all(&mut due);
+        let (deltas, done) = timeline(&items, one);
+        assert_eq!(deltas, [20_300, 20_400], "the whole answer, after the stall");
+        assert_eq!(done, Some((20_500, false)), "and its end, though it was interrupted");
+        let (deltas, _) = timeline(&items, two);
+        assert_eq!(deltas.first(), Some(&20_800), "the next turn waits for the stuck instance");
+        let failed = BrainTurn { fail: true, ..pace };
+        let (three, cmd) = turn(3);
+        Brain::default().command(0, &cmd, failed, &mut due);
+        assert_eq!(timeline(&all(&mut due), three), (vec![], Some((300, true))), "a failed turn");
+    }
+
+    #[test]
+    fn a_slow_load_takes_longer_once() {
+        let mut due = Due::default();
+        let mut speech = Speech::default();
+        speech.slow_next_load();
+        speech.sidecar(0, SidecarCmd::Start, &mut due);
+        assert_eq!(due.next_at(), Some(LOAD_MS + SLOW_LOAD_MS), "the slow load");
+        speech.sidecar(0, SidecarCmd::Restart, &mut due);
+        assert_eq!(due.next_at(), Some(LOAD_MS), "the next load is not slow");
     }
 }

@@ -4,6 +4,17 @@
   "description": "One simulation profile.",
   "type": "object",
   "properties": {
+    "barge_in_pct": {
+      "description": "The chance, in percent, that a voice input drawn while Eileen speaks is a barge-in window rather than the next event of the user's turn.",
+      "type": "integer",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0
+    },
+    "brain": {
+      "description": "How the fake brain backend answers.",
+      "$ref": "#/$defs/BrainProfile"
+    },
     "bus_subscriber_capacity": {
       "description": "The slow bus subscriber's queue (invariant 6).",
       "type": "integer",
@@ -16,6 +27,14 @@
       "format": "uint32",
       "minimum": 0
     },
+    "eileen": {
+      "description": "What Eileen's own processes hold in memory.",
+      "$ref": "#/$defs/EileenCosts"
+    },
+    "faults": {
+      "description": "How often the world's fault points fire.",
+      "$ref": "#/$defs/FaultProfile"
+    },
     "input_mix": {
       "description": "The relative weights of the input kinds the generator draws.",
       "$ref": "#/$defs/InputMix"
@@ -26,9 +45,18 @@
       "format": "uint32",
       "minimum": 0
     },
+    "media_at_start": {
+      "description": "Other audio (a video, music) is playing when the run starts.",
+      "type": "boolean",
+      "default": false
+    },
     "name": {
       "description": "The profile's name, which a `SimRegression` records.",
       "type": "string"
+    },
+    "pc": {
+      "description": "The PC the world simulates.",
+      "$ref": "#/$defs/PcProfile"
     },
     "seeds": {
       "description": "How many fresh seeds a random run of this profile takes (`main` and nightly).",
@@ -58,13 +86,179 @@
     "input_mix",
     "speech_queue_max",
     "bus_subscriber_capacity",
-    "bus_subscriber_drain"
+    "bus_subscriber_drain",
+    "barge_in_pct",
+    "pc",
+    "eileen",
+    "brain",
+    "faults"
   ],
   "$defs": {
+    "BrainProfile": {
+      "description": "How the fake brain backend answers a turn.",
+      "type": "object",
+      "properties": {
+        "delta_ms": {
+          "description": "The time between two deltas, ms.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "dispatch_pct": {
+          "description": "The chance, in percent, that a reply nobody scripted dispatches a job.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "first_jitter_ms": {
+          "description": "How much longer than `first_ms` the first text may take, ms, drawn per turn.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "first_ms": {
+          "description": "The shortest time to the first text, ms.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "stall_ms": {
+          "description": "How long a stalled turn sends nothing before its whole answer comes, ms.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "first_ms",
+        "first_jitter_ms",
+        "delta_ms",
+        "dispatch_pct",
+        "stall_ms"
+      ]
+    },
+    "EileenCosts": {
+      "description": "What Eileen's own processes hold, MB (section 4.4).",
+      "type": "object",
+      "properties": {
+        "brain_mb": {
+          "description": "The brain session.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "core_mb": {
+          "description": "The core process.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speech_mb": {
+          "description": "The speech process, from its start until it ends.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "worker_mb": {
+          "description": "Each worker session, from its start until it exits.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "core_mb",
+        "speech_mb",
+        "brain_mb",
+        "worker_mb"
+      ]
+    },
+    "FaultProfile": {
+      "description": "How often the world's fault points fire (`eileen_stdx::buggify`): each site is switched on for a whole run with the first chance, decided from the seed and the site's name, and an active site fires each time it is reached with the second. Both are per mille; a 0 leaves every site off.",
+      "type": "object",
+      "properties": {
+        "activate_per_mille": {
+          "description": "The chance a site is active in a run, per mille.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fire_per_mille": {
+          "description": "The chance an active site fires when reached, per mille.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "activate_per_mille",
+        "fire_per_mille"
+      ]
+    },
+    "HeavyApp": {
+      "description": "An app that opens, grows to its peak, holds it and closes: a video editor rendering, a virtual machine starting. Times are seconds of virtual time from the start of the run.",
+      "type": "object",
+      "properties": {
+        "closes_at_s": {
+          "description": "When it closes and lets all of it go.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cpu_pct": {
+          "description": "The CPU busy percent it adds while it is open.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "grows_mb_s": {
+          "description": "How fast its working set grows, MB per second, until it reaches its peak.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "description": "A made-up name (`video-editor`), never a real product's.",
+          "type": "string"
+        },
+        "opens_at_s": {
+          "description": "When it opens.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "peak_mb": {
+          "description": "Its working set at its peak, MB; it commits as much as it holds.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "opens_at_s",
+        "grows_mb_s",
+        "peak_mb",
+        "closes_at_s",
+        "cpu_pct"
+      ]
+    },
     "InputMix": {
       "description": "The relative weights of the input kinds. A weight of 0 leaves the kind out.",
       "type": "object",
       "properties": {
+        "activity": {
+          "description": "What the PC and the room do: other audio starting and stopping, physical input, and another app taking the microphone.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
         "playback": {
           "description": "Playback accounting: drained utterances, device changes and stalls.",
           "type": "integer",
@@ -95,7 +289,123 @@
         "voice",
         "user",
         "playback",
-        "timer"
+        "timer",
+        "activity"
+      ]
+    },
+    "PcProfile": {
+      "description": "The simulated PC: its memory, its paging, its CPU and its power, and the other apps on it. Every figure is in MB unless its name says otherwise.",
+      "type": "object",
+      "properties": {
+        "commit_limit_mb": {
+          "description": "The commit limit: physical memory and the page file together.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cpu_busy_pct": {
+          "description": "The CPU's busy percent with no heavy app open.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "heavy_app": {
+          "description": "An app that opens, grows, holds its size and closes during the run.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeavyApp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "largest": {
+          "description": "The biggest of the other apps, by a made-up name (`browser`), never a real process's.",
+          "type": "string"
+        },
+        "largest_mb": {
+          "description": "The biggest other app's working set, part of `others_mb`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "others_commit_mb": {
+          "description": "What the other apps have committed, a heavy app aside.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "others_mb": {
+          "description": "What the other apps hold in physical memory, a heavy app aside.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "paging_floor_mb": {
+          "description": "Available memory under which the PC starts to page.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "paging_kb_s_per_mb": {
+          "description": "How fast it pages, KB/s, for each MB of available memory under the floor.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "paging_limit_kb_s": {
+          "description": "The effective `memory.max_paging_kb_s` the runtime reports with each reading.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "physical_mb": {
+          "description": "Physical memory.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "power": {
+          "description": "Where the PC draws its power from.",
+          "$ref": "#/$defs/Power"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "physical_mb",
+        "commit_limit_mb",
+        "others_mb",
+        "others_commit_mb",
+        "largest",
+        "largest_mb",
+        "paging_floor_mb",
+        "paging_kb_s_per_mb",
+        "paging_limit_kb_s",
+        "cpu_busy_pct",
+        "power"
+      ]
+    },
+    "Power": {
+      "description": "Where the simulated PC draws its power from.",
+      "oneOf": [
+        {
+          "description": "Mains power.",
+          "type": "string",
+          "const": "ac"
+        },
+        {
+          "description": "The battery.",
+          "type": "string",
+          "const": "battery"
+        },
+        {
+          "description": "The battery, with Windows' battery saver on.",
+          "type": "string",
+          "const": "battery_saver"
+        }
       ]
     }
   }
