@@ -211,11 +211,17 @@ fn summaries(events: &[WorkerEvent]) -> Vec<String> {
     events.iter().map(summary).collect()
 }
 
-/// Cancels the session and checks it ends: one `Exited`, then nothing.
+/// Cancels the session and checks it ends: any events already read come first, then one
+/// `Exited`, then nothing.
 async fn cancel(worker: &mut ClaudeWorker) {
     timeout(HANG, worker.send(WorkerCmd::Cancel)).await.unwrap().unwrap();
-    assert!(matches!(next(worker).await, Some(WorkerEvent::Exited { .. })), "the exit");
-    assert_eq!(next(worker).await, None, "nothing after the exit");
+    let mut rest = Vec::new();
+    while let Some(event) = next(worker).await {
+        rest.push(event);
+    }
+    let exits = rest.iter().filter(|e| matches!(e, WorkerEvent::Exited { .. })).count();
+    assert_eq!(exits, 1, "one exit: {rest:?}");
+    assert!(matches!(rest.last(), Some(WorkerEvent::Exited { .. })), "the exit is last: {rest:?}");
 }
 
 /// The environments the stub recorded, one per process it ran as.
