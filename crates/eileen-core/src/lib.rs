@@ -35,7 +35,7 @@
 //! - No IO: the crate depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace` among
 //!   Eileen's crates (check 24), plus `tracing` for spans and `serde_json` for tool arguments,
 //!   and has no build dependencies (decision D84); time comes in as [`MonoTime`] and randomness as [`CoreRng`] (`disallowed-methods` bans the
-//!   system clock and generated IDs). IDs are minted from `MonoTime` and the RNG.
+//!   system clock and generated IDs). IDs are minted from the input's wall time and the RNG.
 //! - Maps that can reach an effect are ordered (`disallowed-types` in
 //!   `crates/eileen-core/clippy.toml` bans `HashMap`).
 //! - One utterance holds the floor at a time; the announcement queue is bounded (invariant 10).
@@ -56,8 +56,8 @@
 //!   authority the core sent that turn with; an ambient turn starts none (section 2.3). A kind
 //!   `JobKind::built_in_v0_1` rejects is refused with its `UserError` before routing and
 //!   admission, and no session starts.
-//! - Job states change only along `lifecycle::legal`'s graph, and every job ends in exactly one
-//!   terminal state (invariants 4 and 5). The first step after a restart interrupts every job
+//! - Job states change only by a `lifecycle::Step`, along the graph `lifecycle::legal` writes
+//!   as pairs of states, and every job ends in exactly one terminal state (invariants 4 and 5). The first step after a restart interrupts every job
 //!   the snapshot held unfinished, and no ID the core mints repeats across a restart: each ID's
 //!   timestamp is after the last one's, which the snapshot keeps (invariant 12).
 //! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
@@ -278,12 +278,13 @@ impl Cx<'_> {
         self.push(ctx, Effect::Emit(event));
     }
 
-    /// The timestamp part of the next ID the core mints: the virtual millisecond, or one after
-    /// the last ID minted, whichever is later. The last one is kept in the snapshot, so a
-    /// restarted core, whose clock and random numbers start again, never mints an ID twice
-    /// (invariant 12).
+    /// The timestamp part of the next ID the core mints: the step's wall-clock millisecond, or
+    /// one after the last ID minted, whichever is later. The last one is kept in the snapshot,
+    /// so a core restarted from it, whose monotonic clock and random numbers start again, never
+    /// mints an ID twice (invariant 12); a core restarted from an older snapshot is past it by
+    /// the wall clock.
     const fn mint(&mut self) -> u64 {
-        let ms = self.now.0 / 1_000_000;
+        let ms = if self.at.0 > 0 { self.at.0.unsigned_abs() / 1_000 } else { 0 };
         let next = self.minted_ms.saturating_add(1);
         self.minted_ms = if ms > next { ms } else { next };
         self.minted_ms
@@ -538,7 +539,7 @@ const COUNTER_TIMERS: &str = "timer_ids";
 /// The snapshot counter of the last minted ID's timestamp, in milliseconds.
 const COUNTER_MINTED: &str = "minted_ms";
 
-/// The latest timestamp among the IDs of  and their sessions, for a snapshot written
+/// The latest timestamp among the IDs of `jobs` and their sessions, for a snapshot written
 /// before it kept [`COUNTER_MINTED`].
 fn latest_id_ms(jobs: &[Job]) -> u64 {
     let ids =

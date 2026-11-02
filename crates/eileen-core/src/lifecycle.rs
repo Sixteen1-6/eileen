@@ -86,8 +86,8 @@ impl Step {
     }
 }
 
-/// Whether a job may go from `from` to `to` in one step: the graph of section 2.5 that
-/// invariant 5 holds every job's rows to.
+/// Whether a job may go from `from` to `to` in one step: the edges [`Step`] takes, written as
+/// pairs of states for checking a job's successive rows (invariant 5).
 #[must_use]
 pub const fn legal(from: JobStatus, to: JobStatus) -> bool {
     use JobStatus::{
@@ -398,10 +398,12 @@ fn slug_of(name: &str) -> String {
     slug
 }
 
-/// A repository named two ways is one repository: case, separators and a trailing separator
-/// do not count.
+/// A repository named two ways is one repository: a trailing separator does not count, and in
+/// a Windows path (a drive letter or a backslash) neither do case and the kind of separator.
 fn repo_key(repo: &str) -> String {
-    repo.trim().trim_end_matches(['\\', '/']).replace('/', "\\").to_ascii_lowercase()
+    let repo = repo.trim().trim_end_matches(['\\', '/']);
+    let windows = repo.contains('\\') || repo.as_bytes().get(1) == Some(&b':');
+    if windows { repo.replace('/', "\\").to_ascii_lowercase() } else { repo.to_owned() }
 }
 
 /// 64-bit FNV-1a, which names a repository's folder of worktrees the same way in every
@@ -478,6 +480,8 @@ mod tests {
     fn one_repository_named_two_ways_has_one_key() {
         assert_eq!(repo_key("D:\\Code\\Demo\\"), repo_key(" d:/code/demo"), "the same repository");
         assert_ne!(repo_key("D:\\code\\demo"), repo_key("D:\\code\\other"), "another one");
+        assert_eq!(repo_key("/home/u/demo/"), repo_key("/home/u/demo"), "a trailing slash");
+        assert_ne!(repo_key("/home/u/Demo"), repo_key("/home/u/demo"), "Linux keeps case");
         assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325, "the offset basis");
         assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c, "the published value for \"a\"");
     }

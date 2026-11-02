@@ -232,8 +232,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   result (the sentence for the model, the error as the structured output) before routing and
   admission (`user_error`). The core's first step after a restart emits `JobInterrupted` and
   the row of each job the snapshot held unfinished, and every ID the core mints carries a
-  timestamp after the last one's, kept in the snapshot as `minted_ms`, so no ID repeats across
-  a restart. Tests: `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model`
+  timestamp after the last one's, kept in the snapshot as `minted_ms`, and no earlier than the
+  input's wall-clock millisecond, so no ID repeats across a restart, even from an older
+  snapshot. Tests: `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model`
   (acceptance 3, proptest-state-machine),
   `eileen-core::it::job_model::a_slug_is_free_again_after_seven_days`,
   `eileen-core::lifecycle::tests::*`, and `eileen-core::tests::jobs::*` (acceptance 14, the
@@ -414,6 +415,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - Slugs are checked against the jobs the core keeps (at most 32), not against the store's
   seven days of rows, which the core cannot read; a worktree path that already exists is the
   harness's to refuse.
+- A repository's key ignores case and the kind of separator only in a Windows path (a drive
+  letter or a backslash); a Linux path keeps its case.
+- A cancel whose target names no unfinished job does nothing and says nothing yet; the
+  spoken "I can't find that job" comes with pronoun resolution in the second half.
+- A step a job cannot take from where it is leaves it live, so a later event of its session
+  still ends it; only a finished job stops being the live one.
 - An `ml_project` refusal carries the `UserError` as the error result's structured output
   and its sentence as the text, and puts nothing on the bus: the brain says it, and the
   HUD's error card follows when WP8 renders `UserError`s.

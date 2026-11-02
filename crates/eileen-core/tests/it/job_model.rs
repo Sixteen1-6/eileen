@@ -125,7 +125,7 @@ enum Target {
 /// One command of a random sequence.
 #[derive(Debug, Clone)]
 enum Cmd {
-    Accept { title: usize, repo: usize, parent: Option<JobId> },
+    Accept { title: usize, repo: usize, parent: Option<JobId>, overlap: bool },
     Move { job: JobId, mv: Move },
     Wait { minutes: u8 },
     Expire,
@@ -190,7 +190,13 @@ impl Model {
         self.jobs.iter_mut().find(|job| job.id == id)
     }
 
-    fn accept(&mut self, title: usize, repo: usize, parent: Option<JobId>) -> Expect {
+    fn accept(
+        &mut self,
+        title: usize,
+        repo: usize,
+        parent: Option<JobId>,
+        overlap: bool,
+    ) -> Expect {
         self.minted += 1;
         let id = id_of(self.minted);
         let (_, kind, hinted) = TITLES[title];
@@ -209,7 +215,7 @@ impl Model {
                         && open(job.status)
                         && job.repo.as_deref().is_some_and(|theirs| key(theirs) == key(repo))
                 });
-                if alongside || parent.is_some() {
+                if alongside || overlap || parent.is_some() {
                     Place::Worktree(key(repo))
                 } else {
                     Place::Snapshot(format!("refs/eileen/{id}"))
@@ -304,8 +310,9 @@ impl ReferenceStateMachine for Lifecycle {
         let titles = 0..TITLES.len();
         let repos = 0..REPOS.len();
         let always = prop_oneof![
-            4 => (titles.clone(), repos.clone())
-                .prop_map(|(title, repo)| Cmd::Accept { title, repo, parent: None }),
+            4 => (titles.clone(), repos.clone(), prop::bool::weighted(0.2)).prop_map(
+                |(title, repo, overlap)| Cmd::Accept { title, repo, parent: None, overlap }
+            ),
             1 => (1..=20_u8).prop_map(|minutes| Cmd::Wait { minutes }),
             1 => Just(Cmd::Expire),
             1 => Just(Cmd::Restart),
@@ -318,8 +325,9 @@ impl ReferenceStateMachine for Lifecycle {
         }
         prop_oneof![
             3 => always,
-            3 => (titles, repos, select(ids.clone()))
-                .prop_map(|(title, repo, parent)| Cmd::Accept { title, repo, parent: Some(parent) }),
+            3 => (titles, repos, select(ids.clone())).prop_map(|(title, repo, parent)| {
+                Cmd::Accept { title, repo, parent: Some(parent), overlap: false }
+            }),
             8 => (select(ids.clone()), select(MOVES.to_vec()))
                 .prop_map(|(job, mv)| Cmd::Move { job, mv }),
             1 => select(ids.clone()).prop_map(|job| Cmd::Cancel(Target::Id(job))),
@@ -330,7 +338,9 @@ impl ReferenceStateMachine for Lifecycle {
 
     fn apply(mut state: Model, transition: &Cmd) -> Model {
         state.expect = match transition {
-            Cmd::Accept { title, repo, parent } => state.accept(*title, *repo, *parent),
+            Cmd::Accept { title, repo, parent, overlap } => {
+                state.accept(*title, *repo, *parent, *overlap)
+            }
             Cmd::Move { job, mv } => state.take(*job, *mv),
             Cmd::Wait { minutes } => {
                 state.now += i64::from(*minutes) * MINUTE_US;
@@ -409,7 +419,14 @@ fn job(
 }
 
 impl Sut {
-    fn accept(&mut self, model: &Model, title: usize, repo: usize, parent: Option<JobId>) {
+    fn accept(
+        &mut self,
+        model: &Model,
+        asked: (usize, usize),
+        parent: Option<JobId>,
+        overlap: bool,
+    ) {
+        let (title, repo) = asked;
         let Expect::Accept { name, ordinal, place, kept } = &model.expect else {
             panic!("the model accepted nothing: {:?}", model.expect);
         };
@@ -422,14 +439,14 @@ impl Sut {
             assert!(naming.slug.starts_with(&format!("{theirs}-{n}")), "{}", naming.slug);
         }
         let job = job(id_of(model.minted), naming, title, repo, parent, model.now);
-        self.check_place(&job, place);
+        self.check_place(&job, overlap, place);
         let accepted = self.registry.accept(job);
         let wanted = if *kept { Ok(()) } else { Err(Refused::Full) };
         assert_eq!(accepted, wanted, "kept while there is room");
     }
 
-    fn check_place(&mut self, job: &Job, place: &Place) {
-        match (place, self.registry.checkout(job, false)) {
+    fn check_place(&mut self, job: &Job, overlap: bool, place: &Place) {
+        match (place, self.registry.checkout(job, overlap)) {
             (Place::Scratch, Checkout::Scratch) => {}
             (Place::Snapshot(wanted), Checkout::InPlace { snapshot_ref, .. }) => {
                 assert_eq!(&snapshot_ref, wanted, "the snapshot ref");
@@ -504,7 +521,9 @@ impl StateMachineTest for Lifecycle {
         let (sut, model) = (&mut state, ref_state);
         let at = WallTime(model.now);
         match transition {
-            Cmd::Accept { title, repo, parent } => sut.accept(model, title, repo, parent),
+            Cmd::Accept { title, repo, parent, overlap } => {
+                sut.accept(model, (title, repo), parent, overlap);
+            }
             Cmd::Move { job, mv } => sut.take(model, job, mv),
             Cmd::Wait { .. } => {
                 assert_eq!(model.expect, Expect::Nothing, "waiting changes nothing");

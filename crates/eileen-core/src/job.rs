@@ -482,14 +482,26 @@ impl Core {
     /// The job reached its terminal state, once: its event, its row, the session's end, and
     /// the announcement of a completion or a failure.
     fn end_job(&mut self, cx: &mut Cx<'_>, live: Live, end: End) {
-        self.jobs.live = None;
         let ctx = job_ctx(live.job);
         let step = match &end {
             End::Completed { .. } => Step::Complete,
             End::Failed { .. } => Step::Fail,
             End::Cancelled { .. } => Step::Cancel,
         };
-        let Ok(job) = self.jobs.registry.step(live.job, step, cx.at) else { return };
+        let job = match self.jobs.registry.step(live.job, step, cx.at) {
+            Ok(job) => job.clone(),
+            // A job that cannot take this step from where it is stays live, so a later event
+            // of its session still ends it; one already finished is live no longer.
+            Err(_) => {
+                let finished =
+                    self.jobs.registry.get(live.job).is_none_or(|job| job.status.is_terminal());
+                if finished {
+                    self.jobs.live = None;
+                }
+                return;
+            }
+        };
+        self.jobs.live = None;
         let (event, spoken) = match end {
             End::Completed { summary } => {
                 let spoken =
@@ -503,7 +515,7 @@ impl Core {
             }
             End::Cancelled { by } => (BusEvent::JobCancelled { job: job.id, by }, None),
         };
-        let row = Record::JobUpsert(Box::new(job.clone()));
+        let row = Record::JobUpsert(Box::new(job));
         cx.emit(ctx, event);
         cx.push(ctx, Effect::Persist(row));
         cx.push(ctx, Effect::Worker(live.session, WorkerCmd::Cancel));
