@@ -50,8 +50,8 @@ fn init(status: &str, memory: Option<&str>) -> Init {
         fields.insert("memory_paths".to_owned(), json!({ "auto": path }));
     }
     let parsed = parse(line.to_string().as_bytes(), &Redactor::new());
-    let Line::Init(init) = parsed else { panic!("not an init: {parsed:?}") };
-    *init
+    let Line::Init(init) = &parsed else { panic!("not an init: {parsed:?}") };
+    init.as_ref().clone()
 }
 
 #[test]
