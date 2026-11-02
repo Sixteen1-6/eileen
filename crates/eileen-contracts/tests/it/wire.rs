@@ -439,3 +439,17 @@ proptest! {
         prop_assert_eq!(&parsed["behavior"], "allow", "an allow");
     }
 }
+
+proptest! {
+    /// A float in a written line reads back to the same number, bit for bit: the workspace's
+    /// `serde_json` parses floats exactly (its `float_roundtrip` feature), which recordings and
+    /// replay rely on.
+    #[test]
+    fn a_written_float_reads_back_exactly(
+        x in any::<f64>().prop_filter("finite", |x| x.is_finite())
+    ) {
+        let text = serde_json::to_string(&json!({ "x": x })).unwrap();
+        let read: Value = serde_json::from_str(&text).unwrap();
+        prop_assert_eq!(read["x"].as_f64().map(f64::to_bits), Some(x.to_bits()), "{}", text);
+    }
+}
