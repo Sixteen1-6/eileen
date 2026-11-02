@@ -179,6 +179,34 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the `recording` fuzz target's `fuzz_entry` with its seed corpus, replayed by
   `eileen-record::it::fuzz_corpus::*`. `eileen record` itself stays a stub until the runtime
   wires the flight recorder.
+- `wp1/sim-world` (open): the world and profiles of section 4.7, with no change to the core.
+  `eileen-sim` gains `pc`, the simulated PC: available memory, commit headroom and paging
+  (pages in proportion to how far available memory is under the profile's floor), read into
+  `Input::Memory` every 5 s as section 2.5 samples it, with Eileen's own share (the core, the
+  brain, the speech process while it runs and each live worker session, at section 4.4's
+  figures), the CPU's busy percent and the power state, and a heavy app that opens, grows to
+  its peak, holds it and closes. It gains `faults`, the world's fault points through
+  `eileen_stdx::buggify`, switched per run from the seed (a runtime switch): the brain stalls
+  (nothing for the profile's `stall_ms`, then its whole answer, with no interrupt heard until
+  then) or fails, the speech process crashes or hangs at a heartbeat or loads 10 s slower, a
+  worker session stops part way or runs 5 s late, and the slow bus subscriber skips a drain.
+  Every fire is a `FaultRecord` with its step's `seq`; a replay fires exactly those records and
+  refuses a site the world cannot fire, and a test can fire a site every time it is reached
+  (`Faults::every`). The brain's pace (a first-text delay with jitter, the delta pace, how
+  often an unscripted reply dispatches a job) comes from the profile, drawn from a fourth
+  random stream. The generator draws activity (other audio starting and stopping, physical
+  input, another app taking the microphone) and takes the profile's barge-in chance. Profiles:
+  `default`, `barge-in-heavy`, `many-jobs`, `flaky-sidecars`, `media-playing` and
+  `low-memory`, with `profile.schema.json` regenerated. Tests: `eileen-sim::pc::tests::*`,
+  `eileen-sim::faults::tests::*`, `eileen-sim::parts::tests::*` (the brain's pace, its stall
+  and its failure, a slow load), `eileen-sim::profile::tests::*`, `eileen-sim::inputs::tests::*`,
+  `eileen-sim::run::tests::a_run_with_faults_replays_with_exactly_its_fault_records`,
+  `eileen-sim::it::world::*` (the readings, the heavy app paging and closing, the CPU and
+  power, media at the start, a stalled brain's late answer never spoken, and each fault
+  breaking its part through the real core), `eileen-sim::it::regressions::*` (a run with faults
+  written as a `SimRegression` file and replayed from it), and
+  `eileen-sim::it::pr_seeds::<profile>::*`, every pull request seed of every profile,
+  doublechecked.
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
   `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
   after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
@@ -215,6 +243,23 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `Stopped` report's position for a heard prefix not yet handed to the brain would close it.
 
 ## Decisions
+
+- The `heavy-app` and `roomy` profiles wait for `wp1/machine-fit`: section 6.3 runs them on
+  WP0's fixture machines (the 32 GB fixture for the heavy app), which come with the machine's
+  facts. `low-memory` already carries a heavy app on the owner's shape, so the world's app that
+  grows and closes is exercised on every pull request.
+- The CPU's busy percent and the power state reach the core in section 2.16's
+  `MachineEvent::Load`, which arrives with `wp0/machine-contracts`; until then the world keeps
+  them (`World::load`) and tells the core nothing, so no input is invented outside the
+  contracts.
+- A world fault site is reached only inside a step (while the step's input or effects are
+  applied), so a record's `seq` is the same in the run and in the replay. A site the core names
+  later is recorded after its step and refused by a replay, which cannot fire inside the core.
+- A stalled brain hears no interrupt until its stall ends and answers the next turn only after
+  it, as a stuck CLI would; the core's per-turn filter (it accepts text only for the turn in
+  flight) already drops the late answer, which `it::world` shows.
+- A memory reading is due every 5 s of virtual time and goes before a timer or a part's answer
+  only when strictly earlier, so the readings never reorder what the slice tests deliver.
 
 - The core strips the assistant's name (at the start or the end of the turn) before it calls
   the resolver, and passes the lower-cased words that remain.
