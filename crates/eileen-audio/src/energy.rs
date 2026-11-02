@@ -11,9 +11,10 @@
 //! reports an onset at the third speech window in a row (96 ms), the window at which section
 //! 2.8's barge-in pauses playback, and once per run of speech windows.
 //!
-//! What remains after AEC3 of Eileen's voice and of a bed the PC plays stays under these
-//! thresholds; `aec::tests` checks over ten minutes of each bed that it never fires, and that it
-//! fires on a near-end command. Nothing here allocates, so it may run in the capture callback.
+//! What remains after a converged AEC3 of Eileen's voice and of a bed the PC plays stays under
+//! these thresholds; `aec::tests` checks over ten minutes of each bed, from 3 s on, that it never
+//! fires, and that it fires on a near-end command. In AEC3's first seconds, before it has
+//! learned the room, the echo can still reach them. Nothing here allocates, so it may run in the capture callback.
 
 /// Samples in one window: 32 ms at 16 kHz, a speech frame.
 pub(crate) const WINDOW: usize = eileen_contracts::speech::AUDIO_FRAME_SAMPLES;

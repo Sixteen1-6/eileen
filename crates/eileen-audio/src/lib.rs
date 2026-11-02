@@ -90,7 +90,8 @@
 //!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
 //!   and a speech video (`aec::tests`: an ERLE floor against the loopback and against own PCM,
 //!   a near-end command's energy kept, the reference switch to the chunk, the flags, and no
-//!   false onset in ten minutes of each bed), and device tests on the owner's PC under
+//!   false onset in ten minutes of each bed once AEC3 has converged), and device tests on the
+//!   owner's PC under
 //!   `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
