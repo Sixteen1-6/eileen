@@ -695,7 +695,7 @@ mod tests {
         let steps = [
             Step::Start,
             Step::Block,
-            Step::AwaitApproval { deadline: eileen_contracts::ids::WallTime(0) },
+            Step::AwaitApproval { deadline: WallTime(0) },
             Step::Resume,
             Step::Complete,
             Step::Fail,
