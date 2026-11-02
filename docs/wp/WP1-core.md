@@ -218,6 +218,28 @@ Every pull request also meets the rules section 6.1 sets for every package.
   part through the real core), `eileen-sim::it::regressions::*` (a run with faults written as a
   `SimRegression` file and replayed from it), and `eileen-sim::it::pr_seeds::<profile>::*`,
   every pull request seed of every profile, doublechecked.
+- `wp1/jobs` (open, #163): section 6.3's jobs, first half; acceptance 3 and 14, invariants 4,
+  5 and 12 in the core. `eileen-core` gains `lifecycle`, a pure, cloneable `Registry` the core
+  keeps: the eight states and one graph of steps (`Step`, `lifecycle::legal`), so every job
+  ends in exactly one terminal state; names of two to four words given at accept; slugs
+  collision-checked against the kept jobs of the last seven days; fan-out children named
+  "agent one" to "agent eight" with ordinals in accept order; the approval deadline and the
+  jobs past it; cancel targets by id, slug, name or ordinal, the newest unfinished job first;
+  a restart that interrupts every unfinished job; and the checkout of a coding job with a
+  repository, in place behind `refs/eileen/<job id>` when it works alone and in a worktree
+  `worktrees/<repo hash>/<slug>` on `eileen/<slug>` otherwise. A `jobs_dispatch` of
+  `ml_project` is refused with the `UserError` `JobKindUnavailable` as the call's error
+  result (the sentence for the model, the error as the structured output) before routing and
+  admission (`user_error`). The core's first step after a restart emits `JobInterrupted` and
+  the row of each job the snapshot held unfinished, and every ID the core mints carries a
+  timestamp after the last one's, kept in the snapshot as `minted_ms`, so no ID repeats across
+  a restart. Tests: `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model`
+  (acceptance 3, proptest-state-machine),
+  `eileen-core::it::job_model::a_slug_is_free_again_after_seven_days`,
+  `eileen-core::lifecycle::tests::*`, and `eileen-core::tests::jobs::*` (acceptance 14, the
+  restart, slugs, the in-place checkout, cancel by name and ordinal). The simulator's checks of
+  invariants 4, 5 and 12 (a simulated core restart in the world, every persisted row against
+  the graph) and fan-out follow in the second half.
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
   `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
   after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
@@ -365,6 +387,36 @@ Every pull request also meets the rules section 6.1 sets for every package.
   crate doc promises. Features unify across a build, so it belongs in the root manifest's
   `serde_json` entry, which is an amendment; `eileen-record` turns it on in its own manifest
   only until that amendment merges.
+
+- The job graph: `queued` goes to `running`, `failed`, `cancelled` or `interrupted`;
+  `running` to `blocked`, `awaiting_approval`, `completed`, `failed`, `cancelled` or
+  `interrupted`; `blocked` and `awaiting_approval` back to `running` (`Step::Resume`, which
+  also carries the decline at the approval deadline) or to `failed`, `cancelled` or
+  `interrupted`. Section 2.5 names the states without the edges. Only a running job
+  completes, so a worker that ends before it was given its job fails with that reason.
+- A restart interrupts queued jobs as well as running ones (invariant 12 names running
+  ones): the admission queue is not in the snapshot and no worker outlives the core, so a
+  queued job would otherwise wait for an admission no one will make.
+- Ordinals belong to a fan-out's children, in accept order, as section 2.5 says; a job
+  outside a fan-out has none, so "agent one" never names it. The contracts' "ordinal among
+  live jobs" is read as among the live children of one fan-out.
+- A child's slug is its parent's slug and its ordinal (`flaky-login-2`), so its branch and
+  worktree sit beside its siblings'. A slug drops a leading article and keeps at most 40
+  bytes, cut at a word, since it names a folder and a branch.
+- The in-place snapshot is kept under `refs/eileen/<job id>` rather than the slug, since a
+  slug may come back after seven days and the ref outlives that. The core names the ref in
+  `SessionSpec.snapshot_ref` for the harness to record before the session starts; the
+  contract's comment there says "restore before it starts", so the pull request proposes
+  that wording change for WP3.
+- The core cannot see the user's uncommitted files, so the overlap rule of section 2.5
+  (a worktree when they overlap the files the task names) waits for the runtime to report
+  them; `Registry::checkout` takes the fact as an argument and the core passes false.
+- Slugs are checked against the jobs the core keeps (at most 32), not against the store's
+  seven days of rows, which the core cannot read; a worktree path that already exists is the
+  harness's to refuse.
+- An `ml_project` refusal carries the `UserError` as the error result's structured output
+  and its sentence as the text, and puts nothing on the bus: the brain says it, and the
+  HUD's error card follows when WP8 renders `UserError`s.
 
 ## Outcome
 

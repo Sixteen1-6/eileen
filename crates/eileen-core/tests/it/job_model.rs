@@ -138,7 +138,7 @@ enum Cmd {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Place {
     Scratch,
-    InPlace(String),
+    Snapshot(String),
     Worktree(String),
 }
 
@@ -212,7 +212,7 @@ impl Model {
                 if alongside || parent.is_some() {
                     Place::Worktree(key(repo))
                 } else {
-                    Place::InPlace(format!("refs/eileen/{id}"))
+                    Place::Snapshot(format!("refs/eileen/{id}"))
                 }
             }
         };
@@ -328,8 +328,8 @@ impl ReferenceStateMachine for Lifecycle {
         .boxed()
     }
 
-    fn apply(mut state: Model, cmd: &Cmd) -> Model {
-        state.expect = match cmd {
+    fn apply(mut state: Model, transition: &Cmd) -> Model {
+        state.expect = match transition {
             Cmd::Accept { title, repo, parent } => state.accept(*title, *repo, *parent),
             Cmd::Move { job, mv } => state.take(*job, *mv),
             Cmd::Wait { minutes } => {
@@ -431,7 +431,7 @@ impl Sut {
     fn check_place(&mut self, job: &Job, place: &Place) {
         match (place, self.registry.checkout(job, false)) {
             (Place::Scratch, Checkout::Scratch) => {}
-            (Place::InPlace(wanted), Checkout::InPlace { snapshot_ref, .. }) => {
+            (Place::Snapshot(wanted), Checkout::InPlace { snapshot_ref, .. }) => {
                 assert_eq!(&snapshot_ref, wanted, "the snapshot ref");
             }
             (Place::Worktree(key), Checkout::Worktree(spec)) => {
@@ -500,13 +500,14 @@ impl StateMachineTest for Lifecycle {
         Sut { registry: Registry::default(), folders: BTreeMap::new() }
     }
 
-    fn apply(mut sut: Sut, model: &Model, cmd: Cmd) -> Sut {
+    fn apply(mut state: Sut, ref_state: &Model, transition: Cmd) -> Sut {
+        let (sut, model) = (&mut state, ref_state);
         let at = WallTime(model.now);
-        match cmd {
+        match transition {
             Cmd::Accept { title, repo, parent } => sut.accept(model, title, repo, parent),
             Cmd::Move { job, mv } => sut.take(model, job, mv),
             Cmd::Wait { .. } => {
-                assert_eq!(model.expect, Expect::Nothing, "waiting changes nothing")
+                assert_eq!(model.expect, Expect::Nothing, "waiting changes nothing");
             }
             Cmd::Expire => {
                 let due = sut.registry.expired(at);
@@ -526,11 +527,11 @@ impl StateMachineTest for Lifecycle {
             }
             Cmd::Cancel(target) => sut.cancel(model, &target),
         }
-        sut
+        state
     }
 
-    fn check_invariants(sut: &Sut, model: &Model) {
-        let jobs = sut.registry.jobs();
+    fn check_invariants(state: &Sut, ref_state: &Model) {
+        let (jobs, model) = (state.registry.jobs(), ref_state);
         let ids: Vec<JobId> = jobs.iter().map(|job| job.id).collect();
         let wanted: Vec<JobId> = model.jobs.iter().map(|job| job.id).collect();
         assert_eq!(ids, wanted, "the same jobs, in accept order");
