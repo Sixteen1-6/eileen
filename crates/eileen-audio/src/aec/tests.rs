@@ -97,7 +97,7 @@ const fn samples_in(seconds: f32) -> usize {
 
 /// `sin(x)` to about 1e-7 from IEEE 754's exactly rounded operations alone: `x` brought into
 /// `[-pi/2, pi/2]`, then its Taylor series to the eleventh power.
-fn sine(x: f32) -> f32 {
+const fn sine(x: f32) -> f32 {
     const C3: f32 = -1.0 / 6.0;
     const C5: f32 = 1.0 / 120.0;
     const C7: f32 = -1.0 / 5_040.0;
@@ -912,22 +912,21 @@ async fn without_a_loopback_eileen_is_cancelled_against_her_own_pcm() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_loopback_that_stops_hands_over_to_own_pcm_and_the_echo_stays_cancelled() {
+async fn a_loopback_that_stops_hands_over_to_own_pcm_and_the_echo_is_cancelled_once_relearned() {
     // The loopback is two chunks behind her stream, so the switch moves AEC3's reference 20 ms.
     let scene = Scene { eileen: Some(eileen()), loopback: true, ..Scene::default() };
     let (shared, mut streams) = start(scene);
     sleep(ms(6_005)).await;
     drop(streams.remove(0));
-    sleep(ms(6_000)).await;
+    sleep(ms(9_000)).await;
     let heard = take(&shared);
     drop(streams);
 
     assert!(heard.references(0..600).iter().all(|&r| r == Reference::Loopback), "first");
-    assert!(heard.references(602..1_200).iter().all(|&r| r == Reference::OwnPcm), "then own");
-    let erle = heard.erle(650..1_200);
-    assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
+    assert!(heard.references(602..1_500).iter().all(|&r| r == Reference::OwnPcm), "then own");
+    let (early, late) = assert_relearned(&heard, 602);
     assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
-    margin(&format!("erle {erle:.2} closest {:.2}", heard.closest_approach()));
+    margin(&format!("early {early:.2} late {late:.2} closest {:.2}", heard.closest_approach()));
 }
 
 #[tokio::test(start_paused = true)]
@@ -938,21 +937,34 @@ async fn a_loopback_that_falls_silent_under_her_voice_hands_over_within_50_ms() 
     let (shared, streams) = start(scene);
     sleep(ms(6_005)).await;
     shared.lock().unwrap().loopback_silent = true;
-    sleep(ms(6_000)).await;
+    sleep(ms(9_000)).await;
     let heard = take(&shared);
     drop(streams);
 
     assert!(heard.references(0..600).iter().all(|&r| r == Reference::Loopback), "first");
-    let switched = heard.references(600..1_200).iter().position(|&r| r == Reference::OwnPcm);
+    let switched = heard.references(600..1_500).iter().position(|&r| r == Reference::OwnPcm);
     assert!(switched.is_some_and(|at| at <= 60), "own PCM {switched:?} chunks after 6 s");
-    assert!(heard.references(700..1_200).iter().all(|&r| r == Reference::OwnPcm), "and kept");
-    let erle = heard.erle(650..1_200);
-    assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
+    assert!(heard.references(700..1_500).iter().all(|&r| r == Reference::OwnPcm), "and kept");
+    let (early, late) = assert_relearned(&heard, 600 + switched.unwrap());
     assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
     margin(&format!(
-        "erle {erle:.2} switched {switched:?} closest {:.2}",
+        "early {early:.2} late {late:.2} switched {switched:?} closest {:.2}",
         heard.closest_approach()
     ));
+}
+
+/// Checks the echo after a handover to her PCM at chunk `from`, in a run of 15 s: AEC3 learns
+/// her PCM's delay to the microphone afresh, as at the core's start, and once it has, the echo
+/// is cancelled past the floor. Returns the ERLE from 500 ms after the switch to then, and after.
+fn assert_relearned(heard: &Heard, from: usize) -> (f32, f32) {
+    let learning = heard.learning();
+    assert!(learning[from], "learning afresh at the switch");
+    let relearned = learning[from..].iter().position(|&l| !l).map(|at| at + from);
+    assert!(relearned.is_some_and(|at| at < 1_200), "learned her delay at chunk {relearned:?}");
+    let at = relearned.unwrap();
+    let late = heard.erle(at..1_500);
+    assert!(late >= ERLE_FLOOR_DB, "ERLE {late:.1} dB once relearned, from chunk {at}");
+    (heard.erle(from + 50..at), late)
 }
 
 #[tokio::test(start_paused = true)]

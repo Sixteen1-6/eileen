@@ -122,13 +122,13 @@ impl EnergyDetector {
 
     /// Judges one window of echo-cancelled 16 kHz audio, `cancelled`, against the microphone's
     /// window it came from, `heard`. `other_audio` is the capture flag of the same time, and
-    /// `canceller` what the canceller did over the window.
+    /// `aec3` what the canceller did over the window.
     pub(crate) fn window(
         &mut self,
         cancelled: &[f32; WINDOW],
         heard: &[f32; WINDOW],
         other_audio: bool,
-        canceller: Canceller,
+        aec3: Canceller,
     ) -> EnergyWindow {
         let level = level_dbfs(cancelled);
         let heard_dbfs = level_dbfs(heard);
@@ -139,13 +139,12 @@ impl EnergyDetector {
         self.floor_db = Some(floor);
         let margin = if other_audio { MARGIN_OTHER_AUDIO_DB } else { MARGIN_DB };
         let loud_enough = MIN_SPEECH_DBFS.max(floor + margin);
-        let needed = if canceller == Canceller::Converged {
+        let needed = if aec3 == Canceller::Converged {
             loud_enough.max(heard_dbfs - MAX_CANCELLED_DB)
         } else {
             loud_enough
         };
-        let short_db =
-            if canceller == Canceller::Learning { f32::INFINITY } else { needed - level };
+        let short_db = if aec3 == Canceller::Learning { f32::INFINITY } else { needed - level };
         let speech = short_db <= 0.0;
         self.run = if speech { self.run.saturating_add(1) } else { 0 };
         EnergyWindow {
@@ -156,7 +155,7 @@ impl EnergyDetector {
             heard_dbfs,
             short_db,
             other_audio,
-            canceller,
+            canceller: aec3,
         }
     }
 }
