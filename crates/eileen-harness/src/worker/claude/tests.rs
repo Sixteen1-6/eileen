@@ -30,6 +30,13 @@ fn at_once<F: Future>(future: F) -> F::Output {
     }
 }
 
+/// The coding worker's spec without its build slot, which the driver does not hold yet.
+fn coding_spec() -> SessionSpec {
+    let mut spec = crate::session::tests::coding_worker();
+    spec.build_slot = None;
+    spec
+}
+
 fn binding() -> JobBinding {
     JobBinding {
         job: JobId::from_parts(1_700_000_000_000, 1),
@@ -124,7 +131,7 @@ fn only_an_init_with_eileen_connected_and_no_memory_folder_may_be_bound() {
 #[test]
 fn a_worker_without_a_located_cli_refuses_to_start() {
     let mut worker = ClaudeWorker::new(HarnessConfig::default(), Arc::new(Redactor::new()));
-    let spec = crate::session::tests::coding_worker();
+    let spec = coding_spec();
     assert_eq!(at_once(worker.start(spec)).err(), Some(DriverError::NoExecutable), "no CLI");
 }
 
@@ -151,7 +158,7 @@ fn a_session_that_was_never_started_takes_no_job_and_no_turn() {
 #[test]
 fn a_spec_asking_for_what_the_driver_does_not_carry_out_is_refused() {
     let refused = |change: fn(&mut SessionSpec)| {
-        let mut spec = crate::session::tests::coding_worker();
+        let mut spec = coding_spec();
         change(&mut spec);
         unsupported(&spec)
     };
@@ -200,7 +207,7 @@ fn a_spec_the_driver_cannot_carry_out_is_refused_before_a_spawn() {
         ..HarnessConfig::default()
     };
     let mut worker = ClaudeWorker::new(cfg, Arc::new(Redactor::new()));
-    let mut spec = crate::session::tests::coding_worker();
+    let mut spec = coding_spec();
     spec.memory_limit_mb = Some(2048);
     assert_eq!(
         at_once(worker.start(spec)).err(),
@@ -256,12 +263,11 @@ fn a_read_dropped_partway_keeps_the_part_of_the_line_it_had_read() {
         br#"{"type":"control_response","response":{"subtype":"success","request_id":"eileen_1"}}"#;
     let (head, tail) = whole.split_at(30);
     at_once(writer.write_all(head)).unwrap();
-    {
-        // As a `select!` drops it when another branch wins.
-        let mut read = pin!(lines.next());
-        let polled = read.as_mut().poll(&mut Context::from_waker(Waker::noop()));
-        assert!(polled.is_pending(), "half a line is not a line");
-    }
+    // Dropped after one poll, as a `select!` drops it when another branch wins.
+    let mut read = Box::pin(lines.next());
+    let polled = read.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+    assert!(polled.is_pending(), "half a line is not a line");
+    drop(read);
     at_once(writer.write_all(tail)).unwrap();
     at_once(writer.write_all(b"\r\n\n")).unwrap();
     let line = at_once(lines.next()).map(<[u8]>::to_vec);
