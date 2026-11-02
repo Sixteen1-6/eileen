@@ -1229,11 +1229,14 @@ mod tests {
     fn senders(items: &[(u64, Input)], turn: TurnId) -> Vec<(u64, u32)> {
         items
             .iter()
-            .filter_map(|(at, input)| match input {
-                Input::Brain(BrainEvent::TextDelta { instance, turn: t, .. }) if *t == turn => {
+            .filter_map(|(at, input)| {
+                if let Input::Brain(BrainEvent::TextDelta { instance, turn: t, .. }) = input
+                    && *t == turn
+                {
                     Some((*at, *instance))
+                } else {
+                    None
                 }
-                _ => None,
             })
             .collect()
     }
