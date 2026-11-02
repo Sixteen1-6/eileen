@@ -46,6 +46,16 @@
 //!   the live limit, an early pause past the ones it remembers and an event the player reports
 //!   itself past the event limit; its render side allocates nothing
 //!   (`allocation_counter::measure` in the same tests).
+//! - Echo cancellation runs on the speech pipe's 16 kHz mono in 10 ms chunks, against the
+//!   loopback while it carries Eileen, her own PCM once she has sounded for 50 ms without it or
+//!   while none runs, and bypassed (high-pass filter and noise suppression only) once the
+//!   reference and her PCM have both been silent for 500 ms; the bypass leaves AEC3's state
+//!   alone, so the next reply is cancelled from its first words (`aec::tests`). sonora allocates
+//!   as it runs AEC3, so echo cancellation runs off the audio callbacks (`aec::tests` pins it).
+//!   No NaN or infinite sample from a device reaches sonora (`aec::tests`).
+//! - The energy barge-in fallback counts no speech while AEC3 learns the room (its first 3 s of
+//!   sounding reference, and again after its reference changes), reports one onset per run of
+//!   speech windows, at the third (`energy::tests`), and allocates nothing.
 //!
 //! # Boundaries
 //!
@@ -60,7 +70,8 @@
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
 //!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
-//!   and `loom` only under `cfg(loom)`. `realfft` (the resamplers' measurements) and
+//!   `sonora` for AEC3, noise suppression and the high-pass filter, and `loom` only under
+//!   `cfg(loom)`. `realfft` (the resamplers' measurements) and
 //!   `allocation-counter` (decision D82) are dev-dependencies, never outside
 //!   `[dev-dependencies]`.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
@@ -78,14 +89,34 @@
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
 //!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
-//!   command, compared bit for bit with the interpolator over the whole clause), and device tests
-//!   on the owner's PC under `desktop.lock`.
+//!   command, compared bit for bit with the interpolator over the whole clause), echo
+//!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
+//!   and a speech video, made bit for bit the same on every platform, with the loopback two
+//!   chunks behind her stream (`aec::tests`: an ERLE floor against the loopback and against own
+//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a near-end command's energy kept alone, over
+//!   Eileen and over each bed, the reference switch to the chunk, the learning time, the flags,
+//!   and no false onset in ten minutes of each bed, counted from a fresh canceller, in four runs
+//!   of 153 s that each stay under the test profiles' time limit), the window assembly and the
+//!   detector's rules (`energy::tests`), and device tests on the owner's PC under
+//!   `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
 //!
 //! - Echo cancellation is bypassed after 500 ms of loopback silence and Eileen's own PCM becomes
-//!   the reference.
+//!   the reference: once her PCM has sounded for 50 ms since the loopback last did (or no
+//!   loopback runs), the loopback does not carry her, so her PCM is the reference; once the
+//!   reference and her PCM have both been silent for 500 ms, AEC3 is bypassed. While the
+//!   loopback works the rules agree, since her voice is in it a buffer or two late. Starting
+//!   from the bypass, AEC3 runs again in the first chunk that either sounds in.
+//! - The playback flag is true of its own chunk: her PCM for it is at or over -60 dBFS. Her echo
+//!   tail is the canceller's business, not the flag's.
+//! - A device can hand over a NaN or infinite float. The canceller makes such a sample silence
+//!   before sonora sees it, since AEC3 is never reset and one bad sample would spoil it for the
+//!   rest of the process.
+//! - The other-audio flag compares energies over 100 ms, not samples, since the loopback lags
+//!   Eileen's own stream by a buffer or more on a real endpoint; so other audio quieter than her
+//!   voice shows only in her pauses, which its 1 s hold bridges.
 //! - The ring's break flag follows from the numbers: a frame carries it when its `seq` is not one
 //!   more than the frame written before it on the connection, so a frame lost at the handoff, one
 //!   dropped from a full store and one written to a connection that ended all show as gaps. Only a
@@ -138,6 +169,19 @@ use std::sync::Arc;
 use eileen_contracts::core_io::EffectFamily;
 use eileen_contracts::ports::{Component, IdleComponent};
 
+// The component cancels the echo in its capture path with this, and runs the energy fallback
+// while the speech process is not connected, in a later part; until then only their tests use
+// them.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the component wires echo cancellation in a later part")
+)]
+mod aec;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the component wires the energy fallback in a later part")
+)]
+mod energy;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 // The component takes the ring in a later part of the audio series; until then only its tests

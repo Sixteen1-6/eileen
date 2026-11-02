@@ -34,6 +34,8 @@ eileen-trace.workspace = true
 # WavSource and CaptureSink read and write WAV files.
 hound.workspace = true
 rtrb.workspace = true
+# AEC3 with noise suppression and the high-pass filter (BUILD.md section 2.8).
+sonora.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
