@@ -536,6 +536,7 @@ async fn eileen_speaking_is_cancelled_past_the_erle_floor_against_the_loopback()
         "learning until 3 s of her voice reached AEC3: {learned:?}"
     );
     assert!(heard.learning()[learned.unwrap()..].iter().all(|&l| !l), "and not again");
+    margin(&format!("erle {erle:.2} learned {learned:?}"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -555,6 +556,7 @@ async fn a_music_bed_from_the_speakers_is_cancelled_and_sets_other_audio() {
     assert!(other[..on].iter().all(|&o| !o), "not before 200 ms of it");
     assert!(other[on..].iter().all(|&o| o), "other audio from 200 ms on");
     assert!(heard.playback().iter().all(|&p| !p), "Eileen played nothing");
+    margin(&format!("erle {erle:.2}"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -565,6 +567,7 @@ async fn the_speech_video_bed_from_the_speakers_is_cancelled() {
     let erle = heard.erle(CONVERGED..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB, under the {ERLE_FLOOR_DB} dB floor");
     assert!(heard.other_audio()[100..].iter().all(|&o| o), "other audio, past its pauses");
+    margin(&format!("erle {erle:.2}"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -595,6 +598,7 @@ async fn a_command_alone_keeps_its_energy_and_the_detector_fires_on_its_onset() 
     assert!((-3.0..=0.5).contains(&kept), "the command kept {kept:.1} dB of its energy");
     let first = heard.first_onset();
     assert!(first.is_some_and(|at| (ms(1_000)..=ms(1_250)).contains(&at)), "onset at {first:?}");
+    margin(&format!("kept {kept:.2} first {first:?}"));
 }
 
 /// What the canceller made of a command spoken at 6 s over what `scene` plays.
@@ -639,6 +643,12 @@ async fn a_command_over_eileen_keeps_its_energy_and_the_detector_fires_on_its_on
     let over =
         command_over(|| Scene { eileen: Some(eileen()), loopback: true, ..Scene::default() }).await;
     assert_command_heard(&over);
+    margin(&format!(
+        "kept {:.2} erle {:.2} first {:?}",
+        over.kept,
+        over.erle,
+        over.heard.first_onset()
+    ));
 }
 
 /// A bed the speakers play 6 dB over Eileen's voice, so that its energy stands over hers
@@ -669,6 +679,12 @@ async fn a_command_over_eileen_and_the_music_bed_is_kept_and_its_onset_detected(
     .await;
     assert_command_heard(&over);
     assert_judged_as_other_audio(&over.heard);
+    margin(&format!(
+        "kept {:.2} erle {:.2} first {:?}",
+        over.kept,
+        over.erle,
+        over.heard.first_onset()
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -682,6 +698,12 @@ async fn a_command_over_eileen_and_the_video_bed_is_kept_and_its_onset_detected(
     .await;
     assert_command_heard(&over);
     assert_judged_as_other_audio(&over.heard);
+    margin(&format!(
+        "kept {:.2} erle {:.2} first {:?}",
+        over.kept,
+        over.erle,
+        over.heard.first_onset()
+    ));
 }
 
 // The reference switch.
@@ -842,6 +864,7 @@ async fn a_nan_from_the_devices_leaves_the_echo_cancelled() {
     let erle = heard.erle(650..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the NaN");
     assert!(heard.onsets.is_empty(), "no onset: {}", heard.onset_levels());
+    margin(&format!("erle {erle:.2} closest {:.2}", heard.closest_approach()));
 }
 
 #[test]
@@ -885,6 +908,7 @@ async fn without_a_loopback_eileen_is_cancelled_against_her_own_pcm() {
     let erle = heard.erle(CONVERGED..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB, under the {ERLE_FLOOR_DB} dB floor");
     assert!(heard.onsets.is_empty(), "no onset: {}", heard.onset_levels());
+    margin(&format!("erle {erle:.2} closest {:.2}", heard.closest_approach()));
 }
 
 #[tokio::test(start_paused = true)]
@@ -903,6 +927,7 @@ async fn a_loopback_that_stops_hands_over_to_own_pcm_and_the_echo_stays_cancelle
     let erle = heard.erle(650..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
     assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
+    margin(&format!("erle {erle:.2} closest {:.2}", heard.closest_approach()));
 }
 
 #[tokio::test(start_paused = true)]
@@ -924,6 +949,10 @@ async fn a_loopback_that_falls_silent_under_her_voice_hands_over_within_50_ms() 
     let erle = heard.erle(650..1_200);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB after the switch");
     assert!(heard.onsets.is_empty(), "no onset across the switch: {}", heard.onset_levels());
+    margin(&format!(
+        "erle {erle:.2} switched {switched:?} closest {:.2}",
+        heard.closest_approach()
+    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -943,6 +972,7 @@ async fn an_idle_spell_keeps_aec3_converged_for_the_next_reply() {
     assert!(heard.learning()[800..].iter().all(|&l| !l), "nothing to learn again");
     let erle = heard.erle(800..900);
     assert!(erle >= ERLE_FLOOR_DB, "ERLE {erle:.1} dB in the first second after the spell");
+    margin(&format!("erle {erle:.2}"));
 }
 
 // The energy detector over the beds.
@@ -970,6 +1000,7 @@ async fn assert_no_onset_over(bed: Vec<f32>, start_s: u64) {
         "false onsets from {start_s} s: {} (closest approach {closest:.1} dB)",
         heard.onset_levels()
     );
+    margin(&format!("closest {closest:.2}"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1023,6 +1054,7 @@ async fn assert_no_onset_over_alone(bed: Vec<f32>) {
         "false onsets: {} (closest approach {closest:.1} dB)",
         heard.onset_levels()
     );
+    margin(&format!("closest {closest:.2}"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1076,4 +1108,9 @@ fn a_chunk_allocates_so_the_canceller_stays_out_of_the_callbacks() {
     for counted in [on_loopback, on_own, bypassed] {
         assert!(counted.bytes_max < 64 * 1024, "at most 64 KiB live at once: {counted:?}");
     }
+}
+
+/// Temporary: fails with `line`, so CI prints each test's margin.
+fn margin(line: &str) {
+    assert!(line.is_empty(), "MARGIN {line}");
 }
