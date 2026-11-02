@@ -1,16 +1,17 @@
 //! The one job through `Core::step`: dispatch, its cold session, its hooks, its end and its
-//! announcement.
+//! announcement; the refusal of a kind not built, a restart, slugs, the in-place checkout and
+//! cancel by name.
 
-use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
+use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, UserError, UserErrorKind};
 use eileen_contracts::core_io::{
-    Caller, Content, Effect, Input, PathAccess, PathClass, PathFact, PlaybackEvent, ShimRole,
-    TimerId, ToolCallRequest, UserInput,
+    Caller, Content, Effect, Input, PathAccess, PathClass, PathFact, PlaybackEvent, Record,
+    ShimRole, TimerId, ToolCallRequest, UserInput,
 };
 use eileen_contracts::harness::{
-    HookDecision, HookReply, HookRequest, PermissionDecision, WorkerCmd, WorkerEvent,
+    HookDecision, HookReply, HookRequest, PermissionDecision, SessionSpec, WorkerCmd, WorkerEvent,
 };
 use eileen_contracts::ids::{JobId, Personal, ToolName, TurnId, Untrusted, WorkerSessionId};
-use eileen_contracts::jobs::{CallOrigin, Cost, JobStatus, Route, TurnAuthority};
+use eileen_contracts::jobs::{CallOrigin, Cost, Job, JobKind, JobStatus, Route, TurnAuthority};
 use eileen_contracts::speech::VoiceEvent;
 use serde_json::{Value, json};
 
@@ -357,4 +358,173 @@ fn a_dispatch_after_stop_or_after_the_turn_ended_is_refused() {
     let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
     h.step(done(turn));
     assert_refused(&h.step(dispatch(turn)), "the turn ended");
+}
+
+/// The job a step accepted, with its spoken name.
+fn accepted(effects: &[Effect]) -> Option<(JobId, String)> {
+    events(effects).into_iter().find_map(|e| {
+        if let BusEvent::JobAccepted { job, name, .. } = e {
+            Some((*job, name.clone()))
+        } else {
+            None
+        }
+    })
+}
+
+/// The spec of the session a step started.
+fn start_spec(effects: &[Effect]) -> Option<SessionSpec> {
+    effects.iter().find_map(|e| {
+        if let Effect::Worker(_, WorkerCmd::Start(spec)) = e {
+            Some((**spec).clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// The job rows a step persisted.
+fn persisted(effects: &[Effect]) -> Vec<Job> {
+    effects
+        .iter()
+        .filter_map(|e| {
+            if let Effect::Persist(Record::JobUpsert(job)) = e {
+                Some((**job).clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn finished() -> WorkerEvent {
+    WorkerEvent::TurnDone {
+        cost: Cost::default(),
+        is_error: false,
+        summary: Untrusted::new("Done.".to_owned()),
+    }
+}
+
+const COLAB: &str = "train a model that finds a person's clothing colour on my Colab";
+
+#[test]
+fn an_ml_project_is_refused_before_routing_and_admission_and_research_is_accepted() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, train a model that finds clothing colour on my Colab");
+    let ml = json!({ "kind": "ml_project", "task": COLAB });
+    let effects = h.step(dispatch_from(BRAIN, addressed(turn), ml));
+    let result = effects.iter().find_map(|e| {
+        if let Effect::ToolReply { result, .. } = e { Some(result.clone()) } else { None }
+    });
+    let result = result.expect("a reply");
+    assert!(result.is_error, "returned as the call's error result");
+    let output = result.output.clone().expect("the error, structured").into_inner();
+    let error: UserError = serde_json::from_value(output).expect("a UserError");
+    assert_eq!(error.kind, UserErrorKind::JobKindUnavailable, "its kind");
+    assert!(
+        error.sentence.contains("next version") && error.sentence.contains("research job"),
+        "names the next version and offers research: {}",
+        error.sentence
+    );
+    assert_eq!(tool_reply(&effects).map(|(_, text)| text), Some(error.sentence), "the same words");
+    assert!(
+        effects.iter().all(|e| matches!(e, Effect::ToolReply { .. })),
+        "no job, no session, no row and no admission: {effects:?}"
+    );
+    let research = json!({ "kind": "research", "task": COLAB });
+    let effects = h.step(dispatch_from(BRAIN, addressed(turn), research));
+    let kind = events(&effects)
+        .into_iter()
+        .find_map(|e| if let BusEvent::JobAccepted { kind, .. } = e { Some(*kind) } else { None });
+    assert_eq!(kind, Some(JobKind::Research), "the same task as research: {effects:?}");
+    assert!(started_session(&effects).is_some(), "its session starts as usual");
+}
+
+#[test]
+fn a_restart_marks_the_running_job_interrupted_and_repeats_no_id() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    let effects = h.step(dispatch(turn));
+    let (job, _) = accepted(&effects).expect("accepted");
+    let session = started_session(&effects).expect("a session");
+    h.step(Input::Worker(session, init()));
+    let (mut h, first) = Harness::resumed(h.core.snapshot());
+    assert!(
+        events(&first)
+            .iter()
+            .any(|e| matches!(e, BusEvent::JobInterrupted { job: j } if *j == job)),
+        "interrupted on the first step: {first:?}"
+    );
+    let statuses: Vec<JobStatus> = persisted(&first).iter().map(|row| row.status).collect();
+    assert_eq!(statuses, [JobStatus::Interrupted], "its row");
+    let kept: Vec<JobStatus> = h.core.snapshot().jobs.iter().map(|job| job.status).collect();
+    assert_eq!(kept, [JobStatus::Interrupted], "the snapshot holds it interrupted");
+    // The same requests at the same virtual times, with the random numbers starting again.
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    let effects = h.step(dispatch(turn));
+    let (again, _) = accepted(&effects).expect("a new job: the old one no longer runs");
+    assert_ne!(again, job, "no job id repeats");
+    assert_ne!(started_session(&effects), Some(session), "no session id repeats");
+}
+
+#[test]
+fn a_second_job_of_the_same_name_gets_a_slug_of_its_own() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    let session = started_session(&h.step(dispatch(turn))).expect("a session");
+    h.step(Input::Worker(session, init()));
+    h.step(done(turn));
+    h.step(Input::Worker(session, finished()));
+    let turn = ask_brain(&mut h, "Eileen, make the hello file again");
+    let (_, name) = accepted(&h.step(dispatch(turn))).expect("accepted");
+    assert_eq!(name, "the hello file", "the name the user knows");
+    let slugs: Vec<String> = h.core.snapshot().jobs.iter().map(|job| job.slug.clone()).collect();
+    assert_eq!(slugs, ["hello-file", "hello-file-2"], "slugs never collide");
+}
+
+#[test]
+fn one_coding_job_works_in_place_behind_a_snapshot_ref() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, fix the parser test in the demo repo");
+    let args = json!({
+        "kind": "coding",
+        "task": "fix the parser test",
+        "title_hint": "the parser fix",
+        "repo": "D:\\code\\demo"
+    });
+    let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
+    let (job, _) = accepted(&effects).expect("accepted");
+    let spec = start_spec(&effects).expect("its session");
+    let snapshot_ref = format!("refs/eileen/{job}");
+    assert_eq!(spec.cwd, "D:\\code\\demo", "in the user's checkout");
+    assert_eq!(spec.worktree, None, "one job needs no worktree");
+    assert_eq!(spec.snapshot_ref.as_deref(), Some(snapshot_ref.as_str()), "a snapshot first");
+    let row = h.core.snapshot().jobs.into_iter().find(|row| row.id == job).expect("its row");
+    assert_eq!(row.snapshot_ref, Some(snapshot_ref), "kept for undo");
+    assert_eq!((row.worktree, row.branch), (None, None), "no worktree, no branch");
+}
+
+#[test]
+fn cancel_takes_a_name_and_an_ordinal_names_only_a_fan_out_child() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    let session = started_session(&h.step(dispatch(turn))).expect("a session");
+    h.step(Input::Worker(session, init()));
+    h.step(done(turn));
+    for words in ["cancel agent one", "cancel the other file"] {
+        let effects = h.say(words);
+        assert!(
+            !events(&effects).iter().any(|e| matches!(e, BusEvent::JobCancelled { .. })),
+            "{words}: names no job: {effects:?}"
+        );
+    }
+    let effects = h.say("cancel the hello file");
+    let cancelled = events(&effects)
+        .iter()
+        .filter(|e| matches!(e, BusEvent::JobCancelled { by: CancelSource::Voice, .. }))
+        .count();
+    assert_eq!(cancelled, 1, "by its name, in any case: {effects:?}");
+    for late in [finished(), WorkerEvent::Exited { code: Some(0) }] {
+        let effects = h.step(Input::Worker(session, late));
+        assert!(events(&effects).is_empty(), "one terminal state only: {effects:?}");
+    }
 }
