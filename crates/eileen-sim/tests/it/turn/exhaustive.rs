@@ -12,7 +12,12 @@ use eileen_sim::invariants::EXHAUSTIVE;
 
 /// What the search reaches from each start at the pull request depth. A change here is a
 /// change in the search's reach, to be explained in review.
-const REACH_AT_PR_DEPTH: &str = "";
+const REACH_AT_PR_DEPTH: &str = "Idle: 158 states, 1045 inputs, 823 pruned, 0 deadlines
+Speaking: 827 states, 5258 inputs, 4088 pruned, 0 deadlines
+Paused: 1111 states, 8448 inputs, 6651 pruned, 0 deadlines
+PausedDecisionDue: 1219 states, 9174 inputs, 7276 pruned, 11 deadlines
+DuckedDecisionDue: 1073 states, 8030 inputs, 6355 pruned, 11 deadlines
+";
 
 /// The depth to run: `EILEEN_EXHAUSTIVE_DEPTH` when it is set, else the pull request depth.
 fn depth() -> u8 {

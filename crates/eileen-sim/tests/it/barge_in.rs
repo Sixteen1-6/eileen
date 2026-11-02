@@ -144,13 +144,12 @@ fn through(world: &World, speak: SpeakId, (clause, samples): (u16, u32)) -> u64 
     before + u64::from(samples)
 }
 
-/// The first sentence of the scripted answer, which every position these tests reach is in.
-const FIRST_CLAUSE: &str = "Rivers carry water from the hills down to the sea.";
+/// The first sentence of the scripted answer.
+const FIRST_SENTENCE: &str = "Rivers carry water from the hills down to the sea.";
 
-/// The text of clause `clause` of `speak` as the core sent it to synthesis, and its size as
-/// the speech process reported it ready: characters and samples.
-fn clause_of(world: &World, speak: SpeakId, clause: u16) -> (String, u64, u64) {
-    let text = world
+/// The clauses of `speak` as the core sent them to synthesis, in order.
+fn clauses_of(world: &World, speak: SpeakId) -> Vec<String> {
+    world
         .effects()
         .iter()
         .filter_map(|effect| {
@@ -163,9 +162,13 @@ fn clause_of(world: &World, speak: SpeakId, clause: u16) -> (String, u64, u64) {
             }
         })
         .flatten()
-        .nth(usize::from(clause))
-        .expect("the clause was sent to synthesis");
-    let (chars, samples) = world
+        .collect()
+}
+
+/// The size of clause `clause` of `speak` as the speech process reported it ready: characters
+/// and samples.
+fn size_of(world: &World, speak: SpeakId, clause: u16) -> (u64, u64) {
+    world
         .inputs()
         .iter()
         .find_map(|record| {
@@ -179,17 +182,33 @@ fn clause_of(world: &World, speak: SpeakId, clause: u16) -> (String, u64, u64) {
                 None
             }
         })
-        .expect("the clause was synthesized");
-    (text, chars, samples)
+        .expect("the clause was synthesized")
 }
 
-/// Section 2.8's heard prefix after `samples` of the first clause of `speak`, worked out here
-/// from the scripted text: its characters in proportion to the samples played, trimmed.
-fn heard_after(world: &World, speak: SpeakId, samples: u32) -> String {
-    let (text, chars, total) = clause_of(world, speak, 0);
-    assert_eq!(text.trim(), FIRST_CLAUSE, "the first clause is the scripted first sentence");
+/// The non-empty pieces, trimmed, joined with single spaces.
+fn joined<'a>(pieces: impl IntoIterator<Item = &'a str>) -> String {
+    pieces
+        .into_iter()
+        .map(str::trim)
+        .filter(|piece| !piece.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Section 2.8's heard prefix of `speak` at `(clause, samples)`, worked out here from the
+/// scripted text: the clauses before in full, then the playing clause's characters in
+/// proportion to its samples played.
+fn heard_after(world: &World, speak: SpeakId, (clause, samples): (u16, u32)) -> String {
+    let clauses = clauses_of(world, speak);
+    assert!(
+        joined(clauses.iter().map(String::as_str)).starts_with(FIRST_SENTENCE),
+        "the clauses are the scripted answer: {clauses:?}"
+    );
+    let (chars, total) = size_of(world, speak, clause);
     let cut = usize::try_from(chars * u64::from(samples) / total).unwrap();
-    text.chars().take(cut).collect::<String>().trim().to_owned()
+    let index = usize::from(clause);
+    let playing: String = clauses[index].chars().take(cut).collect();
+    joined(clauses[..index].iter().map(String::as_str).chain([playing.as_str()]))
 }
 
 /// The last position of `speak` the device reported to the core.
@@ -206,16 +225,15 @@ fn last_reported(world: &World, speak: SpeakId) -> Option<(u16, u32)> {
     })
 }
 
-/// Plays on a callback at a time until the device has handed more of the first clause than
+/// Plays on a callback at a time until the device has handed more of the playing clause than
 /// the core's last report carries, by a character the heard prefix shows. Returns the prefix
 /// of the reported position and of the device's.
 fn until_the_report_lags_a_character(world: &mut World, speak: SpeakId) -> (String, String) {
     for _ in 0..100 {
         let at = world.device().position(speak).expect("the device holds the answer");
-        assert_eq!(at.0, 0, "still in the first clause");
-        if let Some((0, reported)) = last_reported(world, speak) {
+        if let Some(reported) = last_reported(world, speak).filter(|reported| reported.0 == at.0) {
             let (told, heard) =
-                (heard_after(world, speak, reported), heard_after(world, speak, at.1));
+                (heard_after(world, speak, reported), heard_after(world, speak, at));
             if told != heard {
                 return (told, heard);
             }
@@ -305,10 +323,10 @@ fn the_heard_prefix_equals_the_text_of_the_samples_played() {
         through(&world, speak, at_pause),
         "the paused position is every sample handed to the device"
     );
-    assert_eq!(at_pause.0, 0, "paused in the first clause");
-    let expected = heard_after(&world, speak, at_pause.1);
-    assert!(!expected.is_empty() && expected.len() < FIRST_CLAUSE.len(), "{expected:?}");
-    assert!(FIRST_CLAUSE.starts_with(&expected), "a prefix of the sentence: {expected:?}");
+    let expected = heard_after(&world, speak, at_pause);
+    let answer = joined(clauses_of(&world, speak).iter().map(String::as_str));
+    assert!(!expected.is_empty() && expected.len() < answer.len(), "{expected:?}");
+    assert!(answer.starts_with(&expected), "a prefix of the answer: {expected:?}");
     end_of_turn(&mut world, turn, "Eileen, what about lakes");
     let message = last_brain_message(&world).expect("the request went to the brain");
     assert_eq!(told_in(&message), Some(expected.as_str()), "the brain is told it: {message}");
