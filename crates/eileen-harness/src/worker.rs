@@ -4,11 +4,13 @@
 mod claude;
 
 use std::future::{Future, ready};
+use std::sync::Arc;
 
 use eileen_contracts::harness::{JobBinding, SessionSpec, WorkerCmd, WorkerEvent};
 use eileen_contracts::ids::WorkerSessionId;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::speech::LanguageSupport;
+use eileen_trace::Redactor;
 
 pub use self::claude::ClaudeWorker;
 use crate::{DriverError, HarnessConfig};
@@ -19,7 +21,7 @@ pub trait WorkerDriver: Send {
     fn route(&self) -> Route;
     /// The languages its resolved model handles.
     fn languages(&self) -> LanguageSupport;
-    /// Spawns a session (pooled, or for one job) and waits for its init event.
+    /// Spawns a session (pooled, or for one job) and waits until it is ready for its job.
     fn start(
         &mut self,
         spec: SessionSpec,
@@ -30,18 +32,19 @@ pub trait WorkerDriver: Send {
     /// Sends a command to the session.
     fn send(&mut self, cmd: WorkerCmd) -> impl Future<Output = Result<(), DriverError>> + Send;
     /// The next event; `None` once the session has ended and every event was delivered.
+    /// Cancel-safe: a call dropped before it answers (in a `select!`, say) loses no event and
+    /// no part of a line.
     fn next_event(&mut self) -> impl Future<Output = Option<WorkerEvent>> + Send;
 }
 
-/// A started session, as its init event described it.
+/// A session ready for its job. The vendor's id for it and the model it resolved come with
+/// its first turn's `WorkerEvent::Init`, which the CLI writes only after the first user line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerSession {
     /// Eileen's id for the session.
     pub session: WorkerSessionId,
-    /// The vendor's own id for it.
-    pub vendor_session: String,
-    /// The resolved model id it runs.
-    pub model: String,
+    /// The process id of the CLI.
+    pub pid: u32,
 }
 
 /// Declares a worker driver for a designed slot, whose every call answers `$error`
@@ -167,10 +170,16 @@ impl WorkerDriver for AnyWorker {
 }
 
 /// The worker driver for `route`; `RouteUnavailable` unless v0.1 builds it, which is Claude
-/// alone. Claude's runs `cfg.claude_exe`.
-pub fn worker_for(route: Route, cfg: &HarnessConfig) -> Result<AnyWorker, DriverError> {
+/// alone. Claude's runs `cfg.claude_exe` and redacts with `redactor`, the process's own.
+pub fn worker_for(
+    route: Route,
+    cfg: &HarnessConfig,
+    redactor: &Arc<Redactor>,
+) -> Result<AnyWorker, DriverError> {
     match route {
-        Route::Claude => Ok(AnyWorker::Claude(Box::new(ClaudeWorker::new(cfg.clone())))),
+        Route::Claude => {
+            Ok(AnyWorker::Claude(Box::new(ClaudeWorker::new(cfg.clone(), Arc::clone(redactor)))))
+        }
         Route::Codex | Route::Grok | Route::DeepSeek | Route::Local => {
             Err(DriverError::RouteUnavailable { route })
         }

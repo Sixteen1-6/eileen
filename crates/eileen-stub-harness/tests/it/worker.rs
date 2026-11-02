@@ -1,16 +1,22 @@
 //! `ClaudeWorker` running jobs against this stub in place of the claude CLI (BUILD.md section
-//! 6.5, acceptance 2 without the pool and the approval path, the stub half of acceptance 4 and
-//! the init part of acceptance 8). The tests live here, not in `eileen-harness`, because Cargo
-//! names the stub's binary (`CARGO_BIN_EXE_eileen-stub-harness`) only to this package's tests.
+//! 6.5, acceptance 2 without the pool and the approval path, acceptance 4's denylist and
+//! pass-through part, and acceptance 8's memory checks as the amendment of 2026-11-01 moved
+//! them). The tests live here, not in `eileen-harness`, because Cargo names the stub's binary
+//! (`CARGO_BIN_EXE_eileen-stub-harness`) only to this package's tests.
 //!
 //! Each test gives the worker the stub as its executable, a script through `EILEEN_STUB_SCRIPT`
 //! in the user's environment (the driver passes it on, as it is not denylisted) and a data
-//! folder of its own. Nothing here sleeps: the stub holds at `await_user` until the driver
-//! writes, and `HANG` only guards against a hang.
+//! folder of its own, removed when the test ends. The scripts follow the real CLI's order: no
+//! `system/init` before the first user line, so `start` returning shows the session was found
+//! ready through `initialize` and `mcp_status` alone. Nothing here sleeps: the stub holds at
+//! `await_user` until the driver writes, and `HANG` only guards against a hang.
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::future::Future;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -23,6 +29,8 @@ use eileen_contracts::jobs::{JobKind, Route, Toolset};
 use eileen_harness::session::{HostEnv, MCP_FILE, SETTINGS_FILE, is_denylisted};
 use eileen_harness::{ClaudeWorker, DriverError, HarnessConfig, WorkerDriver as _};
 use eileen_stub_harness::{ENV_FILE_ENV, SCRIPT_ENV};
+use eileen_trace::test_support::{Captured, capture};
+use eileen_trace::{Redactor, names};
 use serde_json::Value;
 use tokio::time::timeout;
 
@@ -32,6 +40,12 @@ const HANG: Duration = Duration::from_secs(20);
 
 /// The vendor session id every script's `system/init` carries.
 const VENDOR_SESSION: &str = "a3b57c79-73b3-485d-8511-c5ae9b1cdac5";
+
+/// The shim token the test session carries, which `driver-token.ndjson` quotes.
+const SHIM_TOKEN: &str = "shim-token-for-the-stub";
+
+/// The `PATH` the user's environment holds, which a worker gets as it is.
+const USER_PATH: &str = if cfg!(windows) { r"C:\eileen-test\bin" } else { "/eileen-test/bin" };
 
 /// Variables the user's environment holds that the worker denylist removes (section 2.12).
 const DENIED: [(&str, &str); 6] = [
@@ -60,26 +74,47 @@ fn script(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/harness-scripts").join(name)
 }
 
-/// A fresh folder of this test's own under the system's temporary folder.
-fn scratch() -> PathBuf {
-    static NEXT: AtomicU32 = AtomicU32::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("eileen-worker-{}-{n}", std::process::id()));
-    if dir.exists() {
-        fs::remove_dir_all(&dir).unwrap();
+/// A fresh folder of this test's own under the system's temporary folder, removed on drop, so
+/// no run leaves its settings file or the stub's environment record behind.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("eileen-worker-{}-{n}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).unwrap();
+        }
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
     }
-    fs::create_dir_all(&dir).unwrap();
-    dir
+}
+
+impl Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Best effort: a failed removal leaves only a folder in the temporary folder.
+        let _removed: std::io::Result<()> = fs::remove_dir_all(&self.0);
+    }
 }
 
 /// A worker whose `claude` is the stub playing `name`, with the denylisted variables, a
-/// pass-through proxy and the user's own attempt to turn vendor memory on in its environment.
-/// The stub appends its environment to `<dir>/env.ndjson`.
+/// pass-through proxy, a `PATH` and the user's own attempt to turn vendor memory on in its
+/// environment. The stub appends its environment to `<dir>/env.ndjson`.
 fn worker(dir: &Path, name: &str) -> ClaudeWorker {
     let mut vars: Vec<(String, String)> =
         DENIED.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect();
     vars.extend([
         ("HTTPS_PROXY".to_owned(), "http://127.0.0.1:3128".to_owned()),
+        ("PATH".to_owned(), USER_PATH.to_owned()),
         ("CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_owned(), "0".to_owned()),
         (SCRIPT_ENV.to_owned(), script(name).display().to_string()),
         (ENV_FILE_ENV.to_owned(), dir.join("env.ndjson").display().to_string()),
@@ -96,7 +131,7 @@ fn worker(dir: &Path, name: &str) -> ClaudeWorker {
         init_deadline: HANG,
         ..HarnessConfig::default()
     };
-    ClaudeWorker::new(cfg)
+    ClaudeWorker::new(cfg, Arc::new(Redactor::new()))
 }
 
 fn session_id() -> WorkerSessionId {
@@ -137,7 +172,7 @@ fn spec() -> SessionSpec {
         },
         shim: ShimEndpoint {
             pipe: "eileen-test-pipe".to_owned(),
-            token: SessionToken::new("shim-token-for-the-stub".to_owned()),
+            token: SessionToken::new(SHIM_TOKEN.to_owned()),
         },
     }
 }
@@ -154,14 +189,19 @@ fn binding() -> JobBinding {
     }
 }
 
-/// Starts a session on `name` and binds the job to it.
-async fn started(dir: &Path, name: &str) -> ClaudeWorker {
-    let mut worker = worker(dir, name);
+/// Starts a session of `worker` and binds the job to it. The stub writes nothing before the
+/// first user line, so `start` answers on `initialize` and `mcp_status` alone.
+async fn start_and_bind(worker: &mut ClaudeWorker) {
     let session = timeout(HANG, worker.start(spec())).await.unwrap().unwrap();
     assert_eq!(session.session, session_id(), "Eileen's id for the session");
-    assert_eq!(session.vendor_session, VENDOR_SESSION, "the CLI's id, from system/init");
-    assert_eq!(session.model, "claude-haiku-5-5", "the resolved model");
+    assert_ne!(session.pid, 0, "the CLI's process id");
     timeout(HANG, worker.bind(binding())).await.unwrap().unwrap();
+}
+
+/// A worker on `name` with its job bound.
+async fn started(dir: &Path, name: &str) -> ClaudeWorker {
+    let mut worker = worker(dir, name);
+    start_and_bind(&mut worker).await;
     worker
 }
 
@@ -183,6 +223,15 @@ async fn events_until(
         }
     }
     panic!("the session ended before the expected event: {events:?}");
+}
+
+/// Every event left, to the end of the session.
+async fn rest(worker: &mut ClaudeWorker) -> Vec<WorkerEvent> {
+    let mut events = Vec::new();
+    while let Some(event) = next(worker).await {
+        events.push(event);
+    }
+    events
 }
 
 /// Each event written short: its kind and the fields a script sets.
@@ -212,16 +261,16 @@ fn summaries(events: &[WorkerEvent]) -> Vec<String> {
 }
 
 /// Cancels the session and checks it ends: any events already read come first, then one
-/// `Exited`, then nothing.
-async fn cancel(worker: &mut ClaudeWorker) {
+/// `Exited`, then nothing. Gives the exit code.
+async fn cancel(worker: &mut ClaudeWorker) -> Option<i32> {
     timeout(HANG, worker.send(WorkerCmd::Cancel)).await.unwrap().unwrap();
-    let mut rest = Vec::new();
-    while let Some(event) = next(worker).await {
-        rest.push(event);
-    }
+    let rest = rest(worker).await;
     let exits = rest.iter().filter(|e| matches!(e, WorkerEvent::Exited { .. })).count();
     assert_eq!(exits, 1, "one exit: {rest:?}");
-    assert!(matches!(rest.last(), Some(WorkerEvent::Exited { .. })), "the exit is last: {rest:?}");
+    let Some(WorkerEvent::Exited { code }) = rest.last() else {
+        panic!("the exit is last: {rest:?}");
+    };
+    *code
 }
 
 /// The environments the stub recorded, one per process it ran as.
@@ -230,9 +279,25 @@ fn recorded_envs(dir: &Path) -> Vec<BTreeMap<String, String>> {
     text.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
+/// Runs `test` on a runtime of its own with tracing captured, for the tests that check a log.
+fn with_logs<F: Future>(test: F) -> (F::Output, Captured) {
+    capture(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(test)
+    })
+}
+
+/// The `reason` of each `worker.refused` event captured.
+fn refusals(captured: &Captured) -> Vec<String> {
+    captured
+        .events_named(names::WORKER_REFUSED)
+        .iter()
+        .map(|event| event.fields.get("reason").and_then(Value::as_str).unwrap().to_owned())
+        .collect()
+}
+
 #[tokio::test]
 async fn a_job_runs_to_completion_with_its_events_in_order() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-job.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     assert_eq!(
@@ -245,14 +310,14 @@ async fn a_job_runs_to_completion_with_its_events_in_order() {
             "text Created hello.txt containing hi.".to_owned(),
             "turn_done error=false Created hello.txt containing hi.".to_owned(),
         ],
-        "the job's events, the init first"
+        "the job's events, the first turn's init first"
     );
     cancel(&mut worker).await;
 }
 
 #[tokio::test]
 async fn narration_lines_become_narration_and_other_text_stays_text() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-job.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     let narration: Vec<&str> = events
@@ -273,7 +338,7 @@ async fn narration_lines_become_narration_and_other_text_stays_text() {
 
 #[tokio::test]
 async fn a_skill_call_becomes_skill_invoked() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-skill.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     let skills: Vec<String> = events
@@ -287,12 +352,9 @@ async fn a_skill_call_becomes_skill_invoked() {
 
 #[tokio::test]
 async fn a_crash_ends_the_job_with_its_exit_code_and_no_turn_done() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-crash.ndjson").await;
-    let mut events = Vec::new();
-    while let Some(event) = next(&mut worker).await {
-        events.push(event);
-    }
+    let events = rest(&mut worker).await;
     let summaries = summaries(&events);
     assert_eq!(summaries.last().map(String::as_str), Some("exited Some(3)"), "{summaries:?}");
     assert!(
@@ -307,14 +369,25 @@ async fn a_crash_ends_the_job_with_its_exit_code_and_no_turn_done() {
 }
 
 #[tokio::test]
-async fn cancel_kills_the_session_and_leaves_no_child() {
-    let dir = scratch();
+async fn cancel_kills_the_session_and_its_process_is_gone() {
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-hold.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::Narration { .. })).await;
+    let Some(WorkerEvent::Init { pid, .. }) = events.first() else {
+        panic!("the first turn's init comes first: {events:?}");
+    };
     assert_eq!(summary(&events[1]), "narration Waiting for the build to finish", "held mid-job");
-    // The stub now holds at `await_user`: only the kill of its Job Object ends it. `cancel`
-    // checks that the driver waited for the exit, which on Windows is every process in the job.
-    cancel(&mut worker).await;
+    // The stub now holds at `await_user`: only the kill ends it. The code is the kill's, not
+    // the `None` the driver gives when the exit is not seen within its deadline: on Windows the
+    // Job Object's termination code 1, on Linux none, since a signal ended it.
+    let code = cancel(&mut worker).await;
+    if cfg!(windows) {
+        assert_eq!(code, Some(1), "terminated with its Job Object");
+    } else {
+        assert_eq!(code, None, "ended by a signal");
+        let proc = PathBuf::from(format!("/proc/{pid}"));
+        assert!(!proc.exists(), "the stub's process {pid} is gone and reaped");
+    }
     assert_eq!(
         worker.send(WorkerCmd::Prompt { text: "go on".to_owned() }).await,
         Err(DriverError::NoSession),
@@ -323,12 +396,29 @@ async fn cancel_kills_the_session_and_leaves_no_child() {
 }
 
 #[tokio::test]
-async fn a_later_turn_and_an_interrupt_reach_the_session() {
-    let dir = scratch();
+async fn a_new_session_after_a_cancel_gives_none_of_the_old_ones_events() {
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-hold.ndjson").await;
     events_until(&mut worker, |e| matches!(e, WorkerEvent::Narration { .. })).await;
-    // `system/init` offers `interrupt_receipt_v1`, so the interrupt is written, and the stub's
-    // reply settles it without an event.
+    // Cancelled, and its `Exited` never read.
+    timeout(HANG, worker.send(WorkerCmd::Cancel)).await.unwrap().unwrap();
+    start_and_bind(&mut worker).await;
+    let first = next(&mut worker).await;
+    assert!(
+        matches!(first, Some(WorkerEvent::Init { .. })),
+        "the new session's init, not the old one's exit: {first:?}"
+    );
+    cancel(&mut worker).await;
+    assert_eq!(recorded_envs(&dir).len(), 2, "two sessions");
+}
+
+#[tokio::test]
+async fn a_later_turn_and_an_interrupt_reach_the_session() {
+    let dir = Scratch::new();
+    let mut worker = started(&dir, "driver-hold.ndjson").await;
+    events_until(&mut worker, |e| matches!(e, WorkerEvent::Narration { .. })).await;
+    // The first turn's init offers `interrupt_receipt_v1`, so the interrupt is written, and the
+    // stub's reply settles it without an event.
     timeout(HANG, worker.send(WorkerCmd::Interrupt)).await.unwrap().unwrap();
     let text = "Carry on".to_owned();
     timeout(HANG, worker.send(WorkerCmd::Prompt { text })).await.unwrap().unwrap();
@@ -336,44 +426,85 @@ async fn a_later_turn_and_an_interrupt_reach_the_session() {
     assert_eq!(
         summaries(&events),
         ["narration Carrying on after the next user turn"],
-        "the second turn plays, and its system/init is not passed on twice"
+        "the second turn plays, and the init the CLI writes again at it is not passed on"
     );
     cancel(&mut worker).await;
 }
 
 #[tokio::test]
 async fn a_session_without_eileen_connected_is_never_bound() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = worker(&dir, "driver-no-eileen.ndjson");
     let started = timeout(HANG, worker.start(spec())).await.unwrap();
-    assert_eq!(started.err(), Some(DriverError::EileenNotConnected), "refused at init");
+    assert_eq!(started.err(), Some(DriverError::EileenNotConnected), "refused at mcp_status");
     assert_eq!(worker.bind(binding()).await, Err(DriverError::NoSession), "never bound");
     assert_eq!(next(&mut worker).await, None, "no event from a refused session");
     assert_eq!(recorded_envs(&dir).len(), 1, "started once: a missing server is not retried");
 }
 
-#[tokio::test]
-async fn a_session_that_reports_a_memory_path_is_restarted_once_then_refused() {
-    let dir = scratch();
-    let mut worker = worker(&dir, "driver-memory-path.ndjson");
-    let started = timeout(HANG, worker.start(spec())).await.unwrap();
-    assert_eq!(started.err(), Some(DriverError::MemoryPathReported), "refused at init");
-    assert_eq!(worker.bind(binding()).await, Err(DriverError::NoSession), "never bound");
-    assert_eq!(next(&mut worker).await, None, "no event from a refused session");
+#[test]
+fn a_session_whose_first_init_reports_a_memory_path_is_killed_at_that_line() {
+    let dir = Scratch::new();
+    let (events, logs) = with_logs(async {
+        let mut worker = started(&dir, "driver-memory-path.ndjson").await;
+        let events = rest(&mut worker).await;
+        let prompt = WorkerCmd::Prompt { text: "go on".to_owned() };
+        assert_eq!(worker.send(prompt).await, Err(DriverError::NoSession), "no further turn");
+        events
+    });
+    assert_eq!(events.len(), 1, "no init, no narration, only the exit: {events:?}");
+    assert!(matches!(events[0], WorkerEvent::Exited { .. }), "{events:?}");
+    assert_eq!(
+        refusals(&logs),
+        [DriverError::MemoryPathReported.to_string()],
+        "the kill is logged with its reason"
+    );
     let envs = recorded_envs(&dir);
-    assert_eq!(envs.len(), 2, "the session was restarted once with memory off");
-    for env in &envs {
-        assert_eq!(
-            env.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY").map(String::as_str),
-            Some("1"),
-            "each start has vendor memory off"
-        );
-    }
+    assert_eq!(envs.len(), 1, "not restarted: the task already reached it");
+    assert_eq!(
+        envs[0].get("CLAUDE_CODE_DISABLE_AUTO_MEMORY").map(String::as_str),
+        Some("1"),
+        "it ran with vendor memory off, and reported a folder anyway"
+    );
+}
+
+#[test]
+fn a_later_init_that_reports_a_memory_path_kills_the_session() {
+    let dir = Scratch::new();
+    let (events, logs) = with_logs(async {
+        let mut worker = started(&dir, "driver-memory-later.ndjson").await;
+        events_until(&mut worker, |e| matches!(e, WorkerEvent::Narration { .. })).await;
+        let text = "Carry on".to_owned();
+        timeout(HANG, worker.send(WorkerCmd::Prompt { text })).await.unwrap().unwrap();
+        let events = rest(&mut worker).await;
+        let prompt = WorkerCmd::Prompt { text: "go on".to_owned() };
+        assert_eq!(worker.send(prompt).await, Err(DriverError::NoSession), "no further turn");
+        events
+    });
+    assert_eq!(events.len(), 1, "nothing after the second init but the exit: {events:?}");
+    assert!(matches!(events[0], WorkerEvent::Exited { .. }), "{events:?}");
+    assert_eq!(
+        refusals(&logs),
+        [DriverError::MemoryPathReported.to_string()],
+        "the kill is logged with its reason"
+    );
+}
+
+#[tokio::test]
+async fn a_tool_input_that_quotes_a_session_token_is_redacted() {
+    let dir = Scratch::new();
+    let mut worker = started(&dir, "driver-token.ndjson").await;
+    let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::ToolUse { .. })).await;
+    let Some(WorkerEvent::ToolUse { input, .. }) = events.last() else { panic!("{events:?}") };
+    let text = input.get().to_string();
+    assert!(!text.contains(SHIM_TOKEN), "the token is redacted: {text}");
+    assert!(text.contains("echo [redacted"), "the rest of the command stays: {text}");
+    cancel(&mut worker).await;
 }
 
 #[tokio::test]
 async fn the_session_starts_in_its_folder_with_the_denylist_applied_and_memory_off() {
-    let dir = scratch();
+    let dir = Scratch::new();
     let mut worker = started(&dir, "driver-job.ndjson").await;
     let run = dir.join("data").join("run").join(session_id().to_string());
     assert!(run.join("cwd").is_dir(), "the session's working folder");
@@ -406,6 +537,7 @@ async fn the_session_starts_in_its_folder_with_the_denylist_applied_and_memory_o
     assert_eq!(get("CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING"), Some("1"), "checkpointing off");
     assert_eq!(get("ENABLE_CLAUDEAI_MCP_SERVERS"), Some("false"), "connectors off");
     assert_eq!(get("HTTPS_PROXY"), Some("http://127.0.0.1:3128"), "the pass-through list");
+    assert_eq!(get("PATH"), Some(USER_PATH), "the user's PATH, as it is");
     assert_eq!(get("EILEEN_SESSION_ID"), Some(session_id().to_string().as_str()), "its id");
     cancel(&mut worker).await;
 }

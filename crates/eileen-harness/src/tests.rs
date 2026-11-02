@@ -1,10 +1,12 @@
 use std::future::Future;
 use std::pin::pin;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use eileen_contracts::core_io::EffectFamily;
 use eileen_contracts::jobs::Route;
 use eileen_contracts::speech::LanguageSupport;
+use eileen_trace::Redactor;
 
 use crate::{
     AnyWorker, BrainBackend, BrainSuite, DriverError, HarnessConfig, WorkerDriver, brain_benchmark,
@@ -23,7 +25,7 @@ fn at_once<F: Future>(future: F) -> F::Output {
 #[test]
 fn only_the_claude_route_has_a_worker_driver() {
     for route in Route::ALL {
-        let driver = worker_for(route, &HarnessConfig::default());
+        let driver = worker_for(route, &HarnessConfig::default(), &Arc::new(Redactor::new()));
         if route == Route::Claude {
             assert!(matches!(driver, Ok(AnyWorker::Claude(_))), "v0.1 builds Claude");
         } else {
@@ -35,7 +37,8 @@ fn only_the_claude_route_has_a_worker_driver() {
 
 #[test]
 fn a_claude_worker_without_a_session_reports_any_language_and_no_events() {
-    let mut worker = worker_for(Route::Claude, &HarnessConfig::default()).unwrap();
+    let mut worker =
+        worker_for(Route::Claude, &HarnessConfig::default(), &Arc::new(Redactor::new())).unwrap();
     assert_eq!(worker.route(), Route::Claude, "its route");
     assert_eq!(worker.languages(), LanguageSupport::Any, "Claude reports any language");
     assert!(at_once(worker.next_event()).is_none(), "no session, so no event");

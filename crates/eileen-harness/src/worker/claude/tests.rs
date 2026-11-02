@@ -1,16 +1,23 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::pin;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use eileen_contracts::harness::{JobBinding, WorkerCmd};
-use eileen_contracts::ids::{JobId, SkillId, TraceCtx};
+use eileen_contracts::harness::{
+    BuildSlotTicket, JobBinding, SessionSpec, WorkerCmd, WorktreeSpec,
+};
+use eileen_contracts::ids::{JobId, Personal, SkillId, TraceCtx};
 use eileen_contracts::jobs::JobKind;
-use eileen_contracts::learn::SkillRef;
+use eileen_contracts::learn::{SkillRef, SnapshotManifest};
 use eileen_trace::Redactor;
 use serde_json::{Value, json};
+use tokio::io::{AsyncWriteExt as _, BufReader, duplex};
 
-use super::{ClaudeWorker, check_init, first_turn, user_line};
+use super::{
+    ClaudeWorker, Lines, Status, check_init, eileen_status, first_turn, reply_to, unsupported,
+    user_line,
+};
 use crate::stream::{Init, Line, parse};
 use crate::{DriverError, HarnessConfig, WorkerDriver as _};
 
@@ -116,17 +123,18 @@ fn only_an_init_with_eileen_connected_and_no_memory_folder_may_be_bound() {
 
 #[test]
 fn a_worker_without_a_located_cli_refuses_to_start() {
-    let mut worker = ClaudeWorker::new(HarnessConfig::default());
+    let mut worker = ClaudeWorker::new(HarnessConfig::default(), Arc::new(Redactor::new()));
     let spec = crate::session::tests::coding_worker();
     assert_eq!(at_once(worker.start(spec)).err(), Some(DriverError::NoExecutable), "no CLI");
 }
 
 #[test]
 fn a_session_that_was_never_started_takes_no_job_and_no_turn() {
-    let mut worker = ClaudeWorker::new(HarnessConfig {
+    let cfg = HarnessConfig {
         claude_exe: PathBuf::from("/opt/claude/claude"),
         ..HarnessConfig::default()
-    });
+    };
+    let mut worker = ClaudeWorker::new(cfg, Arc::new(Redactor::new()));
     assert_eq!(at_once(worker.bind(binding())), Err(DriverError::NoSession), "no job");
     let prompt = WorkerCmd::Prompt { text: "go on".to_owned() };
     assert_eq!(at_once(worker.send(prompt)), Err(DriverError::NoSession), "no turn");
@@ -138,4 +146,124 @@ fn a_session_that_was_never_started_takes_no_job_and_no_turn() {
         "the pool's commands come later"
     );
     assert!(at_once(worker.next_event()).is_none(), "no event");
+}
+
+#[test]
+fn a_spec_asking_for_what_the_driver_does_not_carry_out_is_refused() {
+    let refused = |change: fn(&mut SessionSpec)| {
+        let mut spec = crate::session::tests::coding_worker();
+        change(&mut spec);
+        unsupported(&spec)
+    };
+    assert_eq!(refused(|_| {}), Ok(()), "the spec the core builds today");
+    let expect_refused = |command| Err(DriverError::Unsupported { command });
+    assert_eq!(
+        refused(|spec| {
+            spec.snapshot = Some(SnapshotManifest { session: spec.session, files: Vec::new() });
+        }),
+        expect_refused("a plugin snapshot check"),
+        "the snapshot is not re-hashed or checked against init yet"
+    );
+    assert_eq!(
+        refused(|spec| spec.snapshot_ref = Some("refs/eileen/1".to_owned())),
+        expect_refused("a snapshot restore"),
+        "no snapshot is restored yet"
+    );
+    assert_eq!(
+        refused(|spec| {
+            spec.worktree = Some(WorktreeSpec {
+                repo: Personal::new("repo".to_owned()),
+                path: Personal::new("wt".to_owned()),
+                branch: "eileen/job".to_owned(),
+                base: "main".to_owned(),
+            });
+        }),
+        expect_refused("a worktree"),
+        "no worktree is made yet, so the job would run in the run folder"
+    );
+    assert_eq!(
+        refused(|spec| spec.build_slot = Some(BuildSlotTicket { slot: 0, cargo_jobs: 4 })),
+        expect_refused("a build slot"),
+        "no build slot is held yet"
+    );
+    assert_eq!(
+        refused(|spec| spec.memory_limit_mb = Some(2048)),
+        expect_refused("a job memory limit"),
+        "no JOB_OBJECT_LIMIT_JOB_MEMORY yet"
+    );
+}
+
+#[test]
+fn a_spec_the_driver_cannot_carry_out_is_refused_before_a_spawn() {
+    let cfg = HarnessConfig {
+        claude_exe: PathBuf::from("/opt/claude/claude"),
+        ..HarnessConfig::default()
+    };
+    let mut worker = ClaudeWorker::new(cfg, Arc::new(Redactor::new()));
+    let mut spec = crate::session::tests::coding_worker();
+    spec.memory_limit_mb = Some(2048);
+    assert_eq!(
+        at_once(worker.start(spec)).err(),
+        Some(DriverError::Unsupported { command: "a job memory limit" }),
+        "refused at once"
+    );
+}
+
+#[test]
+fn eileen_must_be_connected_in_mcp_status() {
+    let status = |servers: Value| eileen_status(&json!({ "mcpServers": servers }));
+    let eileen = |state: &str| json!([{ "name": "other", "status": "connected" }, { "name": "eileen", "status": state }]);
+    assert_eq!(status(eileen("connected")), Status::Connected, "ready");
+    assert_eq!(status(eileen("pending")), Status::Pending, "asked again");
+    assert_eq!(status(json!([])), Status::Pending, "not listed yet: asked again");
+    assert_eq!(eileen_status(&Value::Null), Status::Pending, "no list at all: asked again");
+    for state in ["failed", "needs-auth", "disabled"] {
+        assert_eq!(status(eileen(state)), Status::Refused, "eileen {state}");
+    }
+}
+
+#[test]
+fn only_the_reply_to_the_request_asked_is_taken() {
+    let reply = |id: &str, subtype: &str| {
+        json!({
+            "type": "control_response",
+            "response": { "subtype": subtype, "request_id": id, "response": { "mcpServers": [] } },
+        })
+        .to_string()
+    };
+    assert_eq!(
+        reply_to(reply("eileen_ready_2", "success").as_bytes(), "eileen_ready_2"),
+        Some(Ok(json!({ "mcpServers": [] }))),
+        "its response"
+    );
+    assert_eq!(
+        reply_to(reply("eileen_ready_2", "error").as_bytes(), "eileen_ready_2"),
+        Some(Err(())),
+        "an error reply"
+    );
+    assert_eq!(reply_to(reply("eileen_ready_1", "success").as_bytes(), "eileen_ready_2"), None);
+    assert_eq!(reply_to(br#"{"type":"system","subtype":"init"}"#, "eileen_ready_2"), None);
+    assert_eq!(reply_to(b"not json", "eileen_ready_2"), None);
+}
+
+#[test]
+fn a_read_dropped_partway_keeps_the_part_of_the_line_it_had_read() {
+    let (mut writer, reader) = duplex(1024);
+    let mut lines = Lines::new(BufReader::new(reader));
+    let whole =
+        br#"{"type":"control_response","response":{"subtype":"success","request_id":"eileen_1"}}"#;
+    let (head, tail) = whole.split_at(30);
+    at_once(writer.write_all(head)).unwrap();
+    {
+        // As a `select!` drops it when another branch wins.
+        let mut read = pin!(lines.next());
+        let polled = read.as_mut().poll(&mut Context::from_waker(Waker::noop()));
+        assert!(polled.is_pending(), "half a line is not a line");
+    }
+    at_once(writer.write_all(tail)).unwrap();
+    at_once(writer.write_all(b"\r\n\n")).unwrap();
+    let line = at_once(lines.next()).map(<[u8]>::to_vec);
+    assert_eq!(line.as_deref(), Some(&whole[..]), "the whole line, once, without its ending");
+    drop(writer);
+    assert_eq!(at_once(lines.next()), None, "the blank line is passed over, then stdout ends");
 }

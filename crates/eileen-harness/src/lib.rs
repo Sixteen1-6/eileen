@@ -38,12 +38,18 @@
 //!   brain answers `NotBuilt` until WP3 builds it (unit tests
 //!   `tests::only_the_claude_route_has_a_worker_driver` and
 //!   `tests::the_stub_claude_brain_answers_not_built_and_measures_nothing`).
-//! - A Claude worker session is bound to a job only after its `system/init` lists `eileen` as
-//!   connected and reports no auto-memory folder; one that reports a folder is started once
-//!   more and then refused (D77). It spawns through `eileen_supervisor` in the Claude class
-//!   with exactly the session's environment; every write to it and every wait for its init or
-//!   its exit has a deadline; cancel kills its Job Object and waits for the job to empty
-//!   (`eileen-stub-harness::it::worker`).
+//! - A Claude worker session is bound to a job only after `mcp_status` lists `eileen` as
+//!   connected, since the CLI writes `system/init` only after the first user line; every init
+//!   it then writes is checked, and one that does not list `eileen` as connected or reports an
+//!   auto-memory folder (D77) kills the session at that line, before the model's first
+//!   message, with a `worker.refused` log. It spawns through `eileen_supervisor` in the Claude
+//!   class with exactly the session's environment, and its hook and shim tokens are registered
+//!   with the process's redactor while it lives; every write to it and every wait for its
+//!   readiness or its exit has a deadline; a write that fails or passes its deadline ends the
+//!   session, since part of a line may have reached the CLI; cancel kills its Job Object and
+//!   waits for the job to empty; `next_event` is cancel-safe; a spec asking for what the
+//!   driver does not carry out yet (snapshots, worktrees, build slots, a job memory limit) is
+//!   refused (`eileen-stub-harness::it::worker`, `worker::claude::tests`).
 //! - A stream-json line longer than `stream::MAX_LINE_BYTES` is malformed before it is parsed,
 //!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
 //!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
@@ -107,7 +113,8 @@
 //!   this test binary run again as a chatty child
 //!   (`cli::doctor::tests::the_supervised_runner_reads_a_real_child_to_its_exit`: exit code,
 //!   the 4 KB cap on standard output, standard error drained), the two fuzz targets with their
-//!   corpora replayed in `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC. The
+//!   corpora replayed in `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC
+//!   (`it::real_claude`: the worker's start against the signed-in CLI). The
 //!   kill when a probe's deadline passes is dropping the supervised child, which
 //!   `eileen-supervisor`'s own tests cover (dropping a child kills its job), since testing it
 //!   here would need a real-time wait.
@@ -138,11 +145,11 @@
 //! - The CLI writes `system/init` again at the start of every user turn, and `system/init`
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
 //! - CLI 2.1.316 writes nothing on stdout, `system/init` included, until the first user line
-//!   arrives, while `ClaudeWorker::start` waits for init before a job is bound, as section
-//!   3.3.8 has it. Against the real CLI a start therefore runs into its init deadline, until
-//!   the amendment that settles how a session shows it is ready before its job changes the
-//!   start (the CLI does answer the `initialize` and `mcp_status` control requests before any
-//!   user line; `docs/wp/WP3-harness.md`, "Surprises").
+//!   arrives, so a worker's readiness comes from the `initialize` and `mcp_status` control
+//!   requests, which it answers before any user line, and the D77 memory check runs at the
+//!   first turn's init (the amendment of 2026-11-01, #161). The core binds on
+//!   `WorkerEvent::Init` until that amendment's contract change gives it `WorkerEvent::Ready`,
+//!   so a live job does not bind until then (`FIXME(#161)` in `worker::claude`).
 //! - Not every denial looks like one: an `approve` call that fails reaches the model as a tool
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
@@ -166,7 +173,11 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet; WP3 declares its spans in `eileen_trace::names`. Tool inputs are redacted in the
+//! - `worker.refused` (warn) when a worker session is killed for a policy reason, with
+//!   Eileen's session id and the driver's reason; `worker.fault` (warn) for a failed write, a
+//!   control reply that matched nothing or carried an error, requests left unanswered at a
+//!   turn's end, and a kill whose exit was not seen. Neither carries CLI text or a path. The
+//!   rest of WP3's spans come with the pool and the brain. Tool inputs are redacted in the
 //!   parser, so no later log sees them whole.
 //!
 //! # Do not change without a decision record
@@ -205,8 +216,8 @@ pub use worker::{
 /// `Task` and the model calls it `Agent` (WP3's approval contract test, section 2.5).
 pub const SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
 
-/// How long a Claude session may take from its spawn to `system/init` by default. A worker's
-/// cold start under load took 30 to 111 s (section 0).
+/// How long a Claude session may take from its spawn to being ready for its job by default. A
+/// worker's cold start under load took 30 to 111 s (section 0).
 pub const INIT_DEADLINE: Duration = Duration::from_secs(120);
 
 /// What the harness reads at start. WP3 adds the rest of its fields (the model aliases, the
@@ -230,7 +241,8 @@ pub struct HarnessConfig {
     /// What the runtime read from the user's machine, from which each session's environment is
     /// built (section 2.12).
     pub host: session::HostEnv,
-    /// How long a session may take from its spawn to `system/init` ([`INIT_DEADLINE`]).
+    /// How long a session may take from its spawn to being ready for its job
+    /// ([`INIT_DEADLINE`]).
     pub init_deadline: Duration,
 }
 
@@ -293,26 +305,37 @@ pub enum DriverError {
         /// The OS's error.
         kind: std::io::ErrorKind,
     },
-    /// The session wrote no `system/init` within the deadline.
-    #[error("the session wrote no system/init within {secs} s")]
-    InitDeadline {
+    /// The session did not show it was ready for its job within the deadline: `initialize`
+    /// answered and `eileen` connected in `mcp_status`.
+    #[error("the session was not ready within {secs} s")]
+    ReadyDeadline {
         /// The deadline, seconds.
         secs: u64,
     },
-    /// The session's process ended before its `system/init`.
-    #[error("the session ended before its system/init (exit code {code:?})")]
-    EndedBeforeInit {
+    /// The session's process ended before it was ready.
+    #[error("the session ended before it was ready (exit code {code:?})")]
+    EndedBeforeReady {
         /// Its exit code, when it had one.
         code: Option<i32>,
     },
-    /// The session's `system/init` does not list `eileen` as connected, so it is never bound
-    /// (section 2.5).
-    #[error("the session's system/init does not list eileen as connected")]
+    /// The CLI answered a readiness control request with an error.
+    #[error("the CLI answered the {request} control request with an error")]
+    ControlRefused {
+        /// The request's subtype.
+        request: &'static str,
+    },
+    /// `mcp_status` or a `system/init` does not list `eileen` as connected, so the session is
+    /// never bound, or is killed at that init (section 2.5).
+    #[error("the session does not list eileen as connected")]
     EileenNotConnected,
-    /// The session's `system/init` reported an auto-memory folder on its first start and on its
-    /// restart, though every session starts with vendor memory off (D77), so it is never bound.
+    /// A `system/init` reported an auto-memory folder, though every session starts with vendor
+    /// memory off (D77), so the session is killed at that line.
     #[error("the session reported an auto-memory folder with vendor memory off")]
     MemoryPathReported,
+    /// A session token could not be registered with the redactor, so the session would log it
+    /// in clear.
+    #[error("a session token could not be registered with the redactor")]
+    SecretNotRegistered,
     /// A session is already started on this driver.
     #[error("a session is already started")]
     AlreadyStarted,

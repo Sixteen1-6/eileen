@@ -26,6 +26,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 # The doctor's deadlines and its read of a probe's output.
 tokio.workspace = true
+# The worker driver's `worker.refused` and `worker.fault` logs.
+tracing.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
