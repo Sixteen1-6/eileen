@@ -9,7 +9,7 @@ use eileen_contracts::core_io::{Input, PlaybackEvent};
 use eileen_contracts::record::{FaultRecord, InputRecord, SimRegression};
 use eileen_stdx::rng::CoreRng;
 
-use crate::faults::Faults;
+use crate::faults::{FaultError, Faults};
 use crate::inputs::Generator;
 use crate::invariants::Violation;
 use crate::profile::{Profile, ProfileError};
@@ -93,8 +93,8 @@ pub enum RunError {
     Io(io::Error),
     /// The simulator thread panicked.
     Panicked(String),
-    /// A regression names something this build cannot replay.
-    Unreplayable(String),
+    /// A regression names a fault the world cannot fire.
+    Fault(FaultError),
 }
 
 impl fmt::Display for RunError {
@@ -103,12 +103,18 @@ impl fmt::Display for RunError {
             Self::Profile(e) => write!(f, "{e}"),
             Self::Io(e) => write!(f, "{e}"),
             Self::Panicked(message) => write!(f, "the simulator thread panicked: {message}"),
-            Self::Unreplayable(why) => write!(f, "cannot replay: {why}"),
+            Self::Fault(e) => write!(f, "cannot replay: {e}"),
         }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl From<FaultError> for RunError {
+    fn from(error: FaultError) -> Self {
+        Self::Fault(error)
+    }
+}
 
 impl From<ProfileError> for RunError {
     fn from(error: ProfileError) -> Self {
@@ -213,7 +219,7 @@ fn draw(
 /// site the world cannot fire does not replay.
 pub fn replay_here(regression: &SimRegression) -> Result<RunReport, RunError> {
     let profile = Profile::load(&regression.profile)?;
-    let faults = Faults::scripted(&regression.faults).map_err(RunError::Unreplayable)?;
+    let faults = Faults::scripted(&regression.faults)?;
     let mut world = World::new(profile, regression.seed.unwrap_or(0));
     world.set_faults(faults);
     let mut failure = None;
@@ -263,7 +269,8 @@ fn report_of(world: &World, seed: Option<u64>, failure: Option<(u32, Violation)>
 mod tests {
     use eileen_contracts::record::{FaultRecord, SimRegression};
 
-    use super::{RunReport, doublecheck, replay, run_bytes, run_seed};
+    use super::{RunError, RunReport, doublecheck, replay, run_bytes, run_seed};
+    use crate::faults::FaultError;
     use crate::profile::Profile;
 
     fn profile() -> Profile {
@@ -343,6 +350,15 @@ mod tests {
             invariant: "6".to_owned(),
         };
         let error = replay(&regression).unwrap_err();
+        let site = |error: &RunError| match error {
+            RunError::Fault(FaultError::UnknownSite { site, seq }) => Some((site.clone(), *seq)),
+            RunError::Profile(_) | RunError::Io(_) | RunError::Panicked(_) => None,
+        };
+        assert_eq!(
+            site(&error),
+            Some(("store.write".to_owned(), Some(1))),
+            "a typed fault error naming the site and its step: {error:?}"
+        );
         assert!(error.to_string().contains("store.write"), "{error}");
     }
 

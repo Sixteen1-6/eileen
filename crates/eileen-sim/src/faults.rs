@@ -19,6 +19,7 @@
 //! the replay.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use eileen_contracts::record::FaultRecord;
 use eileen_stdx::buggify;
@@ -68,6 +69,33 @@ fn what(site: &str) -> &'static str {
     SITES.iter().find(|(known, _)| *known == site).map_or("fired", |(_, what)| what)
 }
 
+/// Faults that cannot be set up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FaultError {
+    /// A site that is not one of the world's [`SITES`], so the world cannot fire it.
+    UnknownSite {
+        /// The site.
+        site: String,
+        /// The step a regression's record names it at; none for [`Faults::every`].
+        seq: Option<u64>,
+    },
+}
+
+impl fmt::Display for FaultError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownSite { site, seq: Some(seq) } => {
+                write!(f, "fault site `{site}` at seq {seq} is not one the world can fire")
+            }
+            Self::UnknownSite { site, seq: None } => {
+                write!(f, "the world has no fault site `{site}`")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FaultError {}
+
 /// How a run decides its faults.
 #[derive(Debug, Default)]
 enum Mode {
@@ -113,14 +141,14 @@ impl Faults {
 
     /// Exactly the faults `records` name, for a replay. `Err` names the first site the world
     /// cannot fire.
-    pub fn scripted(records: &[FaultRecord]) -> Result<Self, String> {
+    pub fn scripted(records: &[FaultRecord]) -> Result<Self, FaultError> {
         let mut left: BTreeMap<(u64, String), u32> = BTreeMap::new();
         for record in records {
             if !is_world_site(&record.site) {
-                return Err(format!(
-                    "fault site `{}` at seq {} is not one the world can fire",
-                    record.site, record.seq
-                ));
+                return Err(FaultError::UnknownSite {
+                    site: record.site.clone(),
+                    seq: Some(record.seq),
+                });
             }
             let count = left.entry((record.seq, record.site.clone())).or_insert(0);
             *count = count.saturating_add(1);
@@ -130,16 +158,19 @@ impl Faults {
 
     /// Faults that fire every time one of `sites` is reached, for a test that breaks one part
     /// on purpose. `Err` names the first site the world does not have.
-    pub fn every(sites: &[&'static str]) -> Result<Self, String> {
+    pub fn every(sites: &[&'static str]) -> Result<Self, FaultError> {
         if let Some(site) = sites.iter().find(|site| !is_world_site(site)) {
-            return Err(format!("the world has no fault site `{site}`"));
+            return Err(FaultError::UnknownSite { site: (*site).to_owned(), seq: None });
         }
         Ok(Self { mode: Mode::Every(sites.iter().copied().collect()), records: Vec::new() })
     }
 
     /// Whether the world's fault point `site`, reached in the step `seq`, fires. `drawn` is
-    /// what `buggify!(site)` answered there, which only a live run uses.
+    /// what `buggify!(site)` answered there, which only a live run uses. A site missing from
+    /// [`SITES`] fails a soft assertion: a run would record it, and its regression would not
+    /// replay.
     pub fn hit(&mut self, seq: u64, site: &'static str, drawn: bool) -> bool {
+        eileen_stdx::always!(is_world_site(site), "fault site `{site}` is not in faults::SITES");
         let fires = match &mut self.mode {
             Mode::Off => false,
             Mode::Live { seen, .. } => {
@@ -196,7 +227,7 @@ impl Faults {
 mod tests {
     use eileen_contracts::record::FaultRecord;
 
-    use super::{BRAIN_STALL, BUS_STALL, Faults, SITES, is_world_site};
+    use super::{BRAIN_STALL, BUS_STALL, FaultError, Faults, SITES, is_world_site};
     use crate::profile::FaultProfile;
 
     const ALWAYS: FaultProfile = FaultProfile { activate_per_mille: 1_000, fire_per_mille: 1_000 };
@@ -271,7 +302,12 @@ mod tests {
     fn a_replay_refuses_a_site_the_world_cannot_fire() {
         let record = FaultRecord { seq: 1, site: "store.write".to_owned(), fault: String::new() };
         let error = Faults::scripted(&[record]).unwrap_err();
-        assert!(error.contains("store.write"), "{error}");
+        assert_eq!(
+            error,
+            FaultError::UnknownSite { site: "store.write".to_owned(), seq: Some(1) },
+            "the site and its step"
+        );
+        assert!(error.to_string().contains("store.write"), "{error}");
         assert!(SITES.iter().all(|(site, _)| is_world_site(site) && site.starts_with("sim.")));
     }
 
@@ -282,6 +318,10 @@ mod tests {
         assert!(faults.hit(2, BUS_STALL, false), "and again");
         assert!(!faults.hit(2, BRAIN_STALL, true), "only the sites named");
         assert_eq!(faults.records().len(), 2, "each fire recorded");
-        assert!(Faults::every(&["store.write"]).is_err(), "a site the world does not have");
+        assert_eq!(
+            Faults::every(&["store.write"]).unwrap_err(),
+            FaultError::UnknownSite { site: "store.write".to_owned(), seq: None },
+            "a site the world does not have"
+        );
     }
 }
