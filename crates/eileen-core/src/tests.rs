@@ -31,6 +31,7 @@ use eileen_contracts::ports::{
 use eileen_contracts::record::CoreSnapshotV1;
 use eileen_contracts::speech::{SpeechCmd, TurnEndReason, VoiceEvent};
 use eileen_contracts::tools::ToolSpec;
+use eileen_contracts::tools::brain::JobRef;
 use eileen_stdx::rng::CoreRng;
 
 use crate::{Core, CoreConfig, CorePorts, fresh_snapshot};
@@ -101,6 +102,13 @@ impl IntentResolver for Scripted {
             "mute" => Some(CoreCommand::Mute),
             "unmute" => Some(CoreCommand::Unmute),
             "cancel" => Some(CoreCommand::Cancel { job: None }),
+            "cancel agent one" => Some(CoreCommand::Cancel { job: Some(JobRef::Ordinal(1)) }),
+            "cancel the hello file" => {
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name("The hello file".to_owned())) })
+            }
+            "cancel the other file" => {
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name("the other file".to_owned())) })
+            }
             "how's it going" => Some(CoreCommand::HowsItGoing),
             "forget that" => Some(CoreCommand::Forget(ForgetTarget::Fact { id: "f1".to_owned() })),
             "off the record" => Some(CoreCommand::OffTheRecord(true)),
@@ -166,6 +174,16 @@ impl Harness {
         h.step(Input::User(UserInput::SetMute(false)));
         h.step(speech(ready()));
         h
+    }
+
+    /// A core restarted from `snapshot`, as a new process with its clock and random numbers
+    /// starting again, whose speech process is up; with the effects of its first step.
+    fn resumed(snapshot: CoreSnapshotV1) -> (Self, Vec<Effect>) {
+        let mut h = Self::booting(CoreConfig::default(), Vec::new());
+        h.core = Core::new(CoreConfig::default(), ports(Vec::new()), Some(snapshot));
+        let first = h.step(Input::User(UserInput::SetMute(false)));
+        h.step(speech(ready()));
+        (h, first)
     }
 
     /// A core that has taken no step yet.

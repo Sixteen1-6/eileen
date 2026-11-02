@@ -218,6 +218,34 @@ Every pull request also meets the rules section 6.1 sets for every package.
   part through the real core), `eileen-sim::it::regressions::*` (a run with faults written as a
   `SimRegression` file and replayed from it), and `eileen-sim::it::pr_seeds::<profile>::*`,
   every pull request seed of every profile, doublechecked.
+- `wp1/jobs` (open, #163): section 6.3's jobs, first half; acceptance 14, the registry half of
+  acceptance 3, and invariants 4, 5 and 12 in the core. `eileen-core` gains `lifecycle`, a
+  pure, cloneable `Registry` the core keeps: the eight states and one graph of steps (`Step`,
+  `lifecycle::legal`), so every job ends in exactly one terminal state; names of two to four
+  words given at accept; slugs collision-checked against seven days of jobs, kept or dropped
+  to make room; fan-out children named "agent one" to "agent eight" with ordinals in accept
+  order, counted on the parent so a dropped child never frees its number; the approval
+  deadline and the jobs past it; cancel targets by id, slug, name or ordinal, the newest
+  unfinished job first; a restart that interrupts every unfinished job; and the checkout of a
+  coding job whose repository is an absolute path, in place behind `refs/eileen/<job id>` when
+  it works alone and in a worktree `worktrees/<repo hash>/<slug>` on `eileen/<slug>`
+  otherwise. The core does not send that checkout yet (see the decisions below). A
+  `jobs_dispatch` of `ml_project` is refused before routing and admission (`user_error`): the
+  `UserError` `JobKindUnavailable` goes on the bus, and its sentence is the call's error
+  result. The core's first step, and only that one, emits `JobInterrupted` and the row of each
+  job the snapshot held unfinished, and every ID the core mints carries a timestamp after the
+  last one's, kept in the snapshot as `minted_ms`, and no earlier than the input's wall-clock
+  millisecond, so no ID repeats across a restart, even from an older snapshot. Tests:
+  `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model` (the registry
+  half of acceptance 3, proptest-state-machine), `eileen-core::it::job_model::*` (slugs over
+  seven days and after a job is dropped, ordinals after a child is dropped),
+  `eileen-core::lifecycle::tests::*`, and `eileen-core::tests::jobs::*` (acceptance 14, the
+  restart, speech going down and up with a job running, slugs, the folder a coding job works
+  in, cancel by name and ordinal). Still open: acceptance 3's other half, a reference model
+  driving `Core::step` itself (dispatch, the worker's `Init`, `TurnDone` and `Exited`, cancel,
+  a restart from `snapshot()`) and checking its `JobUpsert` rows and `Job*` events, which comes
+  with fan-out, when the core runs more than one job; and the simulator's checks of invariants
+  4, 5 and 12 (a simulated core restart in the world, every persisted row against the graph).
 - Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
   `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
   after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
@@ -365,6 +393,63 @@ Every pull request also meets the rules section 6.1 sets for every package.
   crate doc promises. Features unify across a build, so it belongs in the root manifest's
   `serde_json` entry, which is an amendment; `eileen-record` turns it on in its own manifest
   only until that amendment merges.
+
+- The job graph: `queued` goes to `running`, `failed`, `cancelled` or `interrupted`;
+  `running` to `blocked`, `awaiting_approval`, `completed`, `failed`, `cancelled` or
+  `interrupted`; `blocked` and `awaiting_approval` back to `running` (`Step::Resume`, which
+  also carries the decline at the approval deadline) or to `failed`, `cancelled` or
+  `interrupted`. Section 2.5 names the states without the edges. Only a running job
+  completes, so a worker that ends before it was given its job fails with that reason.
+- A restart interrupts queued jobs as well as running ones (invariant 12 names running
+  ones): the admission queue is not in the snapshot and no worker outlives the core, so a
+  queued job would otherwise wait for an admission no one will make.
+- Ordinals belong to a fan-out's children, in accept order, as section 2.5 says; a job
+  outside a fan-out has none, so "agent one" never names it. The contracts' "ordinal among
+  live jobs" is read as among the live children of one fan-out. The registry counts each
+  parent's children and never lowers the count while the parent is kept, and a child is
+  accepted only while its parent is kept and unfinished (`Refused::NoParent`): a fan-out's
+  children are accepted with it, and a finished fan-out takes no new ones.
+- A child's slug is its parent's slug and its ordinal (`flaky-login-2`), so its branch and
+  worktree sit beside its siblings'. A slug drops a leading article and keeps at most 40
+  bytes, cut at a word, since it names a folder and a branch.
+- The in-place snapshot is kept under `refs/eileen/<job id>` rather than the slug, since a
+  slug may come back after seven days and the ref outlives that. The core does not send a
+  checkout yet: every session works in `run/<session>/cwd`, and no row names a snapshot,
+  worktree or branch (`FIXME(#5)` in `job::session_spec`). The harness reads only
+  `SessionSpec.cwd` today, records no snapshot and creates no worktree, and the contract
+  comments `snapshot_ref` as "a snapshot to restore before it starts". The in-place wiring
+  lands with WP3's harness side and a contracts amendment that documents the field as the
+  ref to record, so no row claims a snapshot that was never taken. A repository path in
+  `cwd` would also be personal data in a field that is not `Personal`; that type change is
+  raised with WP3 then.
+- Only an absolute path with no `.` or `..` part (a drive letter and a separator, a UNC path,
+  or a leading `/`) can become a checkout. The brain's `repo` is untrusted and may be a bare
+  name; the harness puts a relative `cwd` under the data folder, so a name such as
+  `learning` would make Eileen's own folder the job's, where the minimal hook lets file tools
+  write. A name stays in the scratch folder until section 2.5's resolution (the utterance,
+  the focused editor, a `project` fact, or asking once) is built.
+- The core cannot see the user's uncommitted files, so the overlap rule of section 2.5
+  (a worktree when they overlap the files the task names) waits for the runtime to report
+  them; `Registry::checkout` takes the fact as an argument and the core passes false.
+- Slugs are checked against the jobs the core keeps (at most 32) and against the slugs it
+  has given in the last seven days (at most 1024, `lifecycle::SLUGS_KEPT`), so a job dropped
+  to make room still holds its slug, branch and worktree folder. The snapshot keeps only its
+  jobs, so after a core restart only the kept jobs' slugs count until the snapshot or the
+  store hands the core the week's slugs (a contracts change); a worktree path that already
+  exists is then the harness's to refuse.
+- A repository's key ignores case and the kind of separator only in a Windows path (a drive
+  letter or a backslash); a Linux path keeps its case.
+- A cancel whose target names no unfinished job does nothing and says nothing yet; the
+  spoken "I can't find that job" comes with pronoun resolution in the second half.
+- A step a job cannot take from where it is leaves it live, so a later event of its session
+  still ends it; only a finished job stops being the live one.
+- An `ml_project` refusal puts the `UserError` on the bus (`BusEvent::UserError`, for the
+  HUD's card, section 2.13) and returns its sentence as the call's error result with no
+  structured output, since a tool result's `output` must match the op's output schema,
+  `JobsDispatchOutput`. The brain says the sentence.
+- The restart's interruption runs on the core's first step, once, by a flag of its own, not
+  on the first step with the speech process off: a later stop and start of speech never
+  interrupts a job this core accepted.
 
 ## Outcome
 
