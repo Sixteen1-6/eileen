@@ -190,9 +190,10 @@ async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), Compone
                     more = true;
                 }
             }
-            () = std::future::ready(()), if more => more = speech.pump().await,
-            _ = pump.tick() => more = speech.pump().await,
+            // Before the replay's next batch, so a long replay still pings every second.
             _ = ping.tick() => speech.on_second().await,
+            () = std::future::ready(()), if more => more = speech.pump().await,
+            _ = pump.tick(), if speech.drains() => more = speech.pump().await,
         }
     }
     speech.finish().await;
@@ -290,8 +291,12 @@ impl Link {
                 false
             }
             Err(AcceptError::Shutdown) => {
-                tracing::info!("the speech transport has shut down; no more connections");
+                tracing::info!(
+                    held = self.held.len(),
+                    "the speech transport has shut down; no more connections, held commands dropped"
+                );
                 self.transport = None;
+                self.held.clear();
                 false
             }
         }
@@ -311,13 +316,17 @@ impl Link {
         });
         self.ring.connected();
         tracing::info!(connection = %id, "speech connected");
-        let latest = self.mode.iter().chain(self.hotwords.iter()).cloned();
-        let first: Vec<SpeechCommandFrame> = latest.chain(self.held.drain(..)).collect();
+        let first: Vec<SpeechCommandFrame> =
+            self.mode.iter().chain(self.hotwords.iter()).chain(self.held.iter()).cloned().collect();
         for command in first {
             self.encode_command(command);
         }
         match self.write_out().await {
-            Ok(()) => true,
+            Ok(()) => {
+                // Held until written, so a connection that breaks at once loses none of them.
+                self.held.clear();
+                true
+            }
             Err(ended) => {
                 self.close(None, ended).await;
                 false
@@ -366,11 +375,13 @@ impl Link {
             self.hotwords = Some(command.clone());
         }
         if self.live.is_some() {
-            self.encode_command(command);
-            if let Err(ended) = self.write_out().await {
-                self.close(None, ended).await;
+            self.encode_command(command.clone());
+            match self.write_out().await {
+                Ok(()) => return,
+                // The connection broke under this command: it is served below as one that came
+                // while no connection was up.
+                Err(ended) => self.close(None, ended).await,
             }
-            return;
         }
         let ctx = command.ctx;
         match command.cmd {
@@ -395,7 +406,9 @@ impl Link {
     }
 
     fn hold(&mut self, command: SpeechCommandFrame) {
-        if self.held.len() < HELD_COMMANDS {
+        if self.transport.is_none() {
+            tracing::debug!(cmd = ?command.cmd, "no speech connection will come; the command is dropped");
+        } else if self.held.len() < HELD_COMMANDS {
             self.held.push_back(command);
         } else {
             self.held_dropped = self.held_dropped.saturating_add(1);
@@ -526,20 +539,28 @@ impl Link {
         }
     }
 
+    /// Takes every frame in `bytes`. A failed answer to a `Ping` does not stop it: the frames
+    /// after it are still taken, so no event already read is lost, and the failure is returned
+    /// at the end.
     async fn take_bytes(&mut self, mut bytes: &[u8]) -> Result<(), Ended> {
+        let mut failed = None;
         while !bytes.is_empty() {
             let Some(live) = self.live.as_mut() else {
-                return Ok(());
+                break;
             };
             let (taken, frame) = live.frames.feed(bytes).map_err(Ended::Refused)?;
             bytes = bytes.get(taken..).unwrap_or_default();
             match frame {
-                Some(frame) => self.on_frame(frame).await?,
+                Some(frame) => {
+                    if let Err(ended) = self.on_frame(frame).await {
+                        failed.get_or_insert(ended);
+                    }
+                }
                 None if taken == 0 => break,
                 None => {}
             }
         }
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 
     async fn on_frame(&mut self, frame: Frame) -> Result<(), Ended> {
@@ -601,13 +622,12 @@ impl Link {
     /// Hands the connection back to the transport, with its read half: `reader` when the caller
     /// holds it, or else the read in flight's, awaited within its deadline.
     async fn close(&mut self, reader: Option<SpeechReader>, ended: Ended) {
+        let reader = match reader {
+            Some(reader) => Some(reader),
+            None => self.finish_read().await,
+        };
         let Some(live) = self.live.take() else {
             return;
-        };
-        let reader = match (reader, live.reading) {
-            (Some(reader), _) => Some(reader),
-            (None, Some(reading)) => Some(reading.await.reader),
-            (None, None) => None,
         };
         tracing::warn!(connection = %live.id, reason = %ended, "speech connection handed back");
         let Some(reader) = reader else {
@@ -620,6 +640,27 @@ impl Link {
                 tracing::warn!(error = %halves, "a connection's halves did not rejoin");
             }
         }
+    }
+
+    /// Waits for the read in flight, within its deadline, and takes the frames it brought, so an
+    /// event the speech process sent before the connection broke still reaches the core. Moves
+    /// the handoff's frames into the store first, so the wait loses none of them. Returns the
+    /// read half.
+    async fn finish_read(&mut self) -> Option<SpeechReader> {
+        self.ring.pull();
+        let reading = self.live.as_mut()?.reading.take()?;
+        let ReadDone { reader, buf, result } = reading.await;
+        if let Ok(n) = result
+            && let Err(ended) = self.take_bytes(buf.get(..n).unwrap_or_default()).await
+        {
+            tracing::debug!(reason = %ended, "the last read of a closing connection ended early");
+        }
+        Some(reader)
+    }
+
+    /// Whether the ring needs draining: capture runs, or a connection is up.
+    const fn drains(&self) -> bool {
+        self.stream.is_some() || self.live.is_some()
     }
 
     /// The component is stopping: capture stops and the connection goes back.

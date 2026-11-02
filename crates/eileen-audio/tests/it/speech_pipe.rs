@@ -166,7 +166,10 @@ impl Rig {
     /// Stops the component and checks that it ended cleanly.
     async fn stop(self) {
         self.stop.send(true).unwrap();
-        let ended = tokio::time::timeout(WAIT, self.task).await.unwrap().unwrap();
+        // Within a write's deadline and a read's, which a component stopping mid-write waits out,
+        // with room to spare.
+        let within = Duration::from_secs(10);
+        let ended = tokio::time::timeout(within, self.task).await.unwrap().unwrap();
         assert_eq!(ended, Ok(()), "the component stops cleanly");
     }
 }
@@ -245,6 +248,8 @@ struct StandIn {
     next_turn: u128,
     pongs_sent: usize,
     last_pong_seq: u64,
+    /// Paced time it waits after each read, as a speech process slower than the pipe.
+    read_pause: Duration,
 }
 
 impl StandIn {
@@ -259,6 +264,7 @@ impl StandIn {
             next_turn: turns_from,
             pongs_sent: 0,
             last_pong_seq: 0,
+            read_pause: Duration::ZERO,
         }
     }
 
@@ -284,6 +290,9 @@ impl StandIn {
                 if let Some(frame) = frame {
                     self.on_frame(frame).await;
                 }
+            }
+            if !self.read_pause.is_zero() {
+                sleep(self.read_pause).await;
             }
         }
     }
@@ -645,6 +654,26 @@ async fn pings_go_every_second_each_pong_is_a_heartbeat_and_confirms_the_frames_
     let mut second = rig.connect();
     second.run_for(ms(500)).await.unwrap();
     assert_eq!(second.audio()[0].seq, confirmed + 1, "the replay starts after the last Pong");
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pings_keep_coming_while_a_long_replay_is_read_slowly() {
+    let mut rig = Rig::start(clip(Duration::from_secs(70), &[]));
+    sleep(Duration::from_secs(60)).await;
+    let mut slow = rig.connect();
+    // 8 KiB each 20 ms, about twelve times real time: a minute of replay takes about 5 s.
+    slow.read_pause = ms(20);
+    slow.run_for(Duration::from_secs(4)).await.unwrap();
+
+    let audio = slow.audio();
+    assert!(audio.len() > 1_000, "the replay is under way: {} frames", audio.len());
+    assert!(audio.last().unwrap().flags.contains(AudioFlags::REPLAYED), "and not over after 4 s");
+    assert!(
+        slow.count(&Got::Ping) >= 3,
+        "a Ping each second meanwhile: {}",
+        slow.count(&Got::Ping)
+    );
     rig.stop().await;
 }
 
