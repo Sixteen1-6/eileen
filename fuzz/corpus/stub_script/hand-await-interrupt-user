@@ -1,0 +1,3 @@
+{"kind":"await_user"}
+{"type":"control_request","request_id":"a","request":{"subtype":"interrupt"}}
+{"type":"user","message":{}}

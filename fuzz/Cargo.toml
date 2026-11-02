@@ -1,7 +1,9 @@
 # The fuzz workspace of BUILD.md section 4.7, as cargo-fuzz lays it out: its own workspace, kept
 # out of the root one, built with the nightly that `rust-toolchain.toml` here pins, on Linux only.
 # Every target of section 4.7 is declared here, among them the three WP10 adds with its `-linux`
-# crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`). Each target calls a
+# crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`), and `stub_script`, which WP3
+# adds for the stub harness's script and stdin parsers (section 3.3.16 asks a target of every
+# parser of its formats; section 4.7's table does not list it yet). Each target calls a
 # `fuzz_entry` function of the crate that owns the parser; that crate's corpus replay test runs
 # the same function on every OS (on Linux only for the `-linux` crates' targets).
 
@@ -39,6 +41,7 @@ eileen-shell-linux = { path = "../crates/eileen-shell-linux" }
 eileen-sim = { path = "../crates/eileen-sim" }
 eileen-skills = { path = "../crates/eileen-skills" }
 eileen-speech = { path = "../crates/eileen-speech" }
+eileen-stub-harness = { path = "../crates/eileen-stub-harness" }
 
 [[bin]]
 name = "command_grammar"
@@ -204,6 +207,13 @@ bench = false
 [[bin]]
 name = "stream_json_line"
 path = "fuzz_targets/stream_json_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stub_script"
+path = "fuzz_targets/stub_script.rs"
 test = false
 doc = false
 bench = false
