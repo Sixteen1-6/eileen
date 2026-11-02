@@ -404,23 +404,27 @@ fn a_duck_ramp_carries_over_buffers_shorter_than_it() {
     let mut out = vec![0.0; BUFFER];
     renderer.fill(&mut out, RenderInfo { plays_at: Duration::ZERO });
     player.duck(-20);
-    let mut played = Vec::new();
+    let mut out_samples = Vec::new();
     let mut short = [0.0; 16];
     for _ in 0..4 {
         fill_measured(&mut renderer, &mut short, "ramping over 16-sample buffers");
-        played.extend(short);
+        out_samples.extend(short);
     }
     let full = &upsampled(&input)[BUFFER..BUFFER + 64];
     let target = 10_f32.powf(-1.0);
     let ramp = super::ramp_frames(48_000);
-    for (k, (heard, whole)) in played.iter().zip(full).enumerate().take(ramp - 1) {
+    for (k, (heard, whole)) in out_samples.iter().zip(full).enumerate().take(ramp - 1) {
         if whole.abs() > 1e-3 {
             let gain = heard / whole;
             assert!(gain > target + 1e-4 && gain < 1.0, "still ramping at {k}: {gain}");
         }
     }
     let after: Vec<f32> = full[ramp - 1..].iter().map(|s| s * target).collect();
-    assert_eq!(bits(&played[ramp - 1..]), bits(&after), "the duck in full from the ramp's end");
+    assert_eq!(
+        bits(&out_samples[ramp - 1..]),
+        bits(&after),
+        "the duck in full from the ramp's end"
+    );
 }
 
 #[test]
