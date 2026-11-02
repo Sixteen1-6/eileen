@@ -1,11 +1,15 @@
 //! A room without a sound card (BUILD.md section 4.7): [`RoomMixer`] joins a speaker and a
 //! microphone, so what Eileen plays comes back into what she hears, delayed and attenuated as
 //! bleed from real speakers would, over a near-end talker and an optional music or speech-video
-//! bed. Echo cancellation and barge-in are tested against it (WP4 acceptance 1).
+//! bed. Its loopback is what the speakers play, Eileen's voice and a bed the PC plays together,
+//! as the system loopback that section 2.8 makes the echo canceller's far-end reference. Echo
+//! cancellation and barge-in are tested against it (WP4 acceptance 1).
 //!
-//! One task runs both halves on one paced timeline ([`Pace`]): each 10 ms buffer it fills the
-//! playback, adds it to the echo line, then mixes and delivers the input. So the echo's delay is
-//! exact to the sample whatever the delay, and a test sees the same samples on every run.
+//! One task runs all three streams on one paced timeline ([`Pace`]): each 10 ms buffer it fills
+//! the playback, mixes in a bed the speakers play, delivers that mix to the loopback and adds it
+//! to the echo line, then mixes and delivers the input. So the echo's delay is exact to the
+//! sample whatever the delay, the three streams carry the same times, and a test sees the same
+//! samples on every run.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -15,7 +19,7 @@ use std::time::Duration;
 use crate::pace::{self, Pace, Paced, Timeline};
 use crate::stream::{
     AudioError, AudioSink, AudioSource, AudioStream, CaptureCallback, CaptureInfo, RenderCallback,
-    RenderInfo, StreamFormat,
+    RenderInfo, SetupError, StreamFormat,
 };
 use crate::wav::WavClip;
 
@@ -25,8 +29,8 @@ const MAX_ECHO_DELAY: Duration = Duration::from_secs(1);
 /// A room's setup.
 #[derive(Debug, Clone)]
 pub struct RoomConfig {
-    /// The format of both the speaker and the microphone. Its rate must be a whole number of
-    /// hundreds of hertz, so it splits into 10 ms buffers.
+    /// The format of the speaker, the microphone and the loopback. Its rate must be a whole
+    /// number of hundreds of hertz, so it splits into 10 ms buffers.
     pub format: StreamFormat,
     /// How fast the room runs.
     pub pace: Pace,
@@ -37,30 +41,77 @@ pub struct RoomConfig {
     /// Someone talking in the room, from the room's start, then silence. Its format must be the
     /// room's.
     pub near: Option<WavClip>,
-    /// Music or a video's speech playing in the room, looped. Its format must be the room's.
+    /// Music or a video's speech playing, looped. Its format must be the room's.
     pub bed: Option<Bed>,
 }
 
-/// Background audio in a room, looped.
+/// Background audio, looped from the room's start.
 #[derive(Debug, Clone)]
 pub struct Bed {
     /// The audio.
     pub clip: WavClip,
     /// Its linear gain, finite and not negative.
     pub gain: f32,
+    /// Where it plays.
+    pub from: BedSource,
 }
 
-/// A room joining a speaker, [`RoomMixer::sink`], to a microphone, [`RoomMixer::source`]. The
-/// microphone hears the near-end talker, the bed and the echo of the speaker:
+/// Where a [`Bed`] plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BedSource {
+    /// The PC plays it, as a video or music beside Eileen: it is in the loopback with her voice,
+    /// and reaches the microphone as their echo does.
+    #[default]
+    Speakers,
+    /// Something else in the room plays it, as a television: the microphone hears it as it is,
+    /// and the loopback never carries it.
+    Room,
+}
+
+/// A room joining a speaker, [`RoomMixer::sink`], to a microphone, [`RoomMixer::source`], with
+/// the speaker's loopback, [`RoomMixer::loopback`]. The speaker plays Eileen's playback and a
+/// bed from the speakers, and the loopback delivers exactly that; the microphone hears the
+/// near-end talker, a bed in the room and the speaker's echo:
 ///
-/// `input[t] = near[t] + bed.gain * bed[t mod bed's length] + echo_gain * playback[t - echo_delay]`
+/// - `speaker[t] = playback[t] + gain * bed[t mod bed's length]`, for a bed from the speakers
+/// - `loopback[t] = speaker[t]`
+/// - `input[t] = near[t] + gain * bed[t mod bed's length] + echo_gain * speaker[t - echo_delay]`,
+///   the bed's term only for a bed in the room
 ///
-/// The room's timeline starts with its first stream and keeps running while both halves are
-/// stopped, as a room does; the speaker plays silence while its half is stopped.
+/// The room's timeline starts with its first stream and keeps running while every stream is
+/// stopped, as a room does: the playback is silent while the speaker's stream is stopped, and
+/// the bed plays on.
 #[derive(Clone)]
 pub struct RoomMixer {
     format: StreamFormat,
     room: Arc<Mutex<Room>>,
+}
+
+/// One stream's callback while it runs, and which start it belongs to, so a stopped stream's
+/// handle never stops a later one.
+struct Slot<C> {
+    callback: Option<C>,
+    starts: u64,
+}
+
+impl<C> Slot<C> {
+    const fn new() -> Self {
+        Self { callback: None, starts: 0 }
+    }
+
+    /// Takes `callback` for a new start, returning the start's number.
+    fn fill(&mut self, callback: C) -> u64 {
+        self.callback = Some(callback);
+        self.starts += 1;
+        self.starts
+    }
+
+    /// Ends start `start`, unless a later one took its place.
+    fn clear(&mut self, start: u64) {
+        if self.starts == start {
+            self.callback = None;
+        }
+    }
 }
 
 struct Room {
@@ -68,15 +119,14 @@ struct Room {
     near: Option<WavClip>,
     bed: Option<Bed>,
     echo_gain: f32,
-    /// The played samples still on their way to the microphone, `echo_delay` of them between
-    /// buffers. Allocated once with room for one more buffer, so it never grows.
+    /// What the speaker played that is still on its way to the microphone, `echo_delay` of it
+    /// between buffers. Allocated once with room for one more buffer, so it never grows.
     echo: VecDeque<f32>,
-    played: Vec<f32>,
+    speaker: Vec<f32>,
     heard: Vec<f32>,
-    capture: Option<CaptureCallback>,
-    capture_starts: u64,
-    render: Option<RenderCallback>,
-    render_starts: u64,
+    microphone: Slot<CaptureCallback>,
+    loopback: Slot<CaptureCallback>,
+    render: Slot<RenderCallback>,
 }
 
 impl RoomMixer {
@@ -85,11 +135,11 @@ impl RoomMixer {
         let RoomConfig { format, pace, echo_delay, echo_gain, near, bed } = config;
         let timeline = Timeline::new(format, pace)?;
         if echo_delay > MAX_ECHO_DELAY {
-            return Err(AudioError::Setup("a room's echo delay is at most 1 s"));
+            return Err(AudioError::Setup(SetupError::EchoTooLong));
         }
         let gains = [Some(echo_gain), bed.as_ref().map(|bed| bed.gain)];
         if gains.into_iter().flatten().any(|gain| !gain.is_finite() || gain < 0.0) {
-            return Err(AudioError::Setup("a room's gains are finite and not negative"));
+            return Err(AudioError::Setup(SetupError::BadGain));
         }
         let mut clips = near.iter().chain(bed.as_ref().map(|bed| &bed.clip));
         if let Some(clip) = clips.find(|clip| clip.format() != format) {
@@ -105,12 +155,11 @@ impl RoomMixer {
             bed,
             echo_gain,
             echo,
-            played: vec![0.0; buffer_len],
+            speaker: vec![0.0; buffer_len],
             heard: vec![0.0; buffer_len],
-            capture: None,
-            capture_starts: 0,
-            render: None,
-            render_starts: 0,
+            microphone: Slot::new(),
+            loopback: Slot::new(),
+            render: Slot::new(),
         };
         Ok(Self { format, room: Arc::new(Mutex::new(room)) })
     }
@@ -125,6 +174,12 @@ impl RoomMixer {
     #[must_use]
     pub fn sink(&self) -> RoomSink {
         RoomSink { format: self.format, room: Arc::clone(&self.room) }
+    }
+
+    /// The speaker's loopback: what the speaker plays, captured at the time it plays.
+    #[must_use]
+    pub fn loopback(&self) -> RoomLoopback {
+        RoomLoopback { format: self.format, room: Arc::clone(&self.room) }
     }
 }
 
@@ -152,17 +207,30 @@ impl AudioSource for RoomSource {
     }
 
     fn start(&mut self, on_buffer: CaptureCallback) -> Result<Box<dyn AudioStream>, AudioError> {
-        let mut room = pace::lock(&self.room);
-        if room.capture.is_some() {
-            return Err(AudioError::Setup("the room's microphone is already capturing"));
-        }
-        let skipped = pace::run("audio.room", &self.room, &mut *room)?;
-        room.pass(skipped);
-        room.capture = Some(on_buffer);
-        room.capture_starts += 1;
-        let start = room.capture_starts;
-        drop(room);
-        Ok(Box::new(RoomStream { room: Arc::clone(&self.room), half: Half::Microphone, start }))
+        start(&self.room, Stream::Microphone, |room| &mut room.microphone, on_buffer)
+    }
+}
+
+/// A room's loopback: what its speaker plays, one capture stream at a time. Each buffer comes
+/// before the microphone's buffer of the same time.
+pub struct RoomLoopback {
+    format: StreamFormat,
+    room: Arc<Mutex<Room>>,
+}
+
+impl fmt::Debug for RoomLoopback {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RoomLoopback").field("format", &self.format).finish_non_exhaustive()
+    }
+}
+
+impl AudioSource for RoomLoopback {
+    fn format(&self) -> StreamFormat {
+        self.format
+    }
+
+    fn start(&mut self, on_buffer: CaptureCallback) -> Result<Box<dyn AudioStream>, AudioError> {
+        start(&self.room, Stream::Loopback, |room| &mut room.loopback, on_buffer)
     }
 }
 
@@ -184,27 +252,54 @@ impl AudioSink for RoomSink {
     }
 
     fn start(&mut self, fill: RenderCallback) -> Result<Box<dyn AudioStream>, AudioError> {
-        let mut room = pace::lock(&self.room);
-        if room.render.is_some() {
-            return Err(AudioError::Setup("the room's speaker is already playing"));
-        }
-        let skipped = pace::run("audio.room", &self.room, &mut *room)?;
-        room.pass(skipped);
-        room.render = Some(fill);
-        room.render_starts += 1;
-        let start = room.render_starts;
-        drop(room);
-        Ok(Box::new(RoomStream { room: Arc::clone(&self.room), half: Half::Speaker, start }))
+        start(&self.room, Stream::Speaker, |room| &mut room.render, fill)
     }
 }
 
+/// Starts `stream` of a room with `callback`, in the slot `slot` picks, and the room's task if
+/// no other stream runs it.
+fn start<C>(
+    shared: &Arc<Mutex<Room>>,
+    stream: Stream,
+    slot: fn(&mut Room) -> &mut Slot<C>,
+    callback: C,
+) -> Result<Box<dyn AudioStream>, AudioError> {
+    let mut room = pace::lock(shared);
+    if slot(&mut room).callback.is_some() {
+        return Err(AudioError::Setup(SetupError::AlreadyRunning));
+    }
+    let skipped = pace::run("audio.room", shared, &mut *room)?;
+    room.pass(skipped);
+    let start = slot(&mut room).fill(callback);
+    drop(room);
+    Ok(Box::new(RoomStream { room: Arc::clone(shared), stream, start }))
+}
+
 impl Room {
-    /// Lets `frames` of the room's time pass with no task running: the speaker played nothing,
-    /// so the echo line moves on by that much silence.
+    /// Lets the `frames` before the next buffer pass with no task running: Eileen played
+    /// nothing, so the echo line moves on by that much of what the speakers played, the bed
+    /// from the speakers or silence.
     fn pass(&mut self, frames: u64) {
         let moved = self.timeline.samples_in(frames).min(self.echo.len());
         drop(self.echo.drain(..moved));
-        self.echo.extend(std::iter::repeat_n(0.0, moved));
+        let end = self.timeline.samples_in(self.timeline.next_position());
+        let from = end.saturating_sub(moved);
+        let bed = self.bed.as_ref().filter(|bed| bed.from == BedSource::Speakers);
+        self.echo.extend((from..end).map(|n| bed.map_or(0.0, |bed| bed_sample(bed, n))));
+    }
+}
+
+/// The bed's sample at interleaved sample `n` of the room's timeline, its gain applied.
+fn bed_sample(bed: &Bed, n: usize) -> f32 {
+    let samples = bed.clip.samples();
+    let looped = n.checked_rem(samples.len()).and_then(|at| samples.get(at));
+    bed.gain * looped.copied().unwrap_or(0.0)
+}
+
+/// Adds the bed into `out`, which starts at interleaved sample `start` of the room's timeline.
+fn add_bed(out: &mut [f32], bed: &Bed, start: usize) {
+    for (n, sample) in out.iter_mut().enumerate() {
+        *sample += bed_sample(bed, start.saturating_add(n));
     }
 }
 
@@ -215,49 +310,50 @@ impl Paced for Room {
 
     fn step(&mut self, position: u64) {
         let at = self.timeline.time_of(position);
-        self.played.fill(0.0);
-        if let Some(render) = self.render.as_mut() {
-            render(&mut self.played, RenderInfo { plays_at: at });
-        }
-        self.echo.extend(self.played.iter().copied());
-
         let start = self.timeline.samples_in(position);
+        self.speaker.fill(0.0);
+        if let Some(render) = self.render.callback.as_mut() {
+            render(&mut self.speaker, RenderInfo { plays_at: at });
+        }
+        if let Some(bed) = self.bed.as_ref().filter(|bed| bed.from == BedSource::Speakers) {
+            add_bed(&mut self.speaker, bed, start);
+        }
+        if let Some(loopback) = self.loopback.callback.as_mut() {
+            loopback(&self.speaker, CaptureInfo { captured_at: at });
+        }
+        self.echo.extend(self.speaker.iter().copied());
+
         let near = self.near.as_ref().map_or(&[][..], WavClip::samples);
         let near = near.get(start..).unwrap_or_default().iter().copied();
         for (heard, sample) in self.heard.iter_mut().zip(near.chain(std::iter::repeat(0.0))) {
             *heard = sample;
         }
-        if let Some(bed) = self.bed.as_ref() {
-            let samples = bed.clip.samples();
-            let looped = samples.get(start % samples.len().max(1)..).unwrap_or_default();
-            for (heard, sample) in
-                self.heard.iter_mut().zip(looped.iter().chain(samples.iter().cycle()))
-            {
-                *heard += bed.gain * sample;
-            }
+        if let Some(bed) = self.bed.as_ref().filter(|bed| bed.from == BedSource::Room) {
+            add_bed(&mut self.heard, bed, start);
         }
         let arrived = self.heard.len().min(self.echo.len());
         for (heard, echo) in self.heard.iter_mut().zip(self.echo.drain(..arrived)) {
             *heard += self.echo_gain * echo;
         }
 
-        if let Some(capture) = self.capture.as_mut() {
-            capture(&self.heard, CaptureInfo { captured_at: at });
+        if let Some(microphone) = self.microphone.callback.as_mut() {
+            microphone(&self.heard, CaptureInfo { captured_at: at });
         }
     }
 }
 
-/// Which half of a room a stream runs.
+/// Which stream of a room a handle runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Half {
+enum Stream {
     Microphone,
+    Loopback,
     Speaker,
 }
 
-/// A running stream of one half of a room. The room's task stops when neither half runs.
+/// A running stream of a room. The room's task stops when none of its streams runs.
 struct RoomStream {
     room: Arc<Mutex<Room>>,
-    half: Half,
+    stream: Stream,
     start: u64,
 }
 
@@ -268,12 +364,15 @@ impl AudioStream for RoomStream {
 impl Drop for RoomStream {
     fn drop(&mut self) {
         let mut room = pace::lock(&self.room);
-        match self.half {
-            Half::Microphone if room.capture_starts == self.start => room.capture = None,
-            Half::Speaker if room.render_starts == self.start => room.render = None,
-            Half::Microphone | Half::Speaker => {}
+        match self.stream {
+            Stream::Microphone => room.microphone.clear(self.start),
+            Stream::Loopback => room.loopback.clear(self.start),
+            Stream::Speaker => room.render.clear(self.start),
         }
-        if room.capture.is_none() && room.render.is_none() {
+        let idle = room.microphone.callback.is_none()
+            && room.loopback.callback.is_none()
+            && room.render.callback.is_none();
+        if idle {
             room.timeline.halt();
         }
     }

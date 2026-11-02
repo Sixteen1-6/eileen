@@ -10,6 +10,8 @@
 //! The timeline is anchored when the device's first stream starts and keeps running while it is
 //! stopped, as a room does: a stream started again takes up at the buffer due next, so what a
 //! WAV file holds for the stopped stretch is never captured, as a muted microphone hears nothing.
+//! A [`CaptureSink`](crate::CaptureSink)'s task runs on from its first stream until the file is
+//! completed, as a speaker plays silence, so it writes the file one buffer at a time.
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -19,7 +21,7 @@ use eileen_stdx::num;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::stream::{AudioError, StreamFormat};
+use crate::stream::{AudioError, SetupError, StreamFormat};
 
 /// Buffers per second of audio: every test source and sink works in 10 ms buffers, as a WASAPI
 /// endpoint's default period is.
@@ -115,6 +117,11 @@ impl Timeline {
         num::saturating_u64_from_u128((scaled + NANOS / 2) / NANOS)
     }
 
+    /// The position of the next buffer to run.
+    pub(crate) const fn next_position(&self) -> u64 {
+        self.next
+    }
+
     /// Whether a task runs the timeline.
     pub(crate) const fn is_live(&self) -> bool {
         self.live.is_some()
@@ -197,7 +204,7 @@ pub(crate) fn run<D: Paced>(
         return Ok(0);
     }
     if tokio::runtime::Handle::try_current().is_err() {
-        return Err(AudioError::Setup("a test source or sink needs a tokio runtime"));
+        return Err(AudioError::Setup(SetupError::NoRuntime));
     }
     let timeline = locked.timeline();
     let (task, skipped) = timeline.begin(Instant::now());

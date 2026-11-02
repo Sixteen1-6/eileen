@@ -20,18 +20,37 @@ use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use crate::pace::{self, Pace, Paced, Timeline};
 use crate::stream::{
     AudioError, AudioSink, AudioSource, AudioStream, CaptureCallback, CaptureInfo, RenderCallback,
-    RenderInfo, StreamFormat,
+    RenderInfo, SetupError, StreamFormat,
 };
 
-/// The longest clip read into memory: 20 minutes, more than the 10 minutes of video WP4's echo
-/// test plays (section 6.6), and at most 460 MB for 48 kHz stereo.
+/// The longest clip read from a file: 20 minutes, more than the 10 minutes of video WP4's echo
+/// test plays (section 6.6).
 const MAX_CLIP_SECONDS: u32 = 20 * 60;
+
+/// The most samples a clip read from a file holds: 20 minutes of 48 kHz stereo, 461 MB of `f32`.
+/// A file at a higher rate or with more channels holds less time.
+const MAX_CLIP_SAMPLES: u64 = 48_000 * 2 * 20 * 60;
+
+/// The most channels a clip read from a file has.
+const MAX_CLIP_CHANNELS: u16 = 8;
+
+/// The highest rate a clip read from a file has.
+const MAX_CLIP_RATE_HZ: u32 = 192_000;
+
+/// The most samples a capture writes. hound counts a file's data bytes, four per 32-bit float,
+/// in a `u32` and adds the header's size to it, so a longer file would overflow the count: about
+/// 6.2 hours of 48 kHz mono, or 3.1 hours of stereo.
+const MAX_CAPTURE_SAMPLES: u64 = (4_294_967_295 - 1_024) / 4;
 
 /// Audio held in memory: interleaved `f32` samples at full scale 1.0, and their format.
 #[derive(Clone)]
 pub struct WavClip {
     format: StreamFormat,
-    samples: Arc<[f32]>,
+    #[expect(
+        clippy::rc_buffer,
+        reason = "an `Arc<[f32]>` made from the samples read would copy them, up to 461 MB, again"
+    )]
+    samples: Arc<Vec<f32>>,
 }
 
 impl WavClip {
@@ -41,31 +60,53 @@ impl WavClip {
             return Err(AudioError::Unsupported(format));
         }
         if !samples.len().is_multiple_of(usize::from(format.channels)) {
-            return Err(AudioError::Setup("a clip's samples must hold whole frames"));
+            return Err(AudioError::Setup(SetupError::PartialFrame));
         }
-        Ok(Self { format, samples: samples.into() })
+        Ok(Self { format, samples: Arc::new(samples) })
     }
 
-    /// Reads a WAV file of integer samples of up to 32 bits or of 32-bit floats, at most
-    /// 20 minutes long.
+    /// Reads a WAV file of integer samples of up to 32 bits or of 32-bit floats. Its rate must be
+    /// a whole number of hundreds of hertz up to 192 kHz, and it has at most 8 channels, at most
+    /// 20 minutes and at most as many samples as 20 minutes of 48 kHz stereo, so a clip read
+    /// takes at most 461 MB.
     pub fn read(path: &Path) -> Result<Self, AudioError> {
         let reader = WavReader::open(path).map_err(wav_error)?;
         let spec = reader.spec();
         let format = StreamFormat { sample_rate_hz: spec.sample_rate, channels: spec.channels };
-        if reader.duration() > spec.sample_rate.saturating_mul(MAX_CLIP_SECONDS) {
-            return Err(AudioError::Setup("a WAV clip is longer than 20 minutes"));
+        if !(1..=MAX_CLIP_CHANNELS).contains(&spec.channels)
+            || !(1..=MAX_CLIP_RATE_HZ).contains(&spec.sample_rate)
+            || !spec.sample_rate.is_multiple_of(100)
+        {
+            return Err(AudioError::Unsupported(format));
         }
-        let samples = match spec.sample_format {
-            SampleFormat::Float => reader.into_samples::<f32>().collect::<Result<Vec<_>, _>>(),
+        let frames = u64::from(reader.duration());
+        let len = u64::from(reader.len());
+        if frames > u64::from(spec.sample_rate) * u64::from(MAX_CLIP_SECONDS)
+            || len > MAX_CLIP_SAMPLES
+        {
+            return Err(AudioError::Setup(SetupError::ClipTooLong));
+        }
+        // A header can claim more samples than the file holds, so the file's size bounds the
+        // allocation too.
+        let file_len = std::fs::metadata(path).map_err(AudioError::Io)?.len();
+        let in_file = file_len / u64::from(spec.bits_per_sample.div_ceil(8).max(1));
+        let mut samples = Vec::new();
+        samples
+            .try_reserve_exact(num::saturating_usize_from_u64(len.min(in_file)))
+            .map_err(|error| AudioError::Io(io::Error::new(io::ErrorKind::OutOfMemory, error)))?;
+        match spec.sample_format {
+            SampleFormat::Float => {
+                for sample in reader.into_samples::<f32>() {
+                    samples.push(sample.map_err(wav_error)?);
+                }
+            }
             SampleFormat::Int => {
                 let scale = 0.5_f64.powi(i32::from(spec.bits_per_sample) - 1);
-                reader
-                    .into_samples::<i32>()
-                    .map(|sample| sample.map(|value| narrow(f64::from(value) * scale)))
-                    .collect::<Result<Vec<_>, _>>()
+                for sample in reader.into_samples::<i32>() {
+                    samples.push(narrow(f64::from(sample.map_err(wav_error)?) * scale));
+                }
             }
         }
-        .map_err(wav_error)?;
         Self::new(format, samples)
     }
 
@@ -158,7 +199,7 @@ impl AudioSource for WavSource {
     fn start(&mut self, on_buffer: CaptureCallback) -> Result<Box<dyn AudioStream>, AudioError> {
         let mut state = pace::lock(&self.state);
         if state.on_buffer.is_some() {
-            return Err(AudioError::Setup("the WAV source is already capturing"));
+            return Err(AudioError::Setup(SetupError::AlreadyRunning));
         }
         pace::run("audio.wav_source", &self.state, &mut *state)?;
         state.on_buffer = Some(on_buffer);
@@ -208,8 +249,11 @@ impl Drop for SourceStream {
 }
 
 /// A sink that writes what Eileen plays to a WAV file of 32-bit floats, one 10 ms buffer per
-/// buffer's length of paced time. The file keeps the room's timeline: a stretch while no stream
-/// ran is written as silence, so a sample's place in the file is its time on the sink's clock.
+/// buffer's length of paced time. Its task runs from its first stream until the file is
+/// completed and writes silence while no stream runs, as a speaker plays silence, so a sample's
+/// place in the file is its time on the sink's clock and each buffer writes only itself. A file
+/// holds at most about 1.07 billion samples, the most hound can count; past that the capture
+/// writes nothing more and [`CaptureSink::finish`] reports [`SetupError::CaptureTooLong`].
 /// [`CaptureSink::finish`] completes the file; dropping the sink completes it too, without
 /// reporting an error.
 pub struct CaptureSink {
@@ -223,16 +267,29 @@ struct SinkState {
     buffer: Vec<f32>,
     fill: Option<RenderCallback>,
     starts: u64,
+    channels: u64,
     /// The frames the file holds.
     written: u64,
+    /// The most samples the file takes.
+    max_samples: u64,
     /// The first write that failed; the file gets no more samples after it.
-    failed: Option<hound::Error>,
+    failed: Option<AudioError>,
 }
 
 impl CaptureSink {
     /// A sink of `format` that writes to a new WAV file at `path`, at `pace`. The rate must be a
     /// whole number of hundreds of hertz, so it splits into 10 ms buffers.
     pub fn create(path: &Path, format: StreamFormat, pace: Pace) -> Result<Self, AudioError> {
+        Self::create_with(path, format, pace, MAX_CAPTURE_SAMPLES)
+    }
+
+    /// A sink as [`CaptureSink::create`] makes, whose file takes at most `max_samples`.
+    fn create_with(
+        path: &Path,
+        format: StreamFormat,
+        pace: Pace,
+        max_samples: u64,
+    ) -> Result<Self, AudioError> {
         let timeline = Timeline::new(format, pace)?;
         let writer = WavWriter::create(path, float_spec(format)).map_err(wav_error)?;
         let buffer = vec![0.0; timeline.buffer_len()];
@@ -242,30 +299,36 @@ impl CaptureSink {
             buffer,
             fill: None,
             starts: 0,
+            channels: u64::from(format.channels),
             written: 0,
+            max_samples,
             failed: None,
         };
         Ok(Self { format, state: Arc::new(Mutex::new(state)) })
     }
 
-    /// Stops any stream and completes the file. Returns the frames it holds, or the first write
+    /// Stops the sink and completes the file. Returns the frames it holds, or the first write
     /// that failed.
     pub fn finish(self) -> Result<u64, AudioError> {
-        let mut state = pace::lock(&self.state);
-        state.timeline.halt();
-        state.fill = None;
-        let writer = state.writer.take();
-        let failed = state.failed.take();
-        let written = state.written;
-        drop(state);
-        if let Some(error) = failed {
-            return Err(wav_error(error));
-        }
-        let Some(writer) = writer else {
-            return Err(AudioError::Setup("the capture's file was already completed"));
-        };
-        writer.finalize().map_err(wav_error)?;
-        Ok(written)
+        complete(&self.state)
+    }
+}
+
+/// Stops the sink's task and completes its file, once: a second call finds the file completed
+/// and returns the frames it holds.
+fn complete(state: &Mutex<SinkState>) -> Result<u64, AudioError> {
+    let mut state = pace::lock(state);
+    state.timeline.halt();
+    state.fill = None;
+    let writer = state.writer.take();
+    let failed = state.failed.take();
+    let written = state.written;
+    drop(state);
+    // A failed capture's file is completed too, so it holds every buffer written before.
+    let completed = writer.map_or(Ok(()), |writer| writer.finalize().map_err(wav_error));
+    match failed {
+        Some(error) => Err(error),
+        None => completed.map(|()| written),
     }
 }
 
@@ -277,11 +340,8 @@ impl fmt::Debug for CaptureSink {
 
 impl Drop for CaptureSink {
     fn drop(&mut self) {
-        let mut state = pace::lock(&self.state);
-        state.timeline.halt();
-        state.fill = None;
-        // hound completes the file when its writer drops.
-        drop(state.writer.take());
+        // After `finish` this finds nothing to do; otherwise nobody is left to tell of an error.
+        drop(complete(&self.state));
     }
 }
 
@@ -293,9 +353,9 @@ impl AudioSink for CaptureSink {
     fn start(&mut self, fill: RenderCallback) -> Result<Box<dyn AudioStream>, AudioError> {
         let mut state = pace::lock(&self.state);
         if state.fill.is_some() {
-            return Err(AudioError::Setup("the capture sink is already playing"));
+            return Err(AudioError::Setup(SetupError::AlreadyRunning));
         }
-        // The file's gap is written with the next buffer, from `written`.
+        // The task runs on from the first start, so a later start finds it running.
         pace::run("audio.capture_sink", &self.state, &mut *state)?;
         state.fill = Some(fill);
         state.starts += 1;
@@ -315,19 +375,26 @@ impl Paced for SinkState {
         if let Some(fill) = self.fill.as_mut() {
             fill(&mut self.buffer, RenderInfo { plays_at: self.timeline.time_of(position) });
         }
-        let gap = self.timeline.samples_in(position.saturating_sub(self.written));
-        self.written = position.saturating_add(self.timeline.buffer_frames());
         if self.failed.is_some() {
             return;
         }
         let Some(writer) = self.writer.as_mut() else { return };
-        if let Err(error) = write_samples(writer, gap, &self.buffer) {
-            self.failed = Some(error);
+        let frames = self.written.saturating_add(self.timeline.buffer_frames());
+        if frames.saturating_mul(self.channels) > self.max_samples {
+            self.failed = Some(AudioError::Setup(SetupError::CaptureTooLong));
+            return;
         }
+        for &sample in &self.buffer {
+            if let Err(error) = writer.write_sample(sample) {
+                self.failed = Some(wav_error(error));
+                return;
+            }
+        }
+        self.written = frames;
     }
 }
 
-/// A running [`CaptureSink`] stream.
+/// A running [`CaptureSink`] stream. Stopping it leaves the sink's task writing silence.
 struct SinkStream {
     state: Arc<Mutex<SinkState>>,
     start: u64,
@@ -341,22 +408,9 @@ impl Drop for SinkStream {
     fn drop(&mut self) {
         let mut state = pace::lock(&self.state);
         if state.starts == self.start {
-            state.timeline.halt();
             state.fill = None;
         }
     }
-}
-
-/// Writes `silence` zero samples, then `buffer`.
-fn write_samples(
-    writer: &mut WavWriter<BufWriter<File>>,
-    silence: usize,
-    buffer: &[f32],
-) -> Result<(), hound::Error> {
-    for sample in std::iter::repeat_n(0.0, silence).chain(buffer.iter().copied()) {
-        writer.write_sample(sample)?;
-    }
-    Ok(())
 }
 
 /// The WAV format of 32-bit floats in `format`.

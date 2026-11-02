@@ -45,9 +45,10 @@
 //! - Called by `eileen-cli`, which builds the component and implements [`SpeechTransport`] over
 //!   WP2's transport; WP2's tests use `fake`. Cross-crate items: [`SpeechTransport`],
 //!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`],
-//!   [`AudioConfig`], and the test audio `eileen run --audio-source wav:<file> --audio-sink
-//!   capture:<file>` selects and other crates' tests use: [`WavClip`], [`WavSource`],
-//!   [`CaptureSink`], [`RoomMixer`] and its halves, and [`Pace`]. The component never names the
+//!   [`AudioConfig`], [`SetupError`], and the test audio `eileen run --audio-source wav:<file>
+//!   --audio-sink capture:<file>` selects and other crates' tests use: [`WavClip`],
+//!   [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker, microphone and loopback,
+//!   [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The component never names the
 //!   pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the Windows
@@ -66,8 +67,9 @@
 //!   time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with `--lib
 //!   ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the same
 //!   models run once on a real thread), the test sources and sinks under paused tokio time
-//!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, and the room's delay and
-//!   attenuation on an impulse), and device tests on the owner's PC under `desktop.lock`.
+//!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
+//!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
+//!   again), and device tests on the owner's PC under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
@@ -89,8 +91,10 @@
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
 //! - The test sources and sinks pace their buffers on the tokio clock and take their buffers'
 //!   times from sample positions, so under paused tokio time a test's audio moves only when the
-//!   test waits. Their callbacks run under the device's lock: a callback that stops its own
-//!   stream deadlocks.
+//!   test waits. Their callbacks run on a tokio task under the device's lock: a callback that
+//!   stops its own stream deadlocks. A `CaptureSink`'s task runs from its first stream until the
+//!   file is completed, writing silence while no stream runs, so no restart writes a long gap in
+//!   one step.
 //!
 //! # Logs and tracing
 //!
@@ -135,10 +139,10 @@ pub mod transport;
 pub mod wav;
 
 pub use pace::Pace;
-pub use room::{Bed, RoomConfig, RoomMixer, RoomSink, RoomSource};
+pub use room::{Bed, BedSource, RoomConfig, RoomLoopback, RoomMixer, RoomSink, RoomSource};
 pub use stream::{
     AudioError, AudioSink, AudioSource, AudioStream, CaptureCallback, CaptureInfo, RenderCallback,
-    RenderInfo, StreamFormat,
+    RenderInfo, SetupError, StreamFormat,
 };
 pub use transport::{
     AcceptError, ByteRead, ByteWrite, ConnectionError, ConnectionId, SpeechConnection,
