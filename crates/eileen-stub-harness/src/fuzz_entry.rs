@@ -63,7 +63,7 @@ fn round_trips(step: &StubScriptLine) -> Result<(), &'static str> {
     if same(&before, &after) { Ok(()) } else { Err("a line changed through a round trip") }
 }
 
-/// Equal JSON values, except that two floats may differ in their last bits: serde_json without
+/// Equal JSON values, except that two floats may differ in their last bits: `serde_json` without
 /// its `float_roundtrip` feature parses a float to the nearest value only on a best effort, so
 /// printing and parsing one again can move it by a few units in the last place.
 fn same(a: &Value, b: &Value) -> bool {
@@ -86,7 +86,7 @@ fn same(a: &Value, b: &Value) -> bool {
 }
 
 fn stdin_holds(data: &[u8]) -> Result<(), &'static str> {
-    let lines = data.iter().filter(|byte| **byte == b'\n').count().saturating_add(1);
+    let lines = data.split(|byte| *byte == b'\n').count();
     // Room for every line, so the reader never waits for a player.
     let (queue, input) = mpsc::sync_channel(lines);
     play::read_input(Cursor::new(data), &queue);
@@ -102,7 +102,7 @@ fn stdin_holds(data: &[u8]) -> Result<(), &'static str> {
             Input::Broken(_) if index.saturating_add(1) != read.len() => {
                 return Err("the reader read on after a broken line");
             }
-            _ => {}
+            Input::User | Input::Control { .. } | Input::Other | Input::Broken(_) => {}
         }
     }
     Ok(())

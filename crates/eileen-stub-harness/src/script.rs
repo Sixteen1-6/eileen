@@ -98,7 +98,12 @@ pub fn load(text: &str) -> Result<Script, ScriptError> {
                 }
                 Some(Box::<str>::from(json.get()))
             }
-            _ => None,
+            StubScriptLine::Crash { .. }
+            | StubScriptLine::Malformed { .. }
+            | StubScriptLine::Delay { .. }
+            | StubScriptLine::Narration { .. }
+            | StubScriptLine::AwaitUser
+            | StubScriptLine::PermissionRequest { .. } => None,
         };
         lines.push((line, parsed));
         events.push(event);

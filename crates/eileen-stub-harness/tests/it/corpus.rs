@@ -69,7 +69,7 @@ fn annotation(value: &Value) -> Option<&str> {
             key.starts_with('$').then_some(key.as_str()).or_else(|| annotation(inner))
         }),
         Value::Array(items) => items.iter().find_map(annotation),
-        _ => None,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
     }
 }
 
