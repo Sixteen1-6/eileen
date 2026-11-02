@@ -210,7 +210,7 @@ The parts of the audio series, in merge order, as each opens:
    `eileen_audio::energy::tests` (the window assembly, the detector's rules, and both inside
    `allocation_counter::measure`). Acceptance 1's transcript-level check needs the recognizer
    and comes after both series (W2).
-8. `wp4/s1-audio-link` (draft): the connection half of the component. `eileen_audio::component`
+8. `wp4/s1-audio-link` (#164, draft): the connection half of the component. `eileen_audio::component`
    now returns the audio component, which takes the audio and speech effect families, captures
    from `AudioConfig::capture` (a `SharedSource`, new) into the ring from its start, and serves
    each connection `AudioConfig::speech` gives: the latest `SetMode` and `SetHotwords` first,
