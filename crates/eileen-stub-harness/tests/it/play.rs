@@ -374,7 +374,8 @@ async fn no_script_is_an_error() {
 }
 
 /// The interrupt is answered while a `delay` line runs, not only between lines: the script's
-/// delay is ten minutes, so a reply within `HANG` can only come from inside it. The stub is then
+/// delay is ten minutes, so a reply within `HANG` comes from inside it (or from the drain just
+/// before it starts, if the interrupt arrives in the instant between the init and the delay). The stub is then
 /// dropped, which kills it (the supervisor's `Child`); closing its stdin instead would leave it
 /// sleeping out the delay.
 #[tokio::test]

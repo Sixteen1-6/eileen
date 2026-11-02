@@ -12,7 +12,7 @@ use eileen_contracts::record::StubScriptLine;
 use serde_json::Value;
 
 use crate::play::{self, Input, MAX_REQUEST_ID_BYTES};
-use crate::script::load;
+use crate::script::{ScriptError, load};
 
 /// The bytes as a script and as stdin. As a script (lossy UTF-8): `load` never panics; a
 /// loaded line plays as one stdout line; an event's kept text is the value it loaded as; a
@@ -25,7 +25,15 @@ pub fn stub_script(data: &[u8]) -> Result<(), &'static str> {
 }
 
 fn script_holds(text: &str) -> Result<(), &'static str> {
-    let Ok(script) = load(text) else { return Ok(()) };
+    let script = match load(text) {
+        Ok(script) => script,
+        Err(ScriptError::EventText { .. }) => return Err("an event's json text was not found"),
+        Err(
+            ScriptError::Parse { .. }
+            | ScriptError::CrashCode { .. }
+            | ScriptError::LineBreak { .. },
+        ) => return Ok(()),
+    };
     for (_, step, event) in script.steps() {
         match (step, event) {
             (StubScriptLine::Event { json }, Some(text)) => {

@@ -16,8 +16,9 @@ and the `result` shape are the recorded ones.
 `system/init` is the recorded one with one difference. The fixtures kept only the fields an
 approval parser reads and listed the names of the others under a `$omitted` key, which the CLI
 never writes, so the scripts drop that key and put back, with placeholder values, the fields
-whose types the Agent SDK documents for this message: `cwd` (the fixtures' redacted scratch
-path, `<runs>\pt-allow\proj` for the workers and `<runs>\brain` for the brain),
+whose types the Agent SDK documents for this message: `cwd` (for the workers the fixtures'
+redacted scratch path `<runs>\pt-allow\proj`; for the brain `<runs>\brain`, a placeholder
+of the same form, since no fixture records a brain's folder),
 `slash_commands`, `skills` and `plugins` (empty lists) and `output_style` (`"default"`). The
 other names the fixtures list are left out, because no recording holds their values or types:
 `additional_directories`, `analytics_disabled`, `fast_mode_disabled_reason`, `fast_mode_state`,

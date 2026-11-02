@@ -229,8 +229,10 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   with the claude CLI's own argv. The whole script loads before anything plays, and a line
   that does not parse, a `crash` code outside 0 to 255, or a line that would write a line
   break inside its one stdout line, is a typed error naming the line. `event` lines are
-  written as the script's own `json` text, byte for byte (serde_json's `raw_value`, since a
-  re-serialised value would sort its keys), `malformed` bytes as one line, a `narration` as an
+  written as the script's own `json` text, byte for byte, found by a small scan of the line
+  (a re-serialised value would sort its keys, and serde_json's `raw_value` feature would
+  change how every crate built beside the stub parses an object holding its private marker
+  key), `malformed` bytes as one line, a `narration` as an
   assistant text message whose lines start with `> `, `delay` waits, `crash` exits with its
   code, and `await_user` holds until the next stream-json user line; after the last line the
   stub waits for stdin to close, and a user line then (a turn the script lacks) is an error.

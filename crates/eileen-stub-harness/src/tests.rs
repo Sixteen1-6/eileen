@@ -113,6 +113,28 @@ fn an_event_is_written_byte_for_byte_as_the_script_holds_it() {
 }
 
 #[test]
+fn the_json_text_is_found_wherever_and_however_the_line_writes_it() {
+    let cases = [
+        // `json` before `kind`, with spaces around the tokens.
+        (r#"{ "json" : {"type":"x"} , "kind" : "event" }"#, r#"{"type":"x"}"#),
+        // The key written with an escape, after a member whose string holds braces and quotes.
+        (
+            r#"{"kind":"event","note":"}\"{[","json":{"a":"]}\"","b":[1,{"c":null}]}}"#,
+            r#"{"a":"]}\"","b":[1,{"c":null}]}"#,
+        ),
+        // Scalars and an array.
+        (r#"{"kind":"event","json":-1.5e3}"#, "-1.5e3"),
+        (r#"{"kind":"event","json":true}"#, "true"),
+        (r#"{"kind":"event","json":"a\"b"}"#, r#""a\"b""#),
+        (r#"{"kind":"event","json":[[],{}]}"#, "[[],{}]"),
+    ];
+    for (line, json) in cases {
+        let (lines, _) = played(line, Vec::new());
+        assert_eq!(lines, [json], "the json text of {line}");
+    }
+}
+
+#[test]
 fn events_and_malformed_bytes_are_written_one_per_line() {
     let malformed = r#"{"kind":"malformed","bytes":"{\"ty"}"#;
     let (lines, ending) = played(&format!("{INIT}\n{malformed}"), Vec::new());

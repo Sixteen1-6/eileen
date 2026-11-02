@@ -1,8 +1,6 @@
 //! Loading a script: one `StubScriptLine` per line, every line checked before anything plays.
 
 use eileen_contracts::record::StubScriptLine;
-use serde::Deserialize;
-use serde_json::value::RawValue;
 
 /// A script, loaded and checked, with each line's number in its file.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,12 +28,100 @@ impl Script {
     }
 }
 
-/// An `Event` line read again for its `json` text. Serde reads a `RawValue` only from the
-/// JSON text itself, not from the buffered content an internally tagged enum such as
-/// `StubScriptLine` reads first, so this is a plain struct whose other keys are ignored.
-#[derive(Deserialize)]
-struct EventText {
-    json: Box<RawValue>,
+/// The text of the top-level `json` member of `line`, a JSON object that has already parsed as
+/// a `StubScriptLine`, so its syntax is known to be good. A scan by hand, because `serde_json`
+/// gives a value's own text only through its `raw_value` feature, and that feature changes how
+/// every crate built beside this one parses an object holding its private marker key. The
+/// `stub_script` fuzz target checks the text found parses to the value `load` read.
+fn json_member(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut at = skip_space(bytes, 0);
+    if bytes.get(at) != Some(&b'{') {
+        return None;
+    }
+    at = at.checked_add(1)?;
+    loop {
+        let key_start = skip_space(bytes, at);
+        let key_end = skip_string(bytes, key_start)?;
+        // A key may be written with escapes; serde_json reads it as `StubScriptLine` did.
+        let key: String = serde_json::from_str(line.get(key_start..key_end)?).ok()?;
+        let colon = skip_space(bytes, key_end);
+        if bytes.get(colon) != Some(&b':') {
+            return None;
+        }
+        let start = skip_space(bytes, colon.checked_add(1)?);
+        let end = skip_value(bytes, start)?;
+        if key == "json" {
+            return line.get(start..end);
+        }
+        let comma = skip_space(bytes, end);
+        if bytes.get(comma) != Some(&b',') {
+            return None;
+        }
+        at = comma.checked_add(1)?;
+    }
+}
+
+/// The first index at or after `at` that is not JSON whitespace.
+fn skip_space(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r')) {
+        at = at.saturating_add(1);
+    }
+    at
+}
+
+/// Just past the closing quote of the string that starts at `at`.
+fn skip_string(bytes: &[u8], at: usize) -> Option<usize> {
+    if bytes.get(at) != Some(&b'"') {
+        return None;
+    }
+    let mut index = at.checked_add(1)?;
+    loop {
+        match bytes.get(index)? {
+            b'\\' => index = index.checked_add(2)?,
+            b'"' => return index.checked_add(1),
+            _ => index = index.checked_add(1)?,
+        }
+    }
+}
+
+/// Just past the end of the value that starts at `at`.
+fn skip_value(bytes: &[u8], at: usize) -> Option<usize> {
+    match bytes.get(at)? {
+        b'"' => skip_string(bytes, at),
+        b'{' | b'[' => {
+            let mut depth = 0_usize;
+            let mut index = at;
+            loop {
+                index = match bytes.get(index)? {
+                    b'"' => skip_string(bytes, index)?,
+                    b'{' | b'[' => {
+                        depth = depth.checked_add(1)?;
+                        index.checked_add(1)?
+                    }
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        let next = index.checked_add(1)?;
+                        if depth == 0 {
+                            return Some(next);
+                        }
+                        next
+                    }
+                    _ => index.checked_add(1)?,
+                };
+            }
+        }
+        // A number, `true`, `false` or `null`: it runs to the next delimiter.
+        _ => {
+            let mut index = at;
+            while bytes.get(index).is_some_and(|byte| {
+                !matches!(byte, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
+            }) {
+                index = index.saturating_add(1);
+            }
+            (index > at).then_some(index)
+        }
+    }
 }
 
 /// Why a script did not load.
@@ -65,6 +151,13 @@ pub enum ScriptError {
         /// The 1-based line number.
         line: usize,
     },
+    /// An `Event` line parsed, but the scan for its `json` text did not find it. Never seen;
+    /// the `stub_script` fuzz target reports it as a broken invariant.
+    #[error("line {line} is an event whose json text was not found")]
+    EventText {
+        /// The 1-based line number.
+        line: usize,
+    },
 }
 
 /// Whether `text` holds a byte that ends a line for some reader.
@@ -82,8 +175,8 @@ pub fn load(text: &str) -> Result<Script, ScriptError> {
         if raw.trim().is_empty() {
             continue;
         }
-        let parse = |source| ScriptError::Parse { line, source };
-        let parsed: StubScriptLine = serde_json::from_str(raw).map_err(parse)?;
+        let parsed: StubScriptLine =
+            serde_json::from_str(raw).map_err(|source| ScriptError::Parse { line, source })?;
         let event = match &parsed {
             StubScriptLine::Crash { code } if u8::try_from(*code).is_err() => {
                 return Err(ScriptError::CrashCode { line, code: *code });
@@ -92,11 +185,11 @@ pub fn load(text: &str) -> Result<Script, ScriptError> {
                 return Err(ScriptError::LineBreak { line });
             }
             StubScriptLine::Event { .. } => {
-                let EventText { json } = serde_json::from_str(raw).map_err(parse)?;
-                if breaks_line(json.get()) {
+                let json = json_member(raw).ok_or(ScriptError::EventText { line })?;
+                if breaks_line(json) {
                     return Err(ScriptError::LineBreak { line });
                 }
-                Some(Box::<str>::from(json.get()))
+                Some(Box::<str>::from(json))
             }
             StubScriptLine::Crash { .. }
             | StubScriptLine::Malformed { .. }
