@@ -178,11 +178,10 @@ fn split_mode_gives_each_worker_its_own_sub_task_and_the_parent_runs_with_the_fi
         if let WorkerCmd::Bind(binding) = cmd { Some(binding.task) } else { None }
     });
     assert_eq!(bound.as_deref(), Some("fix the lexer"), "agent two's own sub-task");
-    let started: Vec<JobId> = events(&effects)
+    let started = events(&effects)
         .into_iter()
-        .filter_map(|e| if let BusEvent::JobStarted { job, .. } = e { Some(*job) } else { None })
-        .collect();
-    assert!(started.contains(&parent), "the parent runs with its first child: {effects:?}");
+        .any(|e| matches!(e, BusEvent::JobStarted { job, .. } if *job == parent));
+    assert!(started, "the parent runs with its first child: {effects:?}");
     assert_eq!(row(&h, parent).status, JobStatus::Running, "its row");
     let again = h.step(Input::Worker(sessions[0].0, init()));
     assert!(
