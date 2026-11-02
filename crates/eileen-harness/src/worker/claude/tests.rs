@@ -49,10 +49,9 @@ fn init(status: &str, memory: Option<&str>) -> Init {
     if let (Some(path), Value::Object(fields)) = (memory, &mut line) {
         fields.insert("memory_paths".to_owned(), json!({ "auto": path }));
     }
-    match parse(line.to_string().as_bytes(), &Redactor::new()) {
-        Line::Init(init) => *init,
-        other => panic!("not an init: {other:?}"),
-    }
+    let parsed = parse(line.to_string().as_bytes(), &Redactor::new());
+    let Line::Init(init) = parsed else { panic!("not an init: {parsed:?}") };
+    *init
 }
 
 #[test]
