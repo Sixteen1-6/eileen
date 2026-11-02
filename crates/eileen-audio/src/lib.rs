@@ -46,6 +46,12 @@
 //!   the live limit, an early pause past the ones it remembers and an event the player reports
 //!   itself past the event limit; its render side allocates nothing
 //!   (`allocation_counter::measure` in the same tests).
+//! - Echo cancellation runs on the speech pipe's 16 kHz mono in 10 ms chunks, against the
+//!   loopback while it sounds, Eileen's own PCM once the loopback has been silent for 500 ms or is
+//!   not running, and bypassed (high-pass filter and noise suppression only) once both have been
+//!   silent for 500 ms; the bypass leaves AEC3's state alone, so the next reply is cancelled from
+//!   its first words (`aec::tests`). The energy barge-in fallback reports one onset per run of
+//!   speech windows, at the third (`energy::tests`), and allocates nothing.
 //!
 //! # Boundaries
 //!
@@ -60,7 +66,8 @@
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
 //!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
-//!   and `loom` only under `cfg(loom)`. `realfft` (the resamplers' measurements) and
+//!   `sonora` for AEC3, noise suppression and the high-pass filter, and `loom` only under
+//!   `cfg(loom)`. `realfft` (the resamplers' measurements) and
 //!   `allocation-counter` (decision D82) are dev-dependencies, never outside
 //!   `[dev-dependencies]`.
 //! - Must not depend on `eileen-core`, `eileen-runtime`, `eileen-speech` (its own process) or
@@ -78,14 +85,25 @@
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
 //!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
-//!   command, compared bit for bit with the interpolator over the whole clause), and device tests
-//!   on the owner's PC under `desktop.lock`.
+//!   command, compared bit for bit with the interpolator over the whole clause), echo
+//!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
+//!   and a speech video (`aec::tests`: an ERLE floor against the loopback and against own PCM,
+//!   a near-end command's energy kept, the reference switch to the chunk, the flags, and no
+//!   false onset in ten minutes of each bed), and device tests on the owner's PC under
+//!   `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
 //!
 //! - Echo cancellation is bypassed after 500 ms of loopback silence and Eileen's own PCM becomes
-//!   the reference.
+//!   the reference: once the loopback has been silent for 500 ms (or delivers no chunk) while
+//!   her own PCM sounds, it does not carry her, so her PCM is the reference; once both have been
+//!   silent for 500 ms, AEC3 is bypassed. While the loopback works the two rules are one, since
+//!   her voice is in it. Starting from the bypass, AEC3 runs again in the first chunk that
+//!   either sounds in.
+//! - The other-audio flag compares energies over 100 ms, not samples, since the loopback lags
+//!   Eileen's own stream by a buffer or more on a real endpoint; so other audio quieter than her
+//!   voice shows only in her pauses, which its 1 s hold bridges.
 //! - The ring's break flag follows from the numbers: a frame carries it when its `seq` is not one
 //!   more than the frame written before it on the connection, so a frame lost at the handoff, one
 //!   dropped from a full store and one written to a connection that ended all show as gaps. Only a
@@ -138,6 +156,19 @@ use std::sync::Arc;
 use eileen_contracts::core_io::EffectFamily;
 use eileen_contracts::ports::{Component, IdleComponent};
 
+// The component cancels the echo in its capture path with this, and runs the energy fallback
+// while the speech process is not connected, in a later part; until then only their tests use
+// them.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the component wires echo cancellation in a later part")
+)]
+mod aec;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the component wires the energy fallback in a later part")
+)]
+mod energy;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 // The component takes the ring in a later part of the audio series; until then only its tests

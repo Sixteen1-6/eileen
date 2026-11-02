@@ -1,0 +1,88 @@
+//! The energy barge-in fallback (BUILD.md section 2.8): while the speech process is not
+//! connected, no VAD judges barge-in windows, so an energy detector on the echo-cancelled
+//! microphone stands in for it. The component part feeds it and acts on what it reports.
+//!
+//! [`EnergyDetector`] takes 32 ms windows, the VAD's and the speech frames' 512 samples at
+//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor,
+//! 18 dB while other audio plays (section 2.8's stricter threshold), and is at least -45 dBFS,
+//! the quietest voice near the PC it is meant to hear. The floor drops to any quieter window at
+//! once and rises 5 dB a second otherwise, so a steady noise stops counting within seconds while
+//! a spoken word, louder than the floor by far more than it rises meanwhile, still counts. It
+//! reports an onset at the third speech window in a row (96 ms), the window at which section
+//! 2.8's barge-in pauses playback, and once per run of speech windows.
+//!
+//! What remains after AEC3 of Eileen's voice and of a bed the PC plays is far under these
+//! thresholds; `aec::tests` checks over ten minutes of each bed that it never fires, and that it
+//! fires on a near-end command. Nothing here allocates, so it may run in the capture callback.
+
+/// Samples in one window: 32 ms at 16 kHz, a speech frame.
+pub(crate) const WINDOW: usize = eileen_contracts::speech::AUDIO_FRAME_SAMPLES;
+
+/// Speech windows in a row that make an onset: 96 ms, where barge-in pauses playback.
+pub(crate) const ONSET_WINDOWS: u32 = 3;
+
+/// How far over the floor a window must be to count as speech, in dB.
+const MARGIN_DB: f32 = 12.0;
+
+/// The margin while other audio plays.
+const MARGIN_OTHER_AUDIO_DB: f32 = 18.0;
+
+/// The quietest window that counts as speech, in dBFS.
+const MIN_SPEECH_DBFS: f32 = -45.0;
+
+/// How fast the floor rises, in dB per window: 5 dB a second.
+const FLOOR_RISE_DB: f32 = 5.0 * 0.032;
+
+/// The level of a window of digital silence, in dBFS, so the logarithm stays finite.
+const SILENCE_DBFS: f32 = -120.0;
+
+/// What the detector made of one window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EnergyWindow {
+    /// The window counts as speech.
+    pub(crate) speech: bool,
+    /// Speech windows in a row, this one included; 0 when it is not speech.
+    pub(crate) run: u32,
+    /// This window is the run's [`ONSET_WINDOWS`]th: the user started to talk.
+    pub(crate) onset: bool,
+}
+
+/// The energy barge-in detector. See the module doc.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EnergyDetector {
+    /// The noise floor in dBFS, from the first window on.
+    floor_db: Option<f32>,
+    run: u32,
+}
+
+impl EnergyDetector {
+    /// A detector that has heard nothing yet: its first window sets the floor.
+    pub(crate) const fn new() -> Self {
+        Self { floor_db: None, run: 0 }
+    }
+
+    /// Judges one window of echo-cancelled 16 kHz audio. `other_audio` is the capture flag of
+    /// the same time.
+    pub(crate) fn window(&mut self, samples: &[f32; WINDOW], other_audio: bool) -> EnergyWindow {
+        let level = level_dbfs(samples);
+        let floor = match self.floor_db {
+            Some(floor) => (floor + FLOOR_RISE_DB).min(level),
+            None => level,
+        };
+        self.floor_db = Some(floor);
+        let margin = if other_audio { MARGIN_OTHER_AUDIO_DB } else { MARGIN_DB };
+        let speech = level >= MIN_SPEECH_DBFS && level >= floor + margin;
+        self.run = if speech { self.run.saturating_add(1) } else { 0 };
+        EnergyWindow { speech, run: self.run, onset: self.run == ONSET_WINDOWS }
+    }
+}
+
+/// A window's level: its mean square in dB relative to full scale.
+fn level_dbfs(samples: &[f32; WINDOW]) -> f32 {
+    let sum: f32 = samples.iter().map(|sample| sample * sample).sum();
+    let mean_square = sum / 512.0;
+    if mean_square > 0.0 { (10.0 * mean_square.log10()).max(SILENCE_DBFS) } else { SILENCE_DBFS }
+}
+
+#[cfg(test)]
+mod tests;
