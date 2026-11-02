@@ -43,6 +43,19 @@ const DENIED: [(&str, &str); 6] = [
     ("SERVICE_SECRET", "not-a-real-secret"),
 ];
 
+/// The variables Eileen sets in every session after the policy has run, whatever the user's
+/// environment held (`eileen_harness::session`).
+const SESSION_VARS: [&str; 8] = [
+    "ENABLE_CLAUDEAI_MCP_SERVERS",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+    "EILEEN_SESSION_ID",
+    "EILEEN_HOOK_TOKEN",
+    "EILEEN_SHIM_TOKEN",
+    "MCP_TOOL_TIMEOUT",
+    "TRACEPARENT",
+];
+
 fn script(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/harness-scripts").join(name)
 }
@@ -372,8 +385,13 @@ async fn the_session_starts_in_its_folder_with_the_denylist_applied_and_memory_o
     let envs = recorded_envs(&dir);
     assert_eq!(envs.len(), 1, "one process");
     let env = &envs[0];
-    let denied: Vec<&String> = env.keys().filter(|name| is_denylisted(name)).collect();
-    assert!(denied.is_empty(), "no denylisted variable reaches the CLI: {denied:?}");
+    // The session's own variables are added after the denylist and some match it by name
+    // (`EILEEN_HOOK_TOKEN`, `MCP_TOOL_TIMEOUT`); nothing else that matches it may be there.
+    let denied: Vec<&String> = env
+        .keys()
+        .filter(|name| is_denylisted(name) && !SESSION_VARS.contains(&name.as_str()))
+        .collect();
+    assert!(denied.is_empty(), "no denylisted variable of the user's reaches the CLI: {denied:?}");
     for (name, _) in DENIED {
         assert!(!env.keys().any(|key| key.eq_ignore_ascii_case(name)), "{name} is removed");
     }
