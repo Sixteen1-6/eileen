@@ -598,8 +598,9 @@ struct Instance {
     number: u32,
     /// When it has loaded and can answer, ms.
     ready_at: u64,
-    /// The turn it answers now, which an interrupt ends.
-    live: Option<TurnId>,
+    /// The turn it answers now and when that answer ends, ms; an interrupt before then ends
+    /// it.
+    live: Option<(TurnId, u64)>,
     /// Until when it is stuck in a stalled answer, ms: it hears no interrupt before then, and a
     /// later turn's answer starts no sooner.
     busy_until: u64,
@@ -705,19 +706,21 @@ impl Brain {
                     None => self.start(now_ms, *slot, due),
                 };
                 let start = now_ms.max(instance.ready_at).max(instance.busy_until);
-                instance.live = Some(*turn);
                 let sent = Sent { number: instance.number, turn: *turn, authority: *authority };
                 let end = answer(start, sent, &reply, pace, due);
+                instance.live = Some((*turn, end));
                 if reply.stall_ms.is_some() {
                     instance.busy_until = instance.busy_until.max(end);
                 }
                 self.slots.insert(*slot, instance);
             }
             BrainCmd::Interrupt { slot } => {
-                // A stuck process hears nothing: its whole answer still comes, late.
+                // A stuck process hears nothing: its whole answer still comes, late. A turn
+                // already answered has nothing left to end.
                 if let Some(instance) = self.slots.get_mut(slot)
                     && now_ms >= instance.busy_until
-                    && let Some(turn) = instance.live.take()
+                    && let Some((turn, end)) = instance.live.take()
+                    && now_ms < end
                 {
                     let number = instance.number;
                     due.drop_where(|input| of_instance(input, number, Some(turn)));
@@ -736,6 +739,15 @@ impl Brain {
                     return;
                 }
                 let Some(promoted) = self.slots.remove(slot) else { return };
+                // A spare still loading becomes ready as the primary only.
+                let number = promoted.number;
+                due.drop_where(|input| {
+                    if let Input::Brain(BrainEvent::Ready { instance, .. }) = input {
+                        *instance == number
+                    } else {
+                        false
+                    }
+                });
                 if let Some(old) = self.slots.insert(BrainSlot::Primary, promoted) {
                     Self::end(now_ms, BrainSlot::Primary, old, None, due);
                 }
@@ -1219,6 +1231,8 @@ mod tests {
         let (deltas, done) = timeline(&all(&mut due), four);
         assert!(deltas.is_empty(), "once the stall is over it hears again: {deltas:?}");
         assert_eq!(done, Some((30_150, false)), "and ends the turn");
+        brain.command(40_000, &BrainCmd::Interrupt { slot: BrainSlot::Primary }, pace, &mut due);
+        assert!(due.is_empty(), "a turn already ended is not ended twice");
         let failed = BrainTurn { fail: true, ..pace };
         let (three, cmd) = turn(3);
         Brain::default().command(0, &cmd, failed, &mut due);
@@ -1298,6 +1312,21 @@ mod tests {
         assert!(senders(&items, one).is_empty(), "the killed primary sends nothing more");
         let killed = BrainEvent::Exited { which: BrainSlot::Primary, instance: 3, code: None };
         assert!(items.contains(&(10_150, Input::Brain(killed))), "{items:?}");
+        // A spare promoted while it still loads is ready once, as the primary, when loaded.
+        brain.command(20_000, &BrainCmd::Stop { slot: BrainSlot::Spare }, pace, &mut due);
+        brain.command(20_000, &BrainCmd::Start { slot: BrainSlot::Spare }, pace, &mut due);
+        brain.command(20_500, &BrainCmd::Promote { slot: BrainSlot::Spare }, pace, &mut due);
+        let readies: Vec<(u64, BrainSlot)> = all(&mut due)
+            .into_iter()
+            .filter_map(|(at, input)| {
+                if let Input::Brain(BrainEvent::Ready { which, instance: 5, .. }) = input {
+                    Some((at, which))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(readies, [(22_000, BrainSlot::Primary)], "one Ready for the promoted spare");
         assert!(
             items.iter().any(|(_, input)| matches!(
                 input,
