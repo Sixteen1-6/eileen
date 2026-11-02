@@ -1,8 +1,10 @@
-//! Acceptance 3 of BUILD.md section 6.3: a reference model of the job lifecycle, written apart
-//! from the core's own code, agrees with `eileen_core::lifecycle::Registry` on random command
-//! sequences (proptest-state-machine). The model holds section 2.5's graph as a table of edges,
-//! each job's state and approval deadline, its name and fan-out ordinal, the decline at the
-//! approval deadline, a restart, the job a cancel names, and where a coding job works.
+//! Acceptance 3 of BUILD.md section 6.3, its registry half: a reference model of the job
+//! lifecycle, written apart from the core's own code, agrees with
+//! `eileen_core::lifecycle::Registry` on random command sequences (proptest-state-machine).
+//! The model holds section 2.5's graph as a table of edges, each job's state and approval
+//! deadline, its name, slug and fan-out ordinal, the decline at the approval deadline, a
+//! restart, the job a cancel names, and where a coding job works. How `Core::step` drives the
+//! registry is checked by the core's own tests (`tests::jobs`), not by this model yet.
 
 use std::collections::BTreeMap;
 
@@ -24,23 +26,45 @@ const START_US: i64 = 1_767_225_600_000_000;
 /// `approvals.deadline_min`'s default, 30 minutes, in microseconds.
 const DEADLINE_US: i64 = 30 * 60_000_000;
 
-/// A minute, in microseconds. A sequence waits at most 20 minutes a step, so every job in it
-/// is inside the seven days a slug is checked against.
+/// A minute, in microseconds.
 const MINUTE_US: i64 = 60_000_000;
 
-/// The titles the brain gives, each with its kind and the spoken name the model expects.
-const TITLES: [(Option<&str>, JobKind, &str); 6] = [
-    (Some("the hello file"), JobKind::General, "the hello file"),
-    (Some("render"), JobKind::General, "the render"),
-    (Some("fix the flaky login tests now"), JobKind::Coding, "fix the flaky login"),
-    (Some("parser fix"), JobKind::Coding, "parser fix"),
-    (None, JobKind::Research, "the research job"),
-    (Some("the hello file"), JobKind::Coding, "the hello file"),
+/// Seven days, in minutes: a sequence sometimes waits a minute past it, so a slug comes free.
+const WEEK_MINUTES: u32 = 7 * 24 * 60;
+
+/// The titles the brain gives, each with its kind, and the spoken name and slug the model
+/// expects of a job that is not a fan-out's child.
+const TITLES: [(Option<&str>, JobKind, &str, &str); 6] = [
+    (Some("the hello file"), JobKind::General, "the hello file", "hello-file"),
+    (Some("render"), JobKind::General, "the render", "render"),
+    (
+        Some("fix the flaky login tests now"),
+        JobKind::Coding,
+        "fix the flaky login",
+        "fix-the-flaky-login",
+    ),
+    (Some("parser fix"), JobKind::Coding, "parser fix", "parser-fix"),
+    (None, JobKind::Research, "the research job", "research-job"),
+    (Some("the hello file"), JobKind::Coding, "the hello file", "hello-file"),
 ];
 
-/// The repositories a job names: two of them are one repository named two ways.
-const REPOS: [Option<&str>; 4] =
-    [None, Some("D:\\code\\demo"), Some("d:/code/demo/"), Some("D:\\code\\other")];
+/// The repositories a job names: Windows paths that are one repository named two ways, Linux
+/// paths that differ only in case or a trailing slash, a UNC path, and text that is no
+/// checkout: a bare name, Eileen's own folder's name, and relative or dotted paths.
+const REPOS: [Option<&str>; 12] = [
+    None,
+    Some("D:\\code\\demo"),
+    Some("d:/code/demo/"),
+    Some("D:\\code\\other"),
+    Some("/home/u/demo"),
+    Some("/home/u/demo/"),
+    Some("/home/u/Demo"),
+    Some("\\\\server\\share\\demo"),
+    Some("demo"),
+    Some("learning"),
+    Some("..\\..\\x"),
+    Some("D:\\code\\..\\demo"),
+];
 
 /// A fan-out child's spoken name, by ordinal.
 const AGENTS: [&str; 8] = [
@@ -125,9 +149,21 @@ enum Target {
 /// One command of a random sequence.
 #[derive(Debug, Clone)]
 enum Cmd {
-    Accept { title: usize, repo: usize, parent: Option<JobId>, overlap: bool },
-    Move { job: JobId, mv: Move },
-    Wait { minutes: u8 },
+    Accept {
+        title: usize,
+        repo: usize,
+        parent: Option<JobId>,
+        overlap: bool,
+    },
+    /// A new job carrying the id of one the registry keeps.
+    Again(JobId),
+    Move {
+        job: JobId,
+        mv: Move,
+    },
+    Wait {
+        minutes: u32,
+    },
     Expire,
     Restart,
     Cancel(Target),
@@ -142,11 +178,19 @@ enum Place {
     Worktree(String),
 }
 
+/// Why the model expects a new job to be refused before there is room to make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Why {
+    Duplicate,
+    NoParent,
+}
+
 /// What the model expects of the command it just took.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expect {
     Nothing,
-    Accept { name: String, ordinal: Option<u8>, place: Place, kept: bool },
+    Accept { name: String, slug: String, ordinal: Option<u8>, place: Place, kept: bool },
+    Refused(Why),
     Unknown,
     Illegal,
     Moved,
@@ -160,9 +204,9 @@ struct ModelJob {
     id: JobId,
     status: JobStatus,
     deadline: Option<i64>,
-    parent: Option<JobId>,
     ordinal: Option<u8>,
     name: String,
+    slug: String,
     kind: JobKind,
     repo: Option<String>,
 }
@@ -172,6 +216,10 @@ struct Model {
     now: i64,
     minted: u64,
     jobs: Vec<ModelJob>,
+    /// Every child each parent has had, counted up and never down.
+    children: BTreeMap<JobId, u8>,
+    /// Every slug given, with when, that a restart has not forgotten.
+    given: Vec<(i64, String)>,
     expect: Expect,
 }
 
@@ -180,14 +228,42 @@ fn id_of(n: u64) -> JobId {
     JobId::from_parts(n, u128::from(n))
 }
 
-/// A repository's key: case and separators do not count.
+/// A repository's key: a trailing separator does not count, and in a Windows path (a drive
+/// letter or a backslash) neither do case and the kind of separator.
 fn key(repo: &str) -> String {
-    repo.trim().trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase()
+    let trimmed = repo.trim().trim_end_matches(['\\', '/']);
+    let windows = trimmed.contains('\\') || trimmed.chars().nth(1) == Some(':');
+    if windows { trimmed.replace('/', "\\").to_lowercase() } else { trimmed.to_owned() }
+}
+
+/// Whether a job may work in `repo`: an absolute path, by drive letter, UNC or a leading
+/// slash, with no part that is a dot or two.
+fn checkout(repo: &str) -> bool {
+    let repo = repo.trim();
+    let mut chars = repo.chars();
+    let rooted = match (chars.next(), chars.next(), chars.next()) {
+        (Some('/'), _, _) | (Some('\\'), Some('\\'), _) => true,
+        (Some(letter), Some(':'), Some('\\' | '/')) => letter.is_ascii_alphabetic(),
+        _ => false,
+    };
+    rooted && repo.split(['/', '\\']).all(|part| part != "." && part != "..")
 }
 
 impl Model {
     fn job_mut(&mut self, id: JobId) -> Option<&mut ModelJob> {
         self.jobs.iter_mut().find(|job| job.id == id)
+    }
+
+    /// `base`, or `base` with the first suffix from `-2` that no slug of the last seven days
+    /// holds.
+    fn free_slug(&self, base: String) -> String {
+        let since = self.now - SLUG_WINDOW_US;
+        let taken =
+            |slug: &str| self.given.iter().any(|(at, theirs)| *at >= since && theirs == slug);
+        if !taken(&base) {
+            return base;
+        }
+        (2..).map(|n| format!("{base}-{n}")).find(|slug| !taken(slug)).expect("a free suffix")
     }
 
     fn accept(
@@ -199,15 +275,21 @@ impl Model {
     ) -> Expect {
         self.minted += 1;
         let id = id_of(self.minted);
-        let (_, kind, hinted) = TITLES[title];
+        let (_, kind, hinted, hinted_slug) = TITLES[title];
         let repo = REPOS[repo].map(str::to_owned);
-        let child = parent.filter(|parent| self.jobs.iter().any(|job| job.id == *parent));
-        let ordinal = child.and_then(|parent| {
-            let older = self.jobs.iter().filter(|job| job.parent == Some(parent)).count();
-            u8::try_from(older + 1).ok().filter(|n| *n <= 8)
-        });
-        let name = ordinal.map_or(hinted, |n| AGENTS[usize::from(n) - 1]).to_owned();
-        let place = match repo.as_deref().filter(|_| kind == JobKind::Coding) {
+        let mut base = (hinted.to_owned(), hinted_slug.to_owned(), None);
+        if let Some(parent) = parent {
+            let Some(of) = self.jobs.iter().find(|job| job.id == parent && open(job.status)) else {
+                return Expect::Refused(Why::NoParent);
+            };
+            let n = self.children.get(&parent).copied().unwrap_or(0) + 1;
+            if n <= 8 {
+                base = (AGENTS[usize::from(n) - 1].to_owned(), format!("{}-{n}", of.slug), Some(n));
+            }
+        }
+        let (name, slug, ordinal) = base;
+        let slug = self.free_slug(slug);
+        let place = match repo.as_deref().filter(|repo| kind == JobKind::Coding && checkout(repo)) {
             None => Place::Scratch,
             Some(repo) => {
                 let alongside = self.jobs.iter().any(|job| {
@@ -227,22 +309,24 @@ impl Model {
                 Some(oldest) => {
                     self.jobs.remove(oldest);
                 }
-                None => return Expect::Accept { name, ordinal, place, kept: false },
+                None => return Expect::Accept { name, slug, ordinal, place, kept: false },
             }
         }
-        let status = JobStatus::Queued;
-        let job = ModelJob {
+        if let Some(parent) = parent {
+            *self.children.entry(parent).or_insert(0) += 1;
+        }
+        self.given.push((self.now, slug.clone()));
+        self.jobs.push(ModelJob {
             id,
-            status,
+            status: JobStatus::Queued,
             deadline: None,
-            parent,
             ordinal,
             name: name.clone(),
+            slug: slug.clone(),
             kind,
             repo,
-        };
-        self.jobs.push(job);
-        Expect::Accept { name, ordinal, place, kept: true }
+        });
+        Expect::Accept { name, slug, ordinal, place, kept: true }
     }
 
     fn take(&mut self, id: JobId, mv: Move) -> Expect {
@@ -268,7 +352,8 @@ impl Model {
         Expect::Ids(due)
     }
 
-    /// No worker outlives the core: every unfinished job is interrupted.
+    /// No worker outlives the core: every unfinished job is interrupted. The snapshot keeps
+    /// only its jobs, so a slug no kept job holds is forgotten.
     fn restart(&mut self) -> Expect {
         let mut interrupted = Vec::new();
         for job in self.jobs.iter_mut().filter(|job| open(job.status)) {
@@ -276,6 +361,8 @@ impl Model {
             job.deadline = None;
             interrupted.push(job.id);
         }
+        let jobs = &self.jobs;
+        self.given.retain(|(_, slug)| jobs.iter().any(|job| job.slug == *slug));
         Expect::Ids(interrupted)
     }
 
@@ -303,7 +390,15 @@ impl ReferenceStateMachine for Lifecycle {
     type Transition = Cmd;
 
     fn init_state() -> BoxedStrategy<Model> {
-        Just(Model { now: START_US, minted: 0, jobs: Vec::new(), expect: Expect::Nothing }).boxed()
+        Just(Model {
+            now: START_US,
+            minted: 0,
+            jobs: Vec::new(),
+            children: BTreeMap::new(),
+            given: Vec::new(),
+            expect: Expect::Nothing,
+        })
+        .boxed()
     }
 
     fn transitions(state: &Model) -> BoxedStrategy<Cmd> {
@@ -313,14 +408,16 @@ impl ReferenceStateMachine for Lifecycle {
             4 => (titles.clone(), repos.clone(), prop::bool::weighted(0.2)).prop_map(
                 |(title, repo, overlap)| Cmd::Accept { title, repo, parent: None, overlap }
             ),
-            1 => (1..=20_u8).prop_map(|minutes| Cmd::Wait { minutes }),
+            1 => (1..=20_u32).prop_map(|minutes| Cmd::Wait { minutes }),
+            1 => Just(Cmd::Wait { minutes: WEEK_MINUTES + 1 }),
             1 => Just(Cmd::Expire),
             1 => Just(Cmd::Restart),
             1 => (1..=3_u8).prop_map(|n| Cmd::Cancel(Target::Agent(n))),
             1 => titles.clone().prop_map(|title| Cmd::Cancel(Target::Name(title))),
         ];
         let ids: Vec<JobId> = (1..=state.minted).map(id_of).collect();
-        if ids.is_empty() {
+        let kept: Vec<JobId> = state.jobs.iter().map(|job| job.id).collect();
+        if ids.is_empty() || kept.is_empty() {
             return always.boxed();
         }
         prop_oneof![
@@ -332,8 +429,16 @@ impl ReferenceStateMachine for Lifecycle {
                 .prop_map(|(job, mv)| Cmd::Move { job, mv }),
             1 => select(ids.clone()).prop_map(|job| Cmd::Cancel(Target::Id(job))),
             1 => select(ids).prop_map(|job| Cmd::Cancel(Target::SlugOf(job))),
+            1 => select(kept).prop_map(Cmd::Again),
         ]
         .boxed()
+    }
+
+    fn preconditions(state: &Model, transition: &Cmd) -> bool {
+        match transition {
+            Cmd::Again(id) => state.jobs.iter().any(|job| job.id == *id),
+            _ => true,
+        }
     }
 
     fn apply(mut state: Model, transition: &Cmd) -> Model {
@@ -341,6 +446,7 @@ impl ReferenceStateMachine for Lifecycle {
             Cmd::Accept { title, repo, parent, overlap } => {
                 state.accept(*title, *repo, *parent, *overlap)
             }
+            Cmd::Again(_) => Expect::Refused(Why::Duplicate),
             Cmd::Move { job, mv } => state.take(*job, *mv),
             Cmd::Wait { minutes } => {
                 state.now += i64::from(*minutes) * MINUTE_US;
@@ -369,7 +475,7 @@ fn job(
     parent: Option<JobId>,
     at: i64,
 ) -> Job {
-    let (hint, kind, _) = TITLES[title];
+    let (hint, kind, _, _) = TITLES[title];
     let spec = JobSpec {
         kind,
         task: "a task".to_owned(),
@@ -418,6 +524,11 @@ fn job(
     }
 }
 
+/// A naming for a job the registry is expected to refuse.
+fn stray() -> Naming {
+    Naming { name: "a stray".to_owned(), slug: "stray".to_owned(), ordinal: None }
+}
+
 impl Sut {
     fn accept(
         &mut self,
@@ -427,22 +538,26 @@ impl Sut {
         overlap: bool,
     ) {
         let (title, repo) = asked;
-        let Expect::Accept { name, ordinal, place, kept } = &model.expect else {
-            panic!("the model accepted nothing: {:?}", model.expect);
-        };
-        let (hint, kind, _) = TITLES[title];
+        let (hint, kind, _, _) = TITLES[title];
+        let id = id_of(model.minted);
         let naming = self.registry.naming(hint, kind, parent, WallTime(model.now));
-        assert_eq!(&naming.name, name, "the spoken name");
-        assert_eq!(&naming.ordinal, ordinal, "the ordinal");
-        if let (Some(n), Some(parent)) = (ordinal, parent) {
-            let theirs = &self.registry.get(parent).expect("the parent is kept").slug;
-            assert!(naming.slug.starts_with(&format!("{theirs}-{n}")), "{}", naming.slug);
+        match (&model.expect, naming) {
+            (Expect::Refused(Why::NoParent), Err(Refused::NoParent(of))) => {
+                assert_eq!(Some(of), parent, "the parent named");
+                let refused =
+                    self.registry.accept(job(id, stray(), title, repo, parent, model.now));
+                assert_eq!(refused, Err(Refused::NoParent(of)), "accept refuses it too");
+            }
+            (Expect::Accept { name, slug, ordinal, place, kept }, Ok(naming)) => {
+                let got = (&naming.name, &naming.slug, &naming.ordinal);
+                assert_eq!(got, (name, slug, ordinal), "the name, slug and ordinal");
+                let job = job(id, naming, title, repo, parent, model.now);
+                self.check_place(&job, overlap, place);
+                let wanted = if *kept { Ok(()) } else { Err(Refused::Full) };
+                assert_eq!(self.registry.accept(job), wanted, "kept while there is room");
+            }
+            (expect, naming) => panic!("expected {expect:?}, got {naming:?}"),
         }
-        let job = job(id_of(model.minted), naming, title, repo, parent, model.now);
-        self.check_place(&job, overlap, place);
-        let accepted = self.registry.accept(job);
-        let wanted = if *kept { Ok(()) } else { Err(Refused::Full) };
-        assert_eq!(accepted, wanted, "kept while there is room");
     }
 
     fn check_place(&mut self, job: &Job, overlap: bool, place: &Place) {
@@ -524,6 +639,11 @@ impl StateMachineTest for Lifecycle {
             Cmd::Accept { title, repo, parent, overlap } => {
                 sut.accept(model, (title, repo), parent, overlap);
             }
+            Cmd::Again(id) => {
+                assert_eq!(model.expect, Expect::Refused(Why::Duplicate), "a kept id");
+                let refused = sut.registry.accept(job(id, stray(), 0, 0, None, model.now));
+                assert_eq!(refused, Err(Refused::Duplicate(id)), "job IDs never repeat");
+            }
             Cmd::Move { job, mv } => sut.take(model, job, mv),
             Cmd::Wait { .. } => {
                 assert_eq!(model.expect, Expect::Nothing, "waiting changes nothing");
@@ -557,7 +677,8 @@ impl StateMachineTest for Lifecycle {
         for (job, theirs) in jobs.iter().zip(&model.jobs) {
             assert_eq!(job.status, theirs.status, "{}: its state", job.id);
             assert_eq!(job.approval_deadline, theirs.deadline.map(WallTime), "{}", job.id);
-            assert_eq!((&job.name, job.ordinal), (&theirs.name, theirs.ordinal), "{}", job.id);
+            let naming = (&job.name, &job.slug, job.ordinal);
+            assert_eq!(naming, (&theirs.name, &theirs.slug, theirs.ordinal), "{}", job.id);
             let ascii =
                 job.slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
             assert!(ascii && !job.slug.is_empty(), "a plain slug: {}", job.slug);
@@ -566,8 +687,22 @@ impl StateMachineTest for Lifecycle {
             if job.spec.parent.is_none() {
                 assert!(job.slug.len() <= SLUG_MAX + 3, "a short slug: {}", job.slug);
             }
-            let twins = jobs.iter().filter(|other| other.slug == job.slug).count();
-            assert_eq!(twins, 1, "no other job of the week holds {}", job.slug);
+        }
+        for (n, job) in jobs.iter().enumerate() {
+            for later in jobs.iter().skip(n + 1) {
+                if later.slug == job.slug {
+                    let apart = later.created.0 - job.created.0;
+                    assert!(apart > SLUG_WINDOW_US, "{} given twice in a week", job.slug);
+                }
+                if job.spec.parent.is_some() && job.ordinal.is_some() {
+                    let sibling = later.spec.parent == job.spec.parent;
+                    assert!(
+                        !sibling || later.ordinal != job.ordinal,
+                        "two children of one fan-out share the ordinal {:?}",
+                        job.ordinal
+                    );
+                }
+            }
         }
     }
 }
@@ -579,17 +714,71 @@ prop_state_machine! {
     fn the_registry_agrees_with_the_reference_model(sequential 1..60 => Lifecycle);
 }
 
+/// Names and keeps the `n`th job, of `title`, at the start of the clock.
+fn keep(registry: &mut Registry, n: u64, title: usize, parent: Option<JobId>) -> JobId {
+    let (hint, kind, _, _) = TITLES[title];
+    let naming = registry.naming(hint, kind, parent, WallTime(START_US)).expect("named");
+    registry.accept(job(id_of(n), naming, title, 0, parent, START_US)).expect("kept");
+    id_of(n)
+}
+
+/// Runs the job `id` to completion.
+fn finish(registry: &mut Registry, id: JobId) {
+    let at = WallTime(START_US);
+    registry.step(id, Step::Start, at).expect("started");
+    registry.step(id, Step::Complete, at).expect("completed");
+}
+
 /// A slug is checked against seven days of jobs: one a week old is free again.
 #[test]
 fn a_slug_is_free_again_after_seven_days() {
     let mut registry = Registry::default();
     let naming =
         registry.naming(Some("the hello file"), JobKind::General, None, WallTime(START_US));
+    let naming = naming.expect("named");
     assert_eq!(naming.slug, "hello-file", "the first");
     registry.accept(job(id_of(1), naming, 0, 0, None, START_US)).expect("kept");
     let soon = registry.naming(Some("the hello file"), JobKind::General, None, WallTime(START_US));
-    assert_eq!(soon.slug, "hello-file-2", "taken within the week");
+    assert_eq!(soon.expect("named").slug, "hello-file-2", "taken within the week");
     let later = WallTime(START_US + SLUG_WINDOW_US + 1);
     let free = registry.naming(Some("the hello file"), JobKind::General, None, later);
-    assert_eq!(free.slug, "hello-file", "free again after it");
+    assert_eq!(free.expect("named").slug, "hello-file", "free again after it");
+}
+
+/// A job dropped to make room keeps its slug for the week: its branch and its worktree folder
+/// may still hold its work.
+#[test]
+fn a_slug_stays_taken_after_its_job_is_dropped() {
+    let mut registry = Registry::default();
+    let hello = keep(&mut registry, 1, 0, None);
+    finish(&mut registry, hello);
+    let mut n = 1;
+    while registry.get(hello).is_some() {
+        n += 1;
+        let other = keep(&mut registry, n, 1, None);
+        finish(&mut registry, other);
+    }
+    let again = registry.naming(Some("the hello file"), JobKind::General, None, WallTime(START_US));
+    assert_eq!(again.expect("named").slug, "hello-file-2", "taken by the job dropped");
+}
+
+/// A fan-out child dropped to make room never frees its ordinal while its parent is kept.
+#[test]
+fn a_dropped_child_never_frees_its_ordinal() {
+    let mut registry = Registry::default();
+    let parent = keep(&mut registry, 1, 2, None);
+    let first = keep(&mut registry, 2, 2, Some(parent));
+    let second = keep(&mut registry, 3, 2, Some(parent));
+    finish(&mut registry, first);
+    let mut n = 3;
+    while registry.get(first).is_some() {
+        n += 1;
+        let other = keep(&mut registry, n, 1, None);
+        finish(&mut registry, other);
+    }
+    let third = registry.naming(None, JobKind::Coding, Some(parent), WallTime(START_US));
+    let third = third.expect("named");
+    assert_eq!((third.name.as_str(), third.ordinal), ("agent three", Some(3)), "a new number");
+    let kept = registry.get(second).and_then(|job| job.ordinal);
+    assert_eq!(kept, Some(2), "agent two is still kept");
 }

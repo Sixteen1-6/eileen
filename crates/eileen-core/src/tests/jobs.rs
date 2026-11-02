@@ -1,8 +1,9 @@
 //! The one job through `Core::step`: dispatch, its cold session, its hooks, its end and its
-//! announcement; the refusal of a kind not built, a restart, slugs, the in-place checkout and
-//! cancel by name.
+//! announcement; the refusal of a kind not built, a restart, slugs, the folder a coding job
+//! works in, and cancel by name.
 
-use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, UserError, UserErrorKind};
+use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, UserErrorKind};
+use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{
     Caller, Content, Effect, Input, PathAccess, PathClass, PathFact, PlaybackEvent, Record,
     ShimRole, TimerId, ToolCallRequest, UserInput,
@@ -15,7 +16,7 @@ use eileen_contracts::jobs::{CallOrigin, Cost, Job, JobKind, JobStatus, Route, T
 use eileen_contracts::speech::VoiceEvent;
 use serde_json::{Value, json};
 
-use super::{Harness, ask_brain, brain_turn, done, events, spoken, timer_set};
+use super::{Harness, ask_brain, brain_turn, done, events, ready, speech, spoken, timer_set};
 
 const BRAIN: Caller = Caller::Shim { connection: 1, role: ShimRole::Brain };
 
@@ -417,8 +418,11 @@ fn an_ml_project_is_refused_before_routing_and_admission_and_research_is_accepte
     });
     let result = result.expect("a reply");
     assert!(result.is_error, "returned as the call's error result");
-    let output = result.output.expect("the error, structured").into_inner();
-    let error: UserError = serde_json::from_value(output).expect("a UserError");
+    assert!(result.output.is_none(), "no output that does not match `JobsDispatchOutput`");
+    let shown = events(&effects)
+        .into_iter()
+        .find_map(|e| if let BusEvent::UserError(error) = e { Some(error.clone()) } else { None });
+    let error = shown.expect("the UserError on the bus, for the HUD");
     assert_eq!(error.kind, UserErrorKind::JobKindUnavailable, "its kind");
     assert!(
         error.sentence.contains("next version") && error.sentence.contains("research job"),
@@ -427,7 +431,9 @@ fn an_ml_project_is_refused_before_routing_and_admission_and_research_is_accepte
     );
     assert_eq!(tool_reply(&effects).map(|(_, text)| text), Some(error.sentence), "the same words");
     assert!(
-        effects.iter().all(|e| matches!(e, Effect::ToolReply { .. })),
+        effects
+            .iter()
+            .all(|e| matches!(e, Effect::ToolReply { .. } | Effect::Emit(BusEvent::UserError(_)))),
         "no job, no session, no row and no admission: {effects:?}"
     );
     let research = json!({ "kind": "research", "task": COLAB });
@@ -481,26 +487,66 @@ fn a_second_job_of_the_same_name_gets_a_slug_of_its_own() {
     assert_eq!(slugs, ["hello-file", "hello-file-2"], "slugs never collide");
 }
 
+/// FIXME(#5): an absolute repository works in place behind `refs/eileen/<job id>`, or in a
+/// worktree, as `lifecycle::Registry::checkout` says, once the harness records that snapshot
+/// before the session starts and creates worktrees. Until then every coding job works in its
+/// own folder, and a name, a relative path or Eileen's own folder never becomes its folder.
 #[test]
-fn one_coding_job_works_in_place_behind_a_snapshot_ref() {
+fn a_coding_job_works_in_its_own_folder_whatever_repository_the_brain_names() {
+    for repo in ["D:\\code\\demo", "demo", "learning", "..\\..\\x"] {
+        let mut h = Harness::new();
+        let turn = ask_brain(&mut h, "Eileen, fix the parser test in the demo repo");
+        let args = json!({
+            "kind": "coding",
+            "task": "fix the parser test",
+            "title_hint": "the parser fix",
+            "repo": repo
+        });
+        let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
+        let (job, _) = accepted(&effects).expect("accepted");
+        let session = started_session(&effects).expect("a session");
+        let spec = start_spec(&effects).expect("its spec");
+        assert_eq!(spec.cwd, format!("run/{session}/cwd"), "{repo}: its own folder");
+        assert_eq!(spec.worktree, None, "{repo}: no worktree");
+        assert_eq!(spec.snapshot_ref, None, "{repo}: no snapshot asked for");
+        let row = h.core.snapshot().jobs.into_iter().find(|row| row.id == job).expect("its row");
+        assert_eq!(row.snapshot_ref, None, "{repo}: no snapshot claimed");
+        assert_eq!((row.worktree, row.branch), (None, None), "{repo}: no worktree, no branch");
+    }
+}
+
+#[test]
+fn speech_going_down_and_up_again_interrupts_no_job() {
     let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, fix the parser test in the demo repo");
-    let args = json!({
-        "kind": "coding",
-        "task": "fix the parser test",
-        "title_hint": "the parser fix",
-        "repo": "D:\\code\\demo"
+    let turn = ask_brain(&mut h, "Eileen, create a file called hello dot txt");
+    let session = started_session(&h.step(dispatch(turn))).expect("a session");
+    h.step(Input::Worker(session, init()));
+    let down = h.now_ms;
+    let mut seen = h.step(speech(SidecarEvent::Exited { code: Some(1) }));
+    let restart = seen.iter().find_map(|e| {
+        if let Effect::SetTimer { id, at } = e
+            && at.0 > down * 1_000_000
+        {
+            Some((*id, *at))
+        } else {
+            None
+        }
     });
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
-    let (job, _) = accepted(&effects).expect("accepted");
-    let spec = start_spec(&effects).expect("its session");
-    let snapshot_ref = format!("refs/eileen/{job}");
-    assert_eq!(spec.cwd, "D:\\code\\demo", "in the user's checkout");
-    assert_eq!(spec.worktree, None, "one job needs no worktree");
-    assert_eq!(spec.snapshot_ref.as_deref(), Some(snapshot_ref.as_str()), "a snapshot first");
-    let row = h.core.snapshot().jobs.into_iter().find(|row| row.id == job).expect("its row");
-    assert_eq!(row.snapshot_ref, Some(snapshot_ref), "kept for undo");
-    assert_eq!((row.worktree, row.branch), (None, None), "no worktree, no branch");
+    let (id, at) = restart.expect("a restart after the backoff");
+    h.now_ms = at.0 / 1_000_000;
+    seen.extend(h.step(Input::Timer(id)));
+    seen.extend(h.step(speech(ready())));
+    let restarted = Effect::Sidecar(SidecarId::Speech, SidecarCmd::Restart);
+    assert!(seen.contains(&restarted), "speech came back: {seen:?}");
+    assert!(
+        !events(&seen).iter().any(|e| matches!(e, BusEvent::JobInterrupted { .. })),
+        "the job this core accepted goes on: {seen:?}"
+    );
+    let effects = h.step(Input::Worker(session, finished()));
+    assert!(
+        events(&effects).iter().any(|e| matches!(e, BusEvent::JobCompleted { .. })),
+        "and its worker still ends it: {effects:?}"
+    );
 }
 
 #[test]

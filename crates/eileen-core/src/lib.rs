@@ -17,9 +17,10 @@
 //! - [`lifecycle`]: the job registry `Core::step` keeps, pure and cloneable: the job states and
 //!   the one legal graph of steps between them, names, slugs and fan-out ordinals given at
 //!   accept, the approval deadline, cancel targets, a restart, and a coding job's checkout (in
-//!   place behind a snapshot ref, or in a worktree).
+//!   place behind a snapshot ref, or in a worktree), which the core does not send yet.
 //! - The `UserError`s the core builds, with their sentences (`user_error`): so far
-//!   `JobKindUnavailable`, the refusal of an `ml_project` dispatch before routing and admission.
+//!   `JobKindUnavailable`, the refusal of an `ml_project` dispatch before routing and admission,
+//!   put on the bus for the HUD with its sentence as the call's error result.
 //! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start, with
 //!   [`LocalTime`], the PC's offsets from UTC and when they change.
 //! - The `shell_command` fuzz target's entry (`fuzz_entry`).
@@ -57,9 +58,13 @@
 //!   `JobKind::built_in_v0_1` rejects is refused with its `UserError` before routing and
 //!   admission, and no session starts.
 //! - Job states change only by a `lifecycle::Step`, along the graph `lifecycle::legal` writes
-//!   as pairs of states, and every job ends in exactly one terminal state (invariants 4 and 5). The first step after a restart interrupts every job
-//!   the snapshot held unfinished, and no ID the core mints repeats across a restart: each ID's
-//!   timestamp is after the last one's, which the snapshot keeps (invariant 12).
+//!   as pairs of states, and every job ends in exactly one terminal state (invariants 4 and
+//!   5). The core's first step, and only that one, interrupts every job the snapshot held
+//!   unfinished, however often the speech process stops and starts later; no ID the core mints
+//!   repeats across a restart: each ID's timestamp is after the last one's, which the snapshot
+//!   keeps (invariant 12).
+//! - The brain's text never picks a job's folder: a repository it names is untrusted, and only
+//!   an absolute path with no `.` or `..` part can become a checkout.
 //! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
 //! - A speech turn is routed once, however often its `EndOfTurn` arrives, and a turn open when
 //!   speech went down is never routed: its audio is replayed under a new turn.
@@ -93,9 +98,9 @@
 //!   by the core's own clause text, not by the speech process's character counts.
 //! - A worker session's `SessionSpec` leaves its hook and shim endpoints empty: the runtime
 //!   mints their tokens at spawn. Its working folder is `run/<session>/cwd`, relative to the
-//!   data directory, except for a coding job with a repository: in place, the folder is the
-//!   repository as the brain named it and `snapshot_ref` names the ref the harness records the
-//!   snapshot under before the session starts; in a worktree, it is the worktree's folder.
+//!   data directory, for every job, a coding job with a repository included, and it names no
+//!   worktree and no snapshot: the harness does not yet record the in-place snapshot or create
+//!   worktrees, and the contract's `snapshot_ref` still reads as a snapshot to restore.
 //! - A restart interrupts queued jobs as well as running ones: the admission queue is not in
 //!   the snapshot, and no worker outlives the core.
 //! - The local time is the offset in force at each step's wall time, from [`LocalTime`]'s
@@ -346,6 +351,9 @@ pub struct Core {
     seq: u64,
     /// The timestamp of the last ID minted, in milliseconds.
     minted_ms: u64,
+    /// Whether a step has run, and with it the interruption of the jobs the snapshot held
+    /// unfinished: once per core, whatever the speech process does later.
+    stepped: bool,
     /// The snapshot the core started from, for the fields it does not run yet.
     resumed: CoreSnapshotV1,
 }
@@ -386,12 +394,14 @@ impl Core {
             hud: Hud::default(),
             seq: counter(COUNTER_SEQ),
             minted_ms,
+            stepped: false,
             resumed,
         }
     }
 
     /// Takes one input at `now` and appends the effects it causes. The first step, whatever its
-    /// input, also starts the speech process.
+    /// input, also interrupts the jobs the snapshot held unfinished, and the first step with the
+    /// speech process off starts it.
     pub fn step(
         &mut self,
         now: MonoTime,
@@ -401,8 +411,11 @@ impl Core {
     ) {
         let Envelope { at, ctx, body, .. } = input;
         let mut cx = Cx { now, at, rng, effects, seq: self.seq, minted_ms: self.minted_ms };
-        if !self.life.started() {
+        if !self.stepped {
+            self.stepped = true;
             self.interrupt_unfinished(&mut cx);
+        }
+        if !self.life.started() {
             self.boot(&mut cx);
         }
         match body {

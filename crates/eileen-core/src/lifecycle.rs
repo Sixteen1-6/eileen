@@ -4,6 +4,7 @@
 //! a coding job works. [`Registry`] is pure and cloneable: `Core::step` keeps one, and
 //! `tests/it/job_model.rs` checks it against a reference model on random command sequences.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 use eileen_contracts::harness::WorktreeSpec;
@@ -24,6 +25,10 @@ pub const SLUG_WINDOW_US: i64 = 7 * 86_400_000_000;
 
 /// The longest slug before a collision suffix, in bytes: it names a folder and a branch.
 pub const SLUG_MAX: usize = 40;
+
+/// The most slugs the registry remembers beside its kept jobs for the seven-day check. Past
+/// this many in seven days, the oldest is forgotten first.
+pub const SLUGS_KEPT: usize = 1024;
 
 /// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8).
 const ORDINALS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
@@ -119,6 +124,9 @@ pub enum Refused {
     },
     /// A kept job has this id already: job IDs never repeat.
     Duplicate(JobId),
+    /// A fan-out child's parent is not a kept, unfinished job: a finished fan-out takes no
+    /// new children.
+    NoParent(JobId),
     /// Every kept job is unfinished.
     Full,
 }
@@ -131,6 +139,7 @@ impl fmt::Display for Refused {
                 write!(f, "{job} cannot take the step {step:?} from {from:?}")
             }
             Self::Duplicate(job) => write!(f, "a kept job is {job} already"),
+            Self::NoParent(job) => write!(f, "{job} is not a kept, unfinished fan-out"),
             Self::Full => write!(f, "all {KEPT} kept jobs are unfinished"),
         }
     }
@@ -144,22 +153,24 @@ impl std::error::Error for Refused {}
 pub struct Naming {
     /// Its spoken name, two to four words.
     pub name: String,
-    /// Its slug, which no kept job of the last seven days holds.
+    /// Its slug, which no job of the last seven days holds.
     pub slug: String,
     /// Its ordinal, for a fan-out's child.
     pub ordinal: Option<u8>,
 }
 
-/// Where a job's session works (section 2.5, "One coding job edits in place").
+/// Where a job's session works (section 2.5, "One coding job edits in place"). The core does
+/// not send it to the harness yet: until the harness records the snapshot and creates the
+/// worktree, every job works in its session's own folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Checkout {
-    /// In its session's own folder under the data directory: every job but a coding job with a
-    /// repository.
+    /// In its session's own folder under the data directory: every job but a coding job whose
+    /// repository is an absolute path.
     Scratch,
     /// In the user's checkout, once the harness has recorded a snapshot (`git stash create`
     /// and `HEAD`) under `snapshot_ref`, so "undo that" restores exactly what was there.
     InPlace {
-        /// The repository, as the brain named it.
+        /// The repository, an absolute path as the brain gave it.
         repo: Personal<String>,
         /// The ref the snapshot is kept under: `refs/eileen/<job id>`.
         snapshot_ref: String,
@@ -172,14 +183,30 @@ pub enum Checkout {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Registry {
     jobs: Vec<Job>,
+    /// How many children each kept fan-out parent has had. It never goes down while the parent
+    /// is kept, so a child dropped to make room never frees its ordinal.
+    children: BTreeMap<JobId, u8>,
+    /// The slugs given since the registry started, oldest first, with when each was given, at
+    /// most [`SLUGS_KEPT`] of the last seven days: a job dropped to make room still holds its
+    /// slug, and with it its branch and its worktree folder.
+    slugs: VecDeque<(WallTime, String)>,
 }
 
 impl Registry {
     /// A registry holding `jobs` as a snapshot kept them, unchanged until
-    /// [`Registry::restart`].
+    /// [`Registry::restart`]. The snapshot keeps no slugs beside its jobs, so a slug given to
+    /// a job it no longer holds is free again after a restart.
     #[must_use]
-    pub const fn resumed(jobs: Vec<Job>) -> Self {
-        Self { jobs }
+    pub fn resumed(jobs: Vec<Job>) -> Self {
+        let mut children = BTreeMap::new();
+        for job in &jobs {
+            let Some(parent) = job.spec.parent else { continue };
+            if jobs.iter().any(|kept| kept.id == parent) {
+                let seen: &mut u8 = children.entry(parent).or_default();
+                *seen = seen.saturating_add(1).max(job.ordinal.unwrap_or(0));
+            }
+        }
+        Self { jobs, children, slugs: VecDeque::new() }
     }
 
     /// Every kept job, in accept order.
@@ -207,62 +234,86 @@ impl Registry {
         interrupted
     }
 
-    /// The name, slug and ordinal of a new job of `kind`. A child of a kept fan-out parent is
-    /// "agent one" to "agent eight" in accept order, with the parent's slug and its ordinal;
-    /// any other job is the brain's title hint cut to four words, or its kind's words. A slug
-    /// that a kept job of the last seven days holds takes the first free suffix from `-2`.
-    #[must_use]
+    /// The name, slug and ordinal of a new job of `kind`. A child of a kept, unfinished
+    /// fan-out parent is "agent one" to "agent eight" in accept order, counting every child the
+    /// parent has had, with the parent's slug and its ordinal; any other job, and a ninth
+    /// child, is the brain's title hint cut to four words, or its kind's words. A slug that a
+    /// job of the last seven days holds takes the first free suffix from `-2`.
     pub fn naming(
         &self,
         hint: Option<&str>,
         kind: JobKind,
         parent: Option<JobId>,
         at: WallTime,
-    ) -> Naming {
-        let child = parent.and_then(|parent| {
-            let slug = &self.get(parent)?.slug;
-            let older = self.jobs.iter().filter(|job| job.spec.parent == Some(parent)).count();
-            let word = ORDINALS.get(older)?;
-            let ordinal = u8::try_from(older.saturating_add(1)).ok()?;
-            Some(Naming {
-                name: format!("agent {word}"),
-                slug: format!("{slug}-{ordinal}"),
-                ordinal: Some(ordinal),
-            })
-        });
+    ) -> Result<Naming, Refused> {
+        let child = match parent {
+            None => None,
+            Some(parent) => {
+                let of = self.get(parent).filter(|job| !job.status.is_terminal());
+                let of = of.ok_or(Refused::NoParent(parent))?;
+                let ordinal = self.children.get(&parent).copied().unwrap_or(0).saturating_add(1);
+                ORDINALS.get(usize::from(ordinal.saturating_sub(1))).map(|word| Naming {
+                    name: format!("agent {word}"),
+                    slug: format!("{}-{ordinal}", of.slug),
+                    ordinal: Some(ordinal),
+                })
+            }
+        };
         let Naming { name, slug, ordinal } = child.unwrap_or_else(|| {
             let name = name_of(hint, kind);
             let slug = slug_of(&name);
             let slug = if slug.is_empty() { slug_of(kind_words(kind)) } else { slug };
             Naming { name, slug, ordinal: None }
         });
-        Naming { name, slug: self.free_slug(slug, at), ordinal }
+        Ok(Naming { name, slug: self.free_slug(slug, at), ordinal })
     }
 
-    /// `base`, or `base` with the first suffix from `-2` that no kept job of the last seven
-    /// days holds.
+    /// `base`, or `base` with the first suffix from `-2` that no job of the last seven days
+    /// holds, kept or remembered.
     fn free_slug(&self, base: String, at: WallTime) -> String {
         let since = at.0.saturating_sub(SLUG_WINDOW_US);
-        let taken =
-            |slug: &str| self.jobs.iter().any(|job| job.created.0 >= since && job.slug == slug);
+        let taken = |slug: &str| {
+            self.jobs.iter().any(|job| job.created.0 >= since && job.slug == slug)
+                || self.slugs.iter().any(|(given, theirs)| given.0 >= since && theirs == slug)
+        };
         if !taken(&base) {
             return base;
         }
-        // At most `KEPT` slugs are taken, so one of these is free.
-        let free = (2..=KEPT.saturating_add(2)).map(|n| format!("{base}-{n}")).find(|s| !taken(s));
+        // At most `KEPT` and `SLUGS_KEPT` slugs are taken, so one of these is free.
+        let last = KEPT.saturating_add(SLUGS_KEPT).saturating_add(2);
+        let free = (2..=last).map(|n| format!("{base}-{n}")).find(|s| !taken(s));
         free.unwrap_or(base)
     }
 
-    /// Keeps a new job, `queued` and with no approval deadline. The oldest finished job goes
-    /// when the registry is full.
+    /// Keeps a new job, `queued` and with no approval deadline, and remembers its slug. The
+    /// oldest finished job goes when the registry is full. A fan-out child needs its parent
+    /// kept and unfinished.
     pub fn accept(&mut self, mut job: Job) -> Result<(), Refused> {
         if self.get(job.id).is_some() {
             return Err(Refused::Duplicate(job.id));
         }
+        if let Some(parent) = job.spec.parent
+            && !self.get(parent).is_some_and(|of| !of.status.is_terminal())
+        {
+            return Err(Refused::NoParent(parent));
+        }
         while self.jobs.len() >= KEPT {
             let oldest = self.jobs.iter().position(|kept| kept.status.is_terminal());
-            self.jobs.remove(oldest.ok_or(Refused::Full)?);
+            let gone = self.jobs.remove(oldest.ok_or(Refused::Full)?);
+            self.children.remove(&gone.id);
         }
+        // The parent is unfinished, so the room made above never dropped it.
+        if let Some(parent) = job.spec.parent {
+            let seen: &mut u8 = self.children.entry(parent).or_default();
+            *seen = seen.saturating_add(1);
+        }
+        let since = job.created.0.saturating_sub(SLUG_WINDOW_US);
+        while self.slugs.len() >= SLUGS_KEPT
+            || self.slugs.front().is_some_and(|(given, _)| given.0 < since)
+        {
+            self.slugs.pop_front();
+        }
+        self.slugs.push_back((job.created, job.slug.clone()));
         job.status = JobStatus::Queued;
         job.approval_deadline = None;
         self.jobs.push(job);
@@ -309,16 +360,20 @@ impl Registry {
         found.map(|job| job.id)
     }
 
-    /// Where `job` works. A coding job with a repository works in place, behind a snapshot,
-    /// when it is not a fan-out's child, no other unfinished coding job works in that
-    /// repository, and the user's uncommitted files do not overlap the files its task names
-    /// (`overlap`, which the runtime reports); otherwise in a worktree under
+    /// Where `job` works. A coding job whose repository is an absolute path works in place,
+    /// behind a snapshot, when it is not a fan-out's child, no other unfinished coding job
+    /// works in that repository, and the user's uncommitted files do not overlap the files its
+    /// task names (`overlap`, which the runtime reports); otherwise in a worktree under
     /// `worktrees/<repo hash>/<slug>` on the branch `eileen/<slug>`, from the user's current
-    /// `HEAD`. Every other job works in its session's own folder.
+    /// `HEAD`. Every other job works in its session's own folder, including one whose
+    /// repository is a bare name or a relative path: the brain's text never picks a folder
+    /// under Eileen's data, and a name is resolved from the utterance, the focused editor or
+    /// a `project` fact first (section 2.5).
     #[must_use]
     pub fn checkout(&self, job: &Job, overlap: bool) -> Checkout {
         let coding = job.spec.kind == JobKind::Coding;
-        let Some(repo) = job.spec.repo.as_ref().filter(|_| coding) else {
+        let repo = job.spec.repo.as_ref().filter(|repo| coding && absolute(repo.get()));
+        let Some(repo) = repo else {
             return Checkout::Scratch;
         };
         let key = repo_key(repo.get());
@@ -398,6 +453,18 @@ fn slug_of(name: &str) -> String {
     slug
 }
 
+/// Whether `repo` is an absolute path with no `.` or `..` part: a drive letter and a separator,
+/// a UNC path, or a leading `/`. A drive-relative path such as `D:demo` is not one.
+fn absolute(repo: &str) -> bool {
+    let repo = repo.trim();
+    let bytes = repo.as_bytes();
+    let drive = bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(b'\\' | b'/'));
+    let rooted = drive || repo.starts_with("\\\\") || repo.starts_with('/');
+    rooted && !repo.split(['\\', '/']).any(|part| part == "." || part == "..")
+}
+
 /// A repository named two ways is one repository: a trailing separator does not count, and in
 /// a Windows path (a drive letter or a backslash) neither do case and the kind of separator.
 fn repo_key(repo: &str) -> String {
@@ -418,7 +485,7 @@ fn fnv1a(text: &str) -> u64 {
 mod tests {
     use eileen_contracts::jobs::{JobKind, JobStatus};
 
-    use super::{Step, fnv1a, legal, name_of, repo_key, slug_of};
+    use super::{Step, absolute, fnv1a, legal, name_of, repo_key, slug_of};
 
     const ALL: [JobStatus; 8] = [
         JobStatus::Queued,
@@ -484,5 +551,18 @@ mod tests {
         assert_ne!(repo_key("/home/u/Demo"), repo_key("/home/u/demo"), "Linux keeps case");
         assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325, "the offset basis");
         assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c, "the published value for \"a\"");
+    }
+
+    #[test]
+    fn only_an_absolute_path_with_no_dot_parts_is_a_checkout() {
+        let checkouts =
+            ["D:\\code\\demo", " d:/code/demo/ ", "\\\\server\\share\\demo", "/home/u/demo"];
+        for repo in checkouts {
+            assert!(absolute(repo), "{repo:?} is a checkout");
+        }
+        let names = ["demo", "learning", "..\\..", "..\\x", "run/x", "D:demo", "D:\\code\\..\\x"];
+        for repo in names.into_iter().chain(["/home/./u", "\\\\.\\pipe\\x", "", "   "]) {
+            assert!(!absolute(repo), "{repo:?} is not");
+        }
     }
 }
