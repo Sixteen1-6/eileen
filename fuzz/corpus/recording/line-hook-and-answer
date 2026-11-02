@@ -1,0 +1,7 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"hook":["ws_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F",{"pre_tool_use":{"request":7,"tool_name":"Read","tool_input":{"file_path":"notes.md"},"tool_use_id":"toolu_7","paths":[],"git":[],"urls":[]}}]}}}
+{"input":{"seq":2,"mono":2000000,"at":1792627199002000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"summarise them"}}}}}
+{"hook_answer":{"input":1,"mono":2500000,"reply":{"pre_tool_use":{"request":7,"decision":"none"}}}}
+{"input":{"seq":3,"mono":3000000,"at":1792627199003000,"ctx":{"turn":null,"job":null,"call":null},"input":{"hook":["ws_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F",{"pre_tool_use":{"request":8,"tool_name":"Write","tool_input":{"file_path":"summary.md","content":"three points"},"tool_use_id":"toolu_8","paths":[],"git":[],"urls":[]}}]}}}
+{"hook_answer":{"input":3,"mono":3200000,"reply":{"pre_tool_use":{"request":8,"decision":{"deny":{"reason":"outside the job folder"}}}}}}
+{"input":{"seq":4,"mono":4000000,"at":1792627199004000,"ctx":{"turn":null,"job":null,"call":null},"input":{"hook":["ws_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F",{"pre_tool_use":{"request":9,"tool_name":"Read","tool_input":{"file_path":"todo.md"},"tool_use_id":"toolu_9","paths":[],"git":[],"urls":[]}}]}}}
+{"hook_answer":{"input":4,"mono":4100000,"reply":{"pre_tool_use":{"request":9,"decision":"none"}}}}

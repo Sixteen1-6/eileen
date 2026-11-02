@@ -1,0 +1,6 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"set_mute":true}}}}
+{"input":{"seq":2,"mono":2000000,"at":1792627199002000,"ctx":{"turn":null,"job":null,"call":null},"input":{"memory":{"available_mb":1800,"commit_headroom_mb":5600,"paging_kb_s":4000,"paging_limit_kb_s":5000,"largest_process":null}}}}
+{"input":{"seq":3,"mono":3000000,"at":1792627199003000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"set_mute":false}}}}
+{"input":{"seq":4,"mono":4000000,"at":1792627199004000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"what time is it"}}}}}
+{"input":{"seq":5,"mono":5000000,"at":1792627199005000,"ctx":{"turn":null,"job":null,"call":null},"input":{"memory":{"available_mb":1800,"commit_headroom_mb":5600,"paging_kb_s":4000,"paging_limit_kb_s":5000,"largest_process":null}}}}
+{"input":{"seq":6,"mono":6000000,"at":1792627199006000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"and open the calculator"}}}}}
