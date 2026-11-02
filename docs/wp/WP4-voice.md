@@ -120,18 +120,31 @@ The parts of the audio series, in merge order, as each opens:
    callback told when its buffer was captured or will play on the source's or sink's own clock; and
    `AudioConfig::speech`, the transport the later parts read. Evidence: the unit tests in
    `eileen_audio::fake::tests` and `eileen_audio::transport::tests`.
-3. `wp4/s1-audio-ring` (draft): the speech ring, crate-private in `eileen-audio` until the
-   component takes it. `CaptureWriter`, the capture callback's end, numbers each 512-sample frame
-   (`seq` from 1, counted from the core's start and never restarting) and hands it, with its
-   capture time and capture flags, over an `rtrb` SPSC ring; it allocates nothing. `SpeechRing`,
-   the reader's end, moves frames into a replay store of at most 180 s (5,625 frames, allocated
-   once) that keeps every frame the speech process has not confirmed, confirms through the `seq`
-   of a `Pong` with no turn open or of the frame that carried an `EndOfTurn`, replays from the
-   oldest unconfirmed frame on each new connection, drops the oldest on overrun, sets the break
-   and replayed flags, and empties on a mute. Evidence: the unit tests in
-   `eileen_audio::ring::tests` (each rule, WP4 acceptance 15's overrun and mute pieces at the
-   unit layer, and the push inside `allocation_counter::measure`) and the loom tests in
-   `eileen_audio::ring::concurrency`, which run once on a real thread without `--cfg loom`.
+3. `wp4/s1-audio-ring` (#145, merged 2026-11-01): the speech ring, crate-private in `eileen-audio`
+   until the component takes it. `CaptureWriter`, the capture callback's end, numbers each
+   512-sample frame (`seq` from 1, counted from the core's start and never restarting) and hands it,
+   with its capture time and capture flags, over an `rtrb` SPSC ring; it allocates nothing.
+   `SpeechRing`, the reader's end, moves frames into a replay store of at most 180 s (5,625 frames,
+   allocated once) that keeps every frame the speech process has not confirmed, confirms through the
+   `seq` of a `Pong` with no turn open or of the frame that carried an `EndOfTurn`, replays from the
+   oldest unconfirmed frame on each new connection, drops the oldest on overrun, sets the break and
+   replayed flags, and empties on a mute. Evidence: the unit tests in `eileen_audio::ring::tests`
+   (each rule, WP4 acceptance 15's overrun and mute pieces at the unit layer, and the push inside
+   `allocation_counter::measure`) and the loom tests in `eileen_audio::ring::concurrency`, which run
+   once on a real thread without `--cfg loom`.
+4. `wp4/s1-audio-resample` (draft): the resamplers, crate-private in `eileen-audio`
+   (`resample`) until the component takes them. One polyphase engine, a Kaiser-windowed sinc
+   split into phases, serves four conversions: capture from 48 kHz to 16 kHz (the 3:1
+   decimator, 128 taps) and from 44.1 kHz (up 160, down 441, 120 taps per phase), and 24 kHz
+   synthesis to 48 kHz (the 1:2 interpolator, 32 taps per phase) and to 44.1 kHz (up 147, down
+   80, 32 taps per phase); and the stereo-to-mono capture downmix. Each filter is designed for
+   80 dB when the resampler is made, and the callbacks' path allocates nothing. Evidence: the
+   unit tests in `eileen_audio::resample::tests`, which measure every conversion through
+   `realfft` against the bar (on Linux and Windows CI), check that buffers of any size give the
+   same samples as one call and that every 10 ms buffer gives 10 ms, and run the downmix and
+   all four conversions inside `allocation_counter::measure`. The cost bar is the `owner_pc::`
+   benchmark in the same module, still to be run on the owner's PC; its result goes on the pull
+   request's `owner-run:` line and here.
 
 The speech series has not opened yet.
 
@@ -152,6 +165,9 @@ The speech series has not opened yet.
   `eileen-audio`), so the ring's loom tests are written to run once on a real thread in every
   other build: CI compiles and runs their bodies, and the loom exploration runs where the flag is
   set.
+
+- realfft's newest release, 3.5.1, came out on 2026-10-26, inside the cooling-off period, so the
+  lock holds 3.5.0, the release section 4.1 names.
 
 - `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
   first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
@@ -198,11 +214,29 @@ The speech series has not opened yet.
   lives in an atomic both sides share, so numbering goes on across streams.
 - A frame counts as written once the ring hands it out. A write that fails ends the connection,
   and the next connection replays from the oldest unconfirmed frame, so the ring needs no undo.
-- Resampling: the bar of BUILD.md section 6.6 (the decimator flat within 0.1 dB to 7 kHz and
-  60 dB down from 9 kHz, the interpolator flat to 10 kHz with its images 60 dB down from 14 kHz,
-  each at most 25 us per 10 ms buffer). At the 48 kHz endpoint rate both ratios are integers (3:1
-  and 1:2), so the own polyphase filter is measured first, a 44.1 kHz endpoint included; if it
-  misses, an amendment pins `rubato` so that it can be measured against the same bar.
+- Resampling: Eileen's own polyphase filter, measured against the bar of BUILD.md section 6.6
+  (capture flat within 0.1 dB to 7 kHz and 60 dB down from 9 kHz, synthesis flat to 10 kHz with
+  its images 60 dB down from 14 kHz, each at most 25 us per 10 ms buffer). Every filter is
+  designed for an 80 dB stopband, 20 dB past the bar, and the tests measure each conversion
+  against the bar itself, so `rubato` stays unpinned while they pass. One engine serves the
+  integer ratios of the 48 kHz endpoint and the rational ratios of a 44.1 kHz one, so the
+  44.1 kHz case costs no second implementation. The cost bar is the `owner_pc::` benchmark; if
+  it misses, the rubato pin amendment follows, as section 6.6 says.
+- A 44.1 kHz endpoint: cpal 0.18.2 opens WASAPI capture streams only at the device's own rates
+  (only render streams take `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`), so capture from such an
+  endpoint needs Eileen's 160:441 conversion. A render stream could be opened at 48 kHz through
+  Windows' converter at its default quality, which CI cannot measure, so the synthesis path
+  keeps Eileen's own 147:80 conversion as well; the render part chooses between them.
+- The loopback is a capture stream too: cpal opens it as an input stream on the render endpoint
+  with `AUDCLNT_STREAMFLAGS_LOOPBACK` and no converter, so a 44.1 kHz endpoint's echo reference
+  also arrives at 44.1 kHz and takes the 160:441 conversion, even when playback runs at 48 kHz
+  through Windows' converter. BUILD.md sections 2.2 step 1, 2.8 and 6.6 still say capture and
+  loopback run at 48 kHz; the pull request for this part proposes the wording under "Suggested
+  guidance changes".
+- An endpoint mixing at any other rate (32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
+  resampler. Until the part of this series that first opens a cpal stream decides what then
+  happens (refuse the endpoint with a logged reason, or add the conversions, measured against
+  the same bar), such an endpoint is unsupported.
 
 ## Outcome
 
