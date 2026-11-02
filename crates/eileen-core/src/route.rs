@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, TurnRoute};
+use eileen_contracts::bus::{BusEvent, SpeakCause, TurnRoute};
 use eileen_contracts::ids::{MonoTime, Personal, TurnId};
 use eileen_contracts::intent::{
     CoreCommand, FollowUp, LastTurnRefs, Resolution, ResolveCtx, ToolSource,
@@ -267,7 +267,7 @@ impl Core {
             Fast::Stop => self.stop_speaking(cx, true),
             Fast::Cancel(job) => {
                 self.stop_speaking(cx, true);
-                self.cancel_job(cx, job.as_ref(), CancelSource::Voice);
+                self.cancel_spoken(cx, routed.turn, job.as_ref());
             }
             Fast::GoOn => self.go_on(cx, routed.turn),
             Fast::WhatTime => {
