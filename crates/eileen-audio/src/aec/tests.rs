@@ -193,12 +193,13 @@ fn db(ratio: f32) -> f32 {
     10.0 * ratio.log10()
 }
 
-/// Eileen's voice from the speakers: a minute, looped.
+/// Eileen's voice from the speakers: a minute, looped, at -26 dBFS, so that with a bed under it
+/// the speakers' mix peaks near -6 dBFS and never clips, as a device's mix cannot.
 fn eileen() -> Vec<f32> {
-    voice(1, (170.0, 250.0), 60.0, 0.1)
+    voice(1, (170.0, 250.0), 60.0, 0.05)
 }
 
-/// A spoken command, two seconds, as loud at the microphone as Eileen's voice is at the speaker.
+/// A spoken command, two seconds, at -22 dBFS at the microphone.
 fn command() -> Vec<f32> {
     voice(7, (110.0, 160.0), 2.0, 0.08)
 }
@@ -206,13 +207,13 @@ fn command() -> Vec<f32> {
 /// The music bed the PC plays, 47 s looped: no length shares a factor with Eileen's minute, so
 /// ten minutes of the two never repeat a stretch.
 fn music_bed() -> Bed {
-    bed(music(3, 47.0, 0.1), BedSource::Speakers)
+    bed(music(3, 47.0, 0.05), BedSource::Speakers)
 }
 
 /// The speech-video bed the PC plays, 53 s looped: a man talking over quiet music.
 fn video_bed() -> Bed {
-    let talk = voice(11, (90.0, 150.0), 53.0, 0.09);
-    let under = music(12, 53.0, 0.03);
+    let talk = voice(11, (90.0, 150.0), 53.0, 0.045);
+    let under = music(12, 53.0, 0.015);
     bed(talk.iter().zip(&under).map(|(a, b)| a + b).collect(), BedSource::Speakers)
 }
 
@@ -254,6 +255,8 @@ struct Listener {
     chunks: Vec<Measured>,
     /// When each onset's window ended.
     onsets: Vec<Duration>,
+    /// The loudest sample the loopback carried: what the speakers played.
+    loudest: f32,
     /// The window of each onset, an index into `levels`.
     onset_windows: Vec<usize>,
 }
@@ -272,9 +275,9 @@ impl Listener {
         self.window_other |= report.flags.other_audio;
         if self.window.len() >= WINDOW {
             let window: [f32; WINDOW] = self.window[..WINDOW].try_into().unwrap();
-            let level_in = db(mean_square(&self.window_in[..WINDOW]));
-            self.levels.push((level_in, db(mean_square(&window))));
-            if self.detector.window(&window, self.window_other).onset {
+            let heard: [f32; WINDOW] = self.window_in[..WINDOW].try_into().unwrap();
+            self.levels.push((db(mean_square(&heard)), db(mean_square(&window))));
+            if self.detector.window(&window, &heard, self.window_other).onset {
                 self.onsets.push(at + ms(10));
                 self.onset_windows.push(self.levels.len() - 1);
             }
@@ -291,6 +294,7 @@ type Shared = Arc<Mutex<Listener>>;
 struct Heard {
     chunks: Vec<Measured>,
     onsets: Vec<Duration>,
+    loudest: f32,
     levels: Vec<(f32, f32)>,
     onset_windows: Vec<usize>,
 }
@@ -370,6 +374,7 @@ fn start(scene: Scene) -> (Shared, Vec<Box<dyn AudioStream>>) {
         levels: Vec::new(),
         chunks: Vec::new(),
         onsets: Vec::new(),
+        loudest: 0.0,
         onset_windows: Vec::new(),
     }));
     let mut streams = Vec::new();
@@ -397,6 +402,7 @@ fn take(shared: &Shared) -> Heard {
     Heard {
         chunks: std::mem::take(&mut listener.chunks),
         onsets: std::mem::take(&mut listener.onsets),
+        loudest: listener.loudest,
         levels: std::mem::take(&mut listener.levels),
         onset_windows: std::mem::take(&mut listener.onset_windows),
     }
@@ -417,7 +423,10 @@ fn speaker(shared: &Shared, voice: Vec<f32>) -> RenderCallback {
 fn loopback(shared: &Shared) -> CaptureCallback {
     let shared = Arc::clone(shared);
     Box::new(move |buffer: &[f32], _: CaptureInfo| {
-        shared.lock().unwrap().loopback = Some(buffer.try_into().unwrap());
+        let mut listener = shared.lock().unwrap();
+        let loudest = buffer.iter().fold(listener.loudest, |most, sample| most.max(sample.abs()));
+        listener.loudest = loudest;
+        listener.loopback = Some(buffer.try_into().unwrap());
     })
 }
 
@@ -606,7 +615,7 @@ fn a_loopback_that_lags_and_scales_eileen_is_not_other_audio_and_a_bed_in_it_is(
     // another volume: two chunks late at full and at half gain, her voice alone never sets the
     // flag, and music under it sets it in her pauses.
     let voice = eileen();
-    let bed = music(4, 12.0, 0.05);
+    let bed = music(4, 12.0, 0.025);
     let chunk = |samples: &[f32], k: usize| -> [f32; CHUNK] {
         samples[k * CHUNK..(k + 1) * CHUNK].try_into().unwrap()
     };
@@ -691,6 +700,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_music_bed() {
         ..Scene::default()
     };
     let heard = listen(scene, 603).await;
+    assert!(heard.loudest < 1.0, "the speakers' mix clipped at {}", heard.loudest);
     let late = heard.onsets_from(CONVERGED_AT);
     assert!(late.is_empty(), "false onsets over music: {}", heard.onset_levels());
 }
@@ -704,6 +714,7 @@ async fn no_barge_in_onset_in_ten_minutes_of_eileen_over_the_speech_video_bed() 
         ..Scene::default()
     };
     let heard = listen(scene, 603).await;
+    assert!(heard.loudest < 1.0, "the speakers' mix clipped at {}", heard.loudest);
     let late = heard.onsets_from(CONVERGED_AT);
     assert!(late.is_empty(), "false onsets over the video: {}", heard.onset_levels());
 }

@@ -3,10 +3,13 @@
 //! microphone stands in for it. The component part feeds it and acts on what it reports.
 //!
 //! [`EnergyDetector`] takes 32 ms windows, the VAD's and the speech frames' 512 samples at
-//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor and
-//! is at least -40 dBFS, the quietest voice near the PC it is meant to hear. While other audio
-//! plays the margin is 18 dB: section 2.8 makes barge-in stricter then (two VAD windows over its
-//! threshold), and a bed's residual after AEC3 is less steady than a room's noise. The floor
+//! 16 kHz, and calls a window speech when its level stands 12 dB over the room's noise floor, is
+//! at least -40 dBFS, the quietest voice near the PC it is meant to hear, and lost at most 6 dB
+//! to the canceller: a voice in the room passes the canceller nearly whole, while a window it
+//! took more from was mostly echo, whose remainder can still be loud while AEC3 converges or
+//! briefly loses the room. While other audio plays the margin is 18 dB: section 2.8 makes
+//! barge-in stricter then (two VAD windows over its threshold), and a bed's residual after AEC3
+//! is less steady than a room's noise. The floor
 //! drops to any quieter window at once and rises 5 dB a second otherwise, so a steady noise stops
 //! counting within seconds while a spoken word, louder than the floor by far more than it rises
 //! meanwhile, still counts. On noise-suppressed audio in a quiet room the floor sits low and the
@@ -44,6 +47,9 @@ const MARGIN_OTHER_AUDIO_DB: f32 = 18.0;
 /// The quietest window that counts as speech, in dBFS.
 const MIN_SPEECH_DBFS: f32 = -40.0;
 
+/// The most the canceller may take from a window that counts as speech, in dB.
+const MAX_CANCELLED_DB: f32 = 6.0;
+
 /// How fast the floor rises, in dB per window: 5 dB a second.
 const FLOOR_RISE_DB: f32 = 5.0 * 0.032;
 
@@ -75,17 +81,24 @@ impl EnergyDetector {
         Self { floor_db: None, run: 0 }
     }
 
-    /// Judges one window of echo-cancelled 16 kHz audio. `other_audio` is the capture flag of
-    /// the same time.
-    pub(crate) fn window(&mut self, samples: &[f32; WINDOW], other_audio: bool) -> EnergyWindow {
-        let level = level_dbfs(samples);
+    /// Judges one window of echo-cancelled 16 kHz audio, `cancelled`, against the microphone's
+    /// window it came from, `heard`. `other_audio` is the capture flag of the same time.
+    pub(crate) fn window(
+        &mut self,
+        cancelled: &[f32; WINDOW],
+        heard: &[f32; WINDOW],
+        other_audio: bool,
+    ) -> EnergyWindow {
+        let level = level_dbfs(cancelled);
         let floor = match self.floor_db {
             Some(floor) => (floor + FLOOR_RISE_DB).min(level),
             None => level,
         };
         self.floor_db = Some(floor);
         let margin = if other_audio { MARGIN_OTHER_AUDIO_DB } else { MARGIN_DB };
-        let speech = level >= MIN_SPEECH_DBFS && level >= floor + margin;
+        let speech = level >= MIN_SPEECH_DBFS
+            && level >= floor + margin
+            && level >= level_dbfs(heard) - MAX_CANCELLED_DB;
         self.run = if speech { self.run.saturating_add(1) } else { 0 };
         EnergyWindow { speech, run: self.run, onset: self.run == ONSET_WINDOWS }
     }

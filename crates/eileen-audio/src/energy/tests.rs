@@ -6,13 +6,14 @@ fn at(dbfs: f32) -> [f32; WINDOW] {
     std::array::from_fn(|n| if n % 2 == 0 { amplitude } else { -amplitude })
 }
 
-/// Feeds `windows` and returns what the detector made of each.
+/// Feeds `windows`, each as the canceller passed it whole, and returns what the detector made
+/// of each.
 fn feed(
     detector: &mut EnergyDetector,
     windows: &[[f32; WINDOW]],
     other: bool,
 ) -> Vec<EnergyWindow> {
-    windows.iter().map(|window| detector.window(window, other)).collect()
+    windows.iter().map(|window| detector.window(window, window, other)).collect()
 }
 
 /// A detector whose floor settled on `dbfs`.
@@ -66,6 +67,22 @@ fn a_window_under_minus_40_dbfs_is_never_speech() {
 }
 
 #[test]
+fn a_window_the_canceller_took_more_than_6_db_from_is_not_speech() {
+    // A loud remainder of echo: -30 dBFS after the canceller, from -22 dBFS at the microphone.
+    let mut detector = settled_on(-70.0);
+    let (cancelled, heard) = (at(-30.0), at(-22.0));
+    let seen: Vec<EnergyWindow> =
+        (0..5).map(|_| detector.window(&cancelled, &heard, false)).collect();
+    assert!(seen.iter().all(|window| !window.speech), "8 dB cancelled: echo, not a voice");
+
+    // A voice over the echo: -23 dBFS after the canceller, from -21 dBFS.
+    let (cancelled, heard) = (at(-23.0), at(-21.0));
+    let seen: Vec<EnergyWindow> =
+        (0..3).map(|_| detector.window(&cancelled, &heard, false)).collect();
+    assert!(seen[2].onset, "2 dB cancelled: a voice");
+}
+
+#[test]
 fn digital_silence_keeps_the_level_finite() {
     let mut detector = EnergyDetector::new();
     let seen = feed(&mut detector, &[[0.0; WINDOW]; 4], false);
@@ -107,7 +124,7 @@ fn judging_a_window_allocates_nothing() {
     let counted = allocation_counter::measure(|| {
         for n in 0..64 {
             let window = if n % 8 < 5 { &loud } else { &quiet };
-            onsets += u32::from(detector.window(window, n % 16 < 8).onset);
+            onsets += u32::from(detector.window(window, window, n % 16 < 8).onset);
         }
     });
     assert_eq!(counted, allocation_counter::AllocationInfo::default(), "no allocation or free");

@@ -245,6 +245,15 @@ The speech series has not opened yet.
   ERLE floors are measured. AEC3 learns the room once after the core starts, since the bypass
   keeps its state, so this is the first few seconds of the first sound played, and only while
   the speech process is not connected.
+- Once the music bed looped every 47 s instead of every 60 s, the ten minutes over it showed one
+  more event on Windows CI only (the test audio comes from the platform's `sin` and `exp`, so
+  the two runners hear slightly different signals): 78.7 s in, AEC3 took only 5.8 to 15 dB off
+  for about 200 ms (-22 to -25 dBFS at the microphone, -30 to -40 dBFS after it), and the
+  detector fired twice. Two changes answer it. The speakers' mix of Eileen and a bed peaked at
+  0.99 of full scale, hotter than a device's mix gets, so the test voices and beds are 6 dB
+  quieter (Eileen at -26 dBFS) and the bed tests assert the mix never reaches full scale. And
+  the detector counts a window as speech only if the canceller took at most 6 dB from it, which
+  leaves neither event a run of three windows and which a voice over the echo passes.
 
 - `AudioConfig` was a unit struct, which `eileen-cli`'s wiring named as a value. Giving it its
   first field changed that one call to `AudioConfig::default()`, a line in WP2's crate.
@@ -418,7 +427,9 @@ The speech series has not opened yet.
   needs more than twice the energy she played (3 dB), turns on after 200 ms and off after 1 s,
   so other audio quieter than her voice shows in her pauses and the hold bridges them.
 - The energy fallback works on the 32 ms windows the VAD and the speech frames use. A window
-  is speech at 12 dB over an adaptive floor and at least -40 dBFS, with an 18 dB margin while
+  is speech at 12 dB over an adaptive floor, at least -40 dBFS and with at most 6 dB taken by
+  the canceller (a double-talk test: a voice in the room passes the canceller nearly whole,
+  while a window it took more from was mostly echo), with an 18 dB margin while
   other audio plays (section 2.8 asks barge-in for two VAD windows over its threshold then; the
   fallback's onset already takes three, so it raises its margin instead); the floor starts at the first window, drops to any
   quieter window and rises 5 dB a second, so a steady noise stops counting within seconds. An
