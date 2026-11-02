@@ -488,20 +488,14 @@ impl Core {
             End::Failed { .. } => Step::Fail,
             End::Cancelled { .. } => Step::Cancel,
         };
-        let job = match self.jobs.registry.step(live.job, step, cx.at) {
-            Ok(job) => job.clone(),
-            // A job that cannot take this step from where it is stays live, so a later event
-            // of its session still ends it; one already finished is live no longer.
-            Err(_) => {
-                let finished =
-                    self.jobs.registry.get(live.job).is_none_or(|job| job.status.is_terminal());
-                if finished {
-                    self.jobs.live = None;
-                }
-                return;
-            }
-        };
-        self.jobs.live = None;
+        let taken = self.jobs.registry.step(live.job, step, cx.at).ok().cloned();
+        // A job that cannot take this step from where it is stays live, so a later event of its
+        // session still ends it; one already finished is live no longer.
+        let finished = self.jobs.registry.get(live.job).is_none_or(|job| job.status.is_terminal());
+        if finished {
+            self.jobs.live = None;
+        }
+        let Some(job) = taken else { return };
         let (event, spoken) = match end {
             End::Completed { summary } => {
                 let spoken =
