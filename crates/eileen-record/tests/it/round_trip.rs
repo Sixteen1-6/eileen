@@ -90,7 +90,7 @@ proptest! {
         let mut store = BlobStore::open(scratch.path()).unwrap();
         let max_inline = if small { 8 } else { MAX_INLINE_BYTES };
         let text = write(&lines, &mut store, max_inline);
-        prop_assert_eq!(text.iter().filter(|byte| **byte == b'\n').count(), lines.len());
+        prop_assert_eq!(text.split(|byte| *byte == b'\n').count(), lines.len() + 1);
         let read = Reader::new(Cursor::new(&text)).read_all(&store).unwrap();
         prop_assert_eq!(read, lines);
     }
