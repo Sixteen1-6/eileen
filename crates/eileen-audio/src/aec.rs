@@ -28,8 +28,8 @@
 //! the chunk's own time:
 //!
 //! - `playback` while Eileen's own PCM for the chunk sounds. Her echo still reaches the
-//!   microphone for a while after, which the canceller handles itself: her PCM stays the
-//!   reference for 500 ms after it falls silent.
+//!   microphone for a while after, which the canceller handles itself: AEC3 keeps running
+//!   against its reference for 500 ms after the reference and her PCM fall silent.
 //! - `other_audio` while the loopback carries energy her own PCM does not explain: over the last
 //!   100 ms, more than twice the energy she played (3 dB), a window long enough to cover the
 //!   loopback lagging her stream by a buffer or two. It turns on after 200 ms of such energy and
@@ -37,9 +37,15 @@
 //!   Eileen's own voice shows only in her pauses, which the hold bridges.
 //!
 //! The devices' samples are untrusted: a NaN or infinite sample in the microphone, the loopback or
-//! her PCM is replaced with silence before any of it reaches sonora or the flags, and the report
-//! says so. AEC3's state is never reset, so one such sample reaching its filter would spoil it
-//! for the rest of the process.
+//! her PCM, or one past 24 dB over full scale, which no device delivers as sound, is replaced
+//! with silence before any of it reaches sonora or the flags, and the report says so. AEC3's
+//! state is never reset, so one such sample reaching its filter would spoil it for the rest of
+//! the process.
+//!
+//! The 50 ms allowance assumes the loopback, once the component has placed it on the
+//! microphone's clock, runs at most 40 ms behind her PCM. Further behind, each reply after a
+//! pause would hand the reference to her PCM and back, and each change restarts AEC3's learning
+//! time, in which the energy fallback counts no speech; the device part measures the real lag.
 //!
 //! The capture side calls [`EchoCanceller::process`] once per 10 ms of microphone audio, with the
 //! loopback and the own PCM of the same time, each placed by its buffer's time on its device's
@@ -72,6 +78,10 @@ pub(crate) const MISSING_CHUNKS: u32 = 5;
 
 /// Chunks of sounding reference after which AEC3 has learned the room: 3 s.
 pub(crate) const LEARNING_CHUNKS: u32 = 300;
+
+/// The largest sample taken as sound: 24 dB over full scale. A float device stream can go a
+/// little past 1.0; nothing near this is audio.
+const MAX_SAMPLE: f32 = 16.0;
 
 /// A chunk under this mean square is silent: -60 dBFS.
 const SILENT_MEAN_SQUARE: f32 = 1e-6;
@@ -112,7 +122,7 @@ pub(crate) struct ChunkReport {
     /// AEC3 ran and has not yet heard 3 s of sounding reference since it started or since its
     /// reference changed: what it leaves of the echo can be as loud as a voice.
     pub(crate) learning: bool,
-    /// A NaN or infinite input sample was replaced with silence.
+    /// A NaN, infinite or far too large input sample was replaced with silence.
     pub(crate) repaired: bool,
     /// The capture flags.
     pub(crate) flags: CaptureFlags,
@@ -333,12 +343,12 @@ const fn next_quiet(quiet: u32, sounds: bool) -> u32 {
     if sounds { 0 } else { quiet.saturating_add(1) }
 }
 
-/// Copies `from` into `to` with each NaN or infinite sample made silence, and says whether there
-/// was one.
+/// Copies `from` into `to` with each NaN, infinite or far too large sample made silence, and
+/// says whether there was one.
 fn finite_into(from: &[f32; CHUNK], to: &mut [f32; CHUNK]) -> bool {
     let mut repaired = false;
     for (sample, &value) in to.iter_mut().zip(from) {
-        if value.is_finite() {
+        if value.abs() <= MAX_SAMPLE {
             *sample = value;
         } else {
             *sample = 0.0;

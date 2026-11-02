@@ -95,8 +95,10 @@ const fn samples_in(seconds: f32) -> usize {
     (seconds * RATE + 0.5) as usize
 }
 
-/// `sin(x)` to about 1e-7 from IEEE 754's exactly rounded operations alone: `x` brought into
-/// `[-pi/2, pi/2]`, then its Taylor series to the eleventh power.
+/// `sin(x)` from IEEE 754's exactly rounded operations alone: `x` brought into `[-pi/2, pi/2]`,
+/// then its Taylor series to the eleventh power, within about 1e-7 there. For a large `x` the
+/// rounding of `x` itself and of `TAU` puts the phase off by up to about 1e-3, which only
+/// detunes the synthetic notes a little, the same on every platform.
 const fn sine(x: f32) -> f32 {
     const C3: f32 = -1.0 / 6.0;
     const C5: f32 = 1.0 / 120.0;
@@ -610,7 +612,8 @@ struct OverCommand {
 }
 
 /// Runs `scene` for 9 s with and without the command at 6 s, by when AEC3 has learned the room.
-/// The room and the canceller are deterministic, so the two runs differ only by the command.
+/// The room and the canceller are deterministic, so the two runs differ in the command and in
+/// what AEC3 and noise suppression made of the double talk, which the bounds allow for.
 async fn command_over(scene: fn() -> Scene) -> OverCommand {
     let spoken = command();
     let near: f32 = spoken.chunks(CHUNK).map(mean_square).sum();
@@ -816,9 +819,9 @@ fn a_nan_or_infinite_input_sample_becomes_silence_and_the_report_says_so() {
         assert!(!report.repaired, "finite input is left alone");
         echo = far.map(|sample| 0.3 * sample);
     }
-    for poisoned in 0..3 {
+    for poisoned in 0..4 {
         let (mut mic, mut far, mut own) = (echo, noise(&mut rng), noise(&mut rng));
-        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][poisoned];
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX][poisoned];
         match poisoned {
             0 => mic[17] = bad,
             1 => far[17] = bad,
@@ -979,6 +982,7 @@ async fn assert_no_onset_over(bed: Vec<f32>, start_s: u64) {
     };
     let heard = listen(scene, BED_RUN_SECONDS).await;
     assert!(heard.loudest < 1.0, "the speakers' mix clipped at {}", heard.loudest);
+    assert_learned_and_judged(&heard);
     let closest = heard.closest_approach();
     assert!(
         heard.onsets.is_empty(),
@@ -1027,11 +1031,21 @@ async fn no_barge_in_onset_over_eileen_and_the_video_bed_from_450_s() {
     assert_no_onset_over(video_samples(), 450).await;
 }
 
+/// Checks that AEC3 learned the room within 6 s and was not learning again after, so the
+/// detector judged the rest of the run rather than counting nothing.
+fn assert_learned_and_judged(heard: &Heard) {
+    let learned = learned_at(heard);
+    assert!(learned.is_some_and(|at| at <= 600), "AEC3 learned the room at chunk {learned:?}");
+    let again = heard.learning()[learned.unwrap()..].iter().filter(|&&l| l).count();
+    assert_eq!(again, 0, "chunks learning again after it had learned");
+}
+
 /// Plays `bed` alone, Eileen silent, for a minute from a fresh canceller, as while the core
 /// starts and the speech process loads its models, and checks that the detector never fires.
 async fn assert_no_onset_over_alone(bed: Vec<f32>) {
     let scene = Scene { bed: Some(played(bed)), loopback: true, ..Scene::default() };
     let heard = listen(scene, 60).await;
+    assert_learned_and_judged(&heard);
     let closest = heard.closest_approach();
     assert!(
         heard.onsets.is_empty(),

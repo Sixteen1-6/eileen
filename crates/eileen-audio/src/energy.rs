@@ -24,8 +24,9 @@
 //! and once per run of speech windows.
 //!
 //! What remains after AEC3 of Eileen's voice and of a bed the PC plays stays under these
-//! thresholds; `aec::tests` checks over ten minutes of each bed, from a fresh canceller on, that
-//! it never fires, and that it fires on a near-end command alone, over Eileen and over each bed.
+//! thresholds; `aec::tests` checks over ten minutes of each bed, in runs that each start from a
+//! fresh canceller and overlap by its learning time, that it never fires, and that it fires on a
+//! near-end command alone, over Eileen and over each bed.
 //!
 //! A detector's floor is the room's while it is fed, so the component makes a fresh assembler
 //! each time the speech process disconnects: a floor kept from before would be stale. Nothing

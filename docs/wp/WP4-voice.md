@@ -450,11 +450,14 @@ The speech series has not opened yet.
   changed under it); while the loopback works the readings agree, since her voice is in it.
   An earlier rule waited for 500 ms of loopback silence before switching, which left AEC3
   cancelling against silence for half a second while her echo passed whole; 50 ms covers a
-  loopback a buffer or two behind her stream, which the room tests now model. The pull request
+  loopback a buffer or two behind her stream, which the room tests now model. A loopback more
+  than 40 ms behind her PCM, once placed on the microphone's clock, would hand the reference to
+  her PCM and back at each reply after a pause, and each change restarts AEC3's learning time;
+  the device part measures the real lag on the owner's PC. The pull request
   proposes a sentence for section 2.2 under "Suggested guidance changes". A chunk is silent
   under -60 dBFS.
 - The devices' samples are untrusted: a NaN or infinite sample in the microphone, the loopback
-  or her PCM becomes silence before sonora or the flags see it, and the report says so, for the
+  or her PCM, or one past 24 dB over full scale, becomes silence before sonora or the flags see it, and the report says so, for the
   component part to count and log. AEC3 is never reset, so one bad sample in its filter would
   last for the process.
 - The bypass runs a second sonora pipeline (high-pass filter and noise suppression) and leaves
