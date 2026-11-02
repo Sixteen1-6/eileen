@@ -1,6 +1,7 @@
 //! Eileen's recordings (BUILD.md section 3.3.16): the recording formats on disk, input records
-//! and hook answers as `RecordLine`s ([`line`]), the content-addressed blob store ([`blob`]), the
-//! [`reader`], the [`writer`] and [`trim`]. `eileen record` itself is still a stub.
+//! and hook answers as `RecordLine`s ([`line`](mod@line)), the content-addressed blob store
+//! ([`blob`]), the [`reader`], the [`writer`] and [`trim`]. `eileen record` itself is still a
+//! stub.
 //!
 //! # Owns
 //!
