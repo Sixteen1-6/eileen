@@ -5,13 +5,27 @@
 //! the last reference is released, so a forget leaves no unreferenced blob behind.
 //!
 //! This is the only module of the crate that uses vendored C (zstd, check 24). Its calls block on
-//! the disk, so async callers run them on the runtime's blocking pool. One process, the core,
-//! writes a data directory's store, and its calls take `&mut self`, so counts are updated one at
-//! a time; each file is written beside its final name and renamed into place, so a crash leaves
-//! either the old file or the new one.
+//! the disk, so async callers run them on the runtime's blocking pool.
+//!
+//! A count is read, changed and written back, so one writer at a time: [`BlobStore::open`]
+//! takes an exclusive lock on `<root>/.lock` that lasts as long as the store, and a second open
+//! of the same folder, from this process or another, fails with [`BlobStoreError::Locked`].
+//! Callers in one process share one store (behind a mutex, say), and its calls take
+//! `&mut self`, so counts change one at a time.
+//!
+//! Each file is written as `<name>.part`, synced, and renamed into place, and on Linux the
+//! folder is synced after the rename, so a crash or a power cut leaves the old file or the new
+//! one (on Windows the rename rests on NTFS's journal). A `.part` file left by a crash is
+//! replaced by the next write of its name and removed with its blob. A file damaged all the
+//! same is repaired, never trusted: a blob that does not decompress to its hash is written again
+//! by the next `put` of its bytes, and a count that does not read is taken as
+//! [`UNKNOWN_COUNT`], so the blob is kept until a sweep recounts its references. A count may be
+//! too high, which keeps a blob too long, but never too low, which would delete one a recording
+//! still names.
 
 use std::collections::BTreeMap;
-use std::io::ErrorKind;
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use eileen_contracts::record::BlobRef;
@@ -25,6 +39,13 @@ const LEVEL: i32 = 3;
 
 /// The longest reference count file the store reads: a decimal `u64` and a newline.
 const MAX_REFS_FILE_BYTES: u64 = 32;
+
+/// The count a damaged count file is read as: more references than any data directory holds,
+/// so releasing them one by one never reaches 0 and the blob stays until a sweep recounts it.
+pub const UNKNOWN_COUNT: u64 = u64::MAX / 2;
+
+/// The lock file of a store's folder.
+const LOCK_FILE: &str = ".lock";
 
 /// The name of `bytes` in the store: `b3:` and their BLAKE3 hash.
 #[must_use]
@@ -55,12 +76,12 @@ pub enum BlobStoreError {
     /// A stored blob that does not decompress to bytes with its own hash.
     #[error("the blob {0} is corrupt")]
     Corrupt(BlobRef),
-    /// A reference count file that does not hold a count.
-    #[error("the reference count of {0} is unreadable")]
-    BadCount(BlobRef),
     /// A reference was added to a blob the store does not hold.
     #[error("the blob {0} is not in the store")]
     Missing(BlobRef),
+    /// Another store, in this process or another, holds the folder's lock.
+    #[error("another writer holds the blob store at {0}")]
+    Locked(PathBuf),
 }
 
 /// What releasing one reference did.
@@ -105,9 +126,11 @@ impl<T: Blobs + ?Sized> Blobs for &mut T {
 #[derive(Debug)]
 pub struct BlobStore {
     root: PathBuf,
+    /// The open lock file, whose lock is released when the store is dropped.
+    _lock: File,
 }
 
-/// The three files of one blob.
+/// The files of one blob.
 struct Files {
     folder: PathBuf,
     blob: PathBuf,
@@ -115,11 +138,25 @@ struct Files {
 }
 
 impl BlobStore {
-    /// Opens the store at `root`, creating the folder when it is not there.
+    /// Opens the store at `root`, creating the folder when it is not there, and takes the
+    /// exclusive lock on its `.lock` file that it keeps until it is dropped. The runtime opens
+    /// a data directory's store once and shares it; a second open while the first is alive
+    /// fails with [`BlobStoreError::Locked`] rather than wait.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, BlobStoreError> {
         let root = root.into();
         std::fs::create_dir_all(&root).map_err(io("create", &root))?;
-        Ok(Self { root })
+        let path = root.join(LOCK_FILE);
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(io("open", &path))?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Self { root, _lock: lock }),
+            Err(TryLockError::WouldBlock) => Err(BlobStoreError::Locked(root)),
+            Err(TryLockError::Error(error)) => Err(io("lock", &path)(error)),
+        }
     }
 
     /// The store's folder.
@@ -139,13 +176,14 @@ impl BlobStore {
         }
     }
 
-    /// How many references the blob has; 0 when the store does not hold it.
+    /// How many references the blob has; 0 when the store does not hold it, and
+    /// [`UNKNOWN_COUNT`] or more when its count file was damaged.
     pub fn refs(&self, blob: &BlobRef) -> Result<u64, BlobStoreError> {
         let files = self.files(blob);
         if !exists(&files.blob)? {
             return Ok(0);
         }
-        read_count(&files.refs, blob)
+        read_count(&files.refs)
     }
 
     /// Adds a reference to a blob the store holds, returning the new count.
@@ -154,9 +192,16 @@ impl BlobStore {
         if !exists(&files.blob)? {
             return Err(BlobStoreError::Missing(blob.clone()));
         }
-        let count = read_count(&files.refs, blob)?.saturating_add(1);
+        let count = read_count(&files.refs)?.saturating_add(1);
         write_atomic(&files.refs, format!("{count}\n").as_bytes())?;
         Ok(count)
+    }
+
+    /// Writes a blob's compressed bytes under its name.
+    fn write_blob(files: &Files, bytes: &[u8]) -> Result<(), BlobStoreError> {
+        std::fs::create_dir_all(&files.folder).map_err(io("create", &files.folder))?;
+        let packed = zstd::bulk::compress(bytes, LEVEL).map_err(io("compress", &files.blob))?;
+        write_atomic(&files.blob, &packed)
     }
 }
 
@@ -167,15 +212,19 @@ impl Blobs for BlobStore {
         }
         let blob = blob_ref(bytes);
         let files = self.files(&blob);
-        if exists(&files.blob)? {
-            self.retain(&blob)?;
-            return Ok(blob);
+        match self.get(&blob) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                Self::write_blob(&files, bytes)?;
+                // A count left from a blob deleted part way restarts with this one.
+                write_atomic(&files.refs, b"1\n")?;
+                return Ok(blob);
+            }
+            // Damaged on disk: written again, its count kept, since recordings still name it.
+            Err(BlobStoreError::Corrupt(_)) => Self::write_blob(&files, bytes)?,
+            Err(error) => return Err(error),
         }
-        std::fs::create_dir_all(&files.folder).map_err(io("create", &files.folder))?;
-        let packed = zstd::bulk::compress(bytes, LEVEL).map_err(io("compress", &files.blob))?;
-        write_atomic(&files.blob, &packed)?;
-        // A count left from a blob deleted part way restarts with this one.
-        write_atomic(&files.refs, b"1\n")?;
+        self.retain(&blob)?;
         Ok(blob)
     }
 
@@ -197,17 +246,16 @@ impl Blobs for BlobStore {
     fn release(&mut self, blob: &BlobRef) -> Result<Released, BlobStoreError> {
         let files = self.files(blob);
         if !exists(&files.blob)? {
-            remove_if_there(&files.refs)?;
+            remove_all(&files)?;
             return Ok(Released::Absent);
         }
-        let count = read_count(&files.refs, blob)?;
+        let count = read_count(&files.refs)?;
         if count > 1 {
             let left = count - 1;
             write_atomic(&files.refs, format!("{left}\n").as_bytes())?;
             return Ok(Released::Kept(left));
         }
-        remove_if_there(&files.blob)?;
-        remove_if_there(&files.refs)?;
+        remove_all(&files)?;
         Ok(Released::Deleted)
     }
 }
@@ -274,29 +322,52 @@ fn exists(path: &Path) -> Result<bool, BlobStoreError> {
     path.try_exists().map_err(io("look for", path))
 }
 
-/// A blob's reference count; a missing file counts 1, since the blob file is written first.
-fn read_count(path: &Path, blob: &BlobRef) -> Result<u64, BlobStoreError> {
+/// A blob's reference count. A missing file counts 1, since the blob file is written first; a
+/// file that does not hold a count above 0 counts [`UNKNOWN_COUNT`], which can only keep the
+/// blob too long.
+fn read_count(path: &Path) -> Result<u64, BlobStoreError> {
     let text = match std::fs::metadata(path) {
-        Ok(meta) if meta.len() > MAX_REFS_FILE_BYTES => {
-            return Err(BlobStoreError::BadCount(blob.clone()));
-        }
-        Ok(_) => std::fs::read_to_string(path).map_err(io("read", path))?,
+        Ok(meta) if meta.len() > MAX_REFS_FILE_BYTES => return Ok(UNKNOWN_COUNT),
+        Ok(_) => std::fs::read(path).map_err(io("read", path))?,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(1),
         Err(error) => return Err(io("read", path)(error)),
     };
-    match text.trim_end().parse::<u64>() {
-        Ok(count) if count > 0 => Ok(count),
-        Ok(_) | Err(_) => Err(BlobStoreError::BadCount(blob.clone())),
-    }
+    let count = std::str::from_utf8(&text).ok().and_then(|text| text.trim_end().parse().ok());
+    Ok(count.filter(|count| *count > 0).unwrap_or(UNKNOWN_COUNT))
 }
 
-/// Writes `bytes` beside `path` and renames the file into place.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), BlobStoreError> {
+/// The file a write of `path` goes to before it is renamed into place.
+fn part(path: &Path) -> PathBuf {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
-    let part = PathBuf::from(part);
-    std::fs::write(&part, bytes).map_err(io("write", &part))?;
-    std::fs::rename(&part, path).map_err(io("rename", path))
+    PathBuf::from(part)
+}
+
+/// Writes `bytes` beside `path`, syncs them, and renames the file into place; on Linux the
+/// folder is synced too, so the rename survives a power cut.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), BlobStoreError> {
+    let part = part(path);
+    let mut file = File::create(&part).map_err(io("create", &part))?;
+    file.write_all(bytes).map_err(io("write", &part))?;
+    file.sync_all().map_err(io("sync", &part))?;
+    drop(file);
+    std::fs::rename(&part, path).map_err(io("rename", path))?;
+    sync_folder(path)
+}
+
+/// Syncs the folder that holds `path`, which makes a rename in it durable on Linux. Windows
+/// cannot open a folder as a file to sync it, and NTFS journals the rename.
+fn sync_folder(path: &Path) -> Result<(), BlobStoreError> {
+    let Some(folder) = path.parent().filter(|_| !cfg!(windows)) else { return Ok(()) };
+    File::open(folder).and_then(|folder| folder.sync_all()).map_err(io("sync", folder))
+}
+
+/// Removes a blob's files, a `.part` file left by a crash included.
+fn remove_all(files: &Files) -> Result<(), BlobStoreError> {
+    remove_if_there(&files.blob)?;
+    remove_if_there(&files.refs)?;
+    remove_if_there(&part(&files.blob))?;
+    remove_if_there(&part(&files.refs))
 }
 
 fn remove_if_there(path: &Path) -> Result<(), BlobStoreError> {
@@ -309,7 +380,11 @@ fn remove_if_there(path: &Path) -> Result<(), BlobStoreError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlobStore, Blobs, MemoryBlobs, Released, blob_ref};
+    use std::path::PathBuf;
+
+    use eileen_contracts::record::BlobRef;
+
+    use super::{BlobStore, BlobStoreError, Blobs, MemoryBlobs, Released, UNKNOWN_COUNT, blob_ref};
     use crate::test_support::Scratch;
 
     #[test]
@@ -364,6 +439,69 @@ mod tests {
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no file left in {folder:?}");
         assert_eq!(store.release(&blob).unwrap(), Released::Absent, "nothing to release");
         assert!(store.retain(&blob).is_err(), "no reference to a blob that is gone");
+    }
+
+    /// A blob's `.zst` and `.refs` paths.
+    fn paths(store: &BlobStore, blob: &BlobRef) -> (PathBuf, PathBuf) {
+        let hex = blob.as_str().strip_prefix("b3:").unwrap();
+        let folder = store.root().join(hex.get(..2).unwrap());
+        (folder.join(format!("{hex}.zst")), folder.join(format!("{hex}.refs")))
+    }
+
+    #[test]
+    fn a_second_store_on_the_same_folder_is_refused_while_the_first_is_open() {
+        let scratch = Scratch::new("blob-lock");
+        let store = BlobStore::open(scratch.path()).unwrap();
+        assert!(
+            matches!(BlobStore::open(scratch.path()), Err(BlobStoreError::Locked(_))),
+            "one writer at a time"
+        );
+        drop(store);
+        assert!(BlobStore::open(scratch.path()).is_ok(), "free once the first is dropped");
+    }
+
+    #[test]
+    fn a_damaged_blob_is_written_again_by_the_next_put_of_its_bytes() {
+        let scratch = Scratch::new("blob-empty");
+        let mut store = BlobStore::open(scratch.path()).unwrap();
+        let text = b"a blob a power cut emptied";
+        let blob = store.put(text).unwrap();
+        let (zst, _) = paths(&store, &blob);
+        std::fs::write(&zst, b"").unwrap();
+        assert!(matches!(store.get(&blob), Err(BlobStoreError::Corrupt(_))), "empty reads corrupt");
+        assert_eq!(store.put(text).unwrap(), blob, "the same name");
+        assert_eq!(store.get(&blob).unwrap().as_deref(), Some(text.as_slice()), "repaired");
+        assert_eq!(store.refs(&blob).unwrap(), 2, "the first reference kept");
+    }
+
+    #[test]
+    fn a_damaged_count_keeps_its_blob_rather_than_deleting_it() {
+        let scratch = Scratch::new("blob-count");
+        let mut store = BlobStore::open(scratch.path()).unwrap();
+        let blob = store.put(b"named by recordings we cannot count").unwrap();
+        let (_, refs) = paths(&store, &blob);
+        std::fs::write(&refs, b"").unwrap();
+        assert_eq!(store.refs(&blob).unwrap(), UNKNOWN_COUNT, "read as unknown");
+        assert_eq!(store.retain(&blob).unwrap(), UNKNOWN_COUNT + 1, "a reference added");
+        assert_eq!(store.put(b"named by recordings we cannot count").unwrap(), blob, "put works");
+        assert_eq!(store.release(&blob).unwrap(), Released::Kept(UNKNOWN_COUNT + 1), "kept");
+        assert!(store.get(&blob).unwrap().is_some(), "never deleted on a guess");
+    }
+
+    #[test]
+    fn releasing_the_last_reference_removes_a_part_file_a_crash_left() {
+        let scratch = Scratch::new("blob-part");
+        let mut store = BlobStore::open(scratch.path()).unwrap();
+        let blob = store.put(b"the user's words, compressed").unwrap();
+        let (zst, refs) = paths(&store, &blob);
+        for path in [&zst, &refs] {
+            let mut part = path.as_os_str().to_owned();
+            part.push(".part");
+            std::fs::write(PathBuf::from(part), b"left by a crash").unwrap();
+        }
+        assert_eq!(store.release(&blob).unwrap(), Released::Deleted, "the last one");
+        let folder = zst.parent().unwrap();
+        assert_eq!(std::fs::read_dir(folder).unwrap().count(), 0, "no file left in {folder:?}");
     }
 
     #[test]
