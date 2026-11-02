@@ -532,7 +532,15 @@ The speech series has not opened yet.
   awaited when a write fails, so the halves rejoin before the connection goes back. A reader
   task per connection was weighed: it would read while a long replay writes, but it needs its
   own channel and a way to hand its half back. Writes go a second of audio at a time instead,
-  with the loop reading between batches.
+  with the loop reading between batches and sending a due `Ping` before the next, so a speech
+  process that reads a long replay slowly still answers a heartbeat each second and the core
+  does not count it dead. When a write fails, the read in flight is awaited and the frames it
+  brought are still taken, so an `EndOfTurn` or `SpeakDone` sent just before the break reaches
+  the core; a command whose write failed is served as one that came with no connection up.
+- The ring's handoff holds 128 frames (about 4 s), up from part 3's 64: a write that waits out
+  its 2 s deadline and the read awaited after it (up to 1 s) stall the loop that drains the
+  handoff, and 2 s of room would lose the very audio the next connection should replay. The
+  component also drains the handoff before it awaits that read.
 - A read that misses its one-second deadline is started again, never a failure: silence is the
   core's business, counted as missed heartbeats, and during a reload it counts none until the
   120 s load deadline. A write that misses its two-second deadline ends the connection, as
@@ -540,9 +548,12 @@ The speech series has not opened yet.
 - While no connection is up the ring is drained from the handoff every 10 ms, so the handoff
   never fills; on a connection the same tick writes what the ring holds.
 - Commands held while no connection is up go to the next connection after the latest `SetMode`
-  and `SetHotwords` and before any audio; a full queue refuses the new command, logged as
-  `channel.full` on `audio.speech.held`. `Speak` and `Check` are never held, since they are
-  answered at once.
+  and `SetHotwords` and before any audio, and leave the queue only once that write succeeds; a
+  full queue refuses the new command, logged as `channel.full` on `audio.speech.held`. `Speak`
+  and `Check` are never held, since they are answered at once. With no transport, or after it
+  has shut down, nothing is held, since no connection will come.
+- With neither capture nor a connection up, the 10 ms drain is off, so a component wired with
+  no speech pipe (as `eileen-cli` still is) wakes once a second, not a hundred times.
 - Inputs leave the component with `seq`, `at` and `mono` zero: only the runtime's input queue
   can give an input its place in the core-wide replay order, and the component reads no clock.
   `eileen-runtime` has no `InputSink` yet; WP2's queue fills them when it takes an input.
