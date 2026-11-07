@@ -32,11 +32,12 @@ WAV source, the transcript stub and the stub harness.
   (`cargo xtask desktop-lock --hold`).
 - Owns: `crates/eileen-runtime`, `crates/eileen-mcp`, `crates/eileen-cli`, `crates/eileen-shim`,
   `crates/eileen-crash`, `crates/eileen-guard`, `crates/eileen-shell-win`,
-  `crates/eileen-scenarios`, the `ipc` module of `crates/eileen-supervisor` and the `PathProbe`
-  trait with its fake in `crates/eileen-platform` (decision D86), `TESTING.md`,
-  `docs/DEBUGGING.md`, `scenarios/runtime/`, the fuzz targets `mcp_client_message`,
-  `mcp_tool_arguments`, `dispatch_line`, `worker_hook_payload`, `http_request` and
-  `scenario_file` with their corpora and regressions, and this file.
+  `crates/eileen-scenarios`, the `ipc` module of `crates/eileen-supervisor` with decision D86's
+  changes to its `spawn`, `ChildSpec` and `Child` (WP0 reviews them), and the `PathProbe` trait
+  with its fake in `crates/eileen-platform` (decision D86), `TESTING.md`, `docs/DEBUGGING.md`,
+  `scenarios/runtime/`, the fuzz targets `mcp_client_message`, `mcp_tool_arguments`,
+  `dispatch_line`, `worker_hook_payload`, `http_request` and `scenario_file` with their corpora
+  and regressions, and this file.
 
 ## Done when
 
@@ -50,7 +51,8 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 3. The `PreToolUse` endpoint never answers `allow`; a held `approve` call allows only after a
    `UserInput` approval; the `PermissionRequest` tripwire answers `deny`.
 4. Caller verification: token files inside a worker's Job Object open only that session's hooks,
-   and the session role works only from outside every Eileen job.
+   the session role works only from outside every Eileen job, and a pipe instance a worker adds
+   receives no token from any shim.
 5. The idle footprint of the thin release `eileen.exe`, measured with `cargo xtask measure-idle`,
    is under 60 MB working set and within section 4.5's CPU table.
 6. `eileen trace last` stitches one turn across processes by its `turn_` ID, and
@@ -83,28 +85,47 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `amend/wp2-ipc-home` (#171, amendment, decision D86): settles where the Win32 calls of the pipes,
   caller checks and path classification live, since `eileen-runtime` forbids unsafe code, stays
   neutral and may not depend on a `-win` crate. `eileen-supervisor` gains an `ipc` module that
-  WP2 builds (pipe servers made as the first instance with remote clients rejected and a
-  user-only DACL, both ends' process ids, the image path, a registry of the Job Objects `spawn`
-  made with `in_job` and `in_any_job`, the owner of a loopback connection, user-only token
-  files); `eileen-platform` gains `PathProbe` with a fake, implemented in `eileen-shell-win`;
-  `CoreConfig.local_time` comes from `eileen-shell-win`'s zone reader through the composition
-  root; `getrandom` 0.4.3 mints the tokens; the `windows` union gains `Win32_System_Time` and
-  `Win32_NetworkManagement_NetManagement`. BUILD.md sections 2.12, 3.1, 3.3.3, 3.3.7, 3.4, 4.1
-  and 6.4 and the root `Cargo.toml` say so; `Cargo.lock` does not change.
-- Next, in this order once the amendment merges: `wp2/supervisor-pipes` (the `ipc` pipe server
-  and the pipe ends' process ids, with `server_pid` for the speech process),
-  `wp2/supervisor-callers` (the Job Object registry, `image_path`, `tcp_client_pid` and
+  WP2 builds, with types on every OS (`PipeServer` and `PipeConn` with both ends' process ids,
+  `Peer`, which opens the other end once and refuses a process created after the connection,
+  `PeerFacts`, a `Jobs` registry the runtime owns, the owner of a loopback connection, user-only
+  token files); the runtime decides each role with a pure function over `PeerFacts`. Every
+  client of a core pipe, the shim in every role included, checks that the server is the core
+  before it sends anything. `spawn` makes each child's Job Object itself, so `ChildSpec` gains
+  `jobs`, `job_key`, `breakaway_ok` and `job_memory_limit_mb` and `Child` gains
+  `memory_limit_hit`, a cross-package change WP0 reviews; WP3's driver sets each session's key,
+  its memory limit and the core's process id (section 6.5). `eileen-platform` gains `PathProbe`
+  with a fake, implemented in `eileen-shell-win`, which opens only drive and volume paths and
+  asks `share` about a UNC path before opening anything. `CoreConfig.local_time` comes from
+  `eileen-shell-win`'s zone reader through the composition root; `getrandom` 0.4.3 mints the
+  tokens; the `windows` union gains `Win32_System_Time`, `Win32_NetworkManagement_NetManagement`,
+  `Win32_System_SystemServices` and `Win32_System_Ioctl`. BUILD.md sections 2.1, 2.12, 3.1,
+  3.3.3, 3.3.7, 3.3.9, 3.4, 4.1, 6.2, 6.4, 6.5 and 7 and the root `Cargo.toml` say so;
+  `Cargo.lock` does not change.
+- Next, in this order once the amendment merges: `wp2/supervisor-pipes` (`PipeServer` and
+  `PipeConn` with the pipe ends' process ids, and the incident when a next instance cannot be
+  made), `wp2/supervisor-callers` (`Peer` and `PeerFacts`, the `Jobs` registry with the changes
+  to `spawn`, `ChildSpec` and `Child` that WP0 reviews, `tcp_client_pid` and
   `write_user_only`), `wp2/path-probe-trait` (the trait and `FakePathProbe` in
   `eileen-platform`, then `WinPathProbe` in `eileen-shell-win`) and `wp2/shell-local-time`
-  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` now
-  waits for the `ipc` pipes too; `wp1/speech-life` (#141) and WP4's `SpeechTransport` (#140)
-  have merged.
+  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` waits for
+  both `ipc` pull requests, since its caller check needs `Peer` and the registry;
+  `wp1/speech-life` (#141) and WP4's `SpeechTransport` (#140) have merged. WP3's #159
+  (`ClaudeWorker`, merged) spawns sessions with no job key and refuses a memory limit; its key,
+  limit and the core's process id follow `wp2/supervisor-callers` in a WP3 pull request.
 
 ## Surprises
 
 - process-wrap 10.0.1 keeps the handle of the Job Object it makes private (`JobObjectChild`
-  exposes none), so `IsProcessInJob` and section 2.1's breakaway limit cannot reach it; the
-  supervisor makes each child's Job Object itself under D86, keeping the same limits.
+  exposes none), so `IsProcessInJob`, section 2.1's breakaway limit and WP3's job memory limit
+  cannot reach it; the supervisor makes each child's Job Object itself under D86, keeping the
+  same limits.
+- The first-instance flag protects a pipe's name only until the core starts. A DACL that lets
+  the core add instances grants `FILE_CREATE_PIPE_INSTANCE` (4, inside `FILE_GENERIC_WRITE`),
+  which the user cannot be denied, so any process of the user can add an instance later and
+  catch new clients; every client now checks the server first.
+- WP3's generated MCP config holds no token: it names `${EILEEN_SHIM_TOKEN}`, and the tokens
+  travel in the session's environment, so the token files are only `bus.json` and
+  `session.json`.
 - `Cargo.lock` holds three `getrandom` versions. 0.3.4 arrives only as a build dependency of
   `zip` 2.6.1 on Windows, while 0.4.3 is already in every binary through `ulid`'s `rand`, so
   the token pin is 0.4.3.
@@ -115,8 +136,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
 ## Decisions
 
 - D86: pipes and caller checks live in `eileen-supervisor`'s `ipc` module, path probes behind
-  the `PathProbe` platform trait; Linux forms are WP10's, and until then `ipc` answers
-  `Unsupported` on Linux.
+  the `PathProbe` platform trait; every pipe client checks the server; `spawn` makes each child's
+  Job Object itself; Linux forms are WP10's, and until then `ipc` answers `Unsupported` on
+  Linux.
 
 ## Outcome
 
