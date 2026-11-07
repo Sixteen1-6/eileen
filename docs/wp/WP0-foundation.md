@@ -343,13 +343,14 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
   package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development
   tool never shipped. Phase B's fuzz job copies the lock before `cargo fuzz build`.
-- `fuzz/Cargo.toml`'s header comment still says each target calls a `fuzz_entry` function "of
-  the crate that owns the parser". Since `amend/wp4-audio-settled` (#180), `fuzz/AGENTS.md` and
+- `fuzz/Cargo.toml`'s header comment said each target calls a `fuzz_entry` function "of the
+  crate that owns the parser". Since `amend/wp4-audio-settled` (#180), `fuzz/AGENTS.md` and
   `fuzz/README.md` put the entry in a crate that builds on Linux owned by the package BUILD.md
   section 4.7's table names (`speech_frame`'s in `eileen-speech`, its parser in
   `eileen-contracts`). The next pull request that changes `fuzz/Cargo.toml`, phase B's fuzz job
   or a new target, brings the comment into line; #180 left it, since a change to any
-  `Cargo.toml` selects every CI class for a comment.
+  `Cargo.toml` selects every CI class for a comment. (Done in pull request #189. #156 changed
+  the comment first and kept the clause.)
 
 - `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
   `SystemMemory::new(&RealClock)`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
