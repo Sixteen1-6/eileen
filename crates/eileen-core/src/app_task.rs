@@ -6,8 +6,12 @@
 //! the usual announcement. The core stays sans-IO and only reacts.
 //!
 //! A render the user started in the app has no turn behind it: its job's `authorized_by` is
-//! the nil turn, it carries no turn on the bus, and it takes the focus only when no job has it.
-//! Cancelling it stops the tracking, not the render, since the adapter has no op to stop one.
+//! the nil turn, it carries no turn on the bus, and it takes the focus only when no other job is
+//! open. Cancelling it stops the tracking, not the render, since the adapter has no op to stop
+//! one. When the apps sidecar exits, every render it reported ends lost, since no `RenderDone`
+//! can come for it, and a render still running when the sidecar is back opens a job of its own.
+//! At most `RENDERS_KEPT` renders are remembered: the oldest whose job has ended is forgotten
+//! first, and while every one remembered still runs no new render is tracked.
 //!
 //! FIXME(#3): a render started through Eileen (`apps_resolve` `render_start` from the brain's
 //! `act` tools) opens its job from the call's `render_job` once the core forwards tool calls
@@ -20,12 +24,16 @@ use eileen_contracts::connectors::AppEvent;
 use eileen_contracts::ids::{JobId, TurnId, Untrusted};
 use eileen_contracts::jobs::{Depth, FanoutMode, JobKind, JobSpec, Route};
 
-use crate::job::{End, RENDERS_KEPT, Routed, new_job};
+use crate::job::{End, RENDERS_KEPT, new_job};
 use crate::lifecycle::Step;
+use crate::router::Routed;
 use crate::{Core, Cx, job_ctx};
 
 /// The turn an app task the user started in the app is authorized by: none.
 const NO_TURN: TurnId = TurnId::from_parts(0, 0);
+
+/// Why a tracked render ended when the apps sidecar stopped.
+const BRIDGE_STOPPED: &str = "the app's bridge stopped";
 
 impl Core {
     /// An app's own event, from the apps sidecar.
@@ -61,10 +69,28 @@ impl Core {
         tracked.map(|(_, id)| *id)
     }
 
-    /// A render no job tracks yet: a running app task named "the render".
+    /// The apps sidecar exited: each render it reported that is still tracked ends lost, and
+    /// none is remembered, so one still running when the sidecar is back opens a new job.
+    pub(crate) fn apps_exited(&mut self, cx: &mut Cx<'_>) {
+        let tracked: Vec<JobId> = self.jobs.renders.drain(..).map(|(_, id)| id).collect();
+        for id in tracked {
+            self.end_job(cx, id, End::Lost { why: BRIDGE_STOPPED.to_owned() });
+        }
+    }
+
+    /// A render no job tracks yet: a running app task named "the render", with room made among
+    /// the renders remembered first.
     fn render_started(&mut self, cx: &mut Cx<'_>, app: &str, render_job: String) {
         if self.render_job(&render_job).is_some() {
             return;
+        }
+        if self.jobs.renders.len() >= RENDERS_KEPT {
+            let registry = &self.jobs.registry;
+            let ended = |id: &JobId| registry.get(*id).is_none_or(|job| job.status.is_terminal());
+            let Some(oldest) = self.jobs.renders.iter().position(|(_, id)| ended(id)) else {
+                return;
+            };
+            self.jobs.renders.remove(oldest);
         }
         let Ok(naming) = self.jobs.registry.naming(Some("render"), JobKind::AppTask, None, cx.at)
         else {
@@ -103,9 +129,6 @@ impl Core {
         let job = new_job(id, naming, spec, &routed, None, cx.at);
         if self.admit(cx, job, None, &routed.reason, false).is_none() {
             return;
-        }
-        while self.jobs.renders.len() >= RENDERS_KEPT {
-            self.jobs.renders.pop_front();
         }
         self.jobs.renders.push_back((render_job, id));
         if self.jobs.registry.step(id, Step::Start, cx.at).is_ok() {
