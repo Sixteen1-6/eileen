@@ -9,7 +9,8 @@
 //! folder of its own, removed when the test ends. The scripts follow the real CLI's order: no
 //! `system/init` before the first user line, so `start` returning shows the session was found
 //! ready through `initialize` and `mcp_status` alone. Nothing here sleeps: the stub holds at
-//! `await_user` until the driver writes, and `HANG` only guards against a hang.
+//! `await_user` until the driver writes, and `HANG` only guards against a hang. The one real
+//! wait is the driver's own init deadline under test (`SHORT_DEADLINE`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -37,6 +38,12 @@ use tokio::time::timeout;
 /// How long a call may take before the test calls the driver hung: a guard, far above anything
 /// a working stub needs, never a measurement.
 const HANG: Duration = Duration::from_secs(20);
+
+/// The init deadline of the test whose stub never reports `eileen` connected: short, and in
+/// whole seconds, which the error names. It is a real wait. Paused tokio time cannot stand in
+/// for it, since on Windows tokio reads a child's pipes on blocking threads, which hold a
+/// paused clock still.
+const SHORT_DEADLINE: Duration = Duration::from_secs(1);
 
 /// The vendor session id every script's `system/init` carries.
 const VENDOR_SESSION: &str = "a3b57c79-73b3-485d-8511-c5ae9b1cdac5";
@@ -110,6 +117,11 @@ impl Drop for Scratch {
 /// pass-through proxy, a `PATH` and the user's own attempt to turn vendor memory on in its
 /// environment. The stub appends its environment to `<dir>/env.ndjson`.
 fn worker(dir: &Path, name: &str) -> ClaudeWorker {
+    worker_within(dir, name, HANG)
+}
+
+/// [`worker`], with `init_deadline` as its readiness deadline.
+fn worker_within(dir: &Path, name: &str, init_deadline: Duration) -> ClaudeWorker {
     let mut vars: Vec<(String, String)> =
         DENIED.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect();
     vars.extend([
@@ -128,7 +140,7 @@ fn worker(dir: &Path, name: &str) -> ClaudeWorker {
         shim_exe: dir.join("eileen-shim"),
         claude_exe: PathBuf::from(env!("CARGO_BIN_EXE_eileen-stub-harness")),
         host: HostEnv { vars, names_ignore_case: cfg!(windows), ..HostEnv::default() },
-        init_deadline: HANG,
+        init_deadline,
         ..HarnessConfig::default()
     };
     ClaudeWorker::new(cfg, Arc::new(Redactor::new()))
@@ -300,6 +312,15 @@ fn refusals(captured: &Captured) -> Vec<String> {
         .collect()
 }
 
+/// The `fault` of each `worker.fault` event captured.
+fn faults(captured: &Captured) -> Vec<String> {
+    captured
+        .events_named(names::WORKER_FAULT)
+        .iter()
+        .map(|event| event.fields.get("fault").and_then(Value::as_str).unwrap().to_owned())
+        .collect()
+}
+
 /// Whether anything captured holds the memory folder the `driver-memory-` scripts report.
 fn quotes_the_memory_folder(captured: &Captured) -> bool {
     format!("{captured:?}").contains("<data>")
@@ -456,7 +477,24 @@ fn a_session_without_eileen_connected_is_never_bound() {
         [DriverError::EileenNotConnected.to_string()],
         "the refusal is logged with its reason"
     );
+    assert!(faults(&logs).is_empty(), "a refusal is no fault");
     assert_eq!(recorded_envs(&dir).len(), 1, "started once: a missing server is not retried");
+}
+
+#[test]
+fn a_session_whose_eileen_stays_pending_past_its_deadline_is_never_bound() {
+    let dir = Scratch::new();
+    let deadline = DriverError::ReadyDeadline { secs: SHORT_DEADLINE.as_secs() };
+    let ((), logs) = with_logs(async {
+        let mut worker = worker_within(&dir, "driver-pending.ndjson", SHORT_DEADLINE);
+        let started = timeout(HANG, worker.start(spec())).await.unwrap();
+        assert_eq!(started.err(), Some(deadline), "asked until the deadline passed");
+        assert_eq!(worker.bind(binding()).await, Err(DriverError::NoSession), "never bound");
+        assert_eq!(next(&mut worker).await, None, "no event from a session never ready");
+    });
+    assert_eq!(faults(&logs), [deadline.to_string()], "the missed deadline is logged");
+    assert!(refusals(&logs).is_empty(), "a server still pending is no refusal");
+    assert_eq!(recorded_envs(&dir).len(), 1, "started once, and killed at the deadline");
 }
 
 #[test]
