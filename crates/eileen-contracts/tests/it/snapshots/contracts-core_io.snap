@@ -1407,7 +1407,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The facts, at start before the brain starts, and after each change the OS reports. Boxed\nso that `Input` stays small; the wire form is the same.",
+          "description": "The facts, at start before the brain starts, and after each change the OS reports.",
           "properties": {
             "facts": {
               "$ref": "#/$defs/MachineFacts"

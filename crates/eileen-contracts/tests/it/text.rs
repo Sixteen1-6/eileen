@@ -215,13 +215,29 @@ fn the_machine_profile_s_names_are_wrapped_and_its_plain_strings_listed() {
         assert!(!found.contains(&path), "{path} is wrapped, so it is not free text");
     }
     let allowed = allowlist();
-    let listed: Vec<_> = allowed
+    let listed: Vec<&str> = allowed
         .keys()
+        .map(String::as_str)
         .filter(|path| {
             ["MachineFacts.", "AdapterFacts.", "BenchKind.", "BenchConditions.", "BenchResult."]
                 .iter()
                 .any(|prefix| path.starts_with(prefix))
         })
         .collect();
-    assert_eq!(listed.len(), 10, "the machine profile's plain strings, each with a reason");
+    assert_eq!(
+        listed,
+        [
+            "AdapterFacts.driver",
+            "BenchConditions.eileen_version",
+            "BenchKind.asr.engine",
+            "BenchKind.clone_ttfa.engine",
+            "BenchKind.embed.model",
+            "BenchKind.tts.engine",
+            "BenchResult.failed.reason",
+            "MachineFacts.degraded[]",
+            "MachineFacts.execution_providers[]",
+            "MachineFacts.os_build",
+        ],
+        "the machine profile's plain strings, each listed with a reason"
+    );
 }

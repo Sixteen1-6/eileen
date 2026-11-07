@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(fake.registered_threads(), 1, "registered");
         drop(ticket);
         assert_eq!(fake.registered_threads(), 0, "reverted");
-        assert!(fake.default_capture(super::StreamCategory::Speech).is_err(), "no endpoint set");
+        assert!(fake.default_capture(StreamCategory::Speech).is_err(), "no endpoint set");
     }
 
     #[test]
