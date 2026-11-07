@@ -27,8 +27,8 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
-| 7 | `wp0/ci-pending-snapshots` | Pull request #133, opened 2026-10-31, rebased on 2026-11-07 onto `main` with #139, its tests moved into `xtask::workflows::tests`; alone on that `main`, they failed in run 42386485533 and passed with the workflow change in run 42386891065. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree. It merges before `wp0/machine-contracts`, which takes its pinned snapshots from CI by this route |
-| 8 | `wp0/ci-cache-fresh` | Pull request #139, merged on 2026-11-01 as 833ab4c, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974. Its amendment, pull request #143, merged on 2026-11-07 as 499c945 |
+| 7 | `wp0/ci-pending-snapshots` | Pull request #133, merged on 2026-11-07 as f56604e, after a rebase that day onto `main` with #139 that moved its tests into `xtask::workflows::tests`; alone on that `main`, they failed in run 42386485533 and passed with the workflow change in run 42386891065. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree. It merged before `wp0/machine-contracts`, which takes its pinned snapshots from CI by this route. Its review's fixes follow in pull request #176, from the same branch, and its amendment of sections 4.6, 4.7, 4b.3 and 6.1 in pull request #177 |
+| 8 | `wp0/ci-cache-fresh` | Pull request #139, merged on 2026-11-01 as 833ab4c, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974. Its amendment, pull request #143, merged on 2026-11-07 as 499c945, and its follow-up amendment, pull request #170, merged on 2026-11-07 as c05fa14 |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -124,26 +124,31 @@ and `ARCHITECTURE.md` moves to the root with its links updated and a code-map ro
 in the workspace.
 
 `wp0/ci-pending-snapshots` lets a lane take a changed snapshot from CI instead of building on the
-owner's PC. insta writes no pending snapshot when it detects CI, so the nextest and doc-test steps
-of `logic-linux` and `windows-test` set `INSTA_UPDATE=new`, and `INSTA_PENDING_DIR` to
-`target/insta-pending` under the workspace (an absolute path, because nextest runs each test binary
-from its crate's folder). insta then writes each pending file in that folder at the path it would
-take in the repository, so none lands in the tree, and each job's on-failure artifact
-(`logic-linux-junit`, `windows-test-junit`) keeps the folder beside the JUnit report, hidden files
-included, because insta names an inline snapshot's pending file `.<file>.pending-snap`. The
-`hygiene` job, which runs on every pull request, fails on a `*.snap.new` or `*.pending-snap`
-committed to the tree. `ci_keeps_pending_snapshots` holds `ci.yml` to all of it, in
-`xtask::workflows::tests` beside `wp0/ci-cache-fresh`'s tests and on the same `job` and `steps`
-parsers, so every assertion about the workflows lives in one module. To take a snapshot from a
-failed run, `gh run download <run-id> -n logic-linux-junit -D <scratch folder>` gives
+owner's PC. insta writes no pending snapshot when it detects CI, so `logic-linux` and `windows-test`
+set `INSTA_UPDATE=new`, and `INSTA_PENDING_DIR` to `target/insta-pending` under the workspace (an
+absolute path, because nextest runs each test binary from its crate's folder), in their job-level
+`env:`, which every step inherits: #133 set them on the nextest and doc-test steps, and #176 moved
+them up, so a test step added later has them however it runs its tests. insta then writes each
+pending file in that folder at the path it would take in the repository, so none lands in the tree,
+and each job's on-failure artifact (`logic-linux-junit`, `windows-test-junit`) keeps the folder
+beside the JUnit report, hidden files included, because insta names an inline snapshot's pending
+file `.<file>.pending-snap`. The `hygiene` job, which runs on every pull request, fails on a
+`*.snap.new` or `*.pending-snap` committed to the tree. nextest's `ci` profile keeps
+`fail-fast = false`, so one failed run writes every changed snapshot. `pending_snapshot_problems`
+names each rule a workflow breaks, `ci_keeps_pending_snapshots` holds `ci.yml` to all of them,
+`each_broken_rule_is_named` shows each rule failing alone on a fixture workflow, and
+`one_failed_run_writes_every_changed_snapshot` holds the `ci` profile, all in
+`xtask::workflows::tests::pending`, a child of `wp0/ci-cache-fresh`'s test module on the same `job`
+and `steps` parsers, so every assertion about the workflows lives in one module. To take a snapshot
+from a failed run, `gh run download <run-id> -n logic-linux-junit -D <scratch folder>` gives
 `nextest/ci/junit.xml` and `insta-pending/<repository path>`; move the `.snap.new` over the `.snap`
 it names and remove its `assertion_line:` header line, which insta writes only in pending files and
 `cargo insta accept` drops. An inline snapshot's `.pending-snap` holds the new value as JSON, for
 the literal in the test. Read the diff before committing it. AGENTS.md's Testing section gives the
-same route, which counts as regenerating the snapshot. Pending files kept beside the snapshots
-would also fail the contracts' `no_snapshot_file_is_unreferenced` whenever it ran after a failing
-snapshot test (a probe run showed it failing on Linux and passing on Windows, by test order alone);
-under `target/` they leave that check strict.
+same route, which counts as regenerating the snapshot. Pending files kept beside the snapshots would
+also fail the contracts' `no_snapshot_file_is_unreferenced` whenever it ran after a failing snapshot
+test (a probe run showed it failing on Linux and passing on Windows, by test order alone); under
+`target/` they leave that check strict.
 
 `wp0/ci-cache-fresh` keeps the dependency artifacts in the rust-cache entries usable when the key
 misses. On a restore that is not a full match, rust-cache v2.9.3 deletes every entry of
@@ -168,14 +173,14 @@ else; it is upkeep, so `all-green` does not need it. The tests in `xtask::workfl
 same toolchain step.
 
 The Linux desktop lane (`linux-desktop.yml`, WP10's) restores the `linux` key without saving, and
-until now matched `main`'s entry in full, because both kept the image's stable 1.99.1 beside the
-pinned 1.99.0 (`a820fa96`). Once this merges, `main` saves under the pinned-only hash
-(`df0daf48`) and the first `prune-caches` run deletes the `a820fa96` entries, so the lane loses
-its only matching Rust cache and builds from a partial restore each night until it keeps only the
-pinned toolchain too. That change is pull request #144, an amendment to WP10's file, which should
-merge with this one; until it does, the workflow tests list the lane's `session` job as the one
-known exception and fail once it gains the step. BUILD.md's sections 4.6 and 4b.3 gain
-`prune-caches` and this cache policy in amendment #143.
+until #139 matched `main`'s entry in full, because both kept the image's stable 1.99.1 beside the
+pinned 1.99.0 (`a820fa96`). With #139 merged, `main` saves under the pinned-only hash
+(`df0daf48`) and `prune-caches` deleted the `a820fa96` entries (on 2026-11-07 the only `linux`
+entry left was `df0daf48`), so the lane lost its only matching Rust cache and builds from a partial
+restore each night until it keeps only the pinned toolchain too. That change is pull request #144,
+an amendment to WP10's file, still held for the owner; until it merges, the workflow tests list the
+lane's `session` job as the one known exception and fail once it gains the step. BUILD.md's
+sections 4.6 and 4b.3 gained `prune-caches` and this cache policy in amendments #143 and #170.
 
 ## Acceptance records
 
