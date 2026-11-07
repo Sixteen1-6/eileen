@@ -27,7 +27,7 @@ measured memory, and exits with code 75 when none comes within `--wait-max`: wai
 | Check one crate | `cargo xtask check -p <crate>` |
 | Test one crate | `cargo xtask test -p <crate>` (nextest; add a test name to filter) |
 | Lint one crate | `cargo xtask clippy -p <crate>` |
-| Snapshot tests | `cargo xtask insta` (`--review` to accept new snapshots) |
+| Snapshot tests | `cargo xtask insta` (`--review` to accept), or take them from CI (Testing) |
 | Simulator, pull request seeds | `cargo xtask sim` (one run: `--seed <n> --profile <name>`) |
 | Fast repository checks | `cargo xtask lint-repo` |
 | Check a pull request description | `cargo xtask pr-meta --body-file <file>` |
@@ -66,8 +66,7 @@ measured memory, and exits with code 75 when none comes within `--wait-max`: wai
 ## On the owner's PC (16 GB, shared with other agents)
 
 - Never call cargo directly to build, test or lint; `.claude/settings.json` denies it. The guard
-  runs cargo in a kill-on-close Job Object at below-normal priority and scales the job count to
-  free memory.
+  runs cargo at below-normal priority in a kill-on-close Job Object, jobs scaled to free memory.
 - Run guarded builds and test runs in the background and wait for them; a cold build can outlast
   a 10-minute foreground tool call. Never leave one orphaned.
 - Exclusive work takes both slots (`--exclusive`): release builds (the owner's), anything that loads speech
@@ -104,8 +103,7 @@ measured memory, and exits with code 75 when none comes within `--wait-max`: wai
    package's merged files, or to the root manifest's feature lists is a separate `amendment` pull
    request that touches only that, and the owner reviews it. A change to `docs/DECISIONS.md`
    also updates `docs/PLAYBOOK.md`, or says under "Playbook" why it is unaffected.
-9. Keep your `docs/wp/` file current. If a crate doc or ARCHITECTURE.md is no longer true, fix it
-   in the same pull request.
+9. Keep your `docs/wp/` file current, and crate docs and ARCHITECTURE.md true, in each pull request.
 
 ## Testing
 
@@ -113,7 +111,9 @@ measured memory, and exits with code 75 when none comes within `--wait-max`: wai
   binary, `tests/it/main.rs`, whose modules are `#[cfg(test)]`.
 - Core behaviour (jobs, the bus, scheduling, barge-in, crashes, approvals) is tested in
   `eileen-sim` as an invariant or a scenario, never as a test that sleeps.
-- Snapshots use insta. Never edit a `.snap` file by hand; regenerate it and read the diff.
+- Snapshots use insta. Never edit a `.snap` file by hand; regenerate it and read the diff. Taking
+  one from a failed CI run counts: `gh run download <run> -n logic-linux-junit -D <dir>`, then move
+  `<dir>/insta-pending/<path>.snap.new` over `<path>.snap` and drop its `assertion_line:` line.
 - Every parser of untrusted input has a fuzz target, a `fuzz_entry` function and a seed corpus. A
   fuzz or simulator failure becomes a regression file before its fix counts.
 - No `#[ignore]`, no `#[should_panic]`, no real-time sleeps (use paused tokio time or a manual
