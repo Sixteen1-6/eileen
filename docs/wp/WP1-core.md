@@ -118,8 +118,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
   deadlines, an exit, the backoff's reset, replies on the HUD), `eileen-core::turn::tests::*`
   (`speech_lost`), `eileen-sim::invariants::tests::invariant_8_*` and five
   `eileen-sim::it::slice` tests plus a load that never finishes and a crash mid-answer.
-- `wp1/turn-exhaustive` (open): acceptance 2 and 4. `eileen-sim::exhaustive` enumerates every
-  sequence of section 4.7's eleven turn-taking inputs (speech start, speech end, end of turn,
+- `wp1/turn-exhaustive` (#149, merged): acceptance 2 and 4. `eileen-sim::exhaustive`
+  enumerates every sequence of section 4.7's eleven turn-taking inputs (speech start, speech end, end of turn,
   clause ready, playback tick, mute, unmute, brain text, backchannel, other audio, physical
   input) through the real `eileen_core::turn::Turns`, to depth 6 on pull requests, from five
   starts: idle, speaking the first clause of a streaming reply, paused by a barge-in, and two
@@ -158,8 +158,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `EILEEN_EXHAUSTIVE_DEPTH=8 cargo nextest run -p eileen-sim --profile nightly -E 'test(/turn::exhaustive/)'`;
   the test reads the variable (`eileen_sim::exhaustive::DEPTH_ENV`) and runs depth 6 without
   it.
-- `wp1/record` (open): `eileen-record`'s formats, store, reader, writer and trim (section 3.3.16).
-  `line::encode` and `line::decode` write any contract value as one line of JSON with each
+- `wp1/record` (#155, merged): `eileen-record`'s formats, store, reader, writer and trim
+  (section 3.3.16). `line::encode` and `line::decode` write any contract value as one line of JSON with each
   string over 1 KiB in the blob store, through `record::stub_blobs` and `resolve_blobs`;
   `writer::Writer` and `reader::Reader` write and read a recording's `RecordLine`s, each line
   bounded at 1 MiB, a cut-off last line reported as `Truncated`, CRLF endings and blank lines
@@ -179,7 +179,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the `recording` fuzz target's `fuzz_entry` with its seed corpus, replayed by
   `eileen-record::it::fuzz_corpus::*`. `eileen record` itself stays a stub until the runtime
   wires the flight recorder.
-- `wp1/sim-world` (open): the world and profiles of section 4.7, with no change to the core.
+- `wp1/sim-world` (#160, merged): the world and profiles of section 4.7, with no change to the core.
   `eileen-sim` gains `pc`, the simulated PC: available memory, commit headroom and paging (pages
   in proportion to how far available memory is under the profile's floor), read into
   `Input::Memory` every 5 s as section 2.5 samples it, with Eileen's own share (the core, each
@@ -218,7 +218,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   part through the real core), `eileen-sim::it::regressions::*` (a run with faults written as a
   `SimRegression` file and replayed from it), and `eileen-sim::it::pr_seeds::<profile>::*`,
   every pull request seed of every profile, doublechecked.
-- `wp1/jobs` (open, #163): section 6.3's jobs, first half; acceptance 14, the registry half of
+- `wp1/jobs` (#163, merged): section 6.3's jobs, first half; acceptance 14, the registry half of
   acceptance 3, and invariants 4, 5 and 12 in the core. `eileen-core` gains `lifecycle`, a
   pure, cloneable `Registry` the core keeps: the eight states and one graph of steps (`Step`,
   `lifecycle::legal`), so every job ends in exactly one terminal state; names of two to four
@@ -246,11 +246,73 @@ Every pull request also meets the rules section 6.1 sets for every package.
   a restart from `snapshot()`) and checking its `JobUpsert` rows and `Job*` events, which comes
   with fan-out, when the core runs more than one job; and the simulator's checks of invariants
   4, 5 and 12 (a simulated core restart in the world, every persisted row against the graph).
-- Next: `wp1/speech-late`, the rule for turns heard late, once WP4's first part has added
-  `SpeechStarted.replayed` (it has, #136); then invariants 2, 3 and 9 in the world's check
-  after every step, with the generator pacing barge-in windows at 32 ms (acceptance 1), once
-  #151 is fixed. Invariant 9's microphone part is not in the core yet (#152): the core ignores
-  `MicInUseElsewhere`, and the enumeration gains a step for it when the core acts on it.
+- `wp1/job-steering` (#165, merged): section 6.3's jobs, second half. The core runs many jobs
+  at once (at most 16 live worker sessions, `job::MAX_LIVE`). `jobs_dispatch` takes `fanout` 1
+  to 8: a fan-out is a parent job with no session, which takes the focus, and one child per
+  worker ("agent one" to "agent eight"), each with its own cold session, the whole task in
+  `compete` mode and its own sub-task in `split` mode (one per worker, or refused); the parent
+  runs with its first child and ends once after its last, completed when any child completed
+  and announced once ("Flaky login tests is done: 2 of 3 agents finished."), cancelled with
+  its children when the user cancels it, and cancelled by the source that cancelled its last
+  child when the user cancelled each child. The router (`Core::route_for`) takes an override the
+  brain passed on (model, then depth, then route), recorded on the job with the user's words
+  (`override_words`), then the kind's policy, then the depth's model, and says why in
+  `JobAccepted.reason`. `lifecycle::Registry::pick` names a job by section 2.5's order: an
+  explicit id, slug, ordinal or name; a kind word ("the render"); a route word ("Claude's
+  job"); then for a pronoun the job just announced, the focus job and the most recent; several
+  fitting jobs with none in focus mean one question. The focus moves to a new job, a fan-out's
+  parent, a job the user follows, steers or reroutes, and off a finished one to the newest
+  unfinished job outside a fan-out, with the rows whose focus changed. `jobs_control` (from
+  the brain's turn in flight, as `jobs_dispatch`) steers (an interrupt, then the words as a new
+  user turn to the bound session; before the bind the words go with the task; a worker that
+  already owes eight turns is told nothing, and the brain hears that it is still catching up),
+  reroutes (a new job with the same task, name, ordinal and working folder on the model asked
+  for, then the old one cancelled), focuses and cancels; a spoken "cancel" with words names
+  its job the same way and says "I can't find that job." when none fits. App tasks: the apps
+  sidecar's `RenderStarted` opens a running job named "the render" with no session,
+  `RenderProgress` becomes `JobProgressed` with the percent on the row, and `RenderDone` ends
+  it with the usual announcement. `eileen-sim`'s workers answer `Prompt` and `Interrupt`, a
+  test can lengthen their work (`World::set_worker_ms`), the scripted brain can call
+  `jobs_control` (`BrainReply::controlling`), and `SimResolver` reads "cancel" followed by a
+  job's words.
+  Tests: `eileen-core::lifecycle::tests::*` (pronoun and ordinal resolution, focus moves,
+  successors, progress), `eileen-core::tests::steering::*` (fan-out children and split mode, a
+  fan-out's one end, its cancel and the source of its cancel, focus moves, steer reaching the
+  bound session and refused past eight owed turns, reroute, the router, spoken words naming
+  jobs and the question, the render as an app task and its cancel),
+  `eileen-core::tests::jobs::*` (a second job running beside the first), and
+  `eileen-sim::it::jobs::*`: three parallel jobs side by side with a steer and a cancel, and a
+  fan-out of three whose agent two moves to a stronger model and which ends once, the bases
+  of `scenarios/jobs/`'s three parallel jobs and reroute. Still open from section 6.3's jobs:
+  acceptance 3's other half (a reference model driving `Core::step` with many jobs), the
+  simulator's checks of invariants 4, 5 and 12, narration for the focus job, the one spoken
+  sentence on how a compete run's results differ (it needs the brain's completion turn; the
+  parent says Eileen's own count until then), worktrees for a coding fan-out's children
+  (`FIXME(#5)`), and the scenarios themselves once `eileen-replay`'s scenario mode runs them.
+- Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
+  for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
+  1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
+     of a named command spoken while the speech process restarts and acted on once from the
+     replay; WP4's first part added `SpeechStarted.replayed` (#136).
+  2. `wp1/job-model`: acceptance 3's other half, `tests/it/job_model.rs` driving `Core::step`
+     with many jobs (dispatch and fan-out, `Init` or `Ready`, `TurnDone` and `Exited`, steer,
+     reroute, cancel, a restart from `snapshot()`) against the reference model's rows and
+     events, and the simulator's checks of invariants 4, 5 and 12 with a core restart in the
+     world.
+  3. Invariants 2, 3 and 9 in the world's check after every step, with the generator pacing
+     barge-in windows at 32 ms (acceptance 1), once #151 is fixed. Invariant 9's microphone
+     part waits for the core to act on `MicInUseElsewhere` (#152), and the enumeration gains a
+     step for it then.
+  4. The rest of the full `Core::step` in section 6.3's order: the addressee gate of section
+     2.8, intent dispatch, the fact path, `Act` jobs, the brain turn (with narration for the
+     focus job), sessions and the warm pool, memory admission (with the worker cap in place of
+     `job::MAX_LIVE`), the permission gate, approvals, announcements as data, the input lock,
+     the journal, the settings flow, the regret window, forget, route proposals and the
+     first-run state machine; `eileen-replay`'s strict and scenario modes; and the scenarios
+     of `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
+  5. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
+     `heavy-app` and `roomy` profiles and `scenarios/machine/`; the D77 parts once WP7's
+     amendment of section 3.3.13 merges (acceptance 17).
 
 ## Surprises
 
@@ -439,8 +501,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   exists is then the harness's to refuse.
 - A repository's key ignores case and the kind of separator only in a Windows path (a drive
   letter or a backslash); a Linux path keeps its case.
-- A cancel whose target names no unfinished job does nothing and says nothing yet; the
-  spoken "I can't find that job" comes with pronoun resolution in the second half.
+- A cancel whose target names no unfinished job cancels nothing; with pronoun resolution
+  (`wp1/job-steering`) Eileen says "I can't find that job." when words named one, and says
+  nothing for a bare "cancel" with no job open.
 - A step a job cannot take from where it is leaves it live, so a later event of its session
   still ends it; only a finished job stops being the live one.
 - An `ml_project` refusal puts the `UserError` on the bus (`BusEvent::UserError`, for the
@@ -450,6 +513,62 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - The restart's interruption runs on the core's first step, once, by a flag of its own, not
   on the first step with the speech process off: a later stop and start of speech never
   interrupts a job this core accepted.
+
+- The focus job is the row's `focus` flag, held by at most one unfinished job. A new job
+  takes it (a fan-out's parent for the fan-out), as does a job the user follows, steers or
+  reroutes to; when it ends, the focus moves to the newest unfinished job outside a fan-out.
+  A render the app started takes it only when no job has it, since the user did not ask for
+  it. Each change persists the rows whose flag changed.
+- Section 2.5 lists "it right after an announcement" last among the pronoun rules; the core
+  tries it first for a pronoun, since the focus job would otherwise always win, and only for
+  an unfinished job announced within `conversation.follow_up_s` with no reply since. Names
+  match after the articles and the words "job", "task", "please" and "now" are dropped. Kind
+  and route words name only jobs outside a fan-out, whose children are named by ordinal or
+  name. Words that fit several jobs pick the focus job among them, or ask one question naming
+  the newest three; the answer is a new request that names the job, since the core keeps no
+  pending question yet.
+- A fan-out's children announce only their failures (section 2.5's table interrupts for
+  `JobFailed`); their completions are on the bus and the HUD, and the parent's end is the one
+  announcement, with Eileen's own count rather than a worker's words. A parent whose children
+  were all cancelled is cancelled by the source that cancelled the last of them (the HUD's
+  cancel of the last agent cancels the fan-out from the HUD), and one whose children all
+  failed fails.
+- Steer is `WorkerCmd::Interrupt` then `WorkerCmd::Prompt`. The core counts the user turns a
+  worker owes (`Live.owed`): the bound task's and one per steer, at most 8, and the job ends
+  with the last `TurnDone`, so the interrupted turn's own `TurnDone` (errored or not) never
+  ends it. A steer to a worker that owes 8 is refused with "the test agent is still catching
+  up; tell it again in a moment.", so the brain never says it told a worker that heard
+  nothing. This assumes each user turn ends in one `result`, an interrupted one included,
+  which WP3's mid-turn interrupt case (its acceptance 3) is to confirm. A steer before the
+  session is ready waits and goes with the task in the bind; a steer to a fan-out's parent goes
+  to each running child.
+- Reroute accepts the new job before it cancels the old one, so a fan-out's parent never sees
+  all its children end in between. The new job keeps the name and ordinal the user knows
+  (`Registry::successor`) with a slug of its own, and works in the old job's folder. The old
+  transcript is not attached (`FIXME(#3)`): sessions run with no session persistence and the
+  harness keeps no transcript. A cancel through `jobs_control` is recorded as `Voice`:
+  `CancelSource` has no source for a typed brain turn. The new session's `cwd` is the old
+  session's `run/<session>/cwd`, as section 2.5 asks ("the same working directory"); section
+  2.12's path classes name a session's own `run\<session>\cwd` its `JobFolder` and "another
+  session's folder" `EileenData`, so the runtime's classifier must take the job folder from
+  the session's `SessionSpec.cwd`, not from its id, or a rerouted worker's file tools are
+  refused. The pull request suggests that wording for section 2.12.
+- The router treats any route, model or depth the brain passes in `jobs_dispatch` or a
+  reroute as the user's spoken override (the tool's schema says to leave them out to let
+  policy decide) and records the brain turn's words with it. An asked model beats an asked
+  depth, which beats the policy's model; an asked route v0.1 does not build is refused, and a
+  policy naming one falls back to Claude.
+- An app task the user started in the app has no turn: its `authorized_by` is the nil turn
+  id and its bus events carry no turn. Its row needs a route, so it says Claude with an empty
+  model, and its completion is announced with no attribution. Cancelling it stops the
+  tracking, and Eileen says the app is still running it, since the adapter has no op to stop
+  a render. A render started through Eileen's own `render_start` call opens its job once the
+  core forwards tool calls to connectors (`FIXME(#3)`).
+- `jobs_control`'s `show_changes`, `keep` and `undo` are answered "I can't do that to a job
+  yet." until the worktree and snapshot wiring of `FIXME(#5)` lands. `interrupt` is answered
+  the same way until the pause of section 2.5 is built (with the hands-off pause and the
+  input lock): an interrupted worker waits with no turn in flight, which the job's states
+  cannot show yet, and its errored `TurnDone` would end the job as failed.
 
 ## Outcome
 

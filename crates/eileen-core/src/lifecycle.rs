@@ -1,7 +1,8 @@
 //! The job lifecycle (BUILD.md section 2.5): the states a job passes through and the one graph
 //! of steps between them, the name, slug and fan-out ordinal a job gets at accept, the approval
-//! deadline, the jobs a cancel can name, what a core restart does to unfinished jobs, and where
-//! a coding job works. [`Registry`] is pure and cloneable: `Core::step` keeps one, and
+//! deadline, the jobs a cancel can name and which job a request names (section 2.5's pronoun
+//! rules), the focus job, what a core restart does to unfinished jobs, and where a coding job
+//! works. [`Registry`] is pure and cloneable: `Core::step` keeps one, and
 //! `tests/it/job_model.rs` checks it against a reference model on random command sequences.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -9,7 +10,7 @@ use std::fmt;
 
 use eileen_contracts::harness::WorktreeSpec;
 use eileen_contracts::ids::{JobId, Personal, WallTime};
-use eileen_contracts::jobs::{Job, JobKind, JobStatus};
+use eileen_contracts::jobs::{Job, JobKind, JobStatus, Route};
 use eileen_contracts::tools::brain::JobRef;
 
 /// The most jobs the registry keeps. The oldest finished job goes to make room, and while every
@@ -30,8 +31,10 @@ pub const SLUG_MAX: usize = 40;
 /// this many in seven days, the oldest is forgotten first.
 pub const SLUGS_KEPT: usize = 1024;
 
-/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8).
-const ORDINALS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8), and
+/// the count a fan-out's acknowledgement says.
+pub(crate) const ORDINALS: [&str; 8] =
+    ["one", "two", "three", "four", "five", "six", "seven", "eight"];
 
 /// Words a slug does not start with.
 const ARTICLES: [&str; 3] = ["the", "a", "an"];
@@ -361,6 +364,123 @@ impl Registry {
         found.map(|job| job.id)
     }
 
+    /// Which unfinished job a request names (section 2.5), first match wins: an explicit id,
+    /// slug, ordinal or name (its words with the articles dropped, in any case); a kind word
+    /// ("the render", "the coding job"); a route word ("Claude's job"); then, for a pronoun or
+    /// no words at all, the job announced just before (`announced`, which the caller gives only
+    /// right after an announcement), the focus job and the most recent job outside a fan-out.
+    /// A name, kind word or route word that fits several jobs picks the focus job among them,
+    /// or asks which. Kind and route words name only jobs outside a fan-out, whose children are
+    /// named by ordinal.
+    #[must_use]
+    pub fn pick(&self, target: Option<&JobRef>, announced: Option<JobId>) -> Pick {
+        let words = match target {
+            None => Vec::new(),
+            Some(JobRef::Name(name)) => plain_words(name),
+            Some(other) => return self.resolve(other).map_or(Pick::Nothing, Pick::One),
+        };
+        let open = |job: &&Job| !job.status.is_terminal();
+        let top = |job: &&Job| open(job) && job.spec.parent.is_none();
+        if !words.is_empty() && !PRONOUNS.contains(&words.join(" ").as_str()) {
+            let named: Vec<&Job> = self
+                .jobs
+                .iter()
+                .rev()
+                .filter(open)
+                .filter(|j| plain_words(&j.name) == words)
+                .collect();
+            if !named.is_empty() {
+                return choose(&named);
+            }
+            if let Some(kind) = kind_named(&words) {
+                let found: Vec<&Job> =
+                    self.jobs.iter().rev().filter(top).filter(|j| j.spec.kind == kind).collect();
+                return choose(&found);
+            }
+            if let Some(route) = route_named(&words) {
+                let found: Vec<&Job> =
+                    self.jobs.iter().rev().filter(top).filter(|j| j.route == route).collect();
+                return choose(&found);
+            }
+            return Pick::Nothing;
+        }
+        let announced = announced.filter(|id| self.get(*id).is_some_and(|job| open(&job)));
+        let newest = || self.jobs.iter().rev().find(top).map(|job| job.id);
+        announced.or_else(|| self.focused()).or_else(newest).map_or(Pick::Nothing, Pick::One)
+    }
+
+    /// The unfinished job the user is focused on, if any.
+    #[must_use]
+    pub fn focused(&self) -> Option<JobId> {
+        let focus = self.jobs.iter().find(|job| job.focus && !job.status.is_terminal());
+        focus.map(|job| job.id)
+    }
+
+    /// Moves the focus to `id`, an unfinished job, at `at`. Returns the jobs whose focus
+    /// changed; nothing when `id` is not a kept, unfinished job.
+    pub fn focus_on(&mut self, id: JobId, at: WallTime) -> Vec<JobId> {
+        if self.get(id).is_none_or(|job| job.status.is_terminal()) {
+            return Vec::new();
+        }
+        let mut changed = Vec::new();
+        for job in &mut self.jobs {
+            let focus = job.id == id;
+            if job.focus != focus {
+                job.focus = focus;
+                job.updated = at;
+                changed.push(job.id);
+            }
+        }
+        changed
+    }
+
+    /// Once the focus job has finished, or no job has the focus: a finished job gives it up,
+    /// and it moves to the newest unfinished job outside a fan-out, if any. Returns the jobs
+    /// whose focus changed.
+    pub fn refocus(&mut self, at: WallTime) -> Vec<JobId> {
+        if self.focused().is_some() {
+            return Vec::new();
+        }
+        let mut changed = Vec::new();
+        for job in self.jobs.iter_mut().filter(|job| job.focus) {
+            job.focus = false;
+            job.updated = at;
+            changed.push(job.id);
+        }
+        let next = self
+            .jobs
+            .iter()
+            .rev()
+            .find(|job| !job.status.is_terminal() && job.spec.parent.is_none());
+        if let Some(next) = next.map(|job| job.id) {
+            changed.extend(self.focus_on(next, at));
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        changed
+    }
+
+    /// The name, slug and ordinal of a job that replaces `old` (a reroute): the name and
+    /// ordinal the user knows, which are never regenerated, and a slug of its own.
+    pub fn successor(&self, old: JobId, at: WallTime) -> Result<Naming, Refused> {
+        let job = self.get(old).ok_or(Refused::Unknown(old))?;
+        let slug = self.free_slug(job.slug.clone(), at);
+        Ok(Naming { name: job.name.clone(), slug, ordinal: job.ordinal })
+    }
+
+    /// Records the unfinished job `id`'s progress, at most 100 percent; returns the job when
+    /// the percent changed.
+    pub fn progress(&mut self, id: JobId, pct: u8, at: WallTime) -> Option<&Job> {
+        let job = self.jobs.iter_mut().find(|job| job.id == id && !job.status.is_terminal())?;
+        let pct = pct.min(100);
+        if job.progress_pct == Some(pct) {
+            return None;
+        }
+        job.progress_pct = Some(pct);
+        job.updated = at;
+        Some(&*job)
+    }
+
     /// Where `job` works. A coding job whose repository is an absolute path works in place,
     /// behind a snapshot, when it is not a fan-out's child, no other unfinished coding job
     /// works in that repository, and the user's uncommitted files do not overlap the files its
@@ -398,6 +518,67 @@ impl Registry {
             }
         }
     }
+}
+
+/// Which job a request names, from [`Registry::pick`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick {
+    /// This job.
+    One(JobId),
+    /// Several jobs fit and none is the focus job: Eileen asks which, once. Newest first.
+    Ask(Vec<JobId>),
+    /// No unfinished job fits.
+    Nothing,
+}
+
+/// Words that name no job by themselves, once the articles and `FILLER` are dropped: the
+/// pronoun rules decide.
+const PRONOUNS: [&str; 5] = ["it", "that", "this", "that one", "this one"];
+
+/// Words dropped before a name, kind word or route word is matched.
+const FILLER: [&str; 5] = ["job", "jobs", "task", "please", "now"];
+
+/// One job of `found` (newest first): the only one, or the focus job among several; otherwise
+/// a question.
+fn choose(found: &[&Job]) -> Pick {
+    match found {
+        [] => Pick::Nothing,
+        [one] => Pick::One(one.id),
+        many => many.iter().find(|job| job.focus).map_or_else(
+            || Pick::Ask(many.iter().map(|job| job.id).collect()),
+            |focus| Pick::One(focus.id),
+        ),
+    }
+}
+
+/// `text` in lower-case ASCII words, with a possessive "'s", the articles and `FILLER`
+/// dropped: "Claude's job" is `["claude"]`, "The Render" is `["render"]`.
+fn plain_words(text: &str) -> Vec<String> {
+    let text = text.replace('\u{2019}', "'").to_lowercase();
+    text.split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .map(|word| word.strip_suffix("'s").unwrap_or(word).trim_matches('\'').to_owned())
+        .filter(|word| !word.is_empty())
+        .filter(|word| !ARTICLES.contains(&word.as_str()) && !FILLER.contains(&word.as_str()))
+        .collect()
+}
+
+/// The job kind `words` name, when they are one of its kind words.
+fn kind_named(words: &[String]) -> Option<JobKind> {
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    match words.as_slice() {
+        ["render" | "renders" | "rendering" | "export"] => Some(JobKind::AppTask),
+        ["coding" | "code" | "coder"] => Some(JobKind::Coding),
+        ["research" | "researcher"] => Some(JobKind::Research),
+        ["computer"] => Some(JobKind::ComputerUse),
+        ["answer"] | ["deep", "answer"] => Some(JobKind::DeepAnswer),
+        _ => None,
+    }
+}
+
+/// The route `words` name, when they are its spoken name.
+fn route_named(words: &[String]) -> Option<Route> {
+    let said = words.join(" ");
+    Route::ALL.into_iter().find(|route| route.display_name().to_lowercase() == said)
 }
 
 /// How a job of `kind` is spoken of when the brain gave no title.
@@ -487,9 +668,18 @@ fn fnv1a(text: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use eileen_contracts::jobs::{JobKind, JobStatus};
+    use std::collections::BTreeMap;
 
-    use super::{Step, absolute, fnv1a, legal, name_of, repo_key, slug_of};
+    use eileen_contracts::ids::{JobId, TurnId, WallTime};
+    use eileen_contracts::jobs::{
+        Cost, Depth, FanoutMode, Job, JobKind, JobSpec, JobStatus, Route, Taint,
+    };
+    use eileen_contracts::tools::brain::JobRef;
+
+    use super::{
+        Pick, Registry, Step, absolute, fnv1a, kind_named, legal, name_of, plain_words, repo_key,
+        route_named, slug_of,
+    };
 
     const ALL: [JobStatus; 8] = [
         JobStatus::Queued,
@@ -507,7 +697,7 @@ mod tests {
         let steps = [
             Step::Start,
             Step::Block,
-            Step::AwaitApproval { deadline: eileen_contracts::ids::WallTime(0) },
+            Step::AwaitApproval { deadline: WallTime(0) },
             Step::Resume,
             Step::Complete,
             Step::Fail,
@@ -568,5 +758,178 @@ mod tests {
         for repo in names.into_iter().chain(["/home/./u", "\\\\.\\pipe\\x", "", "   "]) {
             assert!(!absolute(repo), "{repo:?} is not");
         }
+    }
+
+    /// A job the registry names for itself, number `n`, accepted at `n` ms.
+    fn job(registry: &Registry, n: u64, hint: &str, kind: JobKind, parent: Option<JobId>) -> Job {
+        let at = WallTime(i64::try_from(n).unwrap() * 1_000);
+        let naming = registry.naming(Some(hint), kind, parent, at).unwrap();
+        let spec = JobSpec {
+            kind,
+            task: hint.to_owned(),
+            title_hint: Some(hint.to_owned()),
+            depth: Depth::Considered,
+            route: None,
+            model: None,
+            fanout: if hint == "flaky login tests" { 2 } else { 1 },
+            mode: FanoutMode::Compete,
+            subtasks: Vec::new(),
+            subquestions: Vec::new(),
+            repo: None,
+            resume_session: None,
+            skill: None,
+            slots: BTreeMap::new(),
+            topic: None,
+            anticipated: false,
+            authorized_by: TurnId::from_parts(1, 1),
+            parent,
+            chrome: false,
+        };
+        Job {
+            id: JobId::from_parts(n, u128::from(n)),
+            name: naming.name,
+            slug: naming.slug,
+            ordinal: naming.ordinal,
+            spec,
+            status: JobStatus::Queued,
+            route: Route::Claude,
+            model: "mid".to_owned(),
+            session: None,
+            created: at,
+            updated: at,
+            last_progress: None,
+            progress_pct: None,
+            salience_pct: 50,
+            worktree: None,
+            branch: None,
+            snapshot_ref: None,
+            cost: Cost::default(),
+            grants: Vec::new(),
+            taint: Taint::default(),
+            focus: false,
+            override_words: None,
+            approval_deadline: None,
+        }
+    }
+
+    /// A report, a price check (research), a render (an app task) and a fan-out of two coding
+    /// agents, accepted in that order.
+    fn four_jobs() -> (Registry, [JobId; 6]) {
+        let mut registry = Registry::default();
+        let plain = [
+            (1, "the report", JobKind::General),
+            (2, "the price check", JobKind::Research),
+            (3, "render", JobKind::AppTask),
+            (4, "flaky login tests", JobKind::Coding),
+        ];
+        for (n, hint, kind) in plain {
+            let job = job(&registry, n, hint, kind, None);
+            registry.accept(job).unwrap();
+        }
+        let parent = JobId::from_parts(4, 4);
+        for n in [5, 6] {
+            let child = job(&registry, n, "", JobKind::Coding, Some(parent));
+            registry.accept(child).unwrap();
+        }
+        let ids = [1, 2, 3, 4, 5, 6].map(|n| JobId::from_parts(n, u128::from(n)));
+        (registry, ids)
+    }
+
+    fn name(words: &str) -> JobRef {
+        JobRef::Name(words.to_owned())
+    }
+
+    #[test]
+    fn words_name_a_job_by_name_slug_ordinal_kind_and_route_in_that_order() {
+        let (registry, [report, price, render, fan, one, two]) = four_jobs();
+        let pick = |target: JobRef| registry.pick(Some(&target), None);
+        assert_eq!(pick(name("The Report")), Pick::One(report), "a name in any case");
+        assert_eq!(pick(name("report")), Pick::One(report), "a name without its article");
+        assert_eq!(pick(JobRef::Slug("price-check".to_owned())), Pick::One(price), "a slug");
+        assert_eq!(pick(JobRef::Id(render)), Pick::One(render), "an id");
+        assert_eq!(pick(JobRef::Ordinal(2)), Pick::One(two), "an ordinal");
+        assert_eq!(pick(name("agent one")), Pick::One(one), "a child's name");
+        assert_eq!(pick(name("the render")), Pick::One(render), "the render by name");
+        assert_eq!(pick(name("the research job")), Pick::One(price), "a kind word");
+        assert_eq!(pick(name("the coding job")), Pick::One(fan), "a kind word names no child");
+        assert_eq!(
+            pick(name("Claude's job")),
+            Pick::Ask(vec![fan, render, price, report]),
+            "a route word that fits several jobs, none in focus, asks, newest first"
+        );
+        assert_eq!(pick(name("the other file")), Pick::Nothing, "words that fit no job");
+        assert_eq!(pick(JobRef::Ordinal(3)), Pick::Nothing, "no third agent");
+    }
+
+    #[test]
+    fn a_pronoun_names_the_announced_job_then_the_focus_job_then_the_newest() {
+        let (mut registry, [report, price, render, fan, _, _]) = four_jobs();
+        assert_eq!(registry.pick(None, None), Pick::One(fan), "the newest outside a fan-out");
+        assert_eq!(registry.focus_on(price, WallTime(10)), [price], "the price check in focus");
+        for words in [None, Some(name("it")), Some(name("that one")), Some(name("the job"))] {
+            let picked = registry.pick(words.as_ref(), None);
+            assert_eq!(picked, Pick::One(price), "{words:?}: the focus job");
+        }
+        let said = registry.pick(Some(&name("it")), Some(render));
+        assert_eq!(said, Pick::One(render), "it, right after an announcement");
+        assert_eq!(
+            registry.pick(Some(&name("Claude's job")), None),
+            Pick::One(price),
+            "the focus job among several that fit"
+        );
+        registry.step(report, Step::Start, WallTime(11)).unwrap();
+        registry.step(report, Step::Complete, WallTime(12)).unwrap();
+        let finished = registry.pick(Some(&name("it")), Some(report));
+        assert_eq!(finished, Pick::One(price), "a finished announced job is passed over");
+        assert_eq!(registry.pick(Some(&name("the report")), None), Pick::Nothing, "finished");
+    }
+
+    #[test]
+    fn the_focus_is_held_by_one_job_and_moves_off_a_finished_one() {
+        let (mut registry, [report, price, _, fan, one, _]) = four_jobs();
+        assert_eq!(registry.focused(), None, "nothing in focus yet");
+        assert!(registry.refocus(WallTime(9)).contains(&fan), "the newest outside a fan-out");
+        let moved = registry.focus_on(price, WallTime(10));
+        assert_eq!(moved, [price, fan], "the old focus goes as the new one comes");
+        assert!(registry.focus_on(price, WallTime(11)).is_empty(), "already in focus");
+        assert!(registry.refocus(WallTime(11)).is_empty(), "the focus job runs on");
+        registry.step(price, Step::Cancel, WallTime(12)).unwrap();
+        let moved = registry.refocus(WallTime(13));
+        assert_eq!(moved, [price, fan], "a finished job gives it up, to the newest");
+        assert_eq!(registry.focused(), Some(fan), "one focus job");
+        assert_eq!(registry.focus_on(one, WallTime(14)), [fan, one], "a child can be followed");
+        registry.step(report, Step::Cancel, WallTime(15)).unwrap();
+        assert!(registry.focus_on(report, WallTime(16)).is_empty(), "never a finished job");
+        let count = registry.jobs().iter().filter(|job| job.focus).count();
+        assert_eq!(count, 1, "exactly one job holds the focus");
+    }
+
+    #[test]
+    fn a_successor_keeps_the_name_and_ordinal_with_a_slug_of_its_own() {
+        let (registry, [report, _, _, _, _, two]) = four_jobs();
+        let next = registry.successor(report, WallTime(20)).unwrap();
+        assert_eq!((next.name.as_str(), next.ordinal), ("the report", None), "the same name");
+        assert_eq!(next.slug, "report-2", "a slug of its own");
+        let next = registry.successor(two, WallTime(20)).unwrap();
+        assert_eq!((next.name.as_str(), next.ordinal), ("agent two", Some(2)), "the same agent");
+    }
+
+    #[test]
+    fn progress_is_kept_once_per_change_and_never_past_a_hundred() {
+        let (mut registry, [_, _, render, _, _, _]) = four_jobs();
+        assert!(registry.progress(render, 60, WallTime(1)).is_some(), "a new percent");
+        assert!(registry.progress(render, 60, WallTime(2)).is_none(), "the same percent");
+        let pct = registry.progress(render, 250, WallTime(3)).and_then(|job| job.progress_pct);
+        assert_eq!(pct, Some(100), "at most a hundred");
+    }
+
+    #[test]
+    fn plain_words_drop_articles_filler_and_possessives() {
+        assert_eq!(plain_words("Claude's job"), ["claude"], "a possessive");
+        assert_eq!(plain_words("the  Render, please"), ["render"], "an article and filler");
+        assert_eq!(plain_words("Claude\u{2019}s task"), ["claude"], "a curly apostrophe");
+        assert_eq!(kind_named(&plain_words("the deep answer")), Some(JobKind::DeepAnswer), "two");
+        assert_eq!(kind_named(&plain_words("the hello file")), None, "not a kind word");
+        assert_eq!(route_named(&plain_words("the local model")), Some(Route::Local), "a route");
     }
 }
