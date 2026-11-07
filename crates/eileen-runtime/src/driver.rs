@@ -11,14 +11,21 @@
 //!   way, so `seq` is the order the core sees, counting up by one whatever the source, the
 //!   core's time never runs backwards along it, and a recorded input replays with its own time
 //!   (section 3.3.16).
-//! - **Effects.** Each effect goes, unchanged and in order, to the component whose
-//!   [`Component::accepts`] names its [`EffectFamily`], through that component's own bounded
-//!   queue. A family two components claim is a start error, and so is a component that claims
-//!   `Timer`, which the driver serves itself. An effect nobody serves (no claim, or its
-//!   component has ended) is dropped, with one `effect.unserved` line per family per run.
+//! - **Effects.** Each effect goes, in order, to the component whose [`Component::accepts`]
+//!   names its [`EffectFamily`], through that component's own bounded queue, unchanged but for
+//!   `Hud`: section 3.3.3 has the driver hold HUD snapshots to 10 a second, so one goes at most
+//!   every [`HUD_EVERY`], and since each is the whole HUD state, the newest replaces one still
+//!   waiting, which goes once that time has passed. A family two components claim is a start
+//!   error, and so is a component that claims `Timer`, which the driver serves itself. An effect
+//!   nobody serves (no claim, or its component has ended) is dropped, with one `effect.unserved`
+//!   line per family per run. While a component's queue is full the driver waits for room,
+//!   still watching for shutdown and for any component's end.
 //! - **Timers.** `SetTimer` and `CancelTimer` stay in the driver. A timer fires on tokio's clock
 //!   when the monotonic clock reaches its `at`, and comes back to the core as `Input::Timer`,
-//!   stepped at once with a time no earlier than `at`. A fired timer never waits in the input
+//!   stepped at once with a time no earlier than `at`. Tokio wakes a timer up to a millisecond
+//!   late, and later on Windows, so an input taken in that gap first steps every timer due
+//!   strictly before the time the input takes: no input is stepped past a pending timer's `at`,
+//!   and a tie goes to the input, as in the simulator. A fired timer never waits in the input
 //!   queue, so the driver never blocks on its own channel.
 //! - **Components.** Each starts through [`eileen_rt::task::spawn`] with a [`ComponentCtx`]:
 //!   the input sink, its effects, the data directory, the core session and the run's
@@ -27,6 +34,8 @@
 //! - **Shutdown.** On [`Shutdown::trigger`], or when a component fails, the driver stops
 //!   stepping, triggers the shutdown every component waits on, closes every effect queue and the
 //!   input queue, and gives the components [`Limits::stop_within`] to end; it aborts the rest.
+//!   A run that ends any other way, by a panic in the core's step or by its caller dropping it,
+//!   still triggers the shutdown and aborts every component's task.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,13 +43,13 @@ use std::fmt;
 use std::future::{Future, pending, poll_fn};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
 use eileen_contracts::core_io::{Effect, EffectFamily, Input, TimerId};
-use eileen_contracts::ids::{Envelope, MonoTime, SessionId, TraceCtx};
+use eileen_contracts::ids::{Envelope, MonoTime, Personal, SessionId, TraceCtx};
 use eileen_contracts::ports::{
     Backpressure, Component, ComponentCtx, ComponentError, EffectSource, InputSink, ShutdownSignal,
 };
@@ -55,18 +64,21 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
 use tracing::field::Empty;
 
+mod timing;
+
+use timing::{HudPace, Timers};
+
 /// The name the driver claims `Timer` under, which a component claiming it is told.
 pub const DRIVER: &str = "driver";
 
 /// The name of the core's input queue, as `channel.full` reports it.
 const INPUT_QUEUE: &str = "core.inputs";
 
-/// The most timers the driver keeps at once. The core keeps at most one per kind, so passing it
-/// is a bug in the core: the new timer is refused with a soft assertion.
-const MAX_TIMERS: usize = 1_024;
-
 /// How long an aborted component's task has to go once aborted.
 const ABORT_WAIT: Duration = Duration::from_secs(1);
+
+/// The least time between two `Hud` snapshots: 10 a second (section 3.3.3).
+pub const HUD_EVERY: Duration = Duration::from_millis(100);
 
 /// The bounds of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,13 +147,15 @@ pub enum RunError {
         /// The one that claims it again.
         second: &'static str,
     },
-    /// A component stopped with an error.
-    #[error("the {component} component stopped: {message}")]
+    /// A component stopped with an error. Its words can quote a path, so they stay out of this
+    /// error's message: a caller that logs them logs `message.get()` under `pii.message`, as
+    /// the driver's own `component.ended` line does.
+    #[error("the {component} component stopped")]
     Component {
         /// The component's name, as it was started.
         component: &'static str,
         /// What went wrong, in its words.
-        message: String,
+        message: Personal<String>,
     },
     /// A component's task panicked.
     #[error("the {component} component panicked")]
@@ -276,6 +290,7 @@ impl Driver {
             tasks,
             routes,
             timers: Timers::default(),
+            hud: HudPace::default(),
             origin,
             seq: 0,
             last: MonoTime(0),
@@ -284,6 +299,8 @@ impl Driver {
             shutdown,
             effects: Vec::new(),
         };
+        // A panic in the core's step, or the caller dropping this future, skips `finish`:
+        // dropping `run` then triggers the shutdown and aborts every component's task.
         let outcome = run.drive().await;
         run.finish(limits.stop_within).await;
         outcome
@@ -336,29 +353,6 @@ impl Routes {
     }
 }
 
-/// The timers the core has set and not cancelled.
-#[derive(Debug, Default)]
-struct Timers(BTreeMap<TimerId, MonoTime>);
-
-impl Timers {
-    /// Sets or cancels a timer.
-    fn apply(&mut self, effect: &Effect) {
-        if let Effect::SetTimer { id, at } = effect {
-            let full = self.0.len() >= MAX_TIMERS && !self.0.contains_key(id);
-            if !eileen_stdx::never!(full, "the core holds {MAX_TIMERS} timers; {id:?} is refused") {
-                self.0.insert(*id, *at);
-            }
-        } else if let Effect::CancelTimer(id) = effect {
-            self.0.remove(id);
-        }
-    }
-
-    /// The timer due first, the lower id first among timers due at once.
-    fn next(&self) -> Option<(TimerId, MonoTime)> {
-        self.0.iter().map(|(id, at)| (*id, *at)).min_by_key(|&(id, at)| (at, id))
-    }
-}
-
 /// A component's sender into the core's input queue. A component sends `seq` as zero: the
 /// driver stamps it, so a non-zero one is a component's bug, reported where it happens.
 struct Inputs(Sender<Envelope<Input>>);
@@ -401,6 +395,7 @@ enum Wake {
     Stop,
     Ended(Ended),
     Timer,
+    Hud,
     Input,
 }
 
@@ -423,6 +418,7 @@ struct Run {
     tasks: Vec<Option<Task>>,
     routes: Routes,
     timers: Timers,
+    hud: HudPace,
     /// Tokio's clock and the monotonic clock at the start, to turn a timer's `at` into a
     /// deadline.
     origin: (Instant, MonoTime),
@@ -444,12 +440,14 @@ impl Run {
         loop {
             let due = self.timers.next();
             let deadline = due.and_then(|(_, at)| self.deadline(at));
+            let paced = self.hud.release_at();
             let mut input = None;
             let wake = tokio::select! {
                 biased;
                 _ = self.stop.wait_for(|stop| *stop) => Wake::Stop,
                 ended = first_ended(&mut self.tasks) => Wake::Ended(ended),
                 () = sleep_until(deadline) => Wake::Timer,
+                () = sleep_until(paced) => Wake::Hud,
                 received = recv(self.inputs.as_mut()) => {
                     input = received;
                     Wake::Input
@@ -457,17 +455,21 @@ impl Run {
             };
             let flow = match wake {
                 Wake::Stop => Flow::Stop,
-                Wake::Ended(ended) => self.ended(ended)?,
+                Wake::Ended(ended) => {
+                    self.ended(ended)?;
+                    Flow::Continue
+                }
                 Wake::Timer => match due {
                     Some((id, at)) => {
-                        self.timers.apply(&Effect::CancelTimer(id));
-                        self.step(TraceCtx::default(), Input::Timer(id), at).await
+                        let mono = self.stamp(at);
+                        self.fire(id, mono).await?
                     }
                     None => Flow::Continue,
                 },
+                Wake::Hud => self.release_hud().await?,
                 Wake::Input => {
                     if let Some(input) = input {
-                        self.step(input.ctx, input.body, MonoTime(0)).await
+                        self.take(input).await?
                     } else {
                         self.inputs = None;
                         Flow::Continue
@@ -486,10 +488,35 @@ impl Run {
         instant.checked_add(Duration::from_nanos(at.0.saturating_sub(mono.0)))
     }
 
-    /// Gives an input its place and time, steps the core with it and routes the effects.
-    async fn step(&mut self, ctx: TraceCtx, body: Input, floor: MonoTime) -> Flow {
+    /// The time the next step takes: the clock's, never before the last step's or `floor`.
+    fn stamp(&self, floor: MonoTime) -> MonoTime {
+        self.clock.mono().max(self.last).max(floor)
+    }
+
+    /// Steps timer `id` at `mono`, no earlier than its `at`, and forgets it.
+    async fn fire(&mut self, id: TimerId, mono: MonoTime) -> Result<Flow, RunError> {
+        self.timers.apply(&Effect::CancelTimer(id));
+        self.step(TraceCtx::default(), Input::Timer(id), mono).await
+    }
+
+    /// Steps an input taken off the queue, after every timer due strictly before the time it
+    /// takes, which tokio may not have woken yet. Each of these steps takes that one time, so
+    /// a timer still pending is due no earlier than the input.
+    async fn take(&mut self, input: Envelope<Input>) -> Result<Flow, RunError> {
+        let stamp = self.stamp(MonoTime(0));
+        while let Some((id, at)) = self.timers.next()
+            && at < stamp
+        {
+            if self.fire(id, stamp).await? == Flow::Stop {
+                return Ok(Flow::Stop);
+            }
+        }
+        self.step(input.ctx, input.body, stamp).await
+    }
+
+    /// Gives an input its place, steps the core with it at `mono` and routes the effects.
+    async fn step(&mut self, ctx: TraceCtx, body: Input, mono: MonoTime) -> Result<Flow, RunError> {
         self.seq = self.seq.saturating_add(1);
-        let mono = self.clock.mono().max(self.last).max(floor);
         self.last = mono;
         let at = self.clock.wall();
         let seq = self.seq;
@@ -505,10 +532,10 @@ impl Run {
         span.in_scope(|| self.machine.step(mono, input, &mut effects));
         span.record("effects", effects.len());
         drop(span);
-        let mut flow = Flow::Continue;
+        let mut flow = Ok(Flow::Continue);
         for effect in effects.drain(..) {
-            if self.route(effect).await == Flow::Stop {
-                flow = Flow::Stop;
+            flow = self.route(effect).await;
+            if flow != Ok(Flow::Continue) {
                 break;
             }
         }
@@ -517,28 +544,66 @@ impl Run {
     }
 
     /// Carries one effect out: a timer here, anything else to the component that claims it.
-    async fn route(&mut self, effect: Envelope<Effect>) -> Flow {
+    async fn route(&mut self, effect: Envelope<Effect>) -> Result<Flow, RunError> {
         let family = effect.body.family();
         if family == EffectFamily::Timer {
             self.timers.apply(&effect.body);
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
         let Some((index, name)) = self.routes.get(family) else {
             self.unserved(family, None);
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         };
-        let sent = match self.outlets.get(index).and_then(Option::as_ref) {
-            Some(outlet) => tokio::select! {
-                biased;
-                _ = self.stop.wait_for(|stop| *stop) => return Flow::Stop,
-                sent = outlet.send(effect) => sent.is_ok(),
-            },
-            None => false,
+        let paced = if family == EffectFamily::Hud {
+            self.hud.offer(effect, Instant::now())
+        } else {
+            Some(effect)
         };
-        if !sent {
+        let Some(effect) = paced else { return Ok(Flow::Continue) };
+        self.deliver(index, name, family, effect).await
+    }
+
+    /// Sends the `Hud` snapshot that waited for its turn.
+    async fn release_hud(&mut self) -> Result<Flow, RunError> {
+        let Some(effect) = self.hud.release(Instant::now()) else { return Ok(Flow::Continue) };
+        let Some((index, name)) = self.routes.get(EffectFamily::Hud) else {
+            return Ok(Flow::Continue);
+        };
+        self.deliver(index, name, EffectFamily::Hud, effect).await
+    }
+
+    /// Puts an effect on component `index`'s queue. While the queue is full it waits for room,
+    /// and still for shutdown and for any component's end, so a failure elsewhere ends the run
+    /// with its name even then.
+    async fn deliver(
+        &mut self,
+        index: usize,
+        name: &'static str,
+        family: EffectFamily,
+        effect: Envelope<Effect>,
+    ) -> Result<Flow, RunError> {
+        // A clone, so the send can wait across `ended`, which closes the slot it came from.
+        let Some(outlet) = self.outlets.get(index).and_then(Option::as_ref).cloned() else {
             self.unserved(family, Some(name));
+            return Ok(Flow::Continue);
+        };
+        let mut send = pin!(outlet.send(effect));
+        loop {
+            let ended = tokio::select! {
+                biased;
+                _ = self.stop.wait_for(|stop| *stop) => return Ok(Flow::Stop),
+                sent = &mut send => {
+                    if sent.is_err() {
+                        self.unserved(family, Some(name));
+                    }
+                    return Ok(Flow::Continue);
+                }
+                ended = first_ended(&mut self.tasks) => ended,
+            };
+            // When the component that ended is this one, its queue has closed, and the send
+            // ends with the effect unserved on the next turn.
+            self.ended(ended)?;
         }
-        Flow::Continue
     }
 
     /// Logs a family no running component serves, once per run.
@@ -555,7 +620,7 @@ impl Run {
 
     /// A component's task ended before shutdown: an error or a panic ends the run, and a
     /// component that returned early leaves its families unserved.
-    fn ended(&mut self, ended: Ended) -> Result<Flow, RunError> {
+    fn ended(&mut self, ended: Ended) -> Result<(), RunError> {
         let Ended { index, name, result } = ended;
         if let Some(outlet) = self.outlets.get_mut(index) {
             *outlet = None;
@@ -568,11 +633,11 @@ impl Run {
                     outcome = "returned",
                     "a component returned before shutdown; its effects are now dropped",
                 );
-                Ok(Flow::Continue)
+                Ok(())
             }
             Ok(Err(error)) => {
                 log_error(name, &error);
-                Err(RunError::Component { component: name, message: error.message })
+                Err(RunError::Component { component: name, message: Personal::new(error.message) })
             }
             Err(join) => {
                 log_join(name, &join);
@@ -582,35 +647,50 @@ impl Run {
     }
 
     /// Stops every component: the shutdown they wait on, their effect queues and the input
-    /// queue closed, then up to `within` for them to end before the rest are aborted.
-    async fn finish(self, within: Duration) {
-        let Self { shutdown, outlets, inputs, tasks, .. } = self;
-        shutdown.trigger();
-        drop(outlets);
-        drop(inputs);
+    /// queue closed, then up to `within` for them to end before the rest are aborted. A task
+    /// leaves its slot only once it has ended, so a run dropped meanwhile still aborts it.
+    async fn finish(&mut self, within: Duration) {
+        self.shutdown.trigger();
+        self.outlets.clear();
+        self.inputs = None;
         let deadline = Instant::now().checked_add(within).unwrap_or_else(Instant::now);
-        for task in tasks.into_iter().flatten() {
-            stop_task(task, deadline).await;
+        for slot in &mut self.tasks {
+            if let Some(task) = slot.as_mut() {
+                stop_task(task, deadline).await;
+            }
+            *slot = None;
+        }
+    }
+}
+
+impl Drop for Run {
+    /// Stops what a run that did not finish left running: a panic in the core's step, or a
+    /// caller that dropped the run, ends it without `finish`, and a dropped `JoinHandle` would
+    /// leave its task running with nothing to stop it.
+    fn drop(&mut self) {
+        self.shutdown.trigger();
+        for task in self.tasks.iter().flatten() {
+            task.handle.abort();
         }
     }
 }
 
 /// Waits for one component's task until `deadline`, then aborts it.
-async fn stop_task(task: Task, deadline: Instant) {
-    let Task { name, mut handle } = task;
-    match tokio::time::timeout_at(deadline, &mut handle).await {
+async fn stop_task(task: &mut Task, deadline: Instant) {
+    let name = task.name;
+    match tokio::time::timeout_at(deadline, &mut task.handle).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => log_error(name, &error),
         Ok(Err(join)) => log_join(name, &join),
         Err(_) => {
-            handle.abort();
+            task.handle.abort();
             tracing::warn!(
                 name: names::COMPONENT_ENDED,
                 component = name,
                 outcome = "aborted",
                 "a component did not stop in time and was aborted",
             );
-            if tokio::time::timeout(ABORT_WAIT, handle).await.is_err() {
+            if tokio::time::timeout(ABORT_WAIT, &mut task.handle).await.is_err() {
                 tracing::warn!(
                     name: names::COMPONENT_ENDED,
                     component = name,
