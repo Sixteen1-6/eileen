@@ -315,7 +315,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   wording read as a kill and a restart, which would have loaded the models twice for every
   hang. Sections 2.13, 3.3.16 and 6.3 treat the minimal core's snapshot as a resume snapshot
   (Surprises below) and name the contracts amendment that lifts the start-only rule for strict
-  replay (item 4 of Next). The clause that a backoff step longer than 10 s is kept in full when
+  replay (item 3 of Next). The clause that a backoff step longer than 10 s is kept in full when
   the kill's `Exited` never comes gains its tests:
   `eileen-core::tests::life::a_kill_whose_exit_never_comes_keeps_a_16_s_step_in_full` (five
   kills in a row: no restart at 10 s, a restart at 16 s) and
@@ -328,7 +328,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   remaining candidates mean one question. It listed the announced job last, after the focus job,
   which would always have won. Section 3.3.4 lists `CancelSource` and plans `Typed`: a cancel
   asked for in a turn takes the variant named like the turn's `TurnSource`, else `Voice`
-  (item 4 of Next).
+  (item 3 of Next).
 - `amend/wp1-job-pronouns` again, from review of #190's merged text. Section 2.5's order holds
   over unfinished jobs only for a cancel, focus, steer, reroute or interrupt; a request about
   what a job did (a status question naming a job, `ShowChanges`, `Keep`, `Undo`, "why did you
@@ -338,13 +338,35 @@ Every pull request also meets the rules section 6.1 sets for every package.
   3.3.4 maps a turn's source to `CancelSource` in an exhaustive match (`Scenario` and
   `FirstRun` as `Voice`, no variant for `ClaudeSession`, `JobEvent` and `Connector`), says a
   cancel from a CLI turn is recorded as `Voice` today as well as a typed one, and keeps a
-  provisional D79 line. The code and its tests are in items 2 and 4 of Next.
+  provisional D79 line. The code and its tests are in items 1 and 3 of Next.
+- `wp1/speech-late` (#PRNUM): the rule for turns heard late (section 2.8, D81 and D83),
+  on `SpeechStarted.replayed` from WP4's first part (#136). `eileen-core` records each turn whose
+  start is flagged replayed, and the gate addresses such a turn only when it begins with the
+  name (`addressee::Decision::NamedLate`). Any other turn heard late is greyed
+  (`Decision::Late`), whatever the conversation window, a full built-in command or a follow-up
+  would have said, and the resolver's follow-up is never asked for it. A partial of a turn heard
+  late decides a pending barge-in only by the name. The `addressee` span records `name` or
+  `greyed` with a reason that says the turn was heard late. `route::Handled` became
+  `route::TurnSet`, which keeps both the turns handled and the turns heard late, at most eight
+  each. `eileen-sim`'s speech part gains the audio ring (`parts::ring`): the user's turn events
+  heard while the process is not ready (loading at the start or after a restart, hung, or down)
+  are held for up to 180 s under a turn the process mints, and replayed at `Ready` with that
+  turn's start flagged replayed. The turn open when the process went down is renamed then, since
+  the ring keeps its frames from its start, and the rest of a renamed turn heard after `Ready`
+  keeps the new name; a mute empties the ring, and nothing is held while capture is off. Seeded
+  runs send the generator's speech through the ring (`World::hear`), so the pull request seeds
+  hear turns late after every load and restart. Tests: `eileen-core::tests::late::*` (a replayed
+  unnamed command inside the window and a replayed built-in command outside it greyed, a
+  replayed name-led command routed, a replayed command that only ends with the name greyed, a
+  replayed follow-up not taken, and a replayed partial deciding a barge-in only by the name),
+  `eileen-core::addressee::tests::a_turn_heard_late_is_addressed_only_when_it_begins_with_the_name`,
+  `eileen-sim::parts::ring::tests::*`, and
+  `eileen-sim::it::slice::a_named_command_spoken_while_speech_restarts_is_acted_on_once_from_the_replay`
+  with `eileen-sim::it::slice::a_command_without_the_name_spoken_while_speech_loads_is_not_acted_on`.
+  The HUD's mark for a line heard late waits for a contracts change (Decisions below).
 - Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
   for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
-  1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
-     of a named command spoken while the speech process restarts and acted on once from the
-     replay; WP4's first part added `SpeechStarted.replayed` (#136).
-  2. `wp1/job-model`: acceptance 3's other half, `tests/it/job_model.rs` driving `Core::step`
+  1. `wp1/job-model`: acceptance 3's other half, `tests/it/job_model.rs` driving `Core::step`
      with many jobs (dispatch and fan-out, `Init` or `Ready`, `TurnDone` and `Exited`, steer,
      reroute, cancel, a restart from `snapshot()`) against the reference model's rows and
      events, and the simulator's checks of invariants 4, 5 and 12 with a core restart in the
@@ -360,11 +382,11 @@ Every pull request also meets the rules section 6.1 sets for every package.
      `an_ordinal_or_an_agents_name_picks_the_agent_of_the_fan_out_in_focus`, "the coding job"
      gives `Pick::Ask(vec![second, first])` with no focus and `Pick::One(first)` with the focus
      on `first_one`.
-  3. Invariants 2, 3 and 9 in the world's check after every step, with the generator pacing
+  2. Invariants 2, 3 and 9 in the world's check after every step, with the generator pacing
      barge-in windows at 32 ms (acceptance 1), once #151 is fixed. Invariant 9's microphone
      part waits for the core to act on `MicInUseElsewhere` (#152), and the enumeration gains a
      step for it then.
-  4. The rest of the full `Core::step` in section 6.3's order: the addressee gate of section
+  3. The rest of the full `Core::step` in section 6.3's order: the addressee gate of section
      2.8, intent dispatch, the fact path, `Act` jobs, the brain turn (with narration for the
      focus job), sessions and the warm pool, memory admission (with the worker cap in place of
      `job::MAX_LIVE`), the permission gate, approvals, announcements as data, the input lock,
@@ -388,7 +410,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
      mode refusing any checkpoint of the minimal core but the start's, with a plain message, if
      it lands before that amendment); and the scenarios of `scenarios/feel/`,
      `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
-  5. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
+  4. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
      `heavy-app` and `roomy` profiles and `scenarios/machine/`, and with the first reload the
      core orders that stops recognition, the speech process's reload rule (the 5 s count
      suspended until the reload's first `Heartbeat`, a kill when none comes within 120 s) and
@@ -401,17 +423,18 @@ Every pull request also meets the rules section 6.1 sets for every package.
   heartbeat count from such a reload to its first `Heartbeat` has nothing to start it yet. #146
   amended section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
   comes within 120 s, to the machine profile's core part, which orders the first such reload
-  (item 5 of Next above).
+  (item 4 of Next above).
 - The minimal core's `CoreSnapshotV1` is a resume snapshot, not a replay checkpoint. It lacks
   the core's live state (the speech process's life, the HUD's line, the turn phase, the
   utterance holding the floor and what Eileen last said, live timers, the brain turn, the
-  announcement queue and the speech turns already handled), and a core restored from it
+  announcement queue, and the speech turns already handled and those heard late), and a core
+  restored from it
   interrupts the unfinished jobs and starts speech again on its first step. So strict replay of
   the minimal core starts only from the checkpoint taken at the core's start, and an incident
   whose start checkpoint has left the flight recorder's ring replays in scenario mode (sections
   2.13 and 3.3.16 as #188 amended them), until the contracts amendment with the full
   `Core::step` carries every field and a restore for replay skips what only a resume does (item
-  4 of Next above).
+  3 of Next above).
 
 - A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
   commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
@@ -613,7 +636,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   an unfinished job announced within `conversation.follow_up_s` with no reply since. Section
   2.5 gives that order since #190. `control` reads that window when the brain's `jobs_control`
   call arrives, so a slow brain can carry a request heard inside it past its end; section 2.5
-  runs it to when the request was heard since the follow-up to #190, and item 2 of Next keeps
+  runs it to when the request was heard since the follow-up to #190, and item 1 of Next keeps
   the announced job on the brain turn. `pick` passes over finished jobs because its callers
   cancel, focus, steer and reroute; a request about what a job did names finished jobs too
   (section 2.5), which `show_changes`, `keep` and `undo` need when they are built. Names
@@ -697,6 +720,33 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the same way until the pause of section 2.5 is built (with the hands-off pause and the
   input lock): an interrupted worker waits with no turn in flight, which the job's states
   cannot show yet, and its errored `TurnDone` would end the job as failed.
+
+- A turn heard late must begin with the name; one that only ends with it is greyed. Section 2.8
+  says it "is addressed only by rule 1, when it begins with the name", as the call rule says of
+  calls, while the minimal core's rule 1 takes the name at either end for a turn heard live. The
+  stricter reading is taken for turns heard late, and `addressee::Name` keeps whether the
+  name led, which the call rule can use when it is built.
+- The HUD's mark for a line heard late waits for a contracts change: `HeardLine` has `text`,
+  `is_final`, `addressed` and `turn` and no field for it, and the minimal core does not fill
+  `HudState.heard` yet. The pull request proposes `HeardLine.late` for WP8's provisional `hud`
+  module, set by the core's HUD state assembly from the turns it recorded as heard late.
+- The question kinds a turn heard late may never answer are not in the minimal core, so each
+  pull request that builds one adds its own heard-late rule and test: `wp1/intent-dispatch` the
+  clarifying choice (`Ambiguous`), `wp1/approvals` the approval ("yes, push" replayed inside an
+  open voice window approves nothing: invariant 7's heard-late clause and acceptance 5), and
+  `wp1/leases-journal` the `confirm` step.
+- The simulator mints the turns its speech part recognises from the ring from a fixed tag and a
+  count, not from the generator's random stream: a turn open at a crash is renamed when the
+  process goes down, where no random stream is at hand, and the names are the same in every run.
+  A regression's replay never reaches the ring, since its inputs already hold the replayed
+  events.
+- The ring's replay is scheduled at the `Ready`'s own instant, and the world delivers what is
+  due before anything else happens, so nothing falls between `Ready` and the replay. The real
+  ring keeps each frame until the process confirms it (D81), which the simulator does not model.
+- Before this pull request the generator stepped the user's speech straight into the core while
+  the speech process was loading or down, which the core heard as live turns. Seeded runs now
+  pass it through the speech part, and a draw the ring holds becomes time passing to the next
+  timer or part's answer, as a draw of time does.
 
 ## Outcome
 
