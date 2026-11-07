@@ -1,7 +1,8 @@
 //! Eileen's drivers for vendor CLIs (BUILD.md sections 2.3, 2.5 and 3.3.8): Claude workers and
 //! the Claude brain, the warm pool's session lifecycle, the brain benchmark, and the Codex, ACP,
 //! `DeepSeek` and local routes as designed slots. The stream-json parser, each session's spawn
-//! files, the CLI's location and `eileen doctor claude` are built; the drivers are stubs until
+//! files, the CLI's location, `eileen doctor claude` and the Claude worker without the pool
+//! ([`ClaudeWorker`]) are built; the brain driver, the pool and the component are stubs until
 //! WP3 builds them.
 //!
 //! # Owns
@@ -33,10 +34,22 @@
 //!
 //! - Every vendor process starts through `eileen_supervisor`, in a Job Object
 //!   (`disallowed-methods` bans `Command::new`; check 14).
-//! - The stub builds only the Claude route, whose drivers answer `NotBuilt` until WP3 builds
-//!   them, and every other route is `RouteUnavailable` (unit tests
+//! - Only the Claude route has drivers, and every other route is `RouteUnavailable`; the Claude
+//!   brain answers `NotBuilt` until WP3 builds it (unit tests
 //!   `tests::only_the_claude_route_has_a_worker_driver` and
 //!   `tests::the_stub_claude_brain_answers_not_built_and_measures_nothing`).
+//! - A Claude worker session is bound to a job only after `mcp_status` lists `eileen` as
+//!   connected, since the CLI writes `system/init` only after the first user line; every init
+//!   it then writes is checked, and one that does not list `eileen` as connected or reports an
+//!   auto-memory folder (D77) kills the session at that line, before the model's first
+//!   message, with a `worker.refused` log. It spawns through `eileen_supervisor` in the Claude
+//!   class with exactly the session's environment, and its hook and shim tokens are registered
+//!   with the process's redactor while it lives; every write to it and every wait for its
+//!   readiness or its exit has a deadline; a write that fails or passes its deadline ends the
+//!   session, since part of a line may have reached the CLI; cancel kills its Job Object and
+//!   waits for the job to empty; `next_event` is cancel-safe; a spec asking for what the
+//!   driver does not carry out yet (snapshots, worktrees, build slots, a job memory limit) is
+//!   refused (`eileen-stub-harness::it::worker`, `worker::claude::tests`).
 //! - A stream-json line longer than `stream::MAX_LINE_BYTES` is malformed before it is parsed,
 //!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
 //!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
@@ -88,16 +101,20 @@
 //!
 //! # Testing
 //!
-//! - Fast command: `cargo xtask test -p eileen-harness`.
+//! - Fast command: `cargo xtask test -p eileen-harness`; the worker's runs against the stub:
+//!   `cargo xtask test -p eileen-stub-harness worker`.
 //! - Layers: unit tests for the parser and the flags, with insta snapshots of each session kind's
 //!   command line, settings file and MCP config (the parser's against the lines CLI 2.1.304
 //!   wrote in WP3's approval contract test, copied under `tests/fixtures/wp3-approval/`), runs
 //!   against `eileen-stub-harness`, the CLI's location against fake npm and native layouts in a
-//!   temporary folder, the doctor against a scripted probe runner, its supervised runner against
+//!   temporary folder, `ClaudeWorker` against the stub in `eileen-stub-harness::it::worker`
+//!   (there because Cargo names the stub's binary only to its own package's tests), the doctor
+//!   against a scripted probe runner, its supervised runner against
 //!   this test binary run again as a chatty child
 //!   (`cli::doctor::tests::the_supervised_runner_reads_a_real_child_to_its_exit`: exit code,
 //!   the 4 KB cap on standard output, standard error drained), the two fuzz targets with their
-//!   corpora replayed in `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC. The
+//!   corpora replayed in `it::fuzz_corpus`, and `real_claude::` tests on the owner's PC
+//!   (`it::real_claude`: the worker's start against the signed-in CLI). The
 //!   kill when a probe's deadline passes is dropping the supervised child, which
 //!   `eileen-supervisor`'s own tests cover (dropping a child kills its job), since testing it
 //!   here would need a real-time wait.
@@ -127,6 +144,16 @@
 //! - CI never holds vendor credentials, and no code path opens a vendor credential file.
 //! - The CLI writes `system/init` again at the start of every user turn, and `system/init`
 //!   lists the subagent tool as `Task` while the model calls it `Agent`.
+//! - CLI 2.1.316 writes nothing on stdout, `system/init` included, until the first user line
+//!   arrives, so a worker's readiness comes from the `initialize` and `mcp_status` control
+//!   requests, which it answers before any user line, and the D77 memory check runs at the
+//!   first turn's init (the amendment of 2026-11-01, #161). The core binds on
+//!   `WorkerEvent::Init` until the follow-up `wp3/worker-ready` adds `WorkerEvent::Ready` and
+//!   `WorkerEvent::Refused` and moves the core's bind to `Ready`, so a live job does not bind
+//!   until then (`FIXME(#5)` in `worker::claude` marks both places).
+//! - The CLI's `initialize` reply carries the signed-in account, so the worker driver checks
+//!   only that it succeeded and drops it unread: it is never logged, traced, kept or written to
+//!   a script, and the stub answers `initialize` with an empty response.
 //! - Not every denial looks like one: an `approve` call that fails reaches the model as a tool
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that
@@ -150,7 +177,14 @@
 //!
 //! # Logs and tracing
 //!
-//! - None yet; WP3 declares its spans in `eileen_trace::names`. Tool inputs are redacted in the
+//! - `worker.refused` (warn) when a worker session is refused or killed for a policy reason,
+//!   with Eileen's session id and the driver's reason; `worker.fault` (warn) for a start that
+//!   failed otherwise (the init deadline, an exit, an error reply), a failed write, a control
+//!   reply that matched nothing or carried an error, requests left unanswered until the next
+//!   turn, and a kill whose exit was not seen. Neither carries CLI text or a path
+//!   (`worker::claude::tests::the_initialize_reply_is_dropped_unread_and_never_logged`, and the
+//!   refusal tests in `eileen-stub-harness::it::worker`). The
+//!   rest of WP3's spans come with the pool and the brain. Tool inputs are redacted in the
 //!   parser, so no later log sees them whole.
 //!
 //! # Do not change without a decision record
@@ -170,6 +204,7 @@ pub mod stream;
 mod worker;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub use brain::{
     AnyBrain, BrainBackend, BrainBenchResult, BrainSuite, ClaudeBrain, CodexBrain, DeepSeekBrain,
@@ -188,8 +223,12 @@ pub use worker::{
 /// `Task` and the model calls it `Agent` (WP3's approval contract test, section 2.5).
 pub const SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
 
-/// What the harness reads at start. WP3 adds the rest of its fields (the CLI's location, the
-/// model aliases, the pool sizes) as it builds the drivers.
+/// How long a Claude session may take from its spawn to being ready for its job by default. A
+/// worker's cold start under load took 30 to 111 s (section 0).
+pub const INIT_DEADLINE: Duration = Duration::from_secs(120);
+
+/// What the harness reads at start. WP3 adds the rest of its fields (the model aliases, the
+/// pool sizes) as it builds the drivers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessConfig {
     /// Eileen's data folder; each session's files go under `run/<session>/` in it.
@@ -203,9 +242,18 @@ pub struct HarnessConfig {
     pub shim_exe: PathBuf,
     /// The approved third-party MCP servers: which job kinds get each, and its rung.
     pub mcp: McpConfig,
+    /// The absolute path of the real `claude` executable, which the runtime fills from
+    /// [`locate`]. Empty until then, and a worker refuses to start without it.
+    pub claude_exe: PathBuf,
+    /// What the runtime read from the user's machine, from which each session's environment is
+    /// built (section 2.12).
+    pub host: session::HostEnv,
+    /// How long a session may take from its spawn to being ready for its job
+    /// ([`INIT_DEADLINE`]).
+    pub init_deadline: Duration,
 }
 
-/// A config with no data folder and no shim, for the stub drivers. `session::session_files`
+/// A config with no data folder, no shim and no CLI, for the stub drivers. `session::session_files`
 /// refuses it, so a session never starts from it by accident: the runtime fills both paths
 /// before the first spawn.
 impl Default for HarnessConfig {
@@ -215,6 +263,9 @@ impl Default for HarnessConfig {
             hook_hold_s: ApprovalsConfig::default().hook_hold_s,
             shim_exe: PathBuf::new(),
             mcp: McpConfig::default(),
+            claude_exe: PathBuf::new(),
+            host: session::HostEnv::default(),
+            init_deadline: INIT_DEADLINE,
         }
     }
 }
@@ -234,6 +285,88 @@ pub enum DriverError {
         /// The route asked for.
         route: Route,
     },
+    /// The driver does not carry out this command yet: the pool, worktrees and snapshots come
+    /// later in WP3.
+    #[error("the driver does not carry out {command} yet")]
+    Unsupported {
+        /// The command.
+        command: &'static str,
+    },
+    /// `HarnessConfig::claude_exe` is not an absolute path: the CLI was not located.
+    #[error("the claude executable has not been located")]
+    NoExecutable,
+    /// The session's files could not be built.
+    #[error(transparent)]
+    Session(#[from] session::SessionError),
+    /// The session's run folder could not be written.
+    #[error("the session's {what} could not be written: {kind}")]
+    Files {
+        /// What was being written.
+        what: &'static str,
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// The CLI could not be started.
+    #[error("the claude CLI could not be started: {kind}")]
+    Spawn {
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// The session did not show it was ready for its job within the deadline: `initialize`
+    /// answered and `eileen` connected in `mcp_status`.
+    #[error("the session was not ready within {secs} s")]
+    ReadyDeadline {
+        /// The deadline, seconds.
+        secs: u64,
+    },
+    /// The session's process ended before it was ready.
+    #[error("the session ended before it was ready (exit code {code:?})")]
+    EndedBeforeReady {
+        /// Its exit code, when it had one.
+        code: Option<i32>,
+    },
+    /// The CLI answered a readiness control request with an error.
+    #[error("the CLI answered the {request} control request with an error")]
+    ControlRefused {
+        /// The request's subtype.
+        request: &'static str,
+    },
+    /// `mcp_status` or a `system/init` does not list `eileen` as connected, so the session is
+    /// never bound, or is killed at that init (section 2.5).
+    #[error("the session does not list eileen as connected")]
+    EileenNotConnected,
+    /// A `system/init` reported an auto-memory folder, though every session starts with vendor
+    /// memory off (D77), so the session is killed at that line.
+    #[error("the session reported an auto-memory folder with vendor memory off")]
+    MemoryPathReported,
+    /// A session token could not be registered with the redactor, so the session would log it
+    /// in clear.
+    #[error("a session token could not be registered with the redactor")]
+    SecretNotRegistered,
+    /// A session is already started on this driver.
+    #[error("a session is already started")]
+    AlreadyStarted,
+    /// There is no session: none was started, or it ended or was cancelled.
+    #[error("there is no session")]
+    NoSession,
+    /// The session already has its job.
+    #[error("the session already has its job")]
+    AlreadyBound,
+    /// A user turn came before the job's first line.
+    #[error("the session has no job yet")]
+    NotBound,
+    /// The interrupt was not written.
+    #[error(transparent)]
+    Interrupt(#[from] stream::control::SendError),
+    /// A write to the session's stdin failed.
+    #[error("the session's stdin could not be written: {kind}")]
+    Write {
+        /// The OS's error.
+        kind: std::io::ErrorKind,
+    },
+    /// A write to the session's stdin did not finish within its deadline.
+    #[error("a write to the session's stdin passed its deadline")]
+    WriteDeadline,
 }
 
 /// The harness component: the brain's slots and the workers. The stub accepts the brain and

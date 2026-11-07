@@ -91,7 +91,7 @@ fn summary(line: &Line) -> String {
 }
 
 /// Every seed of `fuzz/corpus/control_message/` and what it parses to.
-const SEEDS: [(&str, &str); 14] = [
+const SEEDS: [(&str, &str); 18] = [
     ("can-use-tool-allow", "can_use_tool 70bd7443-478d-4b77-8d60-d5c6ed0c44fe Bash"),
     ("can-use-tool-deny", "can_use_tool 59734163-8fdc-47d0-b37c-77a0447b7b05 Bash"),
     ("hand-cancel", "cancel req_1_0a1b2c3d"),
@@ -100,6 +100,10 @@ const SEEDS: [(&str, &str); 14] = [
     ("hand-no-request-id", "malformed"),
     ("hand-not-json", "malformed"),
     ("hand-other-subtype", "request mcp_status req_2_0a1b2c3d"),
+    ("hand-ready-error", "error eileen_ready_1: not ready"),
+    ("hand-ready-other-subtype", "malformed"),
+    ("hand-ready-pending", "success eileen_ready_1"),
+    ("hand-ready-status", "success eileen_ready_1"),
     ("hand-reason-secret", "can_use_tool req_3_0a1b2c3d Bash"),
     ("hand-response-eileen-1", "success eileen_1"),
     ("hand-response-error", "error req_1_0a1b2c3d: no turn to interrupt"),
@@ -226,6 +230,26 @@ fn open_requests_are_bounded_and_can_be_abandoned() {
     );
     let line = requests.interrupt(&offered).unwrap();
     assert!(line.contains(r#""request_id":"eileen_5""#), "ids are never reused: {line}");
+}
+
+#[test]
+fn unanswered_requests_closed_at_a_turns_end_leave_room_for_the_next_interrupt() {
+    let mut requests = Requests::default();
+    let offered = init(&RECORDED_CAPABILITIES);
+    // A CLI that never answers: four interrupts fill the cap.
+    for _ in 0..MAX_OPEN_REQUESTS {
+        requests.interrupt(&offered).unwrap();
+    }
+    assert_eq!(requests.interrupt(&offered), Err(SendError::Full), "at the cap");
+    assert_eq!(requests.abandon_all(), MAX_OPEN_REQUESTS, "the turn's end closes all four");
+    assert_eq!(requests.abandon_all(), 0, "nothing left open");
+    let line = requests.interrupt(&offered).unwrap();
+    assert!(line.contains(r#""request_id":"eileen_5""#), "a fifth goes out, numbered on: {line}");
+    assert_eq!(
+        settle(&mut requests, "eileen_4", None),
+        Err(SettleError::NotOpen),
+        "a late reply to an abandoned one settles nothing"
+    );
 }
 
 #[test]

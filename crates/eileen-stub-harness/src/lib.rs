@@ -13,20 +13,28 @@
 //! lines start with `> `, and `AwaitUser` holds until the next `user` line arrives on stdin.
 //! After the last line it waits for stdin to close, as the CLI waits for its next turn.
 //!
+//! When `EILEEN_STUB_ENV_FILE` ([`ENV_FILE_ENV`]) names a file, the stub first appends its own
+//! environment to it as one JSON object per run, so a test reads back exactly what the driver
+//! spawned it with and how many times it was started.
+//!
 //! # Owns
 //!
 //! - Playing a script: its lines in order, held where the script waits for a user line, with its
 //!   faults (crash, delay, malformed line).
-//! - Answering the stdio interrupt: a `control_request` of subtype `interrupt` gets a success
-//!   `control_response` with its `request_id` whenever it arrives (between lines, during a
-//!   delay or while held). Any other request gets an error reply. The stub answers and plays
-//!   on; it does not cut the turn short. The reply copies the `control_response` envelope
-//!   Eileen sends the CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`,
-//!   `sent_to_cli`) without its inner `response` object. No reply the CLI wrote to an interrupt
-//!   has been recorded; WP3 acceptance 3's owner-run check records one, and it replaces this.
+//! - Answering the control requests the driver sends, whenever they arrive (before the first
+//!   user line, between lines, during a delay or while held), as CLI 2.1.316 answers them
+//!   before any user line: `interrupt` and `initialize` get a success `control_response` with
+//!   their `request_id`, and `mcp_status` one whose `response` is `{"mcpServers": [...]}`, the
+//!   `mcp_servers` of the script's first `system/init`. Any other request gets an error reply.
+//!   The stub answers and plays on; it does not cut the turn short. The replies copy the
+//!   `control_response` envelope Eileen sends the CLI
+//!   (`docs/research/fixtures/wp3-approval/stdio-control.json`, `sent_to_cli`). No reply the
+//!   CLI wrote to an interrupt or to `mcp_status` has been recorded; WP3 acceptance 3's
+//!   owner-run check records them, and they replace these.
 //! - The `stub_script` fuzz target's entry (`fuzz_entry`): scripts and stdin lines, both
 //!   untrusted input (section 3.3.16 asks a fuzz target of every parser of its formats).
 //! - The binary `eileen run --stub-harness` starts in place of the claude CLI ([`run`]).
+//! - Recording its environment for a test ([`ENV_FILE_ENV`]).
 //!
 //! # Does not own
 //!
@@ -52,8 +60,9 @@
 //!   (development only: section 3.1's table and `process = "tests"` in its metadata; no
 //!   repository check enforces it yet).
 //! - May depend on `eileen-harness`, `eileen-contracts` and `eileen-stdx`; the lib uses the last
-//!   two. Its tests use `eileen-harness` (to read its stdout back), `eileen-supervisor` (to
-//!   start it) and `eileen-trace` (the `Redactor`) as dev-dependencies only.
+//!   two. Its tests use `eileen-harness` (to read its stdout back, and `ClaudeWorker` to run
+//!   jobs against it), `eileen-supervisor` (to start it) and `eileen-trace` (the `Redactor`) as
+//!   dev-dependencies only.
 //! - Must not depend on `eileen-trace` (it writes only the protocol on stdout), `eileen-rt`,
 //!   `eileen-runtime` or rmcp (section 3.1), or on a `-win` or `-linux` crate (check 15).
 //! - Wire types: stream-json and the stdio control lines, as the claude CLI writes them.
@@ -64,7 +73,8 @@
 //! - Layers: unit tests of the player on in-memory stdio; integration tests that start the
 //!   binary through the supervisor and read its stdout with `eileen_harness::stream`; a corpus
 //!   test over `tests/harness-scripts/`; the `stub_script` corpus replay (`it::fuzz_corpus`);
-//!   the harness's tests against it (WP3 acceptance 2).
+//!   `eileen_harness::ClaudeWorker` running jobs against it (`it::worker`, WP3 acceptance 2),
+//!   which live here because Cargo names this package's binary only to its own tests.
 //! - A bug here starts as a harness test that passes against the stub and fails against the
 //!   real CLI.
 //!
@@ -78,6 +88,7 @@
 //! # Logs and tracing
 //!
 //! - None: it writes only the protocol on stdout, and one `Error:` line on stderr when it fails.
+//!   The environment record is a test's file, written only when a test names one.
 //!
 //! # Do not change without a decision record
 //!
@@ -90,8 +101,9 @@ pub mod fuzz_entry;
 mod play;
 mod script;
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -107,6 +119,11 @@ pub const SCRIPT_ARG: &str = "--stub-script";
 /// The environment variable that names the script when no argument does, so `ClaudeWorker` can
 /// start the stub with exactly the argv it gives the claude CLI.
 pub const SCRIPT_ENV: &str = "EILEEN_STUB_SCRIPT";
+
+/// The environment variable that names a file the stub appends its environment to, one JSON
+/// object of names and values per run, before it plays anything. Tests only: it holds the
+/// session's tokens, and nothing but a test sets it.
+pub const ENV_FILE_ENV: &str = "EILEEN_STUB_ENV_FILE";
 
 /// The largest script read. The first scripts are a few kilobytes; a recording of a long
 /// session stays far below this.
@@ -154,6 +171,9 @@ pub fn run() -> Result<Ending, RunError> {
     let path = script_path(std::env::args_os().skip(1), std::env::var_os(SCRIPT_ENV))
         .ok_or(RunError::NoScript)?;
     let script = read_script(&path)?;
+    if let Some(file) = std::env::var_os(ENV_FILE_ENV).filter(|file| !file.is_empty()) {
+        record_env(Path::new(&file), std::env::vars_os())?;
+    }
     let (queue, input) = mpsc::sync_channel(INPUT_QUEUE);
     // The reader is never joined: it may sit in a read of stdin when the script ends, and the
     // process ends with `main` whatever it is doing.
@@ -162,6 +182,25 @@ pub fn run() -> Result<Ending, RunError> {
     })
     .map_err(RunError::Thread)?;
     play::play(&script, &input, &mut io::stdout().lock())
+}
+
+/// Appends `vars` to `file` as one JSON object, names and values decoded lossily, so a file
+/// that several runs append to holds one line per run.
+fn record_env(
+    file: &Path,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<(), RunError> {
+    let vars: BTreeMap<String, String> = vars
+        .into_iter()
+        .map(|(name, value)| {
+            (name.to_string_lossy().into_owned(), value.to_string_lossy().into_owned())
+        })
+        .collect();
+    let write = |source| RunError::EnvFile { path: file.to_owned(), source };
+    let mut line = serde_json::to_string(&vars).map_err(|error| write(io::Error::other(error)))?;
+    line.push('\n');
+    let mut out = OpenOptions::new().create(true).append(true).open(file).map_err(write)?;
+    out.write_all(line.as_bytes()).map_err(write)
 }
 
 /// Why the stub harness stopped without playing its script to the end.
@@ -183,6 +222,14 @@ pub enum RunError {
     TooLarge {
         /// The script.
         path: PathBuf,
+    },
+    /// The environment record could not be written.
+    #[error("the environment record {} could not be written: {source}", .path.display())]
+    EnvFile {
+        /// The file.
+        path: PathBuf,
+        /// Why.
+        source: io::Error,
     },
     /// The script did not load.
     #[error(transparent)]

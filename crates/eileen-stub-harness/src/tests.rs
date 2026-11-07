@@ -7,7 +7,7 @@ use std::sync::mpsc;
 
 use serde_json::Value;
 
-use crate::play::{self, Input};
+use crate::play::{self, Input, Request};
 use crate::{Ending, InputError, RunError, SCRIPT_ARG, ScriptError, load, script_path};
 
 /// Plays `script` with `inputs` already read and stdin closed after them, and gives its stdout
@@ -26,7 +26,7 @@ fn played(script: &str, inputs: Vec<Input>) -> (Vec<String>, Result<Ending, RunE
 }
 
 fn interrupt(id: &str) -> Input {
-    Input::Control { request_id: id.to_owned(), interrupt: true }
+    Input::Control { request_id: id.to_owned(), request: Request::Interrupt }
 }
 
 fn json(line: &str) -> Value {
@@ -37,6 +37,9 @@ const INIT: &str =
     r#"{"kind":"event","json":{"type":"system","subtype":"init","session_id":"s1","model":"m"}}"#;
 
 const AWAIT: &str = r#"{"kind":"await_user"}"#;
+
+/// An init that lists `eileen` as connected.
+const SERVED_INIT: &str = r#"{"kind":"event","json":{"type":"system","subtype":"init","session_id":"s1","mcp_servers":[{"name":"eileen","status":"connected"}]}}"#;
 
 #[test]
 fn the_argument_names_the_script_before_the_environment() {
@@ -167,11 +170,31 @@ fn await_user_answers_an_interrupt_and_holds_until_a_user_line() {
 
 #[test]
 fn another_control_request_gets_an_error_reply() {
-    let request = Input::Control { request_id: "r1".to_owned(), interrupt: false };
+    let request = Input::Control { request_id: "r1".to_owned(), request: Request::Other };
     let (lines, _) = played(AWAIT, vec![request, Input::User]);
     let reply = json(&lines[0]);
     assert_eq!(reply["response"]["subtype"], "error", "not a success");
     assert_eq!(reply["response"]["request_id"], "r1", "for that request");
+}
+
+#[test]
+fn initialize_and_mcp_status_are_answered_before_the_first_user_line() {
+    let initialize = Input::Control { request_id: "r1".to_owned(), request: Request::Initialize };
+    let status = Input::Control { request_id: "r2".to_owned(), request: Request::McpStatus };
+    let (lines, _) =
+        played(&format!("{AWAIT}\n{SERVED_INIT}"), vec![initialize, status, Input::User]);
+    assert_eq!(lines.len(), 3, "two replies, then the init: {lines:?}");
+    let first = json(&lines[0]);
+    assert_eq!(first["response"]["subtype"], "success", "initialize answered");
+    assert_eq!(first["response"]["request_id"], "r1", "for that request");
+    let second = json(&lines[1]);
+    assert_eq!(second["response"]["request_id"], "r2", "mcp_status answered");
+    assert_eq!(
+        second["response"]["response"]["mcpServers"],
+        serde_json::json!([{ "name": "eileen", "status": "connected" }]),
+        "the servers of the script's first init, before it plays"
+    );
+    assert_eq!(json(&lines[2])["type"], "system", "then the init, after the user line");
 }
 
 #[test]
