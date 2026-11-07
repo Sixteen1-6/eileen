@@ -222,6 +222,25 @@ pub(crate) fn ramp_frames(rate: u32) -> usize {
     usize::try_from(rate / 1_000).unwrap_or(1).max(1)
 }
 
+/// A synthesized sample at the device's full scale of 1.0.
+fn to_device(sample: i16) -> f32 {
+    f32::from(sample) / 32_768.0
+}
+
+/// What the renderer hands a device at `device_rate`, on each channel, for `samples` of one
+/// utterance played without a break: a fresh interpolator over the whole of them in one call,
+/// which gives the same samples bit for bit as any cut into clauses, frames and buffers. `None`
+/// when playback has no conversion to that rate.
+#[cfg(any(test, feature = "fake"))]
+pub(crate) fn rendered(device_rate: u32, samples: &[i16]) -> Option<Vec<f32>> {
+    let mut resampler = Resampler::new(Conversion::between(SYNTH_RATE, device_rate)?);
+    let input: Vec<f32> = samples.iter().copied().map(to_device).collect();
+    let mut output = vec![0.0; resampler.output_len(input.len())];
+    let written = resampler.process(&input, &mut output).ok()?;
+    output.truncate(written);
+    Some(output)
+}
+
 /// The default queue for a device of `format`: [`QUEUE_SECONDS`] of its frames.
 pub(crate) fn default_queue(format: StreamFormat) -> usize {
     usize::try_from(format.sample_rate_hz).unwrap_or(usize::MAX).saturating_mul(QUEUE_SECONDS)
@@ -362,7 +381,7 @@ impl Player {
             self.begin(speak, ordinal, fresh);
         }
         self.input.clear();
-        self.input.extend(samples.iter().map(|&s| f32::from(s) / 32_768.0));
+        self.input.extend(samples.iter().copied().map(to_device));
         self.output.resize(needed, 0.0);
         let written = self.resampler.process(&self.input, &mut self.output).unwrap_or(0);
         let converted = self.output.get(..written).unwrap_or_default();
@@ -423,6 +442,11 @@ impl Player {
         *times += 1;
         let times = *times;
         tracing::warn!(name: names::CHANNEL_FULL, channel = queue.channel(), capacity, times);
+    }
+
+    /// Whether audio is queued that the renderer has not yet handed to the device.
+    pub(crate) fn has_audio(&self) -> bool {
+        self.samples.slots() < self.capacity
     }
 
     /// Serves a playback command and returns whether it was one.

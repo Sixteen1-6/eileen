@@ -275,8 +275,12 @@ pub use wav::{CaptureSink, WavClip, WavSource};
 /// stream (mute stops it), and a test keeps a handle to the same source.
 pub type SharedSource = Arc<Mutex<dyn AudioSource>>;
 
-/// What the audio component reads at start. Later parts of WP4's audio series add the playback
-/// sink and the loopback.
+/// A playback sink the component and its creator share: the component starts its stream, and a
+/// test keeps a handle to the same sink to read back what was played.
+pub type SharedSink = Arc<Mutex<dyn AudioSink>>;
+
+/// What the audio component reads at start. A later part of WP4's audio series adds the
+/// loopback.
 #[derive(Clone, Default)]
 pub struct AudioConfig {
     /// The speech process's connections; `None` runs without the speech pipe, as the stub and
@@ -285,6 +289,9 @@ pub struct AudioConfig {
     /// Where the microphone's audio comes from: the endpoint, or a test's [`WavSource`] or
     /// [`RoomMixer`] microphone. `None` captures nothing.
     pub capture: Option<SharedSource>,
+    /// Where Eileen's speech plays: the endpoint, or a test's [`CaptureSink`] or [`RoomMixer`]
+    /// speaker. `None` plays nothing, and the speech process's PCM is dropped.
+    pub playback: Option<SharedSink>,
 }
 
 impl fmt::Debug for AudioConfig {
@@ -292,6 +299,7 @@ impl fmt::Debug for AudioConfig {
         f.debug_struct("AudioConfig")
             .field("speech", &self.speech.is_some())
             .field("capture", &self.capture.is_some())
+            .field("playback", &self.playback.is_some())
             .finish()
     }
 }
