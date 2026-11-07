@@ -11,7 +11,8 @@
 //!   the stdio control protocol, which it answers before any user line: `initialize`, then
 //!   `mcp_status` until `eileen` is `connected`, all within `HarnessConfig::init_deadline`. A
 //!   session whose `eileen` is `failed` (or any status but `pending`) is killed and never bound
-//!   (section 2.5).
+//!   (section 2.5), with a `worker.refused` log; any other start that fails (the deadline, an
+//!   exit, an error reply) logs `worker.fault`.
 //! - `bind` writes the first user line: the task, `Follow skill eileen-learned:<id>` with any
 //!   inline skill text, and the facts block.
 //! - `send` writes later user turns, the interrupt as a `control_request` once the first turn's
@@ -22,10 +23,15 @@
 //!   with the exit code once stdout closes, or after a cancel. Every init, the first included,
 //!   is checked: one that does not list `eileen` as connected, or reports an auto-memory folder
 //!   (D77: every session runs with memory off), kills the session at that line, which the CLI
-//!   writes before the model's first message, so no tool runs. Later inits are not passed on. A
-//!   crash, or any exit before the turn's `TurnDone`, is how the core learns the job failed.
-//! - Control requests still open when a turn ends or a new init arrives are abandoned, so a CLI
-//!   that drops a reply never fills `stream::control::MAX_OPEN_REQUESTS`.
+//!   writes before the model's first message. That alone does not stop a tool when the reader
+//!   falls behind; the core's hold on a worker's `PreToolUse` until its `Init` does (section
+//!   3.3.8). Later inits are not passed on. A crash, or any exit before the turn's `TurnDone`,
+//!   is how the core learns the job failed.
+//! - Control requests still open when the next turn's init arrives are abandoned, so a CLI that
+//!   drops a reply never fills `stream::control::MAX_OPEN_REQUESTS`, while a reply written
+//!   after its turn's `result` still settles its request.
+//! - Its stdout is read without a deadline: a turn's tool call can run for minutes with
+//!   nothing to say, so a session that stalls is ended by the core's cancel, not here.
 //! - `next_event` is cancel-safe: a partly read line stays buffered, and a session being ended
 //!   stays in `ending` until its exit is seen.
 
@@ -104,7 +110,8 @@ impl ClaudeWorker {
     /// otherwise, and queues its `Exited`.
     async fn end(&mut self, kill: bool) {
         if let Some(session) = self.session.take() {
-            self.ending = Some(Ending { id: session.id, process: session.process, kill });
+            let Session { id, process, _secrets: secrets, .. } = session;
+            self.ending = Some(Ending { id, process, kill, _secrets: secrets });
         }
         self.finish_ending().await;
     }
@@ -200,9 +207,6 @@ impl ClaudeWorker {
             | Line::Result(_)
             | Line::Unknown { .. }
             | Line::Malformed { .. }) => {
-                if matches!(other, Line::Result(_)) {
-                    abandon_open(session);
-                }
                 self.pending.extend(stream::worker_events(other, session.process.pid));
             }
         }
@@ -233,11 +237,23 @@ impl WorkerDriver for ClaudeWorker {
         let secrets = register_tokens(&self.redactor, &spec)?;
         write_files(&files).await?;
         let mut process = Process::spawn(&files, &self.cfg.claude_exe)?;
-        if let Err(error) = process.wait_ready(self.cfg.init_deadline).await {
+        if let Err(asked) = process.wait_ready(self.cfg.init_deadline).await {
+            let id = spec.session;
+            let error = match asked {
+                // Its own exit code says why, so it is waited for before any kill.
+                Asked::Ended => {
+                    DriverError::EndedBeforeReady { code: process.exit_code().await.code(id) }
+                }
+                Asked::Failed(error) => {
+                    process.kill_and_wait().await.code(id);
+                    error
+                }
+            };
             if error == DriverError::EileenNotConnected {
-                tracing::warn!(name: names::WORKER_REFUSED, ws_id = %spec.session, reason = %error);
+                tracing::warn!(name: names::WORKER_REFUSED, ws_id = %id, reason = %error);
+            } else {
+                tracing::warn!(name: names::WORKER_FAULT, ws_id = %id, fault = %error);
             }
-            process.kill_and_wait().await.code(spec.session);
             return Err(error);
         }
         let pid = process.pid;
@@ -342,6 +358,9 @@ struct Ending {
     process: Process,
     /// Whether it is killed, or was seen to close its stdout and is waited for.
     kill: bool,
+    /// The session's tokens, still registered until its exit is seen, since until then it can
+    /// still write them on stderr.
+    _secrets: Vec<LiteralGuard>,
 }
 
 /// How a wait for the session's exit ended.
@@ -364,14 +383,6 @@ impl Exit {
                 tracing::warn!(name: names::WORKER_FAULT, ws_id = %id, fault);
                 None
             }
-        }
-    }
-
-    /// The code, with a missed exit as none, unlogged: for a session that never started.
-    const fn code_or_none(self) -> Option<i32> {
-        match self {
-            Self::Exited(code) => code,
-            Self::Missed => None,
         }
     }
 }
@@ -407,16 +418,10 @@ impl Process {
     }
 
     /// Waits, within `deadline`, until the session is ready for its job (`Pipes::ready`).
-    async fn wait_ready(&mut self, deadline: Duration) -> Result<(), DriverError> {
-        match with_deadline("claude.ready", deadline, self.io.ready()).await {
-            Ok(Err(Asked::Ended)) => {
-                let code = self.exit_code().await.code_or_none();
-                Err(DriverError::EndedBeforeReady { code })
-            }
-            Ok(Err(Asked::Failed(error))) => Err(error),
-            Ok(Ok(())) => Ok(()),
-            Err(_) => Err(DriverError::ReadyDeadline { secs: deadline.as_secs() }),
-        }
+    async fn wait_ready(&mut self, deadline: Duration) -> Result<(), Asked> {
+        with_deadline("claude.ready", deadline, self.io.ready()).await.unwrap_or_else(|_| {
+            Err(Asked::Failed(DriverError::ReadyDeadline { secs: deadline.as_secs() }))
+        })
     }
 
     /// The exit once the process and its job have exited, waited for within
@@ -628,11 +633,11 @@ fn reply_to(line: &[u8], request_id: &str) -> Option<Result<Value, ()>> {
     }
 }
 
-/// Abandons every control request still open on `session`: at a turn's end or a new init its
-/// reply is no longer coming.
+/// Abandons every control request still open on `session`: once the next turn's init arrives
+/// its reply is no longer coming.
 fn abandon_open(session: &mut Session) {
     if session.requests.abandon_all() > 0 {
-        let fault = "control requests were left unanswered at the end of a turn";
+        let fault = "control requests were left unanswered until the next turn";
         tracing::warn!(name: names::WORKER_FAULT, ws_id = %session.id, fault);
     }
 }
