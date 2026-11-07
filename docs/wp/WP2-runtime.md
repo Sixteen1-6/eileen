@@ -96,8 +96,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `wp2/supervisor-callers` (the Job Object registry, `image_path`, `tcp_client_pid` and
   `write_user_only`), `wp2/path-probe-trait` (the trait and `FakePathProbe` in
   `eileen-platform`, then `WinPathProbe` in `eileen-shell-win`) and `wp2/shell-local-time`
-  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` waits
-  for the `ipc` pipes as well as for `wp1/speech-life` and WP4's `SpeechTransport`.
+  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` now
+  waits for the `ipc` pipes too; `wp1/speech-life` (#141) and WP4's `SpeechTransport` (#140)
+  have merged.
 
 ## Surprises
 
