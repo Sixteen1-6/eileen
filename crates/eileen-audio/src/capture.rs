@@ -79,11 +79,14 @@ impl Framer {
     }
 
     /// Takes one buffer of interleaved samples captured at `info.captured_at`. A buffer that ends
-    /// part way through a device frame loses its last partial frame.
+    /// part way through a device frame loses that partial frame and nothing else.
     pub(crate) fn push(&mut self, buffer: &[f32], info: CaptureInfo) {
         let Self { writer, channels, rate_hz, resampler, mono, speech, frame, filled, frame_at } =
             self;
         let width = usize::from(*channels);
+        // Whole device frames only, so every chunk below holds whole frames and downmixes.
+        let partial = buffer.len().checked_rem(width).unwrap_or_default();
+        let buffer = buffer.get(..buffer.len() - partial).unwrap_or_default();
         let mut done = 0_usize;
         for chunk in buffer.chunks(CHUNK_FRAMES.saturating_mul(width)) {
             let chunk_at = info.captured_at.saturating_add(offset(done, *rate_hz));
