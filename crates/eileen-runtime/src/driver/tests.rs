@@ -1,6 +1,12 @@
-//! The driver on paused tokio time, with a scripted stand-in for the core and, in one test, the
-//! real core: routing by family, claims, timers, backpressure, failures, shutdown and the log of
-//! unserved families.
+//! The driver on paused tokio time, with a scripted stand-in for the core: routing by family,
+//! claims, backpressure, the stamps, the pace of `Hud` snapshots and the log of unserved
+//! families here; the core's timers, failures and shutdown, and the real core, in the modules
+//! below.
+
+mod fixtures;
+mod real_core;
+mod stopping;
+mod timers;
 
 use std::collections::BTreeMap;
 use std::future::{Future, pending};
@@ -11,47 +17,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use eileen_contracts::bus::BusEvent;
-use eileen_contracts::config::{
-    Config, Proposal, SettingChange, SettingSpecView, SettingsCmd, ValidationError,
-};
-use eileen_contracts::connectors::{AppCapability, ConnectorManifest, SidecarCmd, SidecarId};
 use eileen_contracts::core_io::{
-    ActivityEvent, AudioCmd, Caller, Effect, EffectFamily, IncidentTrigger, Input, Record, TimerId,
-    Toast, ToolResult, UserInput,
+    ActivityEvent, AudioCmd, Effect, EffectFamily, IncidentTrigger, Input, TimerId, Toast,
+    UserInput,
 };
-use eileen_contracts::desktop::FieldCategory;
-use eileen_contracts::harness::{BrainCmd, BrainSlot, HookDecision, HookReply, WorkerCmd};
-use eileen_contracts::hud::{Corner, HudLayout, HudState, Indicators, MicState};
-use eileen_contracts::ids::{
-    CallId, ConnectorId, Envelope, MonoTime, SessionId, SkillId, SpeakId, ToolName, TraceCtx,
-    WallTime, WorkerSessionId,
-};
-use eileen_contracts::intent::{Capabilities, FollowUp, Resolution, ResolveCtx, SlotValues};
-use eileen_contracts::jobs::PlanUsage;
-use eileen_contracts::learn::{
-    CheckPlan, LearnCmd, Outcome, PhrasingFact, Recipe, ReplayRefusal, ReplayState, ReplayStep,
-    RouteStat, ShadowVerdict, SkillMeta, SkillRef, StepResult, TrajectoryStep, Transition,
-    UseRecord, VocabularyEntry,
-};
-use eileen_contracts::ports::{
-    Cleaned, Component, ComponentCtx, ComponentError, DictationCleaner, InputSink, IntentResolver,
-    SettingsValidator, SkillEngine,
-};
-use eileen_contracts::speech::SpeechCmd;
-use eileen_contracts::tools::ToolSpec;
-use eileen_core::{CoreConfig, CorePorts};
+use eileen_contracts::ids::{Envelope, MonoTime, SessionId, TraceCtx, WallTime};
+use eileen_contracts::ports::{Component, ComponentCtx, ComponentError, InputSink};
 use eileen_rt::channel::{self, Receiver, Sender};
 use eileen_stdx::clock::Clock;
 use eileen_stdx::rng::CoreRng;
 use eileen_stdx::soft_assert::{Mode, failures, with_mode};
 use eileen_trace::names;
-use eileen_trace::test_support::capture;
-use serde_json::Value;
+use eileen_trace::test_support::{Captured, capture};
+use fixtures::{hud, sample};
 use tokio::sync::oneshot;
-use tokio::time::{Instant, sleep, sleep_until, timeout};
+use tokio::time::{Instant, sleep, sleep_until, timeout, timeout_at};
 
-use super::{Backpressure, DRIVER, Driver, Limits, Machine, RunError, Setup, Shutdown};
+use super::{Backpressure, DRIVER, Driver, HUD_EVERY, Limits, Machine, RunError, Setup, Shutdown};
 
 /// 2026-01-01T00:00:00Z in microseconds, the paused clock's wall time at its start.
 const EPOCH_US: i64 = 1_767_225_600_000_000;
@@ -140,6 +122,32 @@ fn setup(limits: Limits) -> Setup {
     }
 }
 
+/// Runs `test` on a paused current-thread runtime, capturing its tracing.
+fn on_paused_time<T>(test: impl Future<Output = T>) -> (T, Captured) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    capture(|| runtime.block_on(test))
+}
+
+/// Each event named `name`, as the values of its fields `first` and `second`.
+fn lines<'a>(
+    captured: &'a Captured,
+    name: &str,
+    first: &str,
+    second: &str,
+) -> Vec<(&'a str, &'a str)> {
+    captured
+        .events_named(name)
+        .into_iter()
+        .map(|event| {
+            (event.fields[first].as_str().unwrap(), event.fields[second].as_str().unwrap())
+        })
+        .collect()
+}
+
 /// One step of the stand-in core: the time it was stepped at and the input.
 #[derive(Debug, Clone, PartialEq)]
 struct Step {
@@ -192,6 +200,10 @@ const fn toggle() -> Input {
     Input::User(UserInput::ToggleMute)
 }
 
+const fn physical() -> Input {
+    Input::Activity(ActivityEvent::PhysicalInput)
+}
+
 /// What a probe does once started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Act {
@@ -201,6 +213,12 @@ enum Act {
     Stubborn,
     /// Fails at once.
     Fail,
+    /// Fails after this long.
+    FailAfter(Duration),
+    /// Panics at once.
+    Panic,
+    /// Returns at once, before any shutdown.
+    ReturnEarly,
 }
 
 /// How many probes have started, and how many have ended (returned or dropped).
@@ -240,6 +258,11 @@ struct Probe {
     sink: Option<oneshot::Sender<Box<dyn InputSink>>>,
 }
 
+/// What a failing probe stops with.
+fn failure(component: &'static str) -> Result<(), ComponentError> {
+    Err(ComponentError { component, message: "the device went away".into() })
+}
+
 impl Component for Probe {
     fn name(&self) -> &'static str {
         self.name
@@ -262,9 +285,13 @@ impl Component for Probe {
                 let _handed = sink.send(inputs);
             }
             match act {
-                Act::Fail => {
-                    Err(ComponentError { component: name, message: "the device went away".into() })
+                Act::Fail => failure(name),
+                Act::FailAfter(after) => {
+                    sleep(after).await;
+                    failure(name)
                 }
+                Act::Panic => panic!("the {name} probe broke"),
+                Act::ReturnEarly => Ok(()),
                 Act::Stubborn => pending().await,
                 Act::Serve => loop {
                     let next = tokio::select! {
@@ -302,6 +329,16 @@ impl Probes {
         }
     }
 
+    /// A probe, boxed as a component.
+    fn boxed(
+        &self,
+        name: &'static str,
+        accepts: &'static [EffectFamily],
+        act: Act,
+    ) -> Box<dyn Component> {
+        Box::new(self.probe(name, accepts, act))
+    }
+
     /// A serving probe that also hands the test its input sink.
     fn feeder(
         &self,
@@ -322,95 +359,14 @@ async fn next_seen(
     timeout(PATIENCE, seen.recv()).await.ok().flatten()
 }
 
-const fn usage() -> PlanUsage {
-    PlanUsage { five_hour_pct: Some(12), seven_day_pct: None, resets_at: None }
-}
-
-fn hud() -> HudState {
-    HudState {
-        v: 1,
-        layout: HudLayout {
-            corner: Corner::TopRight,
-            scale_pct: 100,
-            opacity_pct: 90,
-            show_transcript: true,
-            high_contrast: false,
-        },
-        mic: MicState::Listening,
-        conversation: None,
-        heard: None,
-        speaking: None,
-        jobs: Vec::new(),
-        approvals: Vec::new(),
-        intent: None,
-        input_lock: None,
-        lease: None,
-        watch: None,
-        panel: None,
-        suggestions: Vec::new(),
-        first_run: None,
-        indicators: Indicators::default(),
-    }
-}
-
-/// One effect of `family`. The match is exhaustive, so a new family fails to build here until
-/// this test covers it.
-fn sample(family: EffectFamily) -> Effect {
-    let session = WorkerSessionId::from_parts(1, 2);
-    match family {
-        EffectFamily::Speech => {
-            Effect::Speech(SpeechCmd::Cancel { speak: SpeakId::from_parts(1, 3) })
-        }
-        EffectFamily::Audio => Effect::Audio(AudioCmd::Unduck),
-        EffectFamily::Brain => Effect::Brain(BrainCmd::Stop { slot: BrainSlot::Fallback }),
-        EffectFamily::Worker => Effect::Worker(session, WorkerCmd::Interrupt),
-        EffectFamily::Hook => Effect::Hook(
-            session,
-            HookReply::PreToolUse { request: 4, decision: HookDecision::None },
-        ),
-        EffectFamily::ToolForward => Effect::ToolForward {
-            call: CallId::from_parts(1, 5),
-            connector: ConnectorId::new("pc.apps").unwrap(),
-            tool: ToolName::new("apps_open_url").unwrap(),
-            args: Value::Null,
-            deadline_ms: 5_000,
-        },
-        EffectFamily::ToolReply => Effect::ToolReply {
-            caller: Caller::Internal,
-            call: CallId::from_parts(1, 6),
-            result: ToolResult {
-                content: Vec::new(),
-                is_error: false,
-                verification: None,
-                output: None,
-                duration_ms: 3,
-                rung: None,
-            },
-        },
-        EffectFamily::Sidecar => Effect::Sidecar(SidecarId::Desktop, SidecarCmd::Restart),
-        EffectFamily::Hud => Effect::Hud(Box::new(hud())),
-        EffectFamily::Learn => Effect::Learn(LearnCmd::RunLibrarian { batch: Vec::new() }),
-        EffectFamily::Settings => Effect::Settings(SettingsCmd::ApplyLive(Vec::new())),
-        EffectFamily::Persist => Effect::Persist(Record::PlanUsage(usage())),
-        EffectFamily::Emit => Effect::Emit(BusEvent::PlanUsage(usage())),
-        EffectFamily::Timer => Effect::CancelTimer(TimerId(99)),
-        EffectFamily::Incident => Effect::Incident(IncidentTrigger::UserReport),
-        EffectFamily::Notify => Effect::Notify(Toast {
-            title: "Render".to_owned(),
-            body: "The render finished.".to_owned(),
-            job: None,
-        }),
-    }
-}
-
 #[tokio::test(start_paused = true)]
 async fn each_family_reaches_the_component_that_accepts_it() {
     let (probes, mut seen) = Probes::new();
     let (voice, sink) = probes.feeder("voice", VOICE);
     let components: Vec<Box<dyn Component>> = vec![
         voice,
-        Box::new(probes.probe("models", MODELS, Act::Serve)),
-        Box::new(probes.probe("rest", REST, Act::Serve)),
+        probes.boxed("models", MODELS, Act::Serve),
+        probes.boxed("rest", REST, Act::Serve),
     ];
     let (driver, _steps) = scripted(Limits::default(), |input| {
         if matches!(input, Input::User(_)) {
@@ -474,8 +430,8 @@ async fn a_family_claimed_twice_refuses_to_start() {
     for (first, second, refusal) in cases {
         let (probes, _seen) = Probes::new();
         let components: Vec<Box<dyn Component>> = vec![
-            Box::new(probes.probe("first", first, Act::Serve)),
-            Box::new(probes.probe("second", second, Act::Serve)),
+            probes.boxed("first", first, Act::Serve),
+            probes.boxed("second", second, Act::Serve),
         ];
         let (driver, steps) = scripted(Limits::default(), |_| Vec::new());
         let outcome = timeout(PATIENCE, driver.run(components, Shutdown::new())).await;
@@ -483,54 +439,6 @@ async fn a_family_claimed_twice_refuses_to_start() {
         assert_eq!(probes.counts.started(), 0, "no component started: {refusal}");
         assert!(steps_of(&steps).is_empty(), "the core was never stepped: {refusal}");
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_timer_fires_at_its_mono_time_and_a_cancelled_one_never_does() {
-    let (probes, _seen) = Probes::new();
-    let (feeder, sink) = probes.feeder("feeder", &[]);
-    let mut users = 0;
-    let (driver, steps) = scripted(Limits::default(), move |input| {
-        if !matches!(input, Input::User(_)) {
-            return Vec::new();
-        }
-        users += 1;
-        if users == 1 {
-            // Timer 2 is cancelled in the step that set it, timer 3 by the next input.
-            vec![
-                Effect::SetTimer { id: TimerId(1), at: secs(2) },
-                Effect::SetTimer { id: TimerId(2), at: secs(3) },
-                Effect::CancelTimer(TimerId(2)),
-                Effect::SetTimer { id: TimerId(3), at: secs(5) },
-            ]
-        } else {
-            vec![Effect::CancelTimer(TimerId(3))]
-        }
-    });
-    let shutdown = Shutdown::new();
-    let start = Instant::now();
-    let run = eileen_rt::task::spawn("test.driver", driver.run(vec![feeder], shutdown.clone()));
-    let sink = sink.await.unwrap();
-    sink.send(envelope(toggle())).unwrap();
-    sleep_until(start + Duration::from_secs(4)).await;
-    sink.send(envelope(toggle())).unwrap();
-    sleep_until(start + Duration::from_secs(10)).await;
-    shutdown.trigger();
-    assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");
-
-    let seen: Vec<(u64, MonoTime, MonoTime, Input)> = steps_of(&steps)
-        .into_iter()
-        .map(|step| (step.input.seq, step.now, step.input.mono, step.input.body))
-        .collect();
-    assert_eq!(
-        seen,
-        [
-            (1, secs(0), secs(0), toggle()),
-            (2, secs(2), secs(2), Input::Timer(TimerId(1))),
-            (3, secs(4), secs(4), toggle()),
-        ],
-        "timer 1 comes back at 2 s, stepped at its own time; timers 2 and 3 never fire"
-    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -544,15 +452,18 @@ async fn a_full_input_queue_answers_backpressure() {
     let sink = sink.await.unwrap();
 
     // Nothing yields between these sends, so the driver takes none of them yet.
-    let activity = || envelope(Input::Activity(ActivityEvent::PhysicalInput));
     for n in 0..4 {
-        assert_eq!(sink.send(activity()), Ok(()), "input {n} fits");
+        assert_eq!(sink.send(envelope(physical())), Ok(()), "input {n} fits");
     }
-    assert_eq!(sink.send(activity()), Err(Backpressure { capacity: 4 }), "the fifth is refused");
+    assert_eq!(
+        sink.send(envelope(physical())),
+        Err(Backpressure { capacity: 4 }),
+        "the fifth is refused"
+    );
 
     // Once the driver has drained the queue there is room again.
     sleep(Duration::from_millis(1)).await;
-    assert_eq!(sink.send(activity()), Ok(()), "room again once drained");
+    assert_eq!(sink.send(envelope(physical())), Ok(()), "room again once drained");
     sleep(Duration::from_millis(1)).await;
     let seqs: Vec<u64> = steps_of(&steps).iter().map(|step| step.input.seq).collect();
     assert_eq!(seqs, [1, 2, 3, 4, 5], "the four taken and the one after, in order");
@@ -580,7 +491,6 @@ async fn inputs_take_seq_and_time_in_the_order_the_core_sees() {
     let run =
         eileen_rt::task::spawn("test.driver", driver.run(vec![first, second], shutdown.clone()));
     let (first_sink, second_sink) = (first_sink.await.unwrap(), second_sink.await.unwrap());
-    let physical = || Input::Activity(ActivityEvent::PhysicalInput);
 
     // Both components send at once, each with seq and times zero, then again at 1.5 s.
     first_sink.send(envelope(toggle())).unwrap();
@@ -636,204 +546,80 @@ async fn an_input_sent_with_a_seq_trips_the_soft_assertion() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn shutdown_stops_every_component() {
-    let (probes, _seen) = Probes::new();
-    let components: Vec<Box<dyn Component>> = vec![
-        Box::new(probes.probe("voice", VOICE, Act::Serve)),
-        Box::new(probes.probe("stubborn", MODELS, Act::Stubborn)),
-        Box::new(probes.probe("rest", REST, Act::Serve)),
-    ];
-    let limits = Limits { stop_within: Duration::from_secs(2), ..Limits::default() };
-    let (driver, _steps) = scripted(limits, |_| Vec::new());
+async fn hud_snapshots_go_at_most_ten_a_second_ending_with_the_last() {
+    let (probes, mut seen) = Probes::new();
+    let (hud_probe, sink) = probes.feeder("hud", &[EffectFamily::Hud]);
+    let (driver, _steps) = scripted(Limits::default(), |_| vec![Effect::Hud(Box::new(hud()))]);
     let shutdown = Shutdown::new();
-    let run = eileen_rt::task::spawn("test.driver", driver.run(components, shutdown.clone()));
-    sleep(Duration::from_secs(1)).await;
-    assert_eq!(probes.counts.started(), 3, "every component started");
-    assert_eq!(probes.counts.ended(), 0, "and runs until shutdown");
+    let start = Instant::now();
+    let run = eileen_rt::task::spawn("test.driver", driver.run(vec![hud_probe], shutdown.clone()));
+    // Each snapshot the HUD gets, by the core's seq, with the time it got it.
+    let taken = eileen_rt::task::spawn("test.hud", async move {
+        let mut taken = Vec::new();
+        let until = start + Duration::from_secs(3);
+        while let Ok(Some((_, effect))) = timeout_at(until, seen.recv()).await {
+            taken.push((start.elapsed(), effect.seq));
+        }
+        taken
+    });
+    let sink = sink.await.unwrap();
 
-    let asked = Instant::now();
+    // 30 snapshots, one every 33 ms from 0 to 957 ms.
+    for _ in 0..30 {
+        sink.send(envelope(toggle())).unwrap();
+        sleep(Duration::from_millis(33)).await;
+    }
+    let taken = taken.await.unwrap();
     shutdown.trigger();
-    assert_eq!(run.await.unwrap(), Ok(()), "a run asked to stop ends well");
-    assert_eq!(probes.counts.ended(), 3, "every component's task has ended");
-    assert_eq!(asked.elapsed(), Duration::from_secs(2), "the one that ignored it was aborted");
-}
+    assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");
 
-#[tokio::test(start_paused = true)]
-async fn a_component_error_ends_the_run_with_its_name() {
-    let (probes, _seen) = Probes::new();
-    let components: Vec<Box<dyn Component>> = vec![
-        Box::new(probes.probe("voice", VOICE, Act::Serve)),
-        Box::new(probes.probe("models", MODELS, Act::Fail)),
-    ];
-    let (driver, _steps) = scripted(Limits::default(), |_| Vec::new());
-    let shutdown = Shutdown::new();
-    let outcome = timeout(PATIENCE, driver.run(components, shutdown.clone())).await;
+    let times: Vec<Duration> = taken.iter().map(|&(at, _)| at).collect();
+    let paced: Vec<Duration> = (0..=10).map(|n| HUD_EVERY * n).collect();
+    assert_eq!(times, paced, "the first at once, then one every 100 ms while more come");
+    let seqs: Vec<u64> = taken.iter().map(|&(_, seq)| seq).collect();
     assert_eq!(
-        outcome,
-        Ok(Err(RunError::Component {
-            component: "models",
-            message: "the device went away".to_owned()
-        })),
-        "the failed component's name and words"
+        seqs,
+        [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 30],
+        "each the newest at its turn, and the last snapshot last"
     );
-    assert!(shutdown.is_triggered(), "the others were told to stop");
-    assert_eq!(probes.counts.ended(), 2, "and every component's task has ended");
 }
 
 #[test]
 fn an_unserved_family_is_logged_once_and_dropped() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .start_paused(true)
-        .build()
-        .unwrap();
-    let ((outcome, audio, steps), captured) = capture(|| {
-        runtime.block_on(async {
-            let (probes, mut seen) = Probes::new();
-            let (voice, sink) = probes.feeder("voice", VOICE);
-            let (driver, steps) = scripted(Limits::default(), |_| {
-                vec![
-                    Effect::Notify(Toast {
-                        title: "Done".to_owned(),
-                        body: "Done.".to_owned(),
-                        job: None,
-                    }),
-                    Effect::Audio(AudioCmd::Unduck),
-                    Effect::Incident(IncidentTrigger::UserReport),
-                ]
-            });
-            let shutdown = Shutdown::new();
-            let run =
-                eileen_rt::task::spawn("test.driver", driver.run(vec![voice], shutdown.clone()));
-            let sink = sink.await.unwrap();
-            let mut audio = 0;
-            for _ in 0..3 {
-                sink.send(envelope(toggle())).unwrap();
-                let (_, effect) = next_seen(&mut seen).await.expect("the audio effect");
-                assert_eq!(effect.body, Effect::Audio(AudioCmd::Unduck), "only audio is served");
-                audio += 1;
-            }
-            shutdown.trigger();
-            (run.await.unwrap(), audio, steps_of(&steps).len())
-        })
+    let ((outcome, audio, steps), captured) = on_paused_time(async {
+        let (probes, mut seen) = Probes::new();
+        let (voice, sink) = probes.feeder("voice", VOICE);
+        let (driver, steps) = scripted(Limits::default(), |_| {
+            vec![
+                Effect::Notify(Toast {
+                    title: "Done".to_owned(),
+                    body: "Done.".to_owned(),
+                    job: None,
+                }),
+                Effect::Audio(AudioCmd::Unduck),
+                Effect::Incident(IncidentTrigger::UserReport),
+            ]
+        });
+        let shutdown = Shutdown::new();
+        let run = eileen_rt::task::spawn("test.driver", driver.run(vec![voice], shutdown.clone()));
+        let sink = sink.await.unwrap();
+        let mut audio = 0;
+        for _ in 0..3 {
+            sink.send(envelope(toggle())).unwrap();
+            let (_, effect) = next_seen(&mut seen).await.expect("the audio effect");
+            assert_eq!(effect.body, Effect::Audio(AudioCmd::Unduck), "only audio is served");
+            audio += 1;
+        }
+        shutdown.trigger();
+        (run.await.unwrap(), audio, steps_of(&steps).len())
     });
     assert_eq!(outcome, Ok(()), "the run ends well");
     assert_eq!((audio, steps), (3, 3), "three steps, each served its audio");
-
-    let unserved: Vec<(&str, &str)> = captured
-        .events_named(names::EFFECT_UNSERVED)
-        .into_iter()
-        .map(|event| {
-            (event.fields["family"].as_str().unwrap(), event.fields["component"].as_str().unwrap())
-        })
-        .collect();
     assert_eq!(
-        unserved,
+        lines(&captured, names::EFFECT_UNSERVED, "family", "component"),
         [("Notify", "none"), ("Incident", "none")],
         "one line per unserved family, however often it comes"
     );
     assert_eq!(captured.spans_named(names::CORE_STEP).len(), 3, "one span per step");
     captured.assert_schema_ok();
-}
-
-/// The ports the core does not call while it starts the speech process and waits for it.
-struct Uncalled;
-
-const UNCALLED: &str = "the core does not call this port while speech loads";
-
-impl IntentResolver for Uncalled {
-    fn rebuild(&mut self, _: &[SkillMeta], _: &[PhrasingFact]) {
-        panic!("{UNCALLED}");
-    }
-    fn resolve(&self, _: &str, _: &ResolveCtx) -> Resolution {
-        panic!("{UNCALLED}");
-    }
-    fn resolve_semantic(&self, _: &str, _: &[f32], _: &ResolveCtx) -> Resolution {
-        panic!("{UNCALLED}");
-    }
-    fn follow_up(&self, _: &str, _: &ResolveCtx) -> FollowUp {
-        panic!("{UNCALLED}");
-    }
-    fn introspect(
-        &self,
-        _: &[ToolSpec],
-        _: &[AppCapability],
-        _: &[RouteStat],
-        _: Option<&str>,
-    ) -> Capabilities {
-        panic!("{UNCALLED}");
-    }
-}
-
-impl DictationCleaner for Uncalled {
-    fn clean(&self, _: &str, _: FieldCategory, _: &[VocabularyEntry]) -> Cleaned {
-        panic!("{UNCALLED}");
-    }
-}
-
-impl SettingsValidator for Uncalled {
-    fn validate(&self, _: &Config, _: &[SettingChange]) -> Result<Proposal, ValidationError> {
-        panic!("{UNCALLED}");
-    }
-    fn specs(&self) -> &[SettingSpecView] {
-        panic!("{UNCALLED}");
-    }
-}
-
-impl SkillEngine for Uncalled {
-    fn rebuild(&mut self, _: &[SkillMeta], _: &[Recipe], _: &[ConnectorManifest], _: &[RouteStat]) {
-        panic!("{UNCALLED}");
-    }
-    fn route_line(&self, _: &str, _: &AppCapability) -> Option<String> {
-        panic!("{UNCALLED}");
-    }
-    fn next_level(&self, _: &SkillId, _: &[UseRecord]) -> Transition {
-        panic!("{UNCALLED}");
-    }
-    fn success(&self, _: &Outcome) -> bool {
-        panic!("{UNCALLED}");
-    }
-    fn start_replay(&self, _: &SkillRef, _: &SlotValues) -> Result<ReplayState, ReplayRefusal> {
-        panic!("{UNCALLED}");
-    }
-    fn next(&self, _: &mut ReplayState, _: Option<&StepResult>) -> ReplayStep {
-        panic!("{UNCALLED}");
-    }
-    fn shadow_checks(&self, _: &SkillRef, _: &SlotValues, _: &[TrajectoryStep]) -> Vec<CheckPlan> {
-        panic!("{UNCALLED}");
-    }
-    fn shadow_agree(&self, _: &SkillRef, _: &SlotValues, _: &[TrajectoryStep]) -> ShadowVerdict {
-        panic!("{UNCALLED}");
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn the_core_it_owns_kills_a_speech_process_that_never_gets_ready() {
-    let ports = CorePorts {
-        resolver: Box::new(Uncalled),
-        cleaner: Box::new(Uncalled),
-        settings: Box::new(Uncalled),
-        skills: Box::new(Uncalled),
-    };
-    let driver = Driver::new(CoreConfig::default(), ports, setup(Limits::default()));
-    let (probes, mut seen) = Probes::new();
-    let (sidecars, sink) = probes.feeder("sidecars", &[EffectFamily::Sidecar]);
-    let shutdown = Shutdown::new();
-    let run = eileen_rt::task::spawn("test.driver", driver.run(vec![sidecars], shutdown.clone()));
-    sink.await.unwrap().send(envelope(Input::Activity(ActivityEvent::PhysicalInput))).unwrap();
-
-    // The core's first step starts the speech process and gives it 120 s to be ready.
-    let (_, start) = next_seen(&mut seen).await.expect("the start");
-    assert_eq!(start.body, Effect::Sidecar(SidecarId::Speech, SidecarCmd::Start), "started");
-    assert_eq!(start.mono, secs(0), "on the first step");
-    let (_, kill) = timeout(Duration::from_secs(200), seen.recv()).await.unwrap().unwrap();
-    assert_eq!(
-        kill.body,
-        Effect::Sidecar(SidecarId::Speech, SidecarCmd::HangDumpThenKill),
-        "never ready, so dumped and killed"
-    );
-    assert_eq!(kill.mono, secs(120), "when the core's own timer came back, at 120 s");
-
-    shutdown.trigger();
-    assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");
 }
