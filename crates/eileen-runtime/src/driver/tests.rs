@@ -36,7 +36,7 @@ use eileen_contracts::learn::{
 };
 use eileen_contracts::ports::{
     Cleaned, Component, ComponentCtx, ComponentError, DictationCleaner, InputSink, IntentResolver,
-    SettingsValidator, ShutdownSignal, SkillEngine,
+    SettingsValidator, SkillEngine,
 };
 use eileen_contracts::speech::SpeechCmd;
 use eileen_contracts::tools::ToolSpec;
@@ -152,10 +152,13 @@ fn steps_of(steps: &Steps) -> Vec<Step> {
     steps.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// What the stand-in core answers an input with.
+type Reply = Box<dyn FnMut(&Input) -> Vec<Effect> + Send>;
+
 /// Stands in for the core: answers each input with what `reply` gives for it, and keeps every
 /// step it was given.
 struct Scripted {
-    reply: Box<dyn FnMut(&Input) -> Vec<Effect> + Send>,
+    reply: Reply,
     steps: Steps,
     seq: u64,
 }
@@ -609,18 +612,22 @@ fn an_unserved_family_is_logged_once_and_dropped() {
         .start_paused(true)
         .build()
         .unwrap();
-    let (probes, mut seen) = Probes::new();
-    let (voice, sink) = probes.feeder("voice", VOICE);
-    let (driver, steps) = scripted(Limits::default(), |_| {
-        vec![
-            Effect::Notify(Toast { title: "Done".to_owned(), body: "Done.".to_owned(), job: None }),
-            Effect::Audio(AudioCmd::Unduck),
-            Effect::Incident(IncidentTrigger::UserReport),
-        ]
-    });
-    let shutdown = Shutdown::new();
-    let ((outcome, audio), captured) = capture(|| {
+    let ((outcome, audio, steps), captured) = capture(|| {
         runtime.block_on(async {
+            let (probes, mut seen) = Probes::new();
+            let (voice, sink) = probes.feeder("voice", VOICE);
+            let (driver, steps) = scripted(Limits::default(), |_| {
+                vec![
+                    Effect::Notify(Toast {
+                        title: "Done".to_owned(),
+                        body: "Done.".to_owned(),
+                        job: None,
+                    }),
+                    Effect::Audio(AudioCmd::Unduck),
+                    Effect::Incident(IncidentTrigger::UserReport),
+                ]
+            });
+            let shutdown = Shutdown::new();
             let run =
                 eileen_rt::task::spawn("test.driver", driver.run(vec![voice], shutdown.clone()));
             let sink = sink.await.unwrap();
@@ -632,11 +639,11 @@ fn an_unserved_family_is_logged_once_and_dropped() {
                 audio += 1;
             }
             shutdown.trigger();
-            (run.await.unwrap(), audio)
+            (run.await.unwrap(), audio, steps_of(&steps).len())
         })
     });
     assert_eq!(outcome, Ok(()), "the run ends well");
-    assert_eq!((audio, steps_of(&steps).len()), (3, 3), "three steps, each served its audio");
+    assert_eq!((audio, steps), (3, 3), "three steps, each served its audio");
 
     let unserved: Vec<(&str, &str)> = captured
         .events_named(names::EFFECT_UNSERVED)
