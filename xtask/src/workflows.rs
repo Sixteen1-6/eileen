@@ -1,7 +1,8 @@
 //! Config assertions over `.github/workflows/` that no command checks: how the jobs that save
-//! rust-cache, and every job that restores what they save, keep the cache usable. CI runs these
-//! tests like any other, so a later edit that drops or changes one of these steps fails the pull
-//! request that makes it.
+//! rust-cache, and every job that restores what they save, keep the cache usable, and how the
+//! test jobs keep insta's pending snapshots from a failed run out of the tree and in the run's
+//! artifact. CI runs these tests like any other, so a later edit that drops or changes one of
+//! these steps fails the pull request that makes it.
 
 #[cfg(test)]
 mod tests {
@@ -300,5 +301,105 @@ mod tests {
 
     fn job_text(name: &str) -> String {
         job(CI, name).join("\n") + "\n"
+    }
+
+    /// Whether a step, as `steps` gives it, runs tests: `cargo nextest run` or `cargo test` on
+    /// any of its lines but its name, so a command inside a `run: |` or `run: >-` block counts
+    /// too, while a build-only `--no-run` does not.
+    fn runs_tests(step: &str) -> bool {
+        step.lines().filter(|line| !line.trim_start_matches("- ").starts_with("name: ")).any(
+            |line| {
+                (line.contains("cargo nextest run") || line.contains("cargo test"))
+                    && !line.contains("--no-run")
+            },
+        )
+    }
+
+    #[test]
+    fn a_test_step_is_found_in_every_run_form() {
+        let workflow = "name: example
+jobs:
+  inline:
+    steps:
+      - name: Tests
+        run: cargo nextest run --workspace
+  folded:
+    steps:
+      - name: Build the tests
+        run: cargo nextest run --workspace --no-run
+      - name: The tests, on two lines
+        run: >-
+          cargo nextest run --workspace
+          --locked --profile ci
+  literal:
+    steps:
+      - name: Doc tests
+        run: |
+          echo first
+          cargo test --workspace --doc
+  elsewhere:
+    steps:
+      - name: Lint, as cargo test would build it
+        # cargo test is only named in this comment
+        run: cargo clippy --workspace --all-targets
+";
+        let found: Vec<(&str, Vec<bool>)> = jobs(workflow)
+            .into_iter()
+            .map(|name| {
+                let steps = steps(&job(workflow, name));
+                (name, steps.iter().map(|step| runs_tests(step)).collect())
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("inline", vec![true]),
+                ("folded", vec![false, true]),
+                ("literal", vec![true]),
+                ("elsewhere", vec![false]),
+            ]
+        );
+    }
+
+    #[test]
+    fn ci_keeps_pending_snapshots() {
+        const PENDING_DIR: &str = "INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending";
+        let mut testing = Vec::new();
+        for name in jobs(CI) {
+            let steps = steps(&job(CI, name));
+            let tests: Vec<&String> = steps.iter().filter(|step| runs_tests(step)).collect();
+            if tests.is_empty() {
+                continue;
+            }
+            testing.push(name);
+            // With `INSTA_UPDATE=new`, insta writes a failing or new snapshot as `.snap.new`, and
+            // an inline one as `.<file>.pending-snap`, a hidden file, even when it detects CI.
+            // `INSTA_PENDING_DIR` puts both under `target/`, at their repository paths, so none
+            // lands in the tree, and the job's upload on failure keeps the folder.
+            for step in tests {
+                for line in ["INSTA_UPDATE: new", PENDING_DIR] {
+                    assert!(step.lines().any(|l| l == line), "{name} sets `{line}`: {step}");
+                }
+            }
+            let upload = steps
+                .iter()
+                .find(|step| has_key(step, "uses: actions/upload-artifact@"))
+                .unwrap_or_else(|| panic!("{name} keeps what a failed run leaves: {steps:#?}"));
+            for line in ["if: failure()", "target/insta-pending/", "include-hidden-files: true"] {
+                assert!(upload.lines().any(|l| l == line), "{name} keeps `{line}`: {upload}");
+            }
+        }
+        for name in ["logic-linux", "windows-test"] {
+            assert!(testing.contains(&name), "{name} runs tests: {testing:?}");
+        }
+        // A pending file in the tree came from a hand copy, and no test notices it, so the
+        // `hygiene` job, which runs on every pull request, rejects it.
+        let hygiene = steps(&job(CI, "hygiene"));
+        assert!(
+            hygiene.iter().any(|step| {
+                step.contains("git ls-files -- '*.snap.new' '*.pending-snap' | grep .")
+            }),
+            "hygiene rejects a committed pending snapshot: {hygiene:#?}"
+        );
     }
 }
