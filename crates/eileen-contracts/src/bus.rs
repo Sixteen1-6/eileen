@@ -15,6 +15,7 @@ use crate::desktop::Rect;
 use crate::ids::{ApprovalId, IncidentId, JobId, Personal, SpeakId, Untrusted, WallTime};
 use crate::jobs::{JobKind, PlanUsage, Route, Tier, TurnAuthority, TurnSource};
 use crate::learn::LearnBusEvent;
+use crate::machine::MachinePlan;
 use crate::schema::Registry;
 
 /// What happened, for everyone listening.
@@ -259,6 +260,14 @@ pub enum BusEvent {
     Lagged {
         /// How many.
         missed: u64,
+    },
+    /// The machine profile's plan changed (section 2.16); the announcement table's row for it
+    /// speaks a change the user would notice.
+    MachinePlanChanged {
+        /// The new plan.
+        plan: MachinePlan,
+        /// The keys of the choices that changed.
+        changed: Vec<String>,
     },
 }
 

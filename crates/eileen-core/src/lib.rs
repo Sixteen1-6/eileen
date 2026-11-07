@@ -456,7 +456,8 @@ impl Core {
             | Input::Activity(_)
             | Input::Memory(_)
             | Input::Settings(_)
-            | Input::Store(_) => {}
+            | Input::Store(_)
+            | Input::Machine(_) => {}
         }
         self.announce(&mut cx);
         self.refresh_hud(&mut cx);

@@ -8,7 +8,7 @@ use eileen_buildguard::clock::{Clock, RealClock};
 use eileen_buildguard::procs::Watched;
 #[cfg(any(windows, target_os = "linux"))]
 use eileen_buildguard::procs::process_alive;
-use eileen_buildguard::samples::{PAGING_FILE, Source, Store};
+use eileen_buildguard::samples::{HOURS_FILE, PAGING_FILE, Source, Store};
 use eileen_buildguard::slots::{self, Holder, Slot};
 
 #[cfg(target_os = "linux")]
@@ -48,6 +48,20 @@ fn two_processes_appending_one_window_leave_one_line() {
     assert!(second.wait().unwrap().success(), "second runtime");
     let text = std::fs::read_to_string(root.machine().join(PAGING_FILE)).unwrap();
     assert_eq!(text.lines().count(), 1, "one line for one window:\n{text}");
+}
+
+#[test]
+fn two_processes_appending_one_hour_leave_one_line() {
+    let root = TempRoot::new("cross-hour");
+    let at = RealClock.now_ms().to_string();
+    let mut first = helper("append-hour", &root, &[("EILEEN_BG_AT", at.clone())]);
+    let mut second = helper("append-hour", &root, &[("EILEEN_BG_AT", at)]);
+    assert!(first.wait().unwrap().success(), "first runtime");
+    assert!(second.wait().unwrap().success(), "second runtime");
+    let text = std::fs::read_to_string(root.machine().join(HOURS_FILE)).unwrap();
+    assert_eq!(text.lines().count(), 1, "one line for one hour:\n{text}");
+    let hours = Store::at(root.machine()).hours_at(RealClock.now_ms(), 1).unwrap();
+    assert_eq!(hours.len(), 1, "and samples::hours reads it back");
 }
 
 #[test]

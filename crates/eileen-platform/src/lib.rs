@@ -8,6 +8,8 @@
 //!   [`Subscription`], ...).
 //! - The fakes beside each trait, under `cfg(any(test, feature = "fake"))`.
 //! - [`machine`]: the OS id normalisation, the machine hash and [`machine::FileMachineIdentity`].
+//! - [`MachineProbe`] (section 2.16) and its fake's three fixture machines, each a fact set and a
+//!   week of hourly memory summaries in `memory-hours.jsonl` form.
 //!
 //! # Does not own
 //!
@@ -25,16 +27,20 @@
 //!
 //! # Boundaries
 //!
-//! - Called by the `-win` crates (implementations), `eileen-runtime` (`SystemMemory`,
-//!   `MachineIdentity`, `machine`), `eileen-config` (`SecretStore`) and the sidecars' servers.
-//! - May depend on `eileen-contracts`, `serde_json`, `secrecy`, `blake3` and `thiserror`;
-//!   must not depend on any `-win` crate or any other Eileen crate.
+//! - Called by the `-win` and `-linux` crates (implementations), `eileen-runtime`
+//!   (`SystemMemory`, `MachineIdentity`, `MachineProbe`, `machine`), `eileen-config`
+//!   (`SecretStore`) and the sidecars' servers.
+//! - May depend on `eileen-contracts`, `serde_json`, `secrecy`, `blake3` and `thiserror`, and,
+//!   for the fakes only (the `fake` feature and this crate's tests), on `eileen-stdx`, whose
+//!   `ManualClock` they keep simulated time on; must not depend on any `-win` crate or any
+//!   other Eileen crate.
 //! - Wire types: none; everything that crosses a process is a contract type.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-platform`.
-//! - Layers: unit tests for each fake, integration tests for [`machine`] with a temporary root.
+//! - Layers: unit tests for each fake, integration tests for [`machine`] with a temporary root
+//!   and for the fixture machines through `machine\facts.toml`'s format.
 //! - A bug here starts as a fleet result whose machine hash changed between runs.
 //!
 //! # Traps
@@ -42,6 +48,8 @@
 //! - [`machine::machine_hash`] normalises its OS id itself: pass the raw value, and anything
 //!   unusable counts as no id at all.
 //! - [`HudSurface`] is the only trait that is not `Send + Sync`: it lives on the HUD's thread.
+//! - [`MachineProbe::facts`] leaves the audio endpoints and the execution providers empty (their
+//!   own components report them), and its caller stamps `read_at` and `probe_ms`.
 //!
 //! # Logs and tracing
 //!
@@ -64,6 +72,7 @@ mod handles;
 mod hud;
 mod identity;
 pub mod machine;
+mod machine_probe;
 mod memory;
 mod secrets;
 mod shell;
@@ -91,6 +100,9 @@ pub use hud::{DrawItem, DrawList, HudSurface};
 #[cfg(any(test, feature = "fake"))]
 pub use identity::FakeMachineIdentity;
 pub use identity::MachineIdentity;
+#[cfg(any(test, feature = "fake"))]
+pub use machine_probe::{FakeMachineProbe, FixtureMachine};
+pub use machine_probe::{MachineChange, MachineProbe};
 #[cfg(any(test, feature = "fake"))]
 pub use memory::FakeSystemMemory;
 pub use memory::SystemMemory;

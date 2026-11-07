@@ -1173,6 +1173,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
             "session_question"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The machine panel, for \"Eileen, about this PC\" (section 2.16).",
+          "properties": {
+            "machine": {
+              "$ref": "#/$defs/MachineView"
+            }
+          },
+          "required": [
+            "machine"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1376,9 +1389,16 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "The learning loop is working.",
           "type": "boolean"
         },
-        "low_memory": {
-          "description": "Memory is low.",
-          "type": "boolean"
+        "machine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MachineChip"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The machine chip, which replaces the low-memory flag (section 2.16)."
         },
         "off_the_record": {
           "description": "Off the record.",
@@ -1409,8 +1429,106 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         "off_the_record",
         "brain_warming",
         "rendering_voice",
-        "low_memory",
         "desktop_jobs_paused"
+      ],
+      "type": "object"
+    },
+    "MachineChip": {
+      "description": "The machine chip (section 2.16): the plan's class, what the live re-check let go and why,\nand battery saver, with the chip's words from Eileen's own templates (\"tight memory\", \"spare\npaused: Resolve, 6 GB\", \"battery saver: idle work waits\").",
+      "properties": {
+        "battery_saver": {
+          "description": "Battery saver is on, so idle work waits.",
+          "type": "boolean"
+        },
+        "class": {
+          "$ref": "#/$defs/MachineClass",
+          "description": "How much room the PC has."
+        },
+        "line": {
+          "description": "The chip's words; `Personal`, because they can name the biggest process.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        },
+        "paused": {
+          "description": "What the live re-check let go, and why.",
+          "items": {
+            "$ref": "#/$defs/FitPause"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "class",
+        "paused",
+        "battery_saver",
+        "line"
+      ],
+      "type": "object"
+    },
+    "MachineView": {
+      "description": "The machine panel (section 2.16). A choice's \"Back to automatic\" control sends\n`HudInput::SetSetting` with the key and the value `\"auto\"`, through the normal settings flow.",
+      "properties": {
+        "benches": {
+          "description": "The last benchmarks.",
+          "items": {
+            "$ref": "#/$defs/MachineBench"
+          },
+          "type": "array"
+        },
+        "choices": {
+          "description": "Every row of the plan with its value, reason sentence, source and whether it fits.",
+          "items": {
+            "$ref": "#/$defs/FitChoice"
+          },
+          "type": "array"
+        },
+        "class": {
+          "$ref": "#/$defs/MachineClass",
+          "description": "How much room the PC has."
+        },
+        "endpoints": {
+          "description": "One line per audio endpoint, apart from `facts` because an endpoint's name can name a\nperson.",
+          "items": {
+            "type": "string",
+            "x-eileen-text": "personal"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "description": "The facts in plain lines, from Eileen's own templates.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paused": {
+          "description": "What the live re-check let go, and why.",
+          "items": {
+            "$ref": "#/$defs/FitPause"
+          },
+          "type": "array"
+        },
+        "staged": {
+          "description": "The staged features, the speaker check's state and its measured numbers among them.",
+          "items": {
+            "$ref": "#/$defs/StagedFeature"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The plan's summary sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "class",
+        "choices",
+        "staged",
+        "paused",
+        "facts",
+        "endpoints",
+        "benches"
       ],
       "type": "object"
     },

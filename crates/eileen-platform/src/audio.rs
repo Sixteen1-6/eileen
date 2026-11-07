@@ -1,8 +1,9 @@
 //! Audio endpoints and the system volume.
 
 use eileen_contracts::ids::Personal;
+use eileen_contracts::machine::AudioFacts;
 
-use crate::{PlatformError, ThreadTicket};
+use crate::{PlatformError, Subscription, ThreadTicket};
 
 /// The kind of capture stream, which selects the OS's processing for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,6 +46,22 @@ pub trait AudioEndpoints: Send + Sync {
     fn set_communications_ducking(&self, opt_out: bool) -> Result<(), PlatformError>;
     /// Registers the calling thread with MMCSS; the ticket reverts it on drop.
     fn register_audio_thread(&self) -> Result<ThreadTicket, PlatformError>;
+    /// The endpoints for the machine profile's facts (section 2.16): form factor, bus, mix
+    /// rate, the defaults, and whether the default render endpoint's loopback opens. Until an
+    /// implementation lists them, [`PlatformError::Unavailable`].
+    fn endpoints(&self) -> Result<AudioFacts, PlatformError> {
+        Err(PlatformError::Unavailable { what: "the audio endpoint list" })
+    }
+    /// Calls `sink` when an endpoint arrives, leaves or becomes the default
+    /// (`IMMNotificationClient`). Until an implementation watches them,
+    /// [`PlatformError::Unavailable`].
+    fn watch_endpoints(
+        &self,
+        sink: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Subscription, PlatformError> {
+        drop(sink);
+        Err(PlatformError::Unavailable { what: "audio endpoint changes" })
+    }
 }
 
 /// The system volume (`eileen-desktop-win`, through `IAudioEndpointVolume`), served as the
@@ -69,20 +86,54 @@ mod fake {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use super::{AudioEndpoints, EndpointInfo, StreamCategory, SystemVolume, VolumeState};
-    use crate::fake_util::lock;
-    use crate::{PlatformError, ThreadTicket};
+    use eileen_contracts::machine::AudioFacts;
 
-    /// Endpoints a test sets; registrations are counted and reverted on drop.
-    #[derive(Debug, Default)]
+    use super::{AudioEndpoints, EndpointInfo, StreamCategory, SystemVolume, VolumeState};
+    use crate::fake_util::{Sinks, lock};
+    use crate::{PlatformError, Subscription, ThreadTicket};
+
+    /// Endpoints a test sets, the machine profile's endpoint list among them (`None` answers
+    /// `NotFound`), and their changes; registrations are counted and reverted on drop.
+    #[derive(Debug)]
     pub struct FakeAudioEndpoints {
         capture: Mutex<Option<EndpointInfo>>,
         loopback: Mutex<Option<EndpointInfo>>,
         ducking_opt_out: Mutex<Option<bool>>,
         registered: Arc<AtomicU32>,
+        listed: Mutex<Option<AudioFacts>>,
+        changes: Sinks<()>,
+    }
+
+    impl Default for FakeAudioEndpoints {
+        fn default() -> Self {
+            Self {
+                capture: Mutex::new(None),
+                loopback: Mutex::new(None),
+                ducking_opt_out: Mutex::new(None),
+                registered: Arc::new(AtomicU32::new(0)),
+                listed: Mutex::new(None),
+                changes: Sinks::new(),
+            }
+        }
     }
 
     impl FakeAudioEndpoints {
+        /// Sets the endpoint list [`AudioEndpoints::endpoints`] answers.
+        pub fn set_listed(&self, listed: Option<AudioFacts>) {
+            *lock(&self.listed) = listed;
+        }
+
+        /// Tells every endpoint watcher that an endpoint arrived, left or became the default.
+        pub fn endpoints_changed(&self) {
+            self.changes.emit(&());
+        }
+
+        /// How many endpoint watchers there are.
+        #[must_use]
+        pub fn endpoint_watchers(&self) -> usize {
+            self.changes.len()
+        }
+
         /// Sets the default capture and loopback endpoints (`None` answers `NotFound`).
         pub fn set_endpoints(&self, capture: Option<EndpointInfo>, loopback: Option<EndpointInfo>) {
             *lock(&self.capture) = capture;
@@ -123,6 +174,17 @@ mod fake {
                 registered.fetch_sub(1, Ordering::SeqCst);
             }))
         }
+
+        fn endpoints(&self) -> Result<AudioFacts, PlatformError> {
+            lock(&self.listed).clone().ok_or(PlatformError::NotFound { what: "audio endpoints" })
+        }
+
+        fn watch_endpoints(
+            &self,
+            sink: Box<dyn Fn() + Send + Sync>,
+        ) -> Result<Subscription, PlatformError> {
+            Ok(self.changes.add(Box::new(move |()| sink())))
+        }
     }
 
     /// A volume that remembers what it was set to.
@@ -159,7 +221,66 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioEndpoints, FakeAudioEndpoints, FakeSystemVolume, SystemVolume, VolumeState};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use eileen_contracts::machine::AudioFacts;
+
+    use super::{
+        AudioEndpoints, EndpointInfo, FakeAudioEndpoints, FakeSystemVolume, StreamCategory,
+        SystemVolume, VolumeState,
+    };
+    use crate::{PlatformError, ThreadTicket};
+
+    /// An implementation written before the endpoint listing existed, as `eileen-audio-win` and
+    /// `eileen-audio-linux` are: it has only the four first methods.
+    struct Bare;
+
+    impl AudioEndpoints for Bare {
+        fn default_capture(&self, _: StreamCategory) -> Result<EndpointInfo, PlatformError> {
+            Err(PlatformError::NotFound { what: "capture endpoint" })
+        }
+
+        fn default_render_loopback(&self) -> Result<EndpointInfo, PlatformError> {
+            Err(PlatformError::NotFound { what: "render endpoint" })
+        }
+
+        fn set_communications_ducking(&self, _: bool) -> Result<(), PlatformError> {
+            Ok(())
+        }
+
+        fn register_audio_thread(&self) -> Result<ThreadTicket, PlatformError> {
+            Ok(ThreadTicket::new("Pro Audio", || {}))
+        }
+    }
+
+    #[test]
+    fn an_implementation_without_the_listing_answers_unavailable() {
+        let listed = Bare.endpoints();
+        assert!(matches!(listed, Err(PlatformError::Unavailable { .. })), "{listed:?}");
+        let watched = Bare.watch_endpoints(Box::new(|| {}));
+        assert!(matches!(watched, Err(PlatformError::Unavailable { .. })), "{watched:?}");
+    }
+
+    #[test]
+    fn the_fake_lists_what_the_test_set_and_tells_its_watchers_of_a_change() {
+        let fake = FakeAudioEndpoints::default();
+        assert!(fake.endpoints().is_err(), "nothing listed yet");
+        let listed = AudioFacts { loopback: true, ..AudioFacts::default() };
+        fake.set_listed(Some(listed.clone()));
+        assert_eq!(fake.endpoints().unwrap(), listed, "as set");
+        let heard = Arc::new(AtomicU32::new(0));
+        let counter = Arc::clone(&heard);
+        let watch = fake
+            .watch_endpoints(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }))
+            .unwrap();
+        fake.endpoints_changed();
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "told once");
+        drop(watch);
+        assert_eq!(fake.endpoint_watchers(), 0, "unsubscribed on drop");
+    }
 
     #[test]
     fn a_registration_reverts_on_drop() {
@@ -168,7 +289,7 @@ mod tests {
         assert_eq!(fake.registered_threads(), 1, "registered");
         drop(ticket);
         assert_eq!(fake.registered_threads(), 0, "reverted");
-        assert!(fake.default_capture(super::StreamCategory::Speech).is_err(), "no endpoint set");
+        assert!(fake.default_capture(StreamCategory::Speech).is_err(), "no endpoint set");
     }
 
     #[test]

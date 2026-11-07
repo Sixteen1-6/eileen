@@ -158,6 +158,26 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       },
       "type": "object"
     },
+    "AutoOr_Precision": {
+      "anyOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "$ref": "#/$defs/Precision"
+        }
+      ]
+    },
+    "AutoOr_boolean": {
+      "anyOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
     "AutoOr_uint32": {
       "anyOf": [
         {
@@ -165,6 +185,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         {
           "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "AutoOr_uint8": {
+      "anyOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "format": "uint8",
+          "maximum": 255,
           "minimum": 0,
           "type": "integer"
         }
@@ -188,6 +221,21 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ],
       "type": "object"
     },
+    "BenchMode": {
+      "description": "When the machine profile's short benchmarks run on their own; setup and an explicit request\nrun them either way.",
+      "oneOf": [
+        {
+          "const": "on_change",
+          "description": "When a fact a result depends on changes, at a quiet moment on mains power.",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Never on their own.",
+          "type": "string"
+        }
+      ]
+    },
     "CheckKind": {
       "description": "A check a setting change runs before it applies.",
       "oneOf": [
@@ -209,6 +257,11 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         {
           "const": "brain_benchmark",
           "description": "The brain benchmark passes for the new backend.",
+          "type": "string"
+        },
+        {
+          "const": "machine_fit",
+          "description": "A fitted setting of section 2.16 given a value instead of `auto`: the core's settings\nflow computes the plan with the change (`eileen_core::fit`, no IO) and, when it does not\nfit the PC's usual memory, says its cost and asks first.",
           "type": "string"
         },
         {
@@ -425,7 +478,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "$ref": "#/$defs/IncidentsConfig",
           "default": {
             "keep_days": 30,
-            "max_mb": 1024
+            "max_mb": "auto"
           },
           "description": "Incident bundles."
         },
@@ -468,6 +521,14 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           },
           "description": "Logs."
         },
+        "machine": {
+          "$ref": "#/$defs/MachineConfig",
+          "default": {
+            "announce": true,
+            "bench": "on_change"
+          },
+          "description": "The machine profile."
+        },
         "mcp": {
           "$ref": "#/$defs/McpConfig",
           "default": {
@@ -478,10 +539,11 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         "memory": {
           "$ref": "#/$defs/MemoryConfig",
           "default": {
-            "max_build_heavy_jobs": 1,
+            "max_build_heavy_jobs": "auto",
             "max_paging_kb_s": "auto",
-            "pool_computer_use": 1,
-            "pool_deep": 1,
+            "max_workers": "auto",
+            "pool_computer_use": "auto",
+            "pool_deep": "auto",
             "pool_order": [
               "deep",
               "computer_use"
@@ -518,7 +580,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "default": {
             "audio": false,
             "keep_days": 7,
-            "max_mb": 2048
+            "max_mb": "auto"
           },
           "description": "Recordings."
         },
@@ -537,7 +599,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               "backend": "claude",
               "model": "fast"
             },
-            "hot_spare": true,
+            "hot_spare": "auto",
             "kinds": {},
             "models": {
               "fast": "haiku",
@@ -555,8 +617,10 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "$ref": "#/$defs/SpeechConfig",
           "default": {
             "asr": null,
-            "low_memory_models": false,
-            "pin_working_set": false,
+            "embed": null,
+            "pin_working_set": "auto",
+            "threads": "auto",
+            "tts_precision": "auto",
             "turn": null,
             "vad": null
           },
@@ -964,11 +1028,9 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "integer"
         },
         "max_mb": {
-          "default": 1024,
-          "description": "Their total size cap, MB.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/AutoOr_uint32",
+          "default": "auto",
+          "description": "Their total size cap, MB; `auto` is the machine profile's disk cap (section 2.16, row\n11): 1,024 while the data volume has 20 GB free, half that under 20 GB, 256 under 4 GB."
         }
       },
       "type": "object"
@@ -1106,6 +1168,22 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       },
       "type": "object"
     },
+    "MachineConfig": {
+      "description": "The machine profile (section 2.16).",
+      "properties": {
+        "announce": {
+          "default": true,
+          "description": "Announce a plan change the user would notice, once a day per setting when idle.",
+          "type": "boolean"
+        },
+        "bench": {
+          "$ref": "#/$defs/BenchMode",
+          "default": "on_change",
+          "description": "When the short benchmarks run on their own."
+        }
+      },
+      "type": "object"
+    },
     "McpConfig": {
       "description": "Approved third-party MCP servers.",
       "properties": {
@@ -1183,33 +1261,29 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "description": "Memory admission and the pools (section 2.5).",
       "properties": {
         "max_build_heavy_jobs": {
-          "default": 1,
-          "description": "Build-heavy jobs at once.",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/AutoOr_uint8",
+          "default": "auto",
+          "description": "Build-heavy jobs at once; `auto` is 1, or 2 on a `Roomy` PC with at least 32 GB\n(section 2.16, row 8)."
         },
         "max_paging_kb_s": {
           "$ref": "#/$defs/AutoOr_uint32",
           "default": "auto",
           "description": "The paging limit, KB/s; `auto` is the 75th percentile plus 25 percent of 7 days of\nmachine-wide 30 s averages outside build slots, clamped to 2,000 to 40,000; the build\nguard's baseline until a day exists; 5,000 when there is neither\n(`samples::auto_paging_limit`)."
         },
+        "max_workers": {
+          "$ref": "#/$defs/AutoOr_uint8",
+          "default": "auto",
+          "description": "Claude worker sessions running together; `auto` is `min(8, max(2, performance cores))`\n(section 2.16, row 7)."
+        },
         "pool_computer_use": {
-          "default": 1,
-          "description": "Warm computer-use sessions.",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/AutoOr_uint8",
+          "default": "auto",
+          "description": "Warm computer-use sessions; `auto` is the plan's target (section 2.16, row 5)."
         },
         "pool_deep": {
-          "default": 1,
-          "description": "Warm deep-answer sessions.",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/AutoOr_uint8",
+          "default": "auto",
+          "description": "Warm deep-answer sessions; `auto` is the plan's target (section 2.16, row 3)."
         },
         "pool_order": {
           "default": [
@@ -1251,11 +1325,11 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "MemoryProfile": {
-      "description": "The memory profile.",
+      "description": "The memory profile: a coarse override of the machine profile's plan (section 2.16).",
       "oneOf": [
         {
           "const": "auto",
-          "description": "Chosen from the PC's memory.",
+          "description": "The machine profile's plan.",
           "type": "string"
         },
         {
@@ -1265,7 +1339,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         {
           "const": "low",
-          "description": "The low-memory models.",
+          "description": "The small choices of the plan's rows 1 and 2, and no spare.",
           "type": "string"
         }
       ]
@@ -1414,11 +1488,9 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "integer"
         },
         "max_mb": {
-          "default": 2048,
-          "description": "Their total size cap, MB.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
+          "$ref": "#/$defs/AutoOr_uint32",
+          "default": "auto",
+          "description": "Their total size cap, MB; `auto` is the machine profile's disk cap (section 2.16, row\n11): 2,048 while the data volume has 20 GB free, half that under 20 GB, 256 under 4 GB."
         }
       },
       "type": "object"
@@ -1500,9 +1572,9 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "description": "The brain's fallback slot."
         },
         "hot_spare": {
-          "default": true,
-          "description": "Keep a warm spare brain.",
-          "type": "boolean"
+          "$ref": "#/$defs/AutoOr_boolean",
+          "default": "auto",
+          "description": "Keep a warm spare brain; `auto` is the machine profile's plan (section 2.16, row 4)."
         },
         "kinds": {
           "additionalProperties": {
@@ -1846,25 +1918,38 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "type": "object"
     },
     "SpeechConfig": {
-      "description": "Speech engines, by their names in `models.toml`; `None` is the default there.",
+      "description": "Speech engines, by their names in `models.toml`; `None` means the machine profile chooses\n(section 2.16). The old low-memory-models flag is `memory.profile = \"low\"`.",
       "properties": {
         "asr": {
           "default": null,
-          "description": "Recognition.",
+          "description": "Recognition (section 2.16, row 1).",
           "type": [
             "string",
             "null"
           ]
         },
-        "low_memory_models": {
-          "default": false,
-          "description": "Use the low-memory models.",
-          "type": "boolean"
+        "embed": {
+          "default": null,
+          "description": "The L2 embedding model (section 2.16, row 9).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "pin_working_set": {
-          "default": false,
-          "description": "Pin the speech process's working set.",
-          "type": "boolean"
+          "$ref": "#/$defs/AutoOr_boolean",
+          "default": "auto",
+          "description": "Keep the speech process resident; `auto` is the plan's choice (section 2.16, row 10)."
+        },
+        "threads": {
+          "$ref": "#/$defs/AutoOr_uint8",
+          "default": "auto",
+          "description": "Speech threads; `auto` is the count the measurements found fastest, never above the\nperformance cores and never under 2 (section 2.16, row 6)."
+        },
+        "tts_precision": {
+          "$ref": "#/$defs/AutoOr_Precision",
+          "default": "auto",
+          "description": "The voice's precision; `auto` is the plan's choice (section 2.16, row 2)."
         },
         "turn": {
           "default": null,

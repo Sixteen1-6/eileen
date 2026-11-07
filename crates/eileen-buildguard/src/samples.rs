@@ -1,6 +1,6 @@
 //! The machine-wide memory files: their only writer and reader (BUILD.md section 6.1).
 //!
-//! Three files under [`machine_root`], whatever `EILEEN_DATA_DIR` says, because they describe
+//! Four files under [`machine_root`], whatever `EILEEN_DATA_DIR` says, because they describe
 //! the PC rather than one data directory:
 //!
 //! - `machine/memory-samples.jsonl`: 5 s samples from every guard process and the runtime, one
@@ -12,9 +12,12 @@
 //!   real memory, and only when the newest line ends at least 30 s before the new window
 //!   does, so two runtimes never write one window twice; lines older than 7 days are dropped
 //!   by the next writer that finds the file over 2 MB.
+//! - `machine/memory-hours.jsonl` (from WP0 phase B): one [`HourSummary`] per hour for 30
+//!   days, from which [`usual_of`] gives the machine profile the PC's usual memory (section
+//!   2.16).
 //! - `buildguard.toml`: the baseline's thresholds, written by `cargo xtask slots --baseline`.
 //!
-//! Both line files are appended under a short [`std::fs::File::try_lock`] on
+//! The line files are appended under a short [`std::fs::File::try_lock`] on
 //! `machine/memory-samples.lock`, so lines never interleave.
 //!
 //! The runtime needs nothing else from the guard: [`slot_held_now`] (and [`Store::slot_held`])
@@ -30,11 +33,18 @@ use std::time::Duration;
 use crate::clock::{Clock, RealClock, millis};
 use crate::json;
 
+mod hours;
+
+pub use hours::{
+    HOUR, HOURS_FILE, HOURS_KEEP, HOURS_TRIM_BYTES, HourSummary, USUAL_DAYS, USUAL_MIN_HOURS,
+    USUAL_MIN_SAMPLES, Usual, append_hour, hours, usual, usual_of,
+};
+
 /// The memory samples, relative to the machine root.
 pub const SAMPLES_FILE: &str = "machine/memory-samples.jsonl";
 /// The 30 s paging windows, relative to the machine root.
 pub const PAGING_FILE: &str = "machine/paging-30s.jsonl";
-/// The lock both line files are appended under, relative to the machine root.
+/// The lock the line files are appended under, relative to the machine root.
 pub const LOCK_FILE: &str = "machine/memory-samples.lock";
 /// The baseline's thresholds, relative to the machine root.
 pub const BASELINE_FILE: &str = "buildguard.toml";
@@ -571,156 +581,4 @@ pub fn auto_paging_limit(windows: &[PagingWindow], baseline: Option<&Baseline>) 
 }
 
 #[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-    use std::io::{self, ErrorKind};
-    use std::path::PathBuf;
-
-    use super::{
-        Baseline, LimitSource, PagingWindow, Sample, Source, Store, auto_paging_limit,
-        machine_root_from, p75_plus_25, percentile, plus_25,
-    };
-    use crate::slots::{Holder, Slot, try_take_slot};
-
-    /// The machine root a process with exactly these variables would use.
-    fn root_with(vars: &[(&'static str, &'static str)]) -> io::Result<PathBuf> {
-        let vars = vars.to_vec();
-        machine_root_from(move |key| {
-            vars.iter().find(|(name, _)| *name == key).map(|(_, value)| OsString::from(*value))
-        })
-    }
-
-    #[test]
-    fn the_machine_root_follows_each_platforms_rule() {
-        assert_eq!(
-            root_with(&[("LOCALAPPDATA", "local"), ("XDG_STATE_HOME", "state"), ("HOME", "home")])
-                .unwrap(),
-            PathBuf::from("local").join("eileen"),
-            "LOCALAPPDATA wins on every OS"
-        );
-        let state = root_with(&[("LOCALAPPDATA", ""), ("XDG_STATE_HOME", "state"), ("HOME", "h")]);
-        let home = root_with(&[("XDG_DATA_HOME", "data"), ("HOME", "home")]);
-        let nothing = root_with(&[("XDG_DATA_HOME", "data")]);
-        if cfg!(windows) {
-            for (what, found) in
-                [("XDG_STATE_HOME", &state), ("HOME", &home), ("nothing", &nothing)]
-            {
-                assert_eq!(
-                    found.as_ref().map_err(io::Error::kind),
-                    Err(ErrorKind::NotFound),
-                    "without LOCALAPPDATA there is no root on Windows, whatever {what} says"
-                );
-            }
-        } else {
-            assert_eq!(
-                state.unwrap(),
-                PathBuf::from("state").join("eileen"),
-                "an empty LOCALAPPDATA counts as unset, and XDG_STATE_HOME comes next"
-            );
-            assert_eq!(
-                home.unwrap(),
-                PathBuf::from("home").join(".local").join("state").join("eileen"),
-                "then the state folder under HOME, never the data folder"
-            );
-            assert_eq!(
-                nothing.as_ref().map_err(io::Error::kind),
-                Err(ErrorKind::NotFound),
-                "nothing set"
-            );
-        }
-    }
-
-    #[test]
-    fn lines_round_trip_in_the_documented_format() {
-        let sample = Sample {
-            at_ms: 1_761_000_000_000,
-            avail_mb: 1_300,
-            headroom_mb: 5_500,
-            paging_kb_s: 400,
-            slot_held: true,
-            src: Source::Runtime,
-        };
-        let line = sample.to_line();
-        assert_eq!(
-            line,
-            r#"{"at_ms": 1761000000000, "avail_mb": 1300, "headroom_mb": 5500, "paging_kb_s": 400, "slot_held": true, "src": "runtime"}"#,
-            "sample line",
-        );
-        assert_eq!(Sample::from_line(&line), Some(sample), "round trip");
-        let window =
-            PagingWindow { at_ms: 30_000, paging_kb_s: 9, slot_held: false, src: Source::Runtime };
-        assert_eq!(PagingWindow::from_line(&window.to_line()), Some(window), "window round trip");
-    }
-
-    #[test]
-    fn percentiles_use_the_nearest_rank() {
-        let values: Vec<u32> = (1..=100).collect();
-        assert_eq!(percentile(&values, 75), Some(75), "p75 of 1..=100");
-        assert_eq!(percentile(&values, 10), Some(10), "p10");
-        assert_eq!(percentile(&[7], 95), Some(7), "one value");
-        assert_eq!(percentile(&[], 50), None, "none");
-        assert_eq!(plus_25(4_000), 5_000, "plus 25 percent");
-        assert_eq!(p75_plus_25(&values), Some(94), "75 plus 25 percent, rounded");
-    }
-
-    #[test]
-    fn auto_limit_prefers_a_day_of_windows_then_the_baseline_then_the_default() {
-        let window =
-            |kb| PagingWindow { at_ms: 0, paging_kb_s: kb, slot_held: false, src: Source::Runtime };
-        let baseline = Baseline::from_toml(
-            "measured_from = \"2026-10-22\"\nmeasured_to = \"2026-10-22\"\nsamples = 1\n\
-             slot_held_excluded = 0\nslot0_paging_kb_s = 90000\nrecheck_paging_kb_s = 1\nheadroom_floor_mb = 1024\n",
-        )
-        .unwrap();
-        let short: Vec<_> = (0..100).map(|_| window(8_000)).collect();
-        assert_eq!(auto_paging_limit(&short, None).source, LimitSource::Default, "default");
-        assert_eq!(auto_paging_limit(&short, None).kb_s, 5_000, "default value");
-        let from_baseline = auto_paging_limit(&short, Some(&baseline));
-        assert_eq!(
-            (from_baseline.kb_s, from_baseline.source),
-            (40_000, LimitSource::Baseline),
-            "clamped"
-        );
-        let mut day: Vec<_> = (0..2_880).map(|_| window(8_000)).collect();
-        day.push(PagingWindow { slot_held: true, ..window(1_000_000) });
-        let learned = auto_paging_limit(&day, Some(&baseline));
-        assert_eq!(
-            (learned.kb_s, learned.source),
-            (10_000, LimitSource::Windows),
-            "a day of windows"
-        );
-        day.remove(0);
-        assert_eq!(
-            auto_paging_limit(&day, None).source,
-            LimitSource::Default,
-            "2,879 free windows and a slot-held one do not cover a day",
-        );
-    }
-
-    #[test]
-    fn the_slot_probe_sees_a_held_and_a_free_slot() {
-        let dir = std::env::temp_dir()
-            .join(format!("eileen-buildguard-samples-{}-probe", std::process::id()));
-        let _ignored = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let store = Store::at(&dir);
-        assert!(!store.slot_held(), "no lock files: free");
-        let holder = Holder {
-            pid: std::process::id(),
-            worktree: "wt".to_owned(),
-            command: "cargo xtask test".to_owned(),
-            started_ms: 0,
-        };
-        let held = try_take_slot(&dir, Slot::One, &holder).unwrap().unwrap();
-        assert!(store.slot_held(), "slot 1 held");
-        drop(held);
-        assert!(!store.slot_held(), "released: free again");
-        let _ignored = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_baseline_needs_every_key() {
-        assert!(Baseline::from_toml("samples = 1\n").is_none(), "keys missing");
-        assert!(Baseline::from_toml("not toml").is_none(), "malformed");
-    }
-}
+mod tests;

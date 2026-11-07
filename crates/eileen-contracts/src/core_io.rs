@@ -3,7 +3,9 @@
 //! The core is a state machine with one entry point. Drivers turn the outside world into
 //! [`Input`] and carry out [`Effect`]; they hold no decisions. The families that belong to one
 //! producing area live in that area's module (`speech`, `harness`, `connectors`, `learn`,
-//! `config`, `hud`); this module holds the closed enums and the families the core itself owns.
+//! `config`, `hud`); this module holds the closed enums, the families the core itself owns, and
+//! the machine profile's [`MachineEvent`] and [`MachineCmd`] over the types of `machine`
+//! (section 3.3.17).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,7 @@ use crate::ids::{
 };
 use crate::jobs::{CallOrigin, Job, MemoryPressure, PlanUsage, Tier};
 use crate::learn::{LearnCmd, LearnEvent};
+use crate::machine::{BenchKind, MachineBench, MachineFacts, MachinePlan, PowerState, UsualMemory};
 use crate::schema::Registry;
 use crate::speech::{SpeechCmd, VoiceEvent};
 
@@ -64,6 +67,8 @@ pub enum Input {
     Store(StoreEvent),
     /// A timer the core set has fired.
     Timer(TimerId),
+    /// From the machine profile's drivers (section 2.16).
+    Machine(MachineEvent),
 }
 
 /// Playback accounting from the audio driver.
@@ -384,6 +389,8 @@ pub enum Effect {
     Incident(IncidentTrigger),
     /// Show a toast.
     Notify(Toast),
+    /// To the machine profile's drivers (section 2.16).
+    Machine(MachineCmd),
 }
 
 impl Effect {
@@ -407,6 +414,7 @@ impl Effect {
             Self::SetTimer { .. } | Self::CancelTimer(_) => EffectFamily::Timer,
             Self::Incident(_) => EffectFamily::Incident,
             Self::Notify(_) => EffectFamily::Notify,
+            Self::Machine(_) => EffectFamily::Machine,
         }
     }
 }
@@ -449,6 +457,8 @@ pub enum EffectFamily {
     Incident,
     /// `Effect::Notify`.
     Notify,
+    /// `Effect::Machine`.
+    Machine,
 }
 
 /// To the audio driver.
@@ -631,6 +641,44 @@ pub struct Toast {
     pub job: Option<JobId>,
 }
 
+/// From the machine profile's drivers (section 2.16): the runtime, through `MachineProbe`, the
+/// hourly summaries and the speech process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineEvent {
+    /// The facts, at start before the brain starts, and after each change the OS reports.
+    // Boxed so that `Input` stays small, as `Effect::Hud` boxes its state; the wire form is the
+    // same.
+    Facts(Box<MachineFacts>),
+    /// The usual memory, at start and after each hourly summary.
+    Usual(UsualMemory),
+    /// Every 30 s.
+    Load {
+        /// CPU busy since the last reading, percent.
+        cpu_busy_pct: u8,
+        /// The power source and battery saver.
+        power: PowerState,
+        /// Whether a build slot lock is held.
+        build_slot_held: bool,
+    },
+    /// After each benchmark, the runtime's own or the speech process's.
+    Bench(MachineBench),
+}
+
+/// To the machine profile's drivers (section 2.16).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineCmd {
+    /// Run these benchmarks: the runtime runs `DiskRead` and sends the other kinds to the
+    /// speech process.
+    Bench {
+        /// The kinds to run.
+        kinds: Vec<BenchKind>,
+    },
+    /// Write `machine\plan.toml`, which `eileen doctor machine` reads with Eileen stopped.
+    WritePlan(MachinePlan),
+}
+
 pub(crate) fn register(r: &mut Registry) {
     r.add::<Input>();
     facts::register(r);
@@ -657,6 +705,8 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<JournalRow>();
     r.add::<IncidentTrigger>();
     r.add::<Toast>();
+    r.add::<MachineEvent>();
+    r.add::<MachineCmd>();
     r.add::<Envelope<Input>>();
     r.add::<Envelope<Effect>>();
     r.add::<Envelope<BusEvent>>();
