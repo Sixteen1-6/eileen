@@ -28,7 +28,7 @@ use eileen_contracts::speech::{
 use eileen_stdx::soft_assert::{self, Mode};
 use tokio::time::sleep;
 
-use crate::support::{Running, WAIT, logged, logged_in, messages, ms};
+use crate::support::{Running, WAIT, logged, logged_in, messages, ms, nz};
 
 /// The speakers' rate.
 const RATE: u32 = 48_000;
@@ -44,6 +44,28 @@ const RAMP: usize = 48;
 
 fn speak(n: u128) -> SpeakId {
     SpeakId::from_parts(1_700_000_000_000, n)
+}
+
+/// The core's `Speak` for a reply of two clauses.
+fn speak_cmd(speak: SpeakId) -> SpeechCmd {
+    SpeechCmd::Speak {
+        speak,
+        voice: "default".to_owned(),
+        clauses: vec!["Opening Resolve,".to_owned(), "done.".to_owned()],
+        whole_line: "Opening Resolve, done.".to_owned(),
+    }
+}
+
+/// The speech process's `ClauseReady` for a clause of these samples.
+fn clause_ready(speak: SpeakId, clause: u16, samples: &[i16]) -> VoiceEvent {
+    let samples = u32::try_from(samples.len()).unwrap();
+    VoiceEvent::ClauseReady { speak, clause, chars: 12, samples }
+}
+
+/// The bytes of one PCM frame of a clause at 24 kHz.
+fn pcm_frame(speak: SpeakId, clause: u16, samples: &[i16]) -> Vec<u8> {
+    let header = PcmHeader { speak, clause, sample_rate: 24_000 };
+    Frame::new(FrameBody::Pcm { header, samples: samples.to_vec() }).encode().unwrap()
 }
 
 /// `len` synthesized samples of a tone that starts at sample `from`.
@@ -151,17 +173,17 @@ struct Rig {
 
 impl Rig {
     fn start(test: &str) -> Self {
-        Self::start_on(test, SPEAKERS)
+        Self::start_with(test, SPEAKERS, MemoryLimits::default())
     }
 
-    /// The rig with speakers of `format`.
-    fn start_on(test: &str, format: StreamFormat) -> Self {
+    /// The rig with speakers of `format`, over a memory transport with these limits.
+    fn start_with(test: &str, format: StreamFormat, limits: MemoryLimits) -> Self {
         let scratch = Scratch::new(test);
         let sink = CaptureSink::create(&scratch.played(), format, Pace::RealTime).unwrap();
         let measured = Arc::new(Measured::default());
         let speakers = Speakers { format, sink: Some(sink), measured: Arc::clone(&measured) };
         let speakers = Arc::new(Mutex::new(speakers));
-        let (transport, stand_ins) = memory_transport(MemoryLimits::default());
+        let (transport, stand_ins) = memory_transport(limits);
         let playback: SharedSink = Arc::<Mutex<Speakers>>::clone(&speakers);
         let config = AudioConfig {
             speech: Some(Arc::new(transport)),
@@ -245,9 +267,12 @@ impl StandIn {
         None
     }
 
+    async fn write(&mut self, bytes: &[u8]) {
+        self.connection.writer().write_all(bytes, WAIT).await.unwrap();
+    }
+
     async fn send(&mut self, frame: Frame) {
-        let bytes = frame.encode().unwrap();
-        self.connection.writer().write_all(&bytes, WAIT).await.unwrap();
+        self.write(&frame.encode().unwrap()).await;
     }
 
     async fn event(&mut self, event: VoiceEvent) {
@@ -257,18 +282,15 @@ impl StandIn {
 
     /// One PCM frame of a clause at 24 kHz.
     async fn pcm(&mut self, speak: SpeakId, clause: u16, samples: &[i16]) {
-        let header = PcmHeader { speak, clause, sample_rate: 24_000 };
-        self.send(Frame::new(FrameBody::Pcm { header, samples: samples.to_vec() })).await;
+        self.write(&pcm_frame(speak, clause, samples)).await;
     }
 
-    /// Answers a `Speak` as the speech process does: each clause's `ClauseReady` and PCM, then
-    /// `SpeakDone`.
+    /// Answers a `Speak` as the contract orders it (`VoiceEvent::ClauseReady`): each clause's PCM
+    /// and then its `ClauseReady`, then `SpeakDone`.
     async fn reply(&mut self, speak: SpeakId, clauses: &[Vec<i16>]) {
         for (clause, samples) in (0_u16..).zip(clauses) {
-            let samples_in = u32::try_from(samples.len()).unwrap();
-            self.event(VoiceEvent::ClauseReady { speak, clause, chars: 12, samples: samples_in })
-                .await;
             self.pcm(speak, clause, samples).await;
+            self.event(clause_ready(speak, clause, samples)).await;
         }
         self.event(VoiceEvent::SpeakDone { speak }).await;
     }
@@ -281,13 +303,7 @@ async fn the_clauses_of_a_reply_play_bit_for_bit_and_played_and_drained_reach_th
     let one = speak(1);
     let clauses = [tone(0, 1_500), tone(1_500, 2_000)];
     sleep(ms(25)).await;
-    rig.speech(SpeechCmd::Speak {
-        speak: one,
-        voice: "default".to_owned(),
-        clauses: vec!["Opening Resolve,".to_owned(), "done.".to_owned()],
-        whole_line: "Opening Resolve, done.".to_owned(),
-    })
-    .await;
+    rig.speech(speak_cmd(one)).await;
     let asked = stand_in.next_command().await;
     assert!(matches!(asked, SpeechCmd::Speak { speak, .. } if speak == one), "{asked:?}");
     // At 26 ms, so the reply plays from the 30 ms buffer.
@@ -327,6 +343,89 @@ async fn the_clauses_of_a_reply_play_bit_for_bit_and_played_and_drained_reach_th
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_dry_spell_before_an_announced_clause_has_its_audio_never_reaches_the_core_after_it() {
+    let mut rig = Rig::start("held");
+    let mut stand_in = rig.connect();
+    let one = speak(1);
+    let (first, second) = (tone(0, 1_200), tone(1_200, 1_500));
+    sleep(ms(6)).await;
+    // Clause 0 as the contract orders it, its PCM and then its `ClauseReady`: it plays in the 10
+    // to 50 ms buffers, and the renderer runs dry in the 60 ms one.
+    stand_in.pcm(one, 0, &first).await;
+    stand_in.event(clause_ready(one, 0, &first)).await;
+    sleep(ms(52)).await;
+    // Clause 1's `ClauseReady` comes first, at 58 ms, and its PCM spans two writes, at 64 and
+    // 84 ms, so every pump from the dry spell to the second write finds none of it queued.
+    stand_in.event(clause_ready(one, 1, &second)).await;
+    sleep(ms(6)).await;
+    let frame = pcm_frame(one, 1, &second);
+    let (head, tail) = frame.split_at(frame.len() / 2);
+    stand_in.write(head).await;
+    sleep(ms(20)).await;
+    stand_in.write(tail).await;
+    sleep(ms(200)).await;
+    let inputs = rig.inputs();
+    let speakers = rig.finish().await;
+
+    assert_eq!(
+        voice(&inputs),
+        [clause_ready(one, 0, &first), clause_ready(one, 1, &second)],
+        "both clauses announced"
+    );
+    assert_eq!(
+        playback(&inputs),
+        [
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 },
+            PlaybackEvent::Played { speak: one, clause: 1, samples_played: 1_200 },
+            PlaybackEvent::Drained { speak: one },
+        ],
+        "no Drained between clause 1's ClauseReady and its audio, and one once it has played"
+    );
+    let whole = heard(&[first, second].concat());
+    let mut expected = vec![0.0; BUFFER];
+    expected.extend(&whole[..5 * BUFFER]);
+    expected.extend(std::iter::repeat_n(0.0, 3 * BUFFER));
+    expected.extend(&whole[5 * BUFFER..]);
+    expected.resize(speakers.len(), 0.0);
+    assert_eq!(
+        bits(&speakers),
+        bits(&expected),
+        "clause 0 from the 10 ms buffer, and all of clause 1 from the 90 ms one"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drained_held_for_audio_that_never_comes_reaches_the_core_when_the_connection_closes() {
+    let mut rig = Rig::start("closed");
+    let mut stand_in = rig.connect();
+    let one = speak(1);
+    let first = tone(0, 1_200);
+    sleep(ms(6)).await;
+    stand_in.pcm(one, 0, &first).await;
+    stand_in.event(clause_ready(one, 0, &first)).await;
+    sleep(ms(52)).await;
+    // Clause 1's `ClauseReady` comes at 58 ms, and its PCM never does.
+    stand_in.event(clause_ready(one, 1, &tone(1_200, 1_500))).await;
+    sleep(ms(40)).await;
+    assert_eq!(
+        playback(&rig.inputs()),
+        [PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 }],
+        "the dry spell from 60 ms waits for clause 1's audio"
+    );
+    // The speech process goes away at 98 ms.
+    drop(stand_in);
+    sleep(ms(30)).await;
+    let inputs = rig.inputs();
+    let _played = rig.finish().await;
+
+    assert_eq!(
+        playback(&inputs),
+        [PlaybackEvent::Drained { speak: one }],
+        "with no more audio to come, the core hears that the queue ran dry"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_duck_takes_effect_from_the_next_output_callback_and_an_unduck_lifts_it() {
     let mut rig = Rig::start("duck");
     let mut stand_in = rig.connect();
@@ -362,6 +461,60 @@ async fn a_duck_takes_effect_from_the_next_output_callback_and_an_unduck_lifts_i
     // The unduck sent at 55 ms lifts it from the 60 ms buffer, after its ramp.
     let lifted = at_60 + RAMP..10 * BUFFER;
     assert_eq!(bits(&speakers[lifted.clone()]), bits(clause(lifted)), "full gain again");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_duck_and_a_stop_take_effect_from_the_next_output_callback_while_a_write_waits() {
+    // A pipe that holds 64 bytes and a stand-in that reads nothing, so the `Speak` sent at 25 ms
+    // is a write that waits until its 2 s deadline.
+    let limits = MemoryLimits { buffer_bytes: nz(64), ..MemoryLimits::default() };
+    let mut rig = Rig::start_with("waiting", SPEAKERS, limits);
+    let mut stand_in = rig.connect();
+    let one = speak(1);
+    let input = tone(0, 12_000);
+    sleep(ms(5)).await;
+    stand_in.pcm(one, 0, &input).await;
+    sleep(ms(20)).await;
+    rig.speech(speak_cmd(speak(2))).await;
+    sleep(ms(19)).await;
+    rig.audio(AudioCmd::Duck { db: -20 }).await;
+    sleep(ms(29)).await;
+    rig.audio(AudioCmd::Stop { speak: one }).await;
+    // Past the write's deadline, when the connection goes back and the loop runs again.
+    sleep(ms(2_100)).await;
+    let inputs = rig.inputs();
+    let speakers = rig.finish().await;
+
+    let full = heard(&input);
+    let clause = |range: std::ops::Range<usize>| &full[range.start - BUFFER..range.end - BUFFER];
+    let (at_50, at_80) = (5 * BUFFER, 8 * BUFFER);
+    assert_eq!(bits(&speakers[BUFFER..at_50]), bits(clause(BUFFER..at_50)), "before the duck");
+    // The duck sent at 45 ms ramps down over the first millisecond of the 50 ms buffer.
+    for (k, (got, whole)) in
+        speakers[at_50..at_50 + RAMP].iter().zip(clause(at_50..at_50 + RAMP)).enumerate()
+    {
+        assert!(got.abs() <= whole.abs() + f32::EPSILON, "the ramp only lowers, at {k}");
+    }
+    let gain = 10_f32.powf(-1.0);
+    let ducked: Vec<f32> = clause(at_50 + RAMP..at_80).iter().map(|s| s * gain).collect();
+    assert_eq!(
+        bits(&speakers[at_50 + RAMP..at_80]),
+        bits(&ducked),
+        "20 dB down from the next output callback while the write waits (invariant 2)"
+    );
+    assert!(
+        speakers[at_80..].iter().all(|s| s.to_bits() == 0),
+        "the stop sent at 75 ms silences the 80 ms buffer and every one after it"
+    );
+    assert_eq!(
+        playback(&inputs),
+        [
+            PlaybackEvent::Played { speak: one, clause: 0, samples_played: 1_200 },
+            // 3360 device samples played, from the 10 ms buffer to the 80 ms one.
+            PlaybackEvent::Stopped { speak: one, clause: 0, samples_played: 1_680 },
+        ],
+        "stopped at the 80 ms buffer, reported once the loop runs again"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -475,15 +628,18 @@ fn play_phrase_and_record_fail_a_soft_assertion_and_are_dropped_with_a_logged_re
 }
 
 #[test]
-fn speakers_at_a_rate_playback_cannot_convert_to_play_nothing_and_say_why() {
-    let one = speak(1);
+fn speakers_that_do_not_start_say_why_report_a_stall_per_utterance_and_answer_each_stop() {
+    let (one, two) = (speak(1), speak(2));
     let ((callbacks, inputs), captured) = logged(async {
         let format = StreamFormat { sample_rate_hz: 96_000, channels: 2 };
-        let mut rig = Rig::start_on("unconverted", format);
+        let mut rig = Rig::start_with("unconverted", format, MemoryLimits::default());
         let mut stand_in = rig.connect();
         sleep(ms(5)).await;
         stand_in.pcm(one, 0, &tone(0, 1_000)).await;
-        rig.audio(AudioCmd::Stop { speak: one }).await;
+        stand_in.pcm(one, 1, &tone(1_000, 1_000)).await;
+        stand_in.pcm(two, 0, &tone(0, 1_000)).await;
+        sleep(ms(5)).await;
+        rig.audio(AudioCmd::Stop { speak: two }).await;
         sleep(ms(100)).await;
         let inputs = rig.inputs();
         rig.running.stop().await;
@@ -496,6 +652,15 @@ fn speakers_at_a_rate_playback_cannot_convert_to_play_nothing_and_say_why() {
     assert_eq!(refused[0].level, "WARN", "at warn");
     assert_eq!(refused[0].fields["error"], "no playback at 96000 Hz", "with its reason");
     let dropped = messages(&captured, "there is no playback; PCM dropped");
-    assert_eq!(dropped.len(), 1, "the PCM is dropped and logged: {captured:?}");
-    assert!(playback(&inputs).is_empty(), "and nothing is reported: {inputs:?}");
+    assert_eq!(dropped.len(), 3, "each PCM frame is dropped and logged: {captured:?}");
+    assert_eq!(
+        playback(&inputs),
+        [
+            PlaybackEvent::Stalled,
+            PlaybackEvent::Stalled,
+            PlaybackEvent::Stopped { speak: two, clause: 0, samples_played: 0 },
+        ],
+        "a stall at each utterance's first PCM, which the core turns into a stop, and the stop \
+         answered at the first sample: {inputs:?}"
+    );
 }
