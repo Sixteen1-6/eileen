@@ -20,11 +20,7 @@ blake3.workspace = true
 clap.workspace = true
 eileen-contracts.workspace = true
 serde.workspace = true
-# float_roundtrip parses a float exactly, so a written line reads back to the same number
-# (serde_json's default parser can be one unit in the last place off). Features unify, so this
-# belongs in the root manifest: #157 moves it there, and this line becomes
-# `serde_json.workspace = true` once it merges.
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json.workspace = true
 thiserror.workspace = true
 zstd.workspace = true
 
