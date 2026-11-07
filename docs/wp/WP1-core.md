@@ -97,11 +97,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
   (check 24 as #134 amended it, D84). It follows #134 and builds on it.
 - `wp1/speech-life` (#141, merged): the core's half of the speech process's life (section 6.3 as #134
-  amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
+  and #146 amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
   `life`: `Sidecar(Speech, Start)` on the first step; `HangDumpThenKill` then `Restart` when no
   `Ready` comes within 120 s of a `Start` or `Restart`, or no `Heartbeat` for 5 s from that
   `Ready` or the latest `Heartbeat`; `Restart` alone after an `Exited`; after a kill, `Restart`
-  waits for the killed process's `Exited` as well as the step, for at most 10 s; each `Restart` after a
+  waits for the step and for the killed process's `Exited`, but for that `Exited` at most 10 s
+  from the kill (`EXIT_WAIT_NS`); each `Restart` after a
   backoff step of 1 s doubling to 60 s, back to 1 s once the process stayed up a minute after
   its `Ready`; and `SidecarRestarted` on the bus with the reason. It gains `hud`: the HUD state
   with `MicState::LoadingSpeech`, `SpeechRestarting`, `Muted` or `Listening`, sent when it
@@ -330,18 +331,22 @@ Every pull request also meets the rules section 6.1 sets for every package.
      first-run state machine; `eileen-replay`'s strict and scenario modes; and the scenarios
      of `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
   5. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
-     `heavy-app` and `roomy` profiles and `scenarios/machine/`; the D77 parts once WP7's
-     amendment of section 3.3.13 merges (acceptance 17).
+     `heavy-app` and `roomy` profiles and `scenarios/machine/`, and with the first reload the
+     core orders that stops recognition, the speech process's reload rule (the 5 s count
+     suspended until the reload's first `Heartbeat`, a kill when none comes within 120 s) and
+     its simulation test (section 6.3 as #146 amended it); the D77 parts once WP7's amendment
+     of section 3.3.13 merges (acceptance 17).
 
 ## Surprises
 
 - The minimal core orders no reload that stops recognition, so the suspension of the 5 s
   heartbeat count from such a reload to its first `Heartbeat` has nothing to start it yet. #146
-  amends section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
-  comes within 120 s, to the machine profile's core part, which orders the first such reload.
+  amended section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
+  comes within 120 s, to the machine profile's core part, which orders the first such reload
+  (item 5 of Next above).
 - The speech process's life and the HUD's line are not in `CoreSnapshotV1`, so strict replay of
   the minimal core starts from the checkpoint taken at the core's start (section 3.3.16 as #146
-  amends it) until a contracts amendment adds them with the full `Core::step`.
+  amended it) until a contracts amendment adds them with the full `Core::step`.
 
 - A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
   commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
