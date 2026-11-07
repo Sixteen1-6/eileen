@@ -562,11 +562,11 @@ impl Link {
         }
     }
 
-    /// Takes every frame in `bytes`. A failed answer to a `Ping` does not stop it: the frames
-    /// after it are still taken, so no event already read is lost, and the failure is returned
-    /// at the end.
+    /// Takes every frame in `bytes`, then answers the `Ping`s among them with one `Pong`: a
+    /// `Pong` carries nothing of a `Ping`'s, and one write keeps the read's answer within one
+    /// write's deadline however many `Ping`s came.
     async fn take_bytes(&mut self, mut bytes: &[u8]) -> Result<(), Ended> {
-        let mut failed = None;
+        let mut pinged = false;
         while !bytes.is_empty() {
             let Some(live) = self.live.as_mut() else {
                 break;
@@ -574,45 +574,47 @@ impl Link {
             let (taken, frame) = live.frames.feed(bytes).map_err(Ended::Refused)?;
             bytes = bytes.get(taken..).unwrap_or_default();
             match frame {
-                Some(frame) => {
-                    if let Err(ended) = self.on_frame(frame).await {
-                        failed.get_or_insert(ended);
-                    }
-                }
+                Some(frame) => pinged |= self.on_frame(frame),
                 None if taken == 0 => break,
                 None => {}
             }
         }
-        failed.map_or(Ok(()), Err)
+        if !pinged {
+            return Ok(());
+        }
+        if let Err(error) = Frame::new(FrameBody::Pong).encode_into(&mut self.out) {
+            tracing::warn!(%error, "a Pong did not encode");
+        }
+        self.write_out().await
     }
 
-    async fn on_frame(&mut self, frame: Frame) -> Result<(), Ended> {
+    /// Takes one frame from the speech process; true for a `Ping`, which the caller answers.
+    fn on_frame(&mut self, frame: Frame) -> bool {
         self.ring.on_speech_frame(&frame);
         match frame.body {
-            FrameBody::Ping => {
-                if let Err(error) = Frame::new(FrameBody::Pong).encode_into(&mut self.out) {
-                    tracing::warn!(%error, "a Pong did not encode");
-                }
-                self.write_out().await?;
-            }
+            FrameBody::Ping => true,
             FrameBody::Pong => {
                 self.send(
                     Input::Sidecar(SidecarId::Speech, SidecarEvent::Heartbeat),
                     TraceCtx::default(),
                 );
+                false
             }
-            FrameBody::Event(event) => self.send(Input::Voice(event.event), event.ctx),
+            FrameBody::Event(event) => {
+                self.send(Input::Voice(event.event), event.ctx);
+                false
+            }
             FrameBody::Pcm { header, .. } => {
                 tracing::debug!(
                     speak = %header.speak,
                     clause = header.clause,
                     "PCM is played by a later part of the audio series"
                 );
+                false
             }
             // The reader refuses these from the speech process.
-            FrameBody::Audio(_) | FrameBody::Command(_) | FrameBody::Hello(_) => {}
+            FrameBody::Audio(_) | FrameBody::Command(_) | FrameBody::Hello(_) => false,
         }
-        Ok(())
     }
 
     /// Sends an input to the core. The runtime's input queue gives inputs their place in the
@@ -631,8 +633,10 @@ impl Link {
         }
     }
 
-    /// Writes what was encoded, if there is a connection to write it on.
+    /// Writes what was encoded, if there is a connection to write it on. Moves the handoff's
+    /// frames into the store first, so the wait loses none of them.
     async fn write_out(&mut self) -> Result<(), Ended> {
+        self.ring.pull();
         let result = match self.live.as_mut() {
             Some(live) if !self.out.is_empty() => {
                 live.writer.write_all(&self.out, WRITE_WITHIN).await.map_err(Ended::Connection)
