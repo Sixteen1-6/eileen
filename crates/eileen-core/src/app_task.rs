@@ -20,8 +20,9 @@ use eileen_contracts::connectors::AppEvent;
 use eileen_contracts::ids::{JobId, TurnId, Untrusted};
 use eileen_contracts::jobs::{Depth, FanoutMode, JobKind, JobSpec, Route};
 
-use crate::job::{End, RENDERS_KEPT, Routed, new_job};
+use crate::job::{End, RENDERS_KEPT, new_job};
 use crate::lifecycle::Step;
+use crate::router::Routed;
 use crate::{Core, Cx, job_ctx};
 
 /// The turn an app task the user started in the app is authorized by: none.

@@ -153,10 +153,12 @@ mod job;
 mod life;
 pub mod lifecycle;
 mod route;
+mod router;
 mod spans;
 mod speech;
 pub mod turn;
 mod user_error;
+mod worker;
 
 use std::collections::BTreeMap;
 use std::fmt;

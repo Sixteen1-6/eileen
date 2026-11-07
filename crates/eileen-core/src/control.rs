@@ -18,8 +18,9 @@ use eileen_contracts::ids::{JobId, MonoTime, TurnId, WorkerSessionId};
 use eileen_contracts::jobs::{Depth, JobKind, JobSpec, Route};
 use eileen_contracts::tools::brain::{JobAction, JobRef, JobsControl};
 
-use crate::job::{NewWorker, Routed, TASK_CHARS, cut, refusal, text_result};
+use crate::job::{NewWorker, TASK_CHARS, cut, refusal, text_result};
 use crate::lifecycle::Pick;
+use crate::router::Routed;
 use crate::speech::Owner;
 use crate::{Core, Cx, job_ctx};
 
