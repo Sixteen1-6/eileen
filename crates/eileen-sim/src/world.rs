@@ -24,7 +24,7 @@ use std::fmt::{self, Write as _};
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
-use eileen_contracts::core_io::{ActivityEvent, Effect, Input, PlaybackEvent, TimerId};
+use eileen_contracts::core_io::{ActivityEvent, AudioCmd, Effect, Input, PlaybackEvent, TimerId};
 use eileen_contracts::harness::{BrainCmd, WorkerCmd, WorkerEvent};
 use eileen_contracts::hud::HudState;
 use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime, WorkerSessionId};
@@ -402,8 +402,19 @@ impl World {
             Process::Loading => ChildEvent::Stuck,
             Process::Off | Process::Hung | Process::Dead => return,
         };
-        self.speech.hang(&mut self.due);
+        self.speech.hang(self.now_ms, &mut self.due);
         self.child(SidecarId::Speech, event);
+    }
+
+    /// The user's speech reaches the speech process (BUILD.md section 6.6): a turn event is
+    /// returned, for the next step, while the process is ready, and kept in the audio ring
+    /// while it is not, unless capture is off, to be recognised as a turn heard late once the
+    /// process is ready again. Every other input is returned as it is. A seeded run sends the
+    /// generator's speech through here; a test that steps a turn event itself puts it straight
+    /// into the core.
+    pub fn hear(&mut self, input: Input) -> Option<Input> {
+        let Input::Voice(event) = input else { return Some(input) };
+        self.speech.hear(self.now_ms, event, self.device.capture()).map(Input::Voice)
     }
 
     /// The speech process crashes: the supervisor reports its exit now, and the utterances it
@@ -685,7 +696,12 @@ impl World {
                 }
                 self.speech.command(now, cmd, &mut self.due);
             }
-            Effect::Audio(cmd) => self.device.command(now, cmd, &mut self.due),
+            Effect::Audio(cmd) => {
+                if *cmd == AudioCmd::SetCapture(false) {
+                    self.speech.mute();
+                }
+                self.device.command(now, cmd, &mut self.due);
+            }
             Effect::Brain(cmd) => {
                 let pace = match cmd {
                     BrainCmd::Turn { .. } => self.brain_turn(),

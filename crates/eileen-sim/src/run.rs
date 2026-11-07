@@ -192,9 +192,11 @@ pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunRe
     report_of(&world, None, failure)
 }
 
-/// The generator's next input. A draw of time passing goes to the core's next timer, or to
-/// whatever the world's parts answer before it; with no timer set, or when the bytes cannot
-/// draw, the device reports a change, which the core ignores.
+/// The generator's next input. The user's speech reaches the speech process, whose audio ring
+/// keeps it while the process is not ready, and time passes instead. A draw of time passing
+/// goes to the core's next timer, or to whatever the world's parts answer before it; with no
+/// timer set, or when the bytes cannot draw, the device reports a change, which the core
+/// ignores.
 fn draw(
     world: &mut World,
     generator: &mut Generator,
@@ -205,13 +207,22 @@ fn draw(
     let speaking = world.speaking().to_vec();
     let drawn = generator.next(bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking);
     match drawn {
-        Ok((_, Some(input))) => input,
-        Ok((_, None)) => world
-            .until_next_timer()
-            .and_then(|wait| world.advance(wait.max(1)))
-            .unwrap_or(Input::Playback(PlaybackEvent::DeviceChanged)),
+        Ok((_, Some(input))) => match world.hear(input) {
+            Some(input) => input,
+            None => time_passes(world),
+        },
+        Ok((_, None)) => time_passes(world),
         Err(_) => Input::Playback(PlaybackEvent::DeviceChanged),
     }
+}
+
+/// Time passes to the core's next timer, or to whatever the world's parts answer before it;
+/// with no timer set, the device reports a change, which the core ignores.
+fn time_passes(world: &mut World) -> Input {
+    world
+        .until_next_timer()
+        .and_then(|wait| world.advance(wait.max(1)))
+        .unwrap_or(Input::Playback(PlaybackEvent::DeviceChanged))
 }
 
 /// Replays a stored regression: its inputs at their recorded times, against the current core,

@@ -2,6 +2,12 @@
 //! the conversation window, and a full built-in command. The score of rule 5, the speech
 //! level, suspension while other audio plays and the call rule come with the full core.
 //!
+//! A turn heard late, whose speech began in a replayed frame (`SpeechStarted.replayed`: captured
+//! while the speech process was loading or restarting, and recognised from the ring once it was
+//! back), is addressed only by rule 1 and only when it begins with the name (section 2.8,
+//! "Speech heard late"). The window, a built-in command and a follow-up never address it, since
+//! it may have been spoken before Eileen said what it would seem to answer.
+//!
 //! The name matches phonetically: a word matches when its Soundex code equals the name's
 //! (two leading vowels count as one letter, since recognizers swap them) and its normalised
 //! Levenshtein distance from the name is under one third, so "Aileen" is Eileen and "Ellen"
@@ -32,13 +38,38 @@ pub(crate) fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Where an utterance has the assistant's name (rule 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Name {
+    /// Neither at its start nor at its end.
+    Absent,
+    /// At its start: the utterance is name-led, which a turn heard late must be (section 2.8).
+    Leads,
+    /// At its end, and not at its start.
+    Ends,
+}
+
+impl Name {
+    /// Whether the utterance began or ended with the name.
+    pub(crate) const fn present(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+}
+
 /// An utterance with the assistant's name taken off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Stripped {
-    /// Whether it began or ended with the name (rule 1).
-    pub(crate) named: bool,
+    /// Where it had the name.
+    pub(crate) name: Name,
     /// Its other words, lower case, for the resolver.
     pub(crate) rest: String,
+}
+
+impl Stripped {
+    /// Whether it began or ended with the name (rule 1).
+    pub(crate) const fn named(&self) -> bool {
+        self.name.present()
+    }
 }
 
 /// Takes the name, or one of its aliases, off the start or the end of `text`.
@@ -52,18 +83,17 @@ pub(crate) fn strip_name(text: &str, names: &[String]) -> Stripped {
         }
         let lead = said.get(..count).is_some_and(|lead| matches_name(lead, &name_words));
         if lead {
-            return Stripped { named: true, rest: said.get(count..).unwrap_or_default().join(" ") };
+            let rest = said.get(count..).unwrap_or_default().join(" ");
+            return Stripped { name: Name::Leads, rest };
         }
         let tail_at = said.len() - count;
         let tail = said.get(tail_at..).is_some_and(|tail| matches_name(tail, &name_words));
         if tail {
-            return Stripped {
-                named: true,
-                rest: said.get(..tail_at).unwrap_or_default().join(" "),
-            };
+            let rest = said.get(..tail_at).unwrap_or_default().join(" ");
+            return Stripped { name: Name::Ends, rest };
         }
     }
-    Stripped { named: false, rest: said.join(" ") }
+    Stripped { name: Name::Absent, rest: said.join(" ") }
 }
 
 fn matches_name(said: &[String], name: &[String]) -> bool {
@@ -181,24 +211,29 @@ pub(crate) enum Decision {
     Command,
     /// Typed in Eileen's own UI or sent from the command line: no gate.
     Typed,
+    /// Heard late, and it began with the name: rule 1, the only rule for a turn heard late.
+    NamedLate,
     /// Nothing addressed it: shown greyed, never stored, never a bus event.
     Greyed,
+    /// Heard late, and it did not begin with the name: greyed like room talk, whatever the
+    /// window, a built-in command or a follow-up would have said.
+    Late,
 }
 
 impl Decision {
     /// Whether the turn was addressed.
     pub(crate) const fn addressed(self) -> bool {
-        !matches!(self, Self::Greyed)
+        !matches!(self, Self::Greyed | Self::Late)
     }
 
     /// The decision as the `addressee` span records it.
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::Named => "name",
+            Self::Named | Self::NamedLate => "name",
             Self::Window => "window",
             Self::Command => "command",
             Self::Typed => "typed",
-            Self::Greyed => "greyed",
+            Self::Greyed | Self::Late => "greyed",
         }
     }
 
@@ -209,7 +244,9 @@ impl Decision {
             Self::Window => "inside the conversation window",
             Self::Command => "a full built-in command",
             Self::Typed => "typed or sent, not spoken",
+            Self::NamedLate => "heard late, and it began with the name",
             Self::Greyed => "not addressed",
+            Self::Late => "heard late, and it did not begin with the name",
         }
     }
 }
@@ -217,18 +254,23 @@ impl Decision {
 /// What the gate knows about one spoken utterance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Facts {
-    /// It began or ended with the name.
-    pub(crate) named: bool,
+    /// Where it has the name.
+    pub(crate) name: Name,
+    /// Its speech began in a replayed frame: heard late.
+    pub(crate) late: bool,
     /// The conversation window is open (or Eileen is speaking).
     pub(crate) in_window: bool,
     /// It is a full match of a built-in command.
     pub(crate) command: bool,
 }
 
-/// Rules 1, 3 and 4, first match wins. `follow_up` is asked only inside the window, for an
-/// unnamed utterance that is not a command.
+/// Rules 1, 3 and 4, first match wins; a turn heard late only by rule 1, when it begins with
+/// the name. `follow_up` is asked only inside the window, for an unnamed utterance heard live
+/// that is not a command.
 pub(crate) fn decide(facts: Facts, follow_up: impl FnOnce() -> bool) -> Decision {
-    if facts.named {
+    if facts.late {
+        if facts.name == Name::Leads { Decision::NamedLate } else { Decision::Late }
+    } else if facts.name.present() {
         Decision::Named
     } else if facts.in_window && (facts.command || follow_up()) {
         Decision::Window
