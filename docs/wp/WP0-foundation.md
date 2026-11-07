@@ -29,6 +29,7 @@ records when they exist.
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
 | 7 | `wp0/ci-pending-snapshots` | Pull request #133, merged on 2026-11-07 as f56604e, after a rebase that day onto `main` with #139 that moved its tests into `xtask::workflows::tests`; alone on that `main`, they failed in run 42386485533 and passed with the workflow change in run 42386891065. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree. It merged before `wp0/machine-contracts`, which takes its pinned snapshots from CI by this route. Its review's fixes follow in pull request #176, from the same branch, and its amendment of sections 4.6, 4.7, 4b.3 and 6.1 in pull request #177 |
 | 8 | `wp0/ci-cache-fresh` | Pull request #139, merged on 2026-11-01 as 833ab4c, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974. Its amendment, pull request #143, merged on 2026-11-07 as 499c945, and its follow-up amendment, pull request #170, merged on 2026-11-07 as c05fa14 |
+| 9 | `wp0/machine-contracts` | Pull request #191, opened as a draft on 2026-11-07: phase B's machine profile foundations (section 2.16, decision D76), the pull request WP1 acceptance 16, WP2's machine part, WP4 acceptance 14, WP7, WP8 and WP10's `MachineProbe` wait on |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -212,6 +213,39 @@ run 42395695216 ran `cargo test -p eileen-contracts --test it` on `main` with #1
 which failed on its second case (`-6.481044486608049e-108` read back one unit in the last place
 off), passed with `-p eileen-record` added to the same command, and passed alone with #157's root
 entry. Since #194, the test's pass in CI depends on the root entry alone.
+
+`wp0/machine-contracts` (pull request #191) lays the machine profile's foundations of section 2.16
+as one pull request, so the lanes that read and write the profile build against fixed shapes:
+
+- `eileen-contracts::machine`, with every type of section 3.3.17, is pinned from the start
+  (`modules.toml`: `provisional = false`, `pinned_by = "WP0"`, which keeps
+  `wp0_pinned_exactly_the_slice_modules` true of phase A). The pinned `core_io` gains
+  `Input::Machine(MachineEvent)` and `Effect::Machine(MachineCmd)` with `EffectFamily::Machine`,
+  the pinned `bus` gains `BusEvent::MachinePlanChanged`, the provisional `hud` gains
+  `HudPanel::Machine(MachineView)` and `Indicators.machine`, which replaces `low_memory`, and the
+  provisional `config` gains `MachineConfig`, `CheckKind::MachineFit` and the `auto` forms of the
+  fitted keys. `AutoOr` moves to `config/auto_or.rs` and now reads `auto` first, then the value,
+  so a value written as a word (a precision such as `int8`) reads as itself; before, every word but
+  `auto` was refused. The changed snapshots came from the first CI run's pending-snapshot artifact.
+- `eileen-platform` holds `MachineProbe` and `FakeMachineProbe`, whose three fixture machines
+  (`FixtureMachine::owners_shape`, `one_class_laptop`, `desktop`) each carry a fact set, a week of
+  hourly summaries in `memory-hours.jsonl` form (161 hours of 720 samples and, after each night's
+  start, seven of 120 that `usual` leaves out) and the `UsualMemory` that week gives: 800 MB plus
+  1,000 MB of the plan's items (usually 1.8 GB free), 500 plus 400 (0.9 GB) and 12,800 plus 1,200
+  (14 GB). The fake keeps simulated time on `ManualClock` and takes `eileen-stdx` exactly as #77
+  does, so whichever of the two merges second keeps one copy of those manifest lines.
+  `AudioEndpoints::endpoints` and `watch_endpoints` have default bodies that answer `Unavailable`,
+  so WP4's `eileen-audio-win` and WP10's `eileen-audio-linux` need no edit.
+- `eileen_buildguard::samples` owns `memory-hours.jsonl` in `samples/hours.rs`, and the module's
+  unit tests moved to `samples/tests.rs` to keep `samples.rs` under check 16's 800 lines. `Usual`
+  keeps the contracts' split: `available_mb` is the 25th percentile of the hourly medians,
+  `plan_items_mb` their median and `free_mb()` the two added, as `MachinePlan.budget_mb` adds them;
+  `headroom_p10_mb` is the 25th percentile of the hourly 10th percentiles, which no section states.
+  The guard's `Env` carries `logical_cores`, which xtask reads from
+  `std::thread::available_parallelism`, and `jobs_for` caps the memory-scaled count at it.
+- WP1's `Core::step`, `trim::setup_kind` and the simulator's world got one no-op arm each for the
+  new variants. `setup_kind` counts `Input::Machine` as no setup input; WP1 decides whether a
+  trimmed recording keeps `MachineEvent::Facts` and `Usual`, which set state the plan reads.
 
 ## Acceptance records
 

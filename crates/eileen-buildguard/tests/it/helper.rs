@@ -57,6 +57,24 @@ fn fake_rustc() -> CargoChild {
     rustc
 }
 
+/// A runtime writing the summary of the hour ending at `EILEEN_BG_AT`.
+fn append_hour() {
+    let at_ms = std::env::var("EILEEN_BG_AT").unwrap().parse().unwrap();
+    let hour = HourSummary {
+        at_ms,
+        avail_p10_mb: 900,
+        avail_p50_mb: 1_800,
+        avail_p90_mb: 2_700,
+        headroom_p10_mb: 5_500,
+        paging_p75_kb_s: 3_000,
+        plan_items_mb: 400,
+        slot_held_pct: 0,
+        samples: 720,
+        src: Source::Runtime,
+    };
+    samples::append_hour(&hour).unwrap();
+}
+
 #[test]
 fn entry() {
     let Some(mode) = std::env::var_os("EILEEN_BG_HELPER") else {
@@ -89,22 +107,7 @@ fn entry() {
             samples::append_paging(&window).unwrap();
         }
         // A runtime writing the summary of the hour ending at EILEEN_BG_AT.
-        "append-hour" => {
-            let at_ms = std::env::var("EILEEN_BG_AT").unwrap().parse().unwrap();
-            let hour = HourSummary {
-                at_ms,
-                avail_p10_mb: 900,
-                avail_p50_mb: 1_800,
-                avail_p90_mb: 2_700,
-                headroom_p10_mb: 5_500,
-                paging_p75_kb_s: 3_000,
-                plan_items_mb: 400,
-                slot_held_pct: 0,
-                samples: 720,
-                src: Source::Runtime,
-            };
-            samples::append_hour(&hour).unwrap();
-        }
+        "append-hour" => append_hour(),
         // A build holding slot 0 until it is killed.
         "hold-slot" => {
             let store = Store::machine().unwrap();
