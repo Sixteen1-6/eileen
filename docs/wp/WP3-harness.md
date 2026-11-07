@@ -307,12 +307,15 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   session after a cancel that gives none of the old one's events, a later turn with its second
   init and an interrupt, `eileen` failed at `mcp_status`, `eileen` pending past a 1 s init
   deadline, a memory folder in the first turn's init and in a later turn's init, a tool input
-  quoting the session's token, and the environment the stub records (`EILEEN_STUB_ENV_FILE`):
+  quoting the session's hook and shim tokens, and the environment the stub records
+  (`EILEEN_STUB_ENV_FILE`):
   no denylisted variable, the pass-through list, the user's `PATH`, and
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` though the user's own environment set it to 0. Each
   test's folder is removed when it ends. A unit test runs the readiness exchange over an
   in-memory pipe with tracing captured: an `initialize` reply, and an error reply, holding an
-  email-shaped string leave nothing in the logs. `eileen-harness::it::real_claude` runs
+  email-shaped string leave nothing in the logs. The `control_message` fuzz entry checks the
+  readiness reader against the control parser on every line, and four `hand-ready-` seeds
+  reach it. `eileen-harness::it::real_claude` runs
   `start` against the signed-in CLI on the owner's PC, with the default config's fast model,
   and expects `mcp_status` to report the missing shim before any user line; the owner-run
   pull request runs it. Acceptance 2 except the pooled bind and the approval path;

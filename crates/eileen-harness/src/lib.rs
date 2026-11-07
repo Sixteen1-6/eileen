@@ -177,10 +177,13 @@
 //!
 //! # Logs and tracing
 //!
-//! - `worker.refused` (warn) when a worker session is killed for a policy reason, with
-//!   Eileen's session id and the driver's reason; `worker.fault` (warn) for a failed write, a
-//!   control reply that matched nothing or carried an error, requests left unanswered at a
-//!   turn's end, and a kill whose exit was not seen. Neither carries CLI text or a path. The
+//! - `worker.refused` (warn) when a worker session is refused or killed for a policy reason,
+//!   with Eileen's session id and the driver's reason; `worker.fault` (warn) for a start that
+//!   failed otherwise (the init deadline, an exit, an error reply), a failed write, a control
+//!   reply that matched nothing or carried an error, requests left unanswered until the next
+//!   turn, and a kill whose exit was not seen. Neither carries CLI text or a path
+//!   (`worker::claude::tests::the_initialize_reply_is_dropped_unread_and_never_logged`, and the
+//!   refusal tests in `eileen-stub-harness::it::worker`). The
 //!   rest of WP3's spans come with the pool and the brain. Tool inputs are redacted in the
 //!   parser, so no later log sees them whole.
 //!

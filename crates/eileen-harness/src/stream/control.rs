@@ -24,7 +24,7 @@ pub const INTERRUPT_CAPABILITY: &str = "interrupt_receipt_v1";
 
 /// The most control requests Eileen keeps open on one session. A session runs one turn at a
 /// time, so more than a few open interrupts means the CLI stopped answering; the driver's
-/// deadline closes each one ([`Requests::abandon`]), or the end of the turn closes them all
+/// deadline closes each one ([`Requests::abandon`]), or the next turn's start closes them all
 /// ([`Requests::abandon_all`]).
 pub const MAX_OPEN_REQUESTS: usize = 4;
 
@@ -249,9 +249,9 @@ impl Requests {
         self.open.len() < before
     }
 
-    /// Closes every open request, when their replies are no longer coming (a turn ended, or a
-    /// new init arrived), and returns how many there were. Numbering goes on, so a late reply
-    /// to one of them settles nothing.
+    /// Closes every open request, when their replies are no longer coming (the next turn has
+    /// started), and returns how many there were. Numbering goes on, so a late reply to one of
+    /// them settles nothing.
     pub fn abandon_all(&mut self) -> usize {
         let open = self.open.len();
         self.open.clear();

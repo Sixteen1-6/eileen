@@ -180,9 +180,10 @@ names! {
     /// The harness killed a worker session for a policy reason: `eileen` not connected, or an
     /// auto-memory folder reported (section 2.5, D77). The reason is the driver's own text.
     WORKER_REFUSED = "worker.refused", Event, "core", parents: [Any], outlives: false, fields: ["ws_id", "reason"];
-    /// A fault in a worker session: a write that failed, a control reply that matched nothing
-    /// or carried an error, requests left unanswered, a kill whose exit was not seen. The fault
-    /// is the driver's own text, never the CLI's.
+    /// A fault in a worker session: a start that failed other than by refusal, a write that
+    /// failed, a control reply that matched nothing or carried an error, requests left
+    /// unanswered, a kill whose exit was not seen. The fault is the driver's own text, never the
+    /// CLI's.
     WORKER_FAULT = "worker.fault", Event, "core", parents: [Any], outlives: false, fields: ["ws_id", "fault"];
     /// A call to another process passed its deadline.
     DEADLINE_PASSED = "deadline.passed", Event, "all", parents: [Any], outlives: false, fields: ["call", "deadline_ms"];
