@@ -271,9 +271,10 @@ Every pull request also meets the rules section 6.1 sets for every package.
   its job the same way and says "I can't find that job." when none fits. App tasks: the apps
   sidecar's `RenderStarted` opens a running job named "the render" with no session,
   `RenderProgress` becomes `JobProgressed` with the percent on the row, and `RenderDone` ends
-  it with the usual announcement. `eileen-sim`'s workers answer `Prompt` and `Interrupt`, a test can lengthen
-  their work (`World::set_worker_ms`), the scripted brain can call `jobs_control`
-  (`BrainReply::controlling`), and `SimResolver` reads "cancel" followed by a job's words.
+  it with the usual announcement. `eileen-sim`'s workers answer `Prompt` and `Interrupt`, a
+  test can lengthen their work (`World::set_worker_ms`), the scripted brain can call
+  `jobs_control` (`BrainReply::controlling`), and `SimResolver` reads "cancel" followed by a
+  job's words.
   Tests: `eileen-core::lifecycle::tests::*` (pronoun and ordinal resolution, focus moves,
   successors, progress), `eileen-core::tests::steering::*` (fan-out children and split mode, a
   fan-out's one end, its cancel and the source of its cancel, focus moves, steer reaching the
