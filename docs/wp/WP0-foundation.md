@@ -200,9 +200,10 @@ ran without the feature, goes with its doc comment. #157's test,
 without #157's root entry while `eileen-record` keeps its own feature, because CI builds the whole
 workspace and that feature is unified into every crate. Built alone, it shows the change:
 throwaway probe run 42395695216 ran `cargo test -p eileen-contracts --test it` on `main` with
-#157's test added, which failed on its second case (`-6.481044486608049e-108` read back one unit in the last place off), passed with
-`-p eileen-record` added to the same command, and passed alone with #157's root entry. Once WP1's
-change merges, the test's pass in CI depends on the root entry alone.
+#157's test added, which failed on its second case (`-6.481044486608049e-108` read back one unit
+in the last place off), passed with `-p eileen-record` added to the same command, and passed
+alone with #157's root entry. Once WP1's change merges, the test's pass in CI depends on the root
+entry alone.
 
 ## Acceptance records
 
