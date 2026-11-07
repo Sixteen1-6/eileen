@@ -37,6 +37,17 @@ const DENIED: &str = "Eileen allows only file tools inside the job's own folder 
 /// The answer to the `PermissionRequest` tripwire (section 2.5).
 const TRIPWIRE: &str = "Eileen answers approvals through its own tool; do not retry this call.";
 
+/// What comes between the task and the words the user added, at the bind.
+const ADDED: &str = "\n\nThe user added: ";
+
+/// `task` with the words the user added after it, within `TASK_CHARS`: the task is cut to make
+/// room, never the words, which `STEER_CHARS` bounds.
+fn with_words(task: &str, words: &str) -> String {
+    let room = TASK_CHARS.saturating_sub(ADDED.chars().count());
+    let room = room.saturating_sub(words.chars().count());
+    format!("{}{ADDED}{words}", cut(task, room))
+}
+
 /// The built-in tools of a job kind (section 3.3.9).
 const fn kind_tools(kind: JobKind) -> &'static [&'static str] {
     match kind {
@@ -189,9 +200,7 @@ impl Core {
         };
         let Ok(job) = self.jobs.registry.step(id, Step::Start, cx.at) else { return };
         let task = match &live.steer {
-            Some(words) => {
-                cut(&format!("{}\n\nThe user added: {words}", job.spec.task), TASK_CHARS)
-            }
+            Some(words) => with_words(&job.spec.task, words),
             None => job.spec.task.clone(),
         };
         let binding = JobBinding {

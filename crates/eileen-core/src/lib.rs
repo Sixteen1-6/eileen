@@ -60,9 +60,14 @@
 //!   brain turn in flight, with the authority the core sent that turn with; an ambient turn
 //!   starts and changes none (section 2.3). At most 16 worker sessions run at once.
 //! - At most one unfinished job has the focus; when it ends, the focus moves to the newest
-//!   unfinished job outside a fan-out. A fan-out's parent ends once, after its last child. A kind
-//!   `JobKind::built_in_v0_1` rejects is refused with its `UserError` before routing and
-//!   admission, and no session starts.
+//!   unfinished job outside a fan-out, and to an app's own render only when no other job is open.
+//!   A fan-out's parent ends once, after its last child, counted from a tally that outlives the
+//!   children dropped to make room. A kind `JobKind::built_in_v0_1` rejects is refused with its
+//!   `UserError` before routing and admission, and no session starts.
+//! - A depth the brain chose is never recorded as the user's override; only an asked route or
+//!   model, the turn's L1 depth or a reroute's is. A reroute's job keeps what the user told the
+//!   old worker and the old job's taint, and starts only after the old session is ended.
+//! - A render the apps sidecar reported ends, lost, when that sidecar exits.
 //! - Job states change only by a `lifecycle::Step`, along the graph `lifecycle::legal` writes
 //!   as pairs of states, and every job ends in exactly one terminal state (invariants 4 and
 //!   5). The core's first step, and only that one, interrupts every job the snapshot held
@@ -442,6 +447,9 @@ impl Core {
                 SidecarId::Apps,
                 SidecarEvent::Event(ConnectorEvent::App { app, event }),
             ) => self.app_event(&mut cx, &app, event),
+            Input::Sidecar(SidecarId::Apps, SidecarEvent::Exited { .. }) => {
+                self.apps_exited(&mut cx);
+            }
             Input::Sidecar(which, event) => self.sidecar(&mut cx, which, &event),
             Input::ToolResult(..)
             | Input::Learn(_)

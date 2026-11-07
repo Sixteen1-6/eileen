@@ -8,7 +8,7 @@ use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
 use eileen_contracts::core_io::{Effect, Input, ToolCallRequest};
 use eileen_contracts::harness::{SessionSpec, WorkerCmd, WorkerEvent};
 use eileen_contracts::ids::{JobId, ToolName, TurnId, Untrusted, WorkerSessionId};
-use eileen_contracts::jobs::{Job, JobStatus};
+use eileen_contracts::jobs::{Job, JobStatus, Taint};
 use serde_json::{Value, json};
 
 use super::jobs::{BRAIN, addressed, dispatch_from, finished, init, tool_reply};
@@ -320,6 +320,19 @@ fn a_reroute_gives_the_new_worker_what_the_user_told_the_old_one() {
         task, "do the test agent\n\nThe user added: only look at the parser\nskip the slow tests",
         "words already sent to a bound worker are given again, oldest first"
     );
+}
+
+#[test]
+fn a_reroute_carries_the_old_jobs_taint_into_its_folder() {
+    let mut h = Harness::new();
+    let (old, session) = start(&mut h, "research", "the price check");
+    h.step(Input::Worker(session, init()));
+    let taint = Taint { private_read: true, ..Taint::default() };
+    h.core.jobs.registry.get_mut(old).expect("kept").taint = taint.clone();
+    let effects = reroute_to_deep(&mut h, "the price check");
+    let (new, _, _) = accepted_all(&effects).first().cloned().expect("a new job");
+    assert_eq!(row(&h, new).taint, taint, "the folder holds what the old job read");
+    assert!(row(&h, new).grants.is_empty(), "and no grant comes with it");
 }
 
 #[test]

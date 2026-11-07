@@ -226,6 +226,12 @@ impl Registry {
         self.jobs.iter().find(|job| job.id == id)
     }
 
+    /// The kept job `id`, for a test to set what the core does not track yet, such as taint.
+    #[cfg(test)]
+    pub(crate) fn get_mut(&mut self, id: JobId) -> Option<&mut Job> {
+        self.jobs.iter_mut().find(|job| job.id == id)
+    }
+
     /// A core restart: every unfinished job is interrupted, since no worker or admission queue
     /// outlives the core that started it (invariant 12). Returns them in accept order.
     pub fn restart(&mut self, at: WallTime) -> Vec<JobId> {
@@ -376,8 +382,9 @@ impl Registry {
     }
 
     /// Once the focus job has finished, or no job has the focus: a finished job gives it up,
-    /// and it moves to the newest unfinished job outside a fan-out, if any. Returns the jobs
-    /// whose focus changed.
+    /// and it moves to the newest unfinished job outside a fan-out that is not an app's own
+    /// work, which the user did not ask for, or to the newest app task when no other job is
+    /// open. Returns the jobs whose focus changed.
     pub fn refocus(&mut self, at: WallTime) -> Vec<JobId> {
         if self.focused().is_some() {
             return Vec::new();
@@ -388,11 +395,10 @@ impl Registry {
             job.updated = at;
             changed.push(job.id);
         }
-        let next = self
-            .jobs
-            .iter()
-            .rev()
-            .find(|job| !job.status.is_terminal() && job.spec.parent.is_none());
+        let open = |job: &&Job| !job.status.is_terminal() && job.spec.parent.is_none();
+        let asked =
+            self.jobs.iter().rev().filter(open).find(|job| job.spec.kind != JobKind::AppTask);
+        let next = asked.or_else(|| self.jobs.iter().rev().find(open));
         if let Some(next) = next.map(|job| job.id) {
             changed.extend(self.focus_on(next, at));
         }
@@ -466,7 +472,7 @@ impl Registry {
 pub enum Pick {
     /// This job.
     One(JobId),
-    /// Several jobs fit and none is the focus job: Eileen asks which, once. Newest first.
+    /// Several jobs fit and none is in focus: Eileen asks which, once. Newest first.
     Ask(Vec<JobId>),
     /// No unfinished job fits.
     Nothing,

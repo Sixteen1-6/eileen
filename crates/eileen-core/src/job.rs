@@ -34,7 +34,7 @@ use eileen_contracts::tools::brain::{DispatchedJob, JobsDispatch, JobsDispatchOu
 
 use crate::announce::{self, Announcement};
 use crate::lifecycle::{self, Naming, Registry, Step};
-use crate::router::Routed;
+use crate::router::{Ask, Routed};
 use crate::worker::session_spec;
 use crate::{Core, Cx, job_ctx, user_error};
 
@@ -42,8 +42,8 @@ use crate::{Core, Cx, job_ctx, user_error};
 /// for a brain turn, was refused.
 const NOT_THE_CONVERSATION: &str = "Only the conversation can start or change a job.";
 
-/// Why a dispatch was refused when the kept jobs have no room for it.
-const FULL: &str = "Too many jobs are open; cancel one and ask again.";
+/// Why a dispatch or a reroute was refused when the kept jobs have no room for it.
+pub(crate) const FULL: &str = "Too many jobs are open; cancel one and ask again.";
 
 /// Why a dispatch was refused when too many workers run.
 const BUSY: &str = "Too many workers are running; I can start more when some finish.";
@@ -58,6 +58,10 @@ const FANOUT_MAX: u8 = 8;
 /// The longest task a worker is given, in characters (section 3.3.2), steers included.
 pub(crate) const TASK_CHARS: usize = 8_000;
 
+/// The most characters of what the user added that a worker is given with its task, the
+/// newest kept: the task is cut to make room for them, never the other way round.
+pub(crate) const STEER_CHARS: usize = TASK_CHARS / 2;
+
 /// The most renders the core remembers tracking, so a render's late events never open a
 /// second job for it.
 pub(crate) const RENDERS_KEPT: usize = 16;
@@ -69,13 +73,15 @@ pub(crate) struct Jobs {
     pub(crate) live: BTreeMap<JobId, Live>,
     /// The app's render jobs tracked by app tasks, oldest first, at most [`RENDERS_KEPT`].
     pub(crate) renders: VecDeque<(String, JobId)>,
+    /// How the children of each unfinished fan-out have ended so far.
+    fanouts: BTreeMap<JobId, Tally>,
 }
 
 impl Jobs {
     /// The jobs a snapshot holds. None of them has a live worker in this run, and the core's
     /// first step interrupts the unfinished ones.
     pub(crate) fn resumed(all: Vec<Job>) -> Self {
-        Self { registry: Registry::resumed(all), live: BTreeMap::new(), renders: VecDeque::new() }
+        Self { registry: Registry::resumed(all), ..Self::default() }
     }
 
     /// Every job kept.
@@ -104,6 +110,30 @@ pub(crate) struct Live {
     pub(crate) owed: u8,
     /// What the user added before the session was ready, given with the task at the bind.
     pub(crate) steer: Option<String>,
+    /// Everything the user has told this worker, at most [`STEER_CHARS`] with the newest
+    /// kept, which a job that replaces it (a reroute) is given with the task.
+    pub(crate) told: String,
+}
+
+/// How a fan-out's children have ended so far, kept beside the registry, so a finished child
+/// dropped to make room still counts when the last one ends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Tally {
+    /// The children accepted, a rerouted agent's successor included.
+    accepted: usize,
+    completed: usize,
+    cancelled: usize,
+    /// The children that ended any other way.
+    failed: usize,
+    /// The source that cancelled the last child cancelled.
+    last_cancel: Option<CancelSource>,
+}
+
+impl Tally {
+    /// How many children have ended.
+    const fn ended(&self) -> usize {
+        self.completed.saturating_add(self.cancelled).saturating_add(self.failed)
+    }
 }
 
 /// How a job ended.
@@ -119,6 +149,10 @@ pub(crate) enum End {
         total: usize,
     },
     Failed {
+        why: String,
+    },
+    /// Eileen can no longer follow it: an app task whose app's bridge stopped.
+    Lost {
         why: String,
     },
     Cancelled {
@@ -174,6 +208,18 @@ pub(crate) struct NewWorker {
     pub(crate) naming: Naming,
     pub(crate) folder: Option<WorkerSessionId>,
     pub(crate) focus: bool,
+    /// What the user told the job it replaces, given with the task at the bind.
+    pub(crate) told: Option<String>,
+    /// What the job it replaces had read (section 2.12): its folder holds what that job
+    /// fetched and wrote, so the job that works there starts as tainted.
+    pub(crate) taint: Taint,
+}
+
+impl NewWorker {
+    /// A job that replaces none, in its own folder.
+    fn fresh(spec: JobSpec, naming: Naming, focus: bool) -> Self {
+        Self { spec, naming, folder: None, focus, told: None, taint: Taint::default() }
+    }
 }
 
 /// The result of a dispatch that accepted `jobs`, the first being the one job or the fan-out's
@@ -331,8 +377,14 @@ impl Core {
         if open.saturating_add(room) > lifecycle::KEPT {
             return Err(refusal(FULL));
         }
-        let routed = self.route_for(args.kind, args.route, args.model.clone(), args.depth);
-        let routed = routed.map_err(refusal)?;
+        // A depth the brain passes is its own choice unless the user said it (section 2.3).
+        let ask = Ask {
+            route: args.route,
+            model: args.model.clone(),
+            depth: args.depth,
+            depth_said: false,
+        };
+        let routed = self.route_for(args.kind, &ask).map_err(refusal)?;
         let spec = JobSpec {
             kind: args.kind,
             task: cut(&args.task, TASK_CHARS),
@@ -361,8 +413,7 @@ impl Core {
             let naming = self.jobs.registry.naming(hint.as_deref(), spec.kind, None, cx.at).ok();
             naming
                 .and_then(|naming| {
-                    let worker = NewWorker { spec, naming, folder: None, focus: true };
-                    self.start_worker(cx, worker, &routed)
+                    self.start_worker(cx, NewWorker::fresh(spec, naming, true), &routed)
                 })
                 .map(|job| vec![job])
         };
@@ -391,32 +442,37 @@ impl Core {
             let child =
                 JobSpec { task, fanout: 1, subtasks: Vec::new(), parent: Some(id), ..spec.clone() };
             let naming = self.jobs.registry.naming(None, spec.kind, Some(id), cx.at).ok()?;
-            let worker = NewWorker { spec: child, naming, folder: None, focus: false };
-            jobs.push(self.start_worker(cx, worker, routed)?);
+            jobs.push(self.start_worker(cx, NewWorker::fresh(child, naming, false), routed)?);
         }
         Some(jobs)
     }
 
     /// Accepts a job a worker runs and starts its cold session, in its own folder or in the
-    /// folder `worker` names. Nothing when the registry refuses it.
+    /// folder `worker` names. Nothing when [`MAX_LIVE`] workers run already, the one place
+    /// that bound is kept, or when the registry refuses the job.
     pub(crate) fn start_worker(
         &mut self,
         cx: &mut Cx<'_>,
         worker: NewWorker,
         routed: &Routed,
     ) -> Option<Job> {
-        let NewWorker { spec, naming, folder, focus } = worker;
+        if self.jobs.live.len() >= MAX_LIVE {
+            return None;
+        }
+        let NewWorker { spec, naming, folder, focus, told, taint } = worker;
         let id = JobId::from_parts(cx.mint(), cx.random());
         let session = WorkerSessionId::from_parts(cx.mint(), cx.random());
         let turn = spec.authorized_by;
-        let job = new_job(id, naming, spec, routed, Some(session), cx.at);
+        let mut job = new_job(id, naming, spec, routed, Some(session), cx.at);
+        job.taint = taint;
         let job = self.admit(cx, job, Some(turn), &routed.reason, focus)?;
         let folder = folder.unwrap_or(session);
         self.spans.open_session(id, job.route);
         let spec = session_spec(session, &job, folder);
         cx.push(job_ctx(id), Effect::Worker(session, WorkerCmd::Start(Box::new(spec))));
         let kind = job.spec.kind;
-        let live = Live { kind, session, folder, bound: false, owed: 0, steer: None };
+        let said = told.clone().unwrap_or_default();
+        let live = Live { kind, session, folder, bound: false, owed: 0, steer: told, told: said };
         self.jobs.live.insert(id, live);
         Some(job)
     }
@@ -435,6 +491,10 @@ impl Core {
         self.jobs.registry.accept(job).ok()?;
         let moved = if focus { self.jobs.registry.focus_on(id, cx.at) } else { Vec::new() };
         let job = self.jobs.registry.get(id)?.clone();
+        if let Some(parent) = job.spec.parent {
+            let tally = self.jobs.fanouts.entry(parent).or_default();
+            tally.accepted = tally.accepted.saturating_add(1);
+        }
         let ctx = TraceCtx { turn, job: Some(id), call: None };
         cx.emit(
             ctx,
@@ -477,25 +537,48 @@ impl Core {
 }
 
 impl Core {
-    /// The job reached its terminal state, once: its event, its row, its session's end, the
-    /// announcement of a completion (not of a fan-out child's, which its parent's covers) or a
-    /// failure, its parent's end when it was the last child running, and the focus moving on.
+    /// The job reaches its terminal state, once (`finish`), then its fan-out's parent ends when
+    /// it was the last child running, and the focus moves on.
     pub(crate) fn end_job(&mut self, cx: &mut Cx<'_>, id: JobId, end: End) {
+        let Some(job) = self.finish(cx, id, end) else { return };
+        if let Some(parent) = job.spec.parent {
+            self.settle_parent(cx, parent);
+        }
+        self.refocus(cx);
+    }
+
+    /// The job reaches its terminal state, once: its event, its row, its session's end, the
+    /// announcement of a completion (not of a fan-out child's, which its parent's covers), a
+    /// failure or a loss, and its fan-out's tally. Returns the job as it ended; nothing when it
+    /// cannot take that step from where it is.
+    fn finish(&mut self, cx: &mut Cx<'_>, id: JobId, end: End) -> Option<Job> {
         let step = match &end {
             End::Completed { .. } | End::Gathered { .. } => Step::Complete,
-            End::Failed { .. } => Step::Fail,
+            End::Failed { .. } | End::Lost { .. } => Step::Fail,
             End::Cancelled { .. } => Step::Cancel,
-        };
-        let cancelled_by = match &end {
-            End::Cancelled { by } => Some(*by),
-            End::Completed { .. } | End::Gathered { .. } | End::Failed { .. } => None,
         };
         let taken = self.jobs.registry.step(id, step, cx.at).ok().cloned();
         // A job that cannot take this step from where it is stays live, so a later event of its
         // session still ends it; one already finished is live no longer.
         let finished = self.jobs.registry.get(id).is_none_or(|job| job.status.is_terminal());
         let live = if finished { self.jobs.live.remove(&id) } else { None };
-        let Some(job) = taken else { return };
+        let job = taken?;
+        if let Some(parent) = job.spec.parent {
+            let tally = self.jobs.fanouts.entry(parent).or_default();
+            match &end {
+                End::Completed { .. } | End::Gathered { .. } => {
+                    tally.completed = tally.completed.saturating_add(1);
+                }
+                End::Cancelled { by } => {
+                    tally.cancelled = tally.cancelled.saturating_add(1);
+                    tally.last_cancel = Some(*by);
+                }
+                End::Failed { .. } | End::Lost { .. } => {
+                    tally.failed = tally.failed.saturating_add(1);
+                }
+            }
+        }
+        self.jobs.fanouts.remove(&id);
         let child = job.spec.parent.is_some();
         let route = job.route.display_name();
         let (event, spoken) = match end {
@@ -512,6 +595,10 @@ impl Core {
                 let spoken = announce::failed(&job.name, &why);
                 (BusEvent::JobFailed { job: id, error: why }, Some(spoken))
             }
+            End::Lost { why } => {
+                let spoken = announce::lost(&job.name, &why);
+                (BusEvent::JobFailed { job: id, error: why }, Some(spoken))
+            }
             End::Cancelled { by } => (BusEvent::JobCancelled { job: id, by }, None),
         };
         let ctx = job_ctx(id);
@@ -524,43 +611,35 @@ impl Core {
         if let Some(text) = spoken {
             self.announcements.push(Announcement { job: id, text });
         }
-        if let Some(parent) = job.spec.parent {
-            self.settle_parent(cx, parent, cancelled_by);
-        }
-        self.refocus(cx);
+        Some(job)
     }
 
-    /// A fan-out ends once every child has: completed when any child completed, cancelled
-    /// when the user cancelled every child (by the source that cancelled the last, `last_by`),
-    /// and failed otherwise.
-    fn settle_parent(&mut self, cx: &mut Cx<'_>, parent: JobId, last_by: Option<CancelSource>) {
+    /// A fan-out ends once every child it accepted has, counted from its tally rather than
+    /// from the children still kept: completed when any child completed, cancelled when the
+    /// user cancelled every child (by the source that cancelled the last), and failed
+    /// otherwise.
+    fn settle_parent(&mut self, cx: &mut Cx<'_>, parent: JobId) {
         let Some(of) = self.jobs.registry.get(parent).filter(|job| !job.status.is_terminal())
         else {
             return;
         };
         let total = usize::from(of.spec.fanout);
-        let children: Vec<JobStatus> = self
-            .jobs
-            .all()
-            .iter()
-            .filter(|job| job.spec.parent == Some(parent))
-            .map(|job| job.status)
-            .collect();
-        if children.iter().any(|status| !status.is_terminal()) {
+        let Some(tally) = self.jobs.fanouts.get(&parent).copied() else { return };
+        if tally.ended() < tally.accepted {
             return;
         }
-        let finished = children.iter().filter(|s| **s == JobStatus::Completed).count();
-        let end = if finished > 0 {
-            End::Gathered { finished: finished.min(total), total }
-        } else if children.iter().all(|status| *status == JobStatus::Cancelled) {
-            End::Cancelled { by: last_by.unwrap_or(CancelSource::Voice) }
+        let end = if tally.completed > 0 {
+            End::Gathered { finished: tally.completed.min(total), total }
+        } else if tally.cancelled == tally.ended() {
+            End::Cancelled { by: tally.last_cancel.unwrap_or(CancelSource::Voice) }
         } else {
             End::Failed { why: "no agent finished".to_owned() }
         };
         self.end_job(cx, parent, end);
     }
 
-    /// Cancels the job `id` and, for a fan-out, each of its unfinished children.
+    /// Cancels the job `id` by `by`. A fan-out's unfinished children are cancelled first, by
+    /// their parent, and the parent then ends once, after its last child.
     pub(crate) fn cancel(&mut self, cx: &mut Cx<'_>, id: JobId, by: CancelSource) {
         let children: Vec<JobId> = self
             .jobs
@@ -569,10 +648,10 @@ impl Core {
             .filter(|job| job.spec.parent == Some(id) && !job.status.is_terminal())
             .map(|job| job.id)
             .collect();
-        self.end_job(cx, id, End::Cancelled { by });
         for child in children {
-            self.end_job(cx, child, End::Cancelled { by: CancelSource::Parent });
+            self.finish(cx, child, End::Cancelled { by: CancelSource::Parent });
         }
+        self.end_job(cx, id, End::Cancelled { by });
     }
 
     /// The first step after a restart: every job the snapshot held unfinished is interrupted,
