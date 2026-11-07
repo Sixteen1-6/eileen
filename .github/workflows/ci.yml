@@ -127,6 +127,16 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # insta writes no pending snapshot when it detects CI. With `new` it writes a failing or new
+      # snapshot as a .snap.new (an inline one as .<file>.pending-snap), under the pending folder
+      # at the path it would take in the repository, so none lands in the tree. Set for the whole
+      # job, so every step that runs tests has them, however it runs them. The upload after the
+      # tests keeps the folder, and a lane takes a changed snapshot from the run instead of
+      # building on the owner's PC (xtask test `ci_keeps_pending_snapshots`). The folder is
+      # absolute because nextest runs each test binary from its crate's folder.
+      INSTA_UPDATE: new
+      INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,15 +174,8 @@ jobs:
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
-        # insta writes no pending snapshot when it detects CI. With `new` it writes a failing or
-        # new snapshot as a .snap.new (an inline one as .<file>.pending-snap), under the pending
-        # folder at the path it would take in the repository, so none lands in the tree. The
-        # upload below keeps the folder, and a lane takes a changed snapshot from the run instead
-        # of building on the owner's PC (xtask test `ci_keeps_pending_snapshots`). The folder is
-        # absolute because nextest runs each test binary from its crate's folder.
-        env:
-          INSTA_UPDATE: new
-          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
+        # The ci profile runs every test after a failure (fail-fast = false in
+        # .config/nextest.toml), so one failed run writes every changed snapshot.
         run: cargo nextest run --workspace --locked --profile ci
       - name: Simulator pull request seeds, twice each (WP0 acceptance 7)
         # What `cargo xtask sim --doublecheck` runs; CI runners are not build-guarded.
@@ -180,9 +183,6 @@ jobs:
           EILEEN_SIM_COMMIT: ${{ github.sha }} # printed with a failure's replay command
         run: cargo run --locked -p eileen-sim --bin eileen-sim -- --doublecheck
       - name: Doc tests
-        env:
-          INSTA_UPDATE: new
-          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo test --workspace --doc --locked
       - name: Docs, warnings denied
         env:
@@ -292,6 +292,10 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      # Pending snapshots, as in logic-linux.
+      INSTA_UPDATE: new
+      INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -331,15 +335,8 @@ jobs:
         with:
           tool: cargo-nextest@0.9.148
       - name: Tests
-        # Pending snapshots, as in logic-linux.
-        env:
-          INSTA_UPDATE: new
-          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo nextest run --workspace --locked --profile ci
       - name: Doc tests
-        env:
-          INSTA_UPDATE: new
-          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo test --workspace --doc --locked
       - name: Keep the test report and the pending snapshots
         if: failure()
