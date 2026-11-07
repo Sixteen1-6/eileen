@@ -124,33 +124,46 @@ Every pull request also meets the rules section 6.1 sets for every package.
   acceptance 15 to 14, so `wp2/speech-transport` does not wait for `wp0/machine-contracts`; until
   `eileen-guard` lands, `HangDumpThenKill` kills the speech process without a dump, with a
   warning. Section 6.4 lists the W1 order below.
-- `wp2/driver` (feature, W1 order item 8, first half): the driver loop in
-  `eileen_runtime::driver`. `Driver::new` takes the caller's `CoreConfig` and `CorePorts` with a
-  `Setup` (data directory, core session, clock, the core's RNG and snapshot, and `Limits`), and
+- `wp2/driver` (feature, the first half of W1 order item 8): the driver loop in
+  `eileen_runtime::driver`. Item 8 below names one pull request, `wp2/driver-loop`, for the
+  loop, the bus and the console view; neither half needs the other's code, so `wp2/driver` is
+  the loop (the input queue with its stamps, routing by family, the core's timers, components
+  and shutdown) and `wp2/driver-loop` follows it with the bus with explicit `Lagged` behind the
+  `Emit` family and `eileen run --console`'s view. Item 9's "after 8" means after both.
+  #193 amends BUILD.md section 6.4 to say so, and the list below keeps BUILD.md's words until
+  it merges. `Driver::new` takes the caller's `CoreConfig` and `CorePorts` with a `Setup`
+  (data directory, core session, clock, the core's RNG and snapshot, and `Limits`), and
   `Driver::run` owns the core in the task that awaits it. Components send through one bounded
-  `eileen_rt` channel and get `Backpressure` when it is full. The input queue stamps each input
-  as section 3.3.15 asks: a component sends `seq` and times as zero (a non-zero `seq` fails a
-  `never!` in the sink), and the queue's receiving end in the driver stamps `seq`, wall and
-  monotonic time from the clock as it hands the input to the core, and steps the core with that
-  time. A fired timer takes its stamp the same way, so `seq` is the order the core sees and the
-  core's time never runs backwards along it, which is what the simulator does and what strict
-  replay needs; stamping in the sink instead would give a queued input a lower `seq` and an
-  earlier time than a timer stepped before it. Acceptance 16 holds for what the core sees; its
-  input-tap half waits for the flight recorder (W2). `Envelope`'s `seq`, `at` and `mono` docs in
-  `eileen-contracts` now say so, with WP0 reviewing; the `core_io` schema snapshot changes only
-  in those descriptions. Each effect goes unchanged to the one component
-  that claims its family, through that component's own bounded queue; a family claimed twice,
-  or `Timer` claimed by a component, refuses to start before anything runs. Families nobody
-  serves (in W1 `Persist`, `Learn`, `Settings`, `Incident`, `Notify`, `ToolForward`, `Hud`,
-  `Hook`, `ToolReply` and, until `wp2/driver-loop`, `Emit`) are dropped with one
-  `effect.unserved` line per family per run. `SetTimer` and `CancelTimer` stay in the driver: a
-  timer fires on tokio's clock and is stepped at once as `Input::Timer`, never through the input
-  queue. Components start through `eileen_rt::task::spawn` with `ComponentCtx` (inputs, effects,
-  data directory, session, `Shutdown`); an error or a panic ends the run with the component's
-  name; shutdown closes every queue and aborts a component that has not ended within
-  `Limits::stop_within`. `eileen_trace::names` gains the span `core.step` (DEBUG, one per
-  input) and the events `effect.unserved` and `component.ended`. Unit tests on paused tokio
-  time, one with the real core (its speech load deadline fires through the driver at 120 s).
+  `eileen_rt` channel and get `Backpressure` when it is full. A component sends `seq` and times
+  as zero (a non-zero `seq` fails a `never!` in the sink), and the queue's receiving end in the
+  driver stamps `seq`, wall and monotonic time from the clock as it hands the input to the
+  core, and steps the core with that time. A fired timer takes its stamp the same way, so
+  `seq` is the order the core sees and the core's time never runs backwards along it, which is
+  what the simulator does and what strict replay needs; stamping in the sink instead would
+  give a queued input a lower `seq` and an earlier time than a timer stepped before it. #193
+  also has section 3.3.15 say "as it hands the input to the core" for its "as it takes the
+  input". Acceptance 16 holds for what the core sees; its input-tap half waits for
+  the flight recorder (W2). `Envelope`'s `seq`, `at` and `mono` docs in `eileen-contracts` now
+  say so, with WP0 reviewing; the `core_io` schema snapshot changes only in those
+  descriptions. Each effect goes to the one component that claims its family, through that
+  component's own bounded queue, unchanged but for `Hud`, which section 3.3.3 has the driver
+  hold to 10 a second: one snapshot every 100 ms at most, the newest replacing one still
+  waiting. A family claimed twice, or `Timer` claimed by a component, refuses to start before
+  anything runs. Families nobody serves (in W1 `Persist`, `Learn`, `Settings`, `Incident`,
+  `Notify`, `ToolForward`, `Hud`, `Hook`, `ToolReply` and, until `wp2/driver-loop`, `Emit`) are
+  dropped with one `effect.unserved` line per family per run. `SetTimer` and `CancelTimer`
+  stay in the driver: a timer fires on tokio's clock and is stepped at once as `Input::Timer`,
+  never through the input queue, and an input taken before tokio wakes a timer due strictly
+  earlier steps after it, so no input is stepped past a pending timer's `at`, as in the
+  simulator. Components start through `eileen_rt::task::spawn` with `ComponentCtx` (inputs,
+  effects, data directory, session, `Shutdown`); an error or a panic ends the run with the
+  component's name, also while the driver waits on a full component queue, and the error's
+  words stay out of `RunError`'s message as `Personal`. Shutdown closes every queue and aborts
+  a component that has not ended within `Limits::stop_within`; a run that ends by a panic in
+  the core's step or by its caller dropping it still triggers the shutdown and aborts every
+  component's task. `eileen_trace::names` gains the span `core.step` (DEBUG, one per input)
+  and the events `effect.unserved` and `component.ended`. Unit tests on paused tokio time, one
+  with the real core (its speech load deadline fires through the driver at 120 s).
   `eileen run` still says it is not built: `wp2/s1-live` wires the composition root.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
@@ -167,12 +180,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
   7. `wp2/speech-transport` (after 3 and 4, since its caller check needs `Peer` and the
      registry): acceptance 15, with the interim kill without a dump. `wp1/speech-life` (#141)
      and WP4's `SpeechTransport` (#140) have merged.
-  8. The driver loop, in two pull requests, since neither needs the other's code:
-     - `wp2/driver` (open, no dependencies): `eileen_runtime::driver`, one task owning the core,
-       the input queue with its stamps (acceptance 16, but for the input tap), effects routed by
-       family, the core's timers on tokio time, `ComponentCtx` and shutdown.
-     - `wp2/driver-loop` (after `wp2/driver`): the bus with explicit `Lagged` behind the `Emit`
-       family, and `eileen run --console`'s view.
+  8. `wp2/driver-loop`: the driver loop, effects routed by family, the bus with explicit
+     `Lagged`, and `eileen run --console`'s view.
   9. `wp2/hook-endpoint` (after 4 and 8): the session registry with `open` and `close`, and the
      loopback server with the session hooks routed by role (a brain-role session's answered by
      the endpoint), the guard, the tripwire, the client mapping and job check, and `bus.json`.
