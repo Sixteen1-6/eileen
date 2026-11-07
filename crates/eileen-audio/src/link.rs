@@ -42,7 +42,9 @@ use std::time::Duration;
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{AudioCmd, Effect, EffectFamily, Input};
 use eileen_contracts::ids::{Envelope, MonoTime, TraceCtx, WallTime};
-use eileen_contracts::ports::{Component, ComponentCtx, ComponentError, EffectSource, InputSink};
+use eileen_contracts::ports::{
+    Backpressure, Component, ComponentCtx, ComponentError, EffectSource, InputSink,
+};
 use eileen_contracts::speech::{
     Frame, FrameBody, FrameError, FrameReader, SpeechCheck, SpeechCmd, SpeechCommandFrame,
     VoiceEvent,
@@ -246,8 +248,13 @@ struct Link {
     /// Other commands that came while no connection was up.
     held: VecDeque<SpeechCommandFrame>,
     held_dropped: u64,
-    /// Inputs the core's queue refused since the last report.
+    /// Frames the ring lost, in all, as the last report gave them.
+    ring_dropped: u64,
+    /// Inputs the core's queue refused, in all; the count the last report gave; and the
+    /// capacity the queue gave with its last refusal.
     inputs_refused: u64,
+    inputs_reported: u64,
+    inputs_capacity: usize,
     /// The bytes of the next write, kept to reuse their room.
     out: Vec<u8>,
 }
@@ -270,7 +277,10 @@ impl Link {
             hotwords: None,
             held: VecDeque::with_capacity(HELD_COMMANDS),
             held_dropped: 0,
+            ring_dropped: 0,
             inputs_refused: 0,
+            inputs_reported: 0,
+            inputs_capacity: 0,
             out: Vec::with_capacity(FRAMES_PER_WRITE * 1_056),
         }
     }
@@ -507,19 +517,28 @@ impl Link {
         }
     }
 
+    /// Logs what was dropped, when it changed since the last report: frames the ring lost and
+    /// inputs the core's queue refused, each as its running total, as every other
+    /// `channel.full` gives it.
     fn report(&mut self) {
         let dropped = self.ring.take_dropped();
         if dropped > 0 {
+            self.ring_dropped = self.ring_dropped.saturating_add(dropped);
             tracing::warn!(
                 name: names::CHANNEL_FULL,
                 channel = "audio.speech.ring",
                 capacity = STORE_FRAMES,
-                times = dropped,
+                times = self.ring_dropped,
             );
         }
-        let refused = std::mem::take(&mut self.inputs_refused);
-        if refused > 0 {
-            tracing::warn!(name: names::CHANNEL_FULL, channel = "core.inputs", times = refused);
+        if self.inputs_refused != self.inputs_reported {
+            self.inputs_reported = self.inputs_refused;
+            tracing::warn!(
+                name: names::CHANNEL_FULL,
+                channel = "core.inputs",
+                capacity = self.inputs_capacity,
+                times = self.inputs_refused,
+            );
         }
     }
 
@@ -600,8 +619,9 @@ impl Link {
     /// replay order and their times, so the envelope leaves them zero.
     fn send(&mut self, body: Input, ctx: TraceCtx) {
         let input = Envelope { seq: 0, at: WallTime(0), mono: MonoTime(0), ctx, body };
-        if self.inputs.send(input).is_err() {
+        if let Err(Backpressure { capacity }) = self.inputs.send(input) {
             self.inputs_refused = self.inputs_refused.saturating_add(1);
+            self.inputs_capacity = capacity;
         }
     }
 
