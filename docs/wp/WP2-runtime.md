@@ -41,7 +41,7 @@ WAV source, the transcript stub and the stub harness.
 
 ## Done when
 
-The acceptance list of BUILD.md section 6.4, items 1 to 15, each recorded under Progress with its
+The acceptance list of BUILD.md section 6.4, items 1 to 16, each recorded under Progress with its
 evidence when it holds. The lines below are reminders; the full text in BUILD.md is the bar.
 
 1. Slice S1 passes live on the owner's PC, with latencies and the `desktop.lock` hold recorded,
@@ -78,6 +78,9 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
     right token is handed over and reported `Ready` once, a squatter on the name makes the
     transport fail closed, nothing restarts until the core says so, and the pipe's DACL grants
     only the current user.
+16. The input queue stamps each input's `seq`, `at` and `mono` (section 3.3.15): two components
+    sending at once get strictly increasing `seq`, recorded and replayed in that order, and a
+    non-zero `seq` from a component trips a `never!`.
 
 Every pull request also meets the rules section 6.1 sets for every package.
 

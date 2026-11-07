@@ -41,7 +41,8 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 1. Synthetic echo through `RoomMixer`: no far-end words leak, the command is recovered, and false
    barge-ins stay under 1 per 10 minutes of video.
 2. Barge-in on the owner's PC with speakers: onset to silence at most 150 ms at p95 over 20
-   trials, with the right heard prefix; a backchannel resumes.
+   trials, with the right heard prefix; a backchannel resumes; the loopback's lag behind her
+   PCM is recorded, and over 40 ms it opens an amendment.
 3. Idle listening: the speech process under 8 percent of one core and the full stack about
    1.25 GB resident, recorded with the machine state.
 4. End of turn: half-finished sentences do not end early on the synthetic set, nor on the
@@ -71,7 +72,7 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
     connect or a restart recognises each turn once, the latest `SetMode` and `SetHotwords` arrive
     before any audio and the held commands after them, a gap sets the break flag, muted frames are
     never written, and with no connection up the energy fallback raises `BargeInWindow` for the
-    utterance playing.
+    utterance playing, numbered modulo 256, so a run across window 255 still pauses.
 
 Every pull request also meets the rules section 6.1 sets for every package.
 
@@ -252,18 +253,23 @@ The amendment after the connection part:
 
 - #180 (`amend/wp4-audio-settled`, open): writes into BUILD.md what the parts proposed under
   "Suggested guidance changes" and settles two open points. Capture and loopback run at the
-  endpoint's own rate, 48 kHz or 44.1 kHz through the 160:441 conversion, and a stream at any
-  other rate is refused with a logged reason (#148; sections 2.2, 2.8 and 6.6). Eileen's own PCM
-  becomes AEC3's reference once it has sounded for 50 ms since the loopback last did, or while
-  no loopback runs, and AEC3 is bypassed once the reference and her PCM have both been silent
-  for 500 ms (#162). Components send inputs with `seq`, `at` and `mono` zero and the runtime's
-  input queue stamps them (#164; section 3.3.15). Held commands go after the latest `SetMode`
-  and `SetHotwords` and before any audio, and a full queue refuses the newest (#164). The energy
+  endpoint's own rate, 48 kHz through the 3:1 conversion, 44.1 kHz through the 160:441
+  conversion or 16 kHz taken as it is, and a stream at any other rate (8, 32, 88.2 or 96 kHz) is
+  refused with a logged reason, which `eileen doctor audio` shows (#148; sections 2.2, 2.8, 3.5,
+  6.6 and 7). Eileen's own PCM becomes AEC3's reference once it has sounded for 50 ms since the
+  loopback last did, or while no loopback runs, and AEC3 is bypassed once the reference and her
+  PCM have both been silent for 500 ms; the loopback's lag is measured on the owner's PC, and
+  over 40 ms it opens an amendment (#162; 6.6 acceptance 2). Components send inputs with `seq`,
+  `at` and `mono` zero and the runtime's input queue stamps them, which WP2's section 6.4 builds
+  and tests (#164; sections 3.3.15 and 6.4). Held commands go after the latest `SetMode` and
+  `SetHotwords` and before any audio, and a full queue refuses the newest (#164). The energy
   fallback reaches the core as `BargeInWindow`, one per speech window of the detector's run for
-  the utterance playing, with no contract change (section 2.8). The machine link leaves slice
-  S1's gate and lands after `wp0/machine-contracts` (sections 0, 3.3.17, 6.1 and 6.6). A fuzz
-  target's entry stays in its owner's crate (`fuzz/AGENTS.md`, #136). Evidence: the sources
-  each change cites, read on `main`, listed in its pull request.
+  the utterance playing, numbered modulo 256, with no contract change (section 2.8). The machine
+  link leaves slice S1's gate and lands after `wp0/machine-contracts`, and WP2's speech
+  transport no longer tests it, as #178 also settled (sections 0, 3.3.17, 6.1, 6.4 and 6.6). A
+  fuzz target's entry stays in a crate of the package section 4.7's table names
+  (`fuzz/AGENTS.md` and `fuzz/README.md`, #136). Evidence: the sources each change cites, read
+  on `main`, listed in its pull request.
 
 The speech series has not opened yet. When it does, `tts.synth` cannot take its remote `speak`
 parent from the command frame, since the audio component sends `span` 0 until the plan settles
@@ -412,11 +418,16 @@ which would fail the span-parent check in every simulation run.
   also arrives at 44.1 kHz and takes the 160:441 conversion, even when playback runs at 48 kHz
   through Windows' converter. BUILD.md sections 2.2 step 1, 2.8 and 6.6 said capture and
   loopback run at 48 kHz; `amend/wp4-audio-settled` writes the endpoint's own rate there.
-- An endpoint mixing at any other rate (32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
+- A 16 kHz capture or loopback stream, such as a Bluetooth hands-free headset's wideband
+  microphone, needs no conversion: `Framer` takes it as it is, and
+  `sixteen_kilohertz_mono_is_framed_sample_for_sample_with_each_frames_time` pins that.
+- An endpoint mixing at any other rate (8, 32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
   resampler, and its capture or loopback stream is refused with a logged reason, as
   `amend/wp4-audio-settled` settles in BUILD.md sections 2.2 step 1, 2.8 and 6.6; with no
-  loopback running, AEC3 takes her own PCM. Conversions for those rates would each need their
-  own measurement against the same bar first.
+  loopback running, AEC3 takes her own PCM. Today the reason reaches only the log (`link.rs`
+  warns "capture did not start"); the plan has `eileen doctor audio` name such an endpoint, and
+  no contract carries a HUD notice for it. Conversions for those rates would each need their
+  own measurement against the same bar first, an open risk in BUILD.md section 7.
 
 - The test sources and sinks pace on the tokio clock, not on `eileen_stdx::clock::ManualClock`.
   The component's speech connections take their deadlines from tokio's timer, so a source on
@@ -510,8 +521,9 @@ which would fail the span-parent check in every simulation run.
   loopback a buffer or two behind her stream, which the room tests now model. A loopback more
   than 40 ms behind her PCM, once placed on the microphone's clock, would hand the reference to
   her PCM and back at each reply after a pause, and each change restarts AEC3's learning time;
-  the device part measures the real lag on the owner's PC. `amend/wp4-audio-settled` writes
-  this rule into sections 2.2 step 1, 2.8 and 6.6, as the pull request proposed. A chunk is
+  the device part measures the real lag on the owner's PC, and a lag over 40 ms opens an
+  amendment (BUILD.md section 6.6, acceptance 2). `amend/wp4-audio-settled` writes this rule
+  into sections 2.2 step 1, 2.8 and 6.6, as the pull request proposed. A chunk is
   silent under -60 dBFS.
 - The devices' samples are untrusted: a NaN or infinite sample in the microphone, the loopback
   or her PCM, or one past 24 dB over full scale, becomes silence before sonora or the flags see it, and the report says so, for the
@@ -549,9 +561,12 @@ which would fail the span-parent check in every simulation run.
   carries the flags of every chunk it spans, a chunk split between two windows counting in
   both, so the component wires the same code the room tests run. It returns windows and onsets. The
   component part sends the core one `VoiceEvent::BargeInWindow` for the utterance playing per
-  speech window of a run, numbered as that contract counts windows and with `prob_pct` 100, so
-  the core ducks at the first and pauses at the third with no contract change, as
-  `amend/wp4-audio-settled` settles in BUILD.md sections 2.8 and 6.6.
+  speech window of a run, numbered as that contract counts windows, modulo 256 (the low eight
+  bits of the window's place since the utterance began playing, never saturated, since
+  `window` is a `u8` and `Turns::barge_in_window` counts a run with wrapping addition, so a run
+  about 8.2 s into a reply still pauses), and with `prob_pct` 100, so the core ducks at the
+  first and pauses at the third with no contract change, as `amend/wp4-audio-settled` settles
+  in BUILD.md sections 2.8 and 6.6.
 - The tests run the room at 16 kHz, so each buffer is one chunk; the resamplers are measured on
   their own. Ten minutes of a bed in one test took 19.5 s and 20.1 s on Windows CI and 14 s on
   Linux, near the default nextest profile's 30 s limit on a loaded PC, so each bed runs as four
