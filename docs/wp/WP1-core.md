@@ -339,7 +339,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `FirstRun` as `Voice`, no variant for `ClaudeSession`, `JobEvent` and `Connector`), says a
   cancel from a CLI turn is recorded as `Voice` today as well as a typed one, and keeps a
   provisional D79 line. The code and its tests are in items 1 and 3 of Next.
-- `wp1/speech-late` (#PRNUM): the rule for turns heard late (section 2.8, D81 and D83),
+- `wp1/speech-late` (#195): the rule for turns heard late (section 2.8, D81 and D83),
   on `SpeechStarted.replayed` from WP4's first part (#136). `eileen-core` records each turn whose
   start is flagged replayed, and the gate addresses such a turn only when it begins with the
   name (`addressee::Decision::NamedLate`). Any other turn heard late is greyed
