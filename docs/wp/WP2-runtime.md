@@ -80,7 +80,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-- `amend/wp2-ipc-home` (amendment, decision D86): settles where the Win32 calls of the pipes,
+- `amend/wp2-ipc-home` (#171, amendment, decision D86): settles where the Win32 calls of the pipes,
   caller checks and path classification live, since `eileen-runtime` forbids unsafe code, stays
   neutral and may not depend on a `-win` crate. `eileen-supervisor` gains an `ipc` module that
   WP2 builds (pipe servers made as the first instance with remote clients rejected and a
