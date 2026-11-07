@@ -321,6 +321,14 @@ Every pull request also meets the rules section 6.1 sets for every package.
   kills in a row: no restart at 10 s, a restart at 16 s) and
   `eileen-core::tests::life::a_kill_whose_exit_never_comes_restarts_at_10_s_after_a_4_s_step`
   (three kills in a row: no restart at the 4 s step, a restart at 10 s).
+- `amend/wp1-job-pronouns` (#190), which #165 asked for. Section 2.5 now gives the order
+  `Registry::pick` implements: an explicit name, slug or ordinal; a kind word, never a fan-out's
+  child; a route word, never a child, an app task or an `Act` job; then for a pronoun or no job
+  words the job just announced, the focus job and the newest job outside a fan-out; two or more
+  remaining candidates mean one question. It listed the announced job last, after the focus job,
+  which would always have won. Section 3.3.4 lists `CancelSource` and plans `Typed`: a cancel
+  asked for in a turn takes the variant named like the turn's `TurnSource`, else `Voice`
+  (item 4 of Next).
 - Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
   for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
   1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
@@ -340,12 +348,14 @@ Every pull request also meets the rules section 6.1 sets for every package.
      focus job), sessions and the warm pool, memory admission (with the worker cap in place of
      `job::MAX_LIVE`), the permission gate, approvals, announcements as data, the input lock,
      the journal, the settings flow, the regret window, forget, route proposals and the
-     first-run state machine; the contracts amendment that adds to `CoreSnapshotV1` the speech
-     process's life, the HUD's line and the rest of the live state, each with a default, with a
-     restore for replay that skips what only a resume does, lifting section 3.3.16's rule that
-     strict replay of the minimal core starts only from the core's start, and tested by a
-     strict replay from a mid-session checkpoint, taken while speech is up and a job is
-     running, that matches the recording; `eileen-replay`'s strict and scenario modes (strict
+     first-run state machine; `CancelSource::Typed` in the pinned `bus` module, with a cancel
+     asked for in a turn, on the fast path or through `jobs_control`, recorded by the turn's
+     source (section 3.3.4 as #190 planned it); the contracts amendment that adds to
+     `CoreSnapshotV1` the speech process's life, the HUD's line and the rest of the live state,
+     each with a default, with a restore for replay that skips what only a resume does,
+     lifting section 3.3.16's rule that strict replay of the minimal core starts only from the
+     core's start, and tested by a strict replay from a mid-session checkpoint, taken while
+     speech is up and a job is running, that matches the recording; `eileen-replay`'s strict and scenario modes (strict
      mode refusing any checkpoint of the minimal core but the start's, with a plain message, if
      it lands before that amendment); and the scenarios of `scenarios/feel/`,
      `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
@@ -569,9 +579,10 @@ Every pull request also meets the rules section 6.1 sets for every package.
   reroutes to; when it ends, the focus moves to the newest unfinished job outside a fan-out
   that is not an app task. A render the app started takes it only when no other job is open,
   since the user did not ask for it. Each change persists the rows whose flag changed.
-- Section 2.5 lists "it right after an announcement" last among the pronoun rules; the core
+- Section 2.5 listed "it right after an announcement" last among the pronoun rules; the core
   tries it first for a pronoun, since the focus job would otherwise always win, and only for
-  an unfinished job announced within `conversation.follow_up_s` with no reply since. Names
+  an unfinished job announced within `conversation.follow_up_s` with no reply since. Section
+  2.5 gives that order since #190. Names
   match after the articles and the words "job", "task", "please" and "now" are dropped. Kind
   and route words name only jobs outside a fan-out, whose children are named by ordinal or
   name, and route words never name an app task or an `Act` job, which no route runs (their
@@ -611,7 +622,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
   (`Live.told`, sent or still waiting) with the task. The old transcript is not attached
   (`FIXME(#3)`): sessions run with no session persistence and the harness keeps no
   transcript. A cancel through `jobs_control` is recorded as `Voice`:
-  `CancelSource` has no source for a typed brain turn. The new session's `cwd` is the old
+  `CancelSource` has no source for a typed brain turn, and a typed "cancel" on the fast path is
+  recorded as `Voice` too. Section 3.3.4 plans `Typed` since #190 (item 4 of Next). The new session's `cwd` is the old
   session's `run/<session>/cwd`, as section 2.5 asks ("the same working directory"); section
   2.12's path classes name a session's own `run\<session>\cwd` its `JobFolder` and "another
   session's folder" `EileenData`, so the runtime's classifier must take the job folder from
