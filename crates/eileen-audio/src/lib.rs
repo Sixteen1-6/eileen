@@ -54,15 +54,20 @@
 //!   interpolator gives it; `Duck`, `Unduck`, `Pause`, `Resume` and `Stop` reach playback from
 //!   their effect, and `Played`, `Paused`, `Stopped` and `Drained` reach the core as
 //!   `Input::Playback`, a `Stopped` with the exact samples played (`tests/it/playback_link.rs`).
-//!   `PlayPhrase` and `Record`, W2 work, fail a `never!` soft assertion and are dropped with a
-//!   logged reason, never silently (the same tests).
-//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
-//!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
-//!   of a stopped utterance (`playback::tests`, and through the component
-//!   `tests/it/playback_link.rs`). Its queues are bounded: a PCM frame that does not fit the
-//!   sample or marker queue is refused and logged, and so is a new utterance past the live limit,
-//!   an early pause past the ones it remembers and an event the player reports itself past the
-//!   event limit; its render side allocates nothing
+//!   No `Drained` reaches the core between a clause's `ClauseReady` and its audio, and one held
+//!   for audio that never comes reaches it when the connection closes. A sink that was given and
+//!   did not start reports `Stalled` at each utterance's first PCM and answers each `Stop` with
+//!   `Stopped` at the first sample, so no reply holds the floor unheard. `PlayPhrase` and
+//!   `Record`, W2 work, fail a `never!` soft assertion and are dropped with a logged reason,
+//!   never silently (the same tests).
+//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), even
+//!   while a write on the speech pipe waits, since the component serves the five playback
+//!   commands as they arrive; it stops a paused utterance at a sample and resumes it from exactly
+//!   that sample, and never plays audio of a stopped utterance (`playback::tests`, and through the
+//!   component `tests/it/playback_link.rs`). Its queues are bounded: a PCM frame that does not fit
+//!   the sample or marker queue is refused and logged, and so is a new utterance past the live
+//!   limit, an early pause past the ones it remembers and an event the player reports itself past
+//!   the event limit; its render side allocates nothing
 //!   (`allocation_counter::measure` in the same tests, and around every render callback the
 //!   component gives a sink in `tests/it/playback_link.rs`).
 //! - Echo cancellation runs on the speech pipe's 16 kHz mono in 10 ms chunks, against the
@@ -113,9 +118,11 @@
 //!   and an overrun); integration tests of its playback in `tests/it/playback_link.rs` (a
 //!   stand-in's PCM on a `CaptureSink` whose render callbacks run inside
 //!   `allocation_counter::measure`, on paused tokio time: a reply's clauses bit for bit with
-//!   `Played` and `Drained` at the core, a duck from the next output callback, a pause and resume,
-//!   a stop's exact position and the PCM refused after it, `PlayPhrase` and `Record` dropped and
-//!   logged, and speakers at a rate playback cannot convert to); unit tests for the capture framing
+//!   `Played` and `Drained` at the core, a `Drained` held while an announced clause's audio is on
+//!   its way and one released when the connection closes, a duck from the next output callback, a
+//!   duck and a stop while a write waits, a pause and resume, a stop's exact position and the PCM
+//!   refused after it, `PlayPhrase` and `Record` dropped and logged, and speakers that do not
+//!   start reporting `Stalled` and `Stopped`); unit tests for the capture framing
 //!   (`capture::tests`, a buffer that ends inside a device frame among them, and the callback
 //!   inside `allocation_counter::measure`), the DSP, the ring's rules and the memory transport
 //!   (paused tokio time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with
@@ -171,12 +178,14 @@
 //! - The component's pending accept, read and effect are owned futures kept across its loop's
 //!   turns, so none is dropped part way; a read in flight when a write fails is awaited within
 //!   its deadline, so the two halves rejoin before the connection goes back.
-//! - A mute never waits on the speech pipe. While a write, or a closing connection's last read,
-//!   waits, the component keeps taking effects: a mute stops capture at once and drops any
-//!   `SetCapture` parked before it, and any other effect is parked, at most 64, for the loop to
-//!   serve in order after the wait. Audio goes a frame at a time under one deadline for the
-//!   batch, so after a mute only the frame already begun is finished. A new wait on the pipe
-//!   goes through the same race.
+//! - A mute and the playback commands never wait on the speech pipe. While a write, or a closing
+//!   connection's last read, waits, the component keeps taking effects: a mute stops capture at
+//!   once and drops any `SetCapture` parked before it, `Duck`, `Unduck`, `Pause`, `Resume` and
+//!   `Stop` go to the player at once while playback runs (each an atomic store or a bounded queue
+//!   operation, never parked, so they keep their order), and any other effect is parked, at most
+//!   64, for the loop to serve in order after the wait. Audio goes a frame at a time under one
+//!   deadline for the batch, so after a mute only the frame already begun is finished. A new wait
+//!   on the pipe goes through the same race.
 //! - A speech command frame's `span` is 0: an effect's envelope carries no span id, so the
 //!   speech process cannot open `tts.synth` under the core's `speak` span until the plan says
 //!   how one reaches this component.
@@ -212,7 +221,17 @@
 //! - The render stream runs from the component's start to its stop, silent while nothing is
 //!   queued; whether a real endpoint's stream rests while idle, for section 4.5's idle budget, is
 //!   the device part's choice. A sink at a rate playback cannot convert to, or one that does not
-//!   start, leaves the component without playback, logged at warn, and its PCM is then dropped.
+//!   start, leaves the component without playback, logged at warn: its PCM is dropped, the core
+//!   hears `Stalled` at each utterance's first PCM (it stops the utterance) and `Stopped` at the
+//!   first sample for each `Stop`. With no sink given at all, as in the stub runs, PCM is dropped
+//!   and nothing is reported.
+//! - The component relies on the speech process sending a clause's PCM before its `ClauseReady`,
+//!   as `VoiceEvent::ClauseReady` says, since the player's filter of a stale `Drained` sees only
+//!   audio already queued. Should a `ClauseReady` come first, or its PCM span reads the pump runs
+//!   between, the component holds a `Drained` for that utterance until the announced samples have
+//!   come, then drops it (the renderer reports the next dry spell) unless no audio was queued
+//!   since; a later utterance, a refused frame or a closed connection ends that wait, and a `Stop`
+//!   drops the held `Drained`, since `Stopped` ends the utterance in the core.
 //!
 //! # Logs and tracing
 //!
