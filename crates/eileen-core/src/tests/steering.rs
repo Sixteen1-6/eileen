@@ -5,7 +5,7 @@
 use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
 use eileen_contracts::config::KindRouting;
 use eileen_contracts::connectors::{AppEvent, ConnectorEvent, SidecarEvent, SidecarId};
-use eileen_contracts::core_io::{Effect, Input, ToolCallRequest};
+use eileen_contracts::core_io::{Effect, Input, ToolCallRequest, UserInput};
 use eileen_contracts::harness::{SessionSpec, WorkerCmd, WorkerEvent};
 use eileen_contracts::ids::{JobId, ToolName, TurnId, Untrusted, WorkerSessionId};
 use eileen_contracts::jobs::{Job, JobKind, JobStatus};
@@ -213,7 +213,10 @@ fn a_fan_out_ends_once_after_its_last_child_with_one_announcement() {
         .collect();
     assert_eq!(ends.len(), 1, "the parent completes once: {effects:?}");
     assert!(
-        matches!(ends[0], BusEvent::JobCompleted { summary, .. } if summary.get() == "2 of 3 agents finished."),
+        matches!(
+            ends[0],
+            BusEvent::JobCompleted { summary, .. } if summary.get() == "2 of 3 agents finished."
+        ),
         "{ends:?}"
     );
     assert_eq!(
@@ -245,6 +248,30 @@ fn cancelling_a_fan_out_cancels_each_running_child_once() {
     assert!(cancelled[1..].iter().all(|(_, by)| *by == CancelSource::Parent), "by their parent");
     let killed = commands(&effects).iter().filter(|(_, c)| *c == WorkerCmd::Cancel).count();
     assert_eq!(killed, 2, "both sessions end");
+    assert!(announcements(&mut h).is_empty(), "nothing the user cancelled is announced");
+}
+
+#[test]
+fn a_fan_out_ends_cancelled_by_whoever_cancelled_its_last_agent() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, launch two agents to fix the flaky login tests");
+    let effects = h.step(dispatch_from(BRAIN, addressed(turn), flaky(2)));
+    h.step(done(turn));
+    let jobs = accepted_all(&effects);
+    let (parent, one, two) = (jobs[0].0, jobs[1].0, jobs[2].0);
+    h.step(Input::User(UserInput::CancelJob(one)));
+    assert_eq!(row(&h, parent).status, JobStatus::Queued, "agent two is still open");
+    let effects = h.step(Input::User(UserInput::CancelJob(two)));
+    let by = events(&effects).into_iter().find_map(|e| {
+        if let BusEvent::JobCancelled { job, by } = e
+            && *job == parent
+        {
+            Some(*by)
+        } else {
+            None
+        }
+    });
+    assert_eq!(by, Some(CancelSource::Hud), "from the HUD, as its last agent was: {effects:?}");
     assert!(announcements(&mut h).is_empty(), "nothing the user cancelled is announced");
 }
 
@@ -316,6 +343,34 @@ fn a_steer_interrupts_the_bound_session_and_gives_it_the_words_as_a_new_turn() {
             .iter()
             .any(|e| matches!(e, BusEvent::JobCompleted { job: j, .. } if *j == job)),
         "the steered turn does: {effects:?}"
+    );
+}
+
+#[test]
+fn a_steer_to_a_worker_eight_turns_behind_is_refused_with_a_sentence() {
+    let mut h = Harness::new();
+    let (_, session) = start(&mut h, "coding", "the test agent");
+    h.step(Input::Worker(session, init()));
+    let args = json!({
+        "job": { "name": "the test agent" },
+        "action": { "steer": { "text": "skip the slow tests" } }
+    });
+    let steer = |h: &mut Harness| {
+        let turn = ask_brain(h, "Eileen, tell the test agent to skip the slow tests");
+        let effects = h.step(control(turn, args.clone()));
+        h.step(done(turn));
+        effects
+    };
+    for n in 1..=7 {
+        let effects = steer(&mut h);
+        assert_eq!(commands(&effects).len(), 2, "steer {n}: an interrupt and the words");
+    }
+    let effects = steer(&mut h);
+    assert!(commands(&effects).is_empty(), "the bound task and seven steers owed: {effects:?}");
+    assert_eq!(
+        tool_reply(&effects),
+        Some((true, "the test agent is still catching up; tell it again in a moment.".to_owned())),
+        "and Eileen says why rather than that she told it"
     );
 }
 
