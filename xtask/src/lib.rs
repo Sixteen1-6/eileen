@@ -32,6 +32,10 @@
 //! - Every `ci.yml` step that runs tests sets `INSTA_UPDATE=new` and `INSTA_PENDING_DIR`, its job
 //!   keeps the pending snapshots a failure leaves under `target/`, and `hygiene` rejects one
 //!   committed to the tree (test `workflows::tests::ci_keeps_pending_snapshots`).
+//! - `logic-linux` and `windows-clippy` run clippy over every target and then over libraries and
+//!   binaries alone, which lints the configuration that ships, without the features only
+//!   dev-dependencies turn on (test
+//!   `workflows::tests::clippy_lints_the_shipped_configuration_as_well_as_every_target`).
 //! - Every failure names its check or step, where it is, the fix and the command to rerun.
 //!
 //! # Boundaries
