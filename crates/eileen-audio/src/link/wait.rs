@@ -122,16 +122,18 @@ impl Incoming {
             return;
         };
         self.next = Some(next_effect(source));
-        match &envelope.body {
-            Effect::Audio(AudioCmd::SetCapture(false)) => {
-                self.parked.retain(|parked| {
-                    !matches!(parked.body, Effect::Audio(AudioCmd::SetCapture(_)))
-                });
-                capture.set(false);
-            }
-            Effect::Audio(cmd) if speakers.serve(cmd) => {}
-            _ => self.parked.push_back(envelope),
+        if matches!(envelope.body, Effect::Audio(AudioCmd::SetCapture(false))) {
+            self.parked
+                .retain(|parked| !matches!(parked.body, Effect::Audio(AudioCmd::SetCapture(_))));
+            capture.set(false);
+            return;
         }
+        if let Effect::Audio(cmd) = &envelope.body
+            && speakers.serve(cmd)
+        {
+            return;
+        }
+        self.parked.push_back(envelope);
     }
 }
 

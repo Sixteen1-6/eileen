@@ -129,12 +129,9 @@ impl Speakers {
             return None;
         }
         tracing::debug!(?cmd, "there is no playback; the command changes nothing");
-        match (self, cmd) {
-            (Self::Failed { .. }, &AudioCmd::Stop { speak }) => {
-                Some(PlaybackEvent::Stopped { speak, clause: 0, samples_played: 0 })
-            }
-            _ => None,
-        }
+        let AudioCmd::Stop { speak } = *cmd else { return None };
+        let stopped = PlaybackEvent::Stopped { speak, clause: 0, samples_played: 0 };
+        matches!(self, Self::Failed { .. }).then_some(stopped)
     }
 
     /// The next event playback reports, if one waits.
@@ -323,14 +320,14 @@ impl Playback {
             if event.is_some() || self.player.has_audio() {
                 self.touch();
             }
-            match event? {
-                PlaybackEvent::Drained { speak }
-                    if self.announced.is_some_and(|waiting| waiting.speak == speak) =>
-                {
-                    self.held = Some(speak);
-                }
-                event => return Some(event),
+            let event = event?;
+            if let PlaybackEvent::Drained { speak } = event
+                && self.announced.is_some_and(|waiting| waiting.speak == speak)
+            {
+                self.held = Some(speak);
+                continue;
             }
+            return Some(event);
         }
     }
 }
