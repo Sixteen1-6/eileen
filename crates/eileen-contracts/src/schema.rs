@@ -39,6 +39,7 @@ const MODULES: &[(&str, RegisterFn)] = &[
     ("record", crate::record::register),
     ("fleet", crate::fleet::register),
     ("ports", crate::ports::register),
+    ("machine", crate::machine::register),
 ];
 
 /// The names of every contract module, as `modules.toml` keys them.

@@ -194,3 +194,34 @@ fn the_walk_sees_a_plain_string_and_skips_a_wrapped_one() {
     assert_eq!(found, expected, "free text");
     assert_eq!(refs, ["Other"], "references followed");
 }
+
+#[test]
+fn the_machine_profile_s_names_are_wrapped_and_its_plain_strings_listed() {
+    let found = free_text_paths();
+    assert!(
+        found.contains("MachineFacts.os_build"),
+        "the walk reaches the machine profile through Input::Machine: {found:#?}"
+    );
+    let catalogue = eileen_contracts::schema::catalogue();
+    let machine = &catalogue.modules["machine"];
+    for (definition, kind) in
+        [("CpuFacts", "untrusted"), ("AdapterFacts", "untrusted"), ("EndpointFacts", "personal")]
+    {
+        assert_eq!(
+            machine[definition]["properties"]["name"]["x-eileen-text"], kind,
+            "{definition}.name is {kind}"
+        );
+        let path = format!("{definition}.name");
+        assert!(!found.contains(&path), "{path} is wrapped, so it is not free text");
+    }
+    let allowed = allowlist();
+    let listed: Vec<_> = allowed
+        .keys()
+        .filter(|path| {
+            ["MachineFacts.", "AdapterFacts.", "BenchKind.", "BenchConditions.", "BenchResult."]
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+        })
+        .collect();
+    assert_eq!(listed.len(), 10, "the machine profile's plain strings, each with a reason");
+}

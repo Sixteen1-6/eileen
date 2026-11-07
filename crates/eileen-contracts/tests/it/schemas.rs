@@ -85,6 +85,7 @@ const SNAPSHOT_MODULES: &[&str] = &[
     "record",
     "fleet",
     "ports",
+    "machine",
 ];
 
 #[test]
@@ -205,6 +206,11 @@ fn fleet_matches_its_snapshot() {
 #[test]
 fn ports_matches_its_snapshot() {
     assert_module_snapshot("ports");
+}
+
+#[test]
+fn machine_matches_its_snapshot() {
+    assert_module_snapshot("machine");
 }
 
 #[test]
