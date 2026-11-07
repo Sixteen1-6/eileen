@@ -162,7 +162,7 @@ impl Rig {
         let speakers = Speakers { format, sink: Some(sink), measured: Arc::clone(&measured) };
         let speakers = Arc::new(Mutex::new(speakers));
         let (transport, stand_ins) = memory_transport(MemoryLimits::default());
-        let playback: SharedSink = Arc::clone(&speakers);
+        let playback: SharedSink = Arc::<Mutex<Speakers>>::clone(&speakers);
         let config = AudioConfig {
             speech: Some(Arc::new(transport)),
             playback: Some(playback),
