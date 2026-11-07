@@ -29,6 +29,9 @@
 //!   `cargo_run::tests::the_desktop_filter_is_nextests`).
 //! - `ci.yml`'s cache-saving jobs keep only the pinned toolchain and date their artifacts before
 //!   `main` saves, and only `main` prunes superseded caches (tests in `workflows::tests`).
+//! - Every `ci.yml` step that runs tests sets `INSTA_UPDATE=new` and `INSTA_PENDING_DIR`, its job
+//!   keeps the pending snapshots a failure leaves under `target/`, and `hygiene` rejects one
+//!   committed to the tree (test `workflows::tests::ci_keeps_pending_snapshots`).
 //! - Every failure names its check or step, where it is, the fix and the command to rerun.
 //!
 //! # Boundaries
