@@ -228,12 +228,23 @@ The parts of the audio series, in merge order, as each opens:
    reload, latest mode and hotwords, overrun and mute pieces, the heartbeat and confirmation, a
    refused frame, the `Speak` answer while no connection is up, the held commands' maximum of
    64 with the drop logged, and a clean stop logging no warning) and the unit tests in
-   `eileen_audio::capture::tests`. Still to come in later parts: PCM into playback and the
-   playback commands, echo cancellation and the capture flags, the energy fallback while no
-   connection is up, `PlayPhrase` and `Record` as `never!`, and `Bench` and `Providers` to the
-   machine link, which waits for those events in `eileen_contracts::speech`.
+   `eileen_audio::capture::tests`. The review's follow-up (#173) serves a mute while a write or
+   a closing connection's last read waits on the pipe, answers a read's `Ping`s with one `Pong`
+   and drains the handoff before every write, logs the link's `channel.full` as running totals
+   with the inputs' capacity, and keeps a capture buffer's whole frames when it ends inside a
+   device frame; its tests add a write that misses its deadline, a command whose own write
+   fails and the transport's shutdown, and #174 amends section 4.6 so CI lints the shipped
+   configuration, which tests compile with `fake` on. Still to come in later parts: PCM into
+   playback and the playback commands, echo cancellation and the capture flags, the energy
+   fallback while no connection is up, `PlayPhrase` and `Record` as `never!`, `Bench` and
+   `Providers` to the machine link, which waits for those events in `eileen_contracts::speech`,
+   and the core's span id in each speech command frame, whose `span` stays 0 until the plan
+   says how the id reaches the component (planned for `amend/wp4-audio-settled`).
 
-The speech series has not opened yet.
+The speech series has not opened yet. When it does, `tts.synth` cannot take its remote `speak`
+parent from the command frame, since the audio component sends `span` 0 until the plan settles
+how the core's span id reaches it; so the series builds no span against that parent before then,
+which would fail the span-parent check in every simulation run.
 
 ## Surprises
 
@@ -539,10 +550,26 @@ The speech series has not opened yet.
   does not count it dead. When a write fails, the read in flight is awaited and the frames it
   brought are still taken, so an `EndOfTurn` or `SpeakDone` sent just before the break reaches
   the core; a command whose write failed is served as one that came with no connection up.
+- A mute never waits on the pipe (follow-up #173). Each write, and a closing connection's last
+  read, races the pending effect: a mute stops capture at once and drops any `SetCapture` parked
+  before it, and any other effect is parked, at most 64, for the loop to serve in order after
+  the wait. Before, a slow speech process could hold a mute for a write's 2 s and a read's 1 s,
+  with the capture stream and the mic indicator still on, past section 4.7's one-buffer budget
+  and simulator invariant 9. Audio goes a frame at a time under one deadline for the batch, so
+  after a mute only the frame already begun is finished and the rest of the batch, captured
+  before the mute, is dropped with the ring. Handing the connection back once a write outlived
+  one buffer was weighed: it would also stop the frames, but the speech process exits when its
+  connection closes, so a mute during a slow replay would cost a 10 to 20 s model reload. A
+  writer task per connection was weighed too; it frees the loop from writes, but frames already
+  queued to it go out after the mute unless the queue is cleared, which is the same race again.
 - The ring's handoff holds 128 frames (about 4 s), up from part 3's 64: a write that waits out
   its 2 s deadline and the read awaited after it (up to 1 s) stall the loop that drains the
   handoff, and 2 s of room would lose the very audio the next connection should replay. The
-  component also drains the handoff before it awaits that read.
+  component drains the handoff before every write and before that read, and one `Pong`
+  answers all the `Ping`s of a read (follow-up #173; before, each `Ping` had its own write and
+  deadline), so no stretch between two drains is longer than one write's deadline and one
+  read's. A test stalls a connection until its write misses the deadline and finds no frame
+  lost or flagged on the next.
 - A read that misses its one-second deadline is started again, never a failure: silence is the
   core's business, counted as missed heartbeats, and during a reload it counts none until the
   120 s load deadline. A write that misses its two-second deadline ends the connection, as
@@ -551,7 +578,12 @@ The speech series has not opened yet.
   never fills; on a connection the same tick writes what the ring holds.
 - Commands held while no connection is up go to the next connection after the latest `SetMode`
   and `SetHotwords` and before any audio, and leave the queue only once that write succeeds; a
-  full queue refuses the new command, logged as `channel.full` on `audio.speech.held`. `Speak`
+  full queue refuses the new command, logged as `channel.full` on `audio.speech.held`. The
+  link's other `channel.full` events, the ring's drops and the inputs the core's queue refused,
+  go in the once-a-second report when they changed, each with its running total as `times`
+  and the inputs' with the capacity the queue's last refusal gave, as every other emitter does
+  (follow-up #173; before, each gave the count since the last report, and the inputs' had no
+  capacity). `Speak`
   and `Check` are never held, since they are answered at once. With no transport, or after it
   has shut down, nothing is held, since no connection will come.
 - While capture is off the 10 ms drain is off too: a mute empties the ring and nothing new
@@ -564,13 +596,18 @@ The speech series has not opened yet.
   can give an input its place in the core-wide replay order, and the component reads no clock.
   `eileen-runtime` has no `InputSink` yet; WP2's queue fills them when it takes an input.
 - The capture callback takes a buffer in chunks of 480 device frames (10 ms at 48 kHz) into
-  scratch buffers allocated once, so a device buffer of any length allocates nothing. A frame's
+  scratch buffers allocated once, so a device buffer of any length allocates nothing. It takes
+  whole device frames before it chunks, so a buffer that ends inside a device frame loses that
+  partial frame only (follow-up #173; before, the downmix refused the last chunk whole). A frame's
   capture time is the buffer's plus its first sample's place in it at 16 kHz; the resampler's
   own delay (under 3 ms) is not subtracted. Every frame carries no capture flag until echo
   cancellation joins.
 - The integration tests take the `fake` feature through a dev-dependency of `eileen-audio` on
   itself, so `cargo nextest run --workspace` builds them without a feature flag and no shipped
-  binary carries the memory transport.
+  binary carries the memory transport. Under resolver 3 that turns `fake` on in every build of
+  the workspace that compiles test targets, clippy over `--all-targets` included, so #174
+  amends section 4.6 with a clippy run over libraries and binaries alone, the one check of the
+  configuration that ships.
 
 ## Outcome
 
