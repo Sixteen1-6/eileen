@@ -14,9 +14,10 @@ folder builds with another toolchain, on Linux only, outside the root workspace 
 - The nightly is pinned by date in `fuzz/rust-toolchain.toml`. Build from a copy of the root
   lockfile (`cp Cargo.lock fuzz/`), so the targets build the versions the root workspace tests
   (docs/wp/WP0-foundation.md); `.gitignore` keeps the copy out of commits.
-- Each target calls `fuzz_entry::<target>` in the neutral crate that owns the parser and fails only
-  when that function reports a broken invariant. The entry never panics itself, because every
-  Eileen binary links the crate.
+- Each target calls `fuzz_entry::<target>` in the crate of the owner BUILD.md section 4.7's table
+  gives it, even when the parser lives in another neutral crate (`speech_frame`'s entry is in
+  `eileen-speech`, its parser in `eileen-contracts`), and fails only when that function reports a
+  broken invariant. The entry never panics itself, because every Eileen binary links the crate.
 - `corpus/<target>/` holds a small, size-capped seed corpus. The owning crate's
   `tests/it/fuzz_corpus.rs` replays it on every OS (on Linux only for the `-linux` crates'
   targets).
