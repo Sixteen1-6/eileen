@@ -26,6 +26,7 @@
 //!   stepping, triggers the shutdown every component waits on, closes every effect queue and the
 //!   input queue, and gives the components [`Limits::stop_within`] to end; it aborts the rest.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::{Future, pending, poll_fn};
@@ -36,8 +37,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use eileen_contracts::core_io::TimerId;
-use eileen_contracts::core_io::{Effect, EffectFamily, Input};
+use eileen_contracts::core_io::{Effect, EffectFamily, Input, TimerId};
 use eileen_contracts::ids::{Envelope, MonoTime, SessionId, TraceCtx};
 use eileen_contracts::ports::{
     Backpressure, Component, ComponentCtx, ComponentError, EffectSource, InputSink, ShutdownSignal,
@@ -309,12 +309,15 @@ impl Routes {
                 let first = if family == EffectFamily::Timer {
                     Some(DRIVER)
                 } else {
-                    match routes.get(&family) {
-                        Some(&(claimed, first)) if claimed != index => Some(first),
-                        Some(_) => None,
-                        None => {
-                            routes.insert(family, (index, name));
+                    match routes.entry(family) {
+                        Entry::Vacant(vacant) => {
+                            vacant.insert((index, name));
                             None
+                        }
+                        // The same component naming a family twice claims it once.
+                        Entry::Occupied(occupied) => {
+                            let (claimed, first) = *occupied.get();
+                            (claimed != index).then_some(first)
                         }
                     }
                 };

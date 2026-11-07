@@ -99,11 +99,11 @@ const REST: &[EffectFamily] = &[
     EffectFamily::Notify,
 ];
 
-fn nz(n: usize) -> NonZeroUsize {
+const fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).unwrap()
 }
 
-fn secs(n: u64) -> MonoTime {
+const fn secs(n: u64) -> MonoTime {
     MonoTime(n * 1_000_000_000)
 }
 
@@ -184,7 +184,7 @@ fn envelope(body: Input) -> Envelope<Input> {
     Envelope { seq: 0, at: WallTime(0), mono: MonoTime(0), ctx: TraceCtx::default(), body }
 }
 
-fn toggle() -> Input {
+const fn toggle() -> Input {
     Input::User(UserInput::ToggleMute)
 }
 
@@ -318,7 +318,7 @@ async fn next_seen(
     timeout(PATIENCE, seen.recv()).await.ok().flatten()
 }
 
-fn usage() -> PlanUsage {
+const fn usage() -> PlanUsage {
     PlanUsage { five_hour_pct: Some(12), seven_day_pct: None, resets_at: None }
 }
 
@@ -408,9 +408,12 @@ async fn each_family_reaches_the_component_that_accepts_it() {
         Box::new(probes.probe("models", MODELS, Act::Serve)),
         Box::new(probes.probe("rest", REST, Act::Serve)),
     ];
-    let (driver, _steps) = scripted(Limits::default(), |input| match input {
-        Input::User(_) => ALL.into_iter().map(sample).collect(),
-        _ => Vec::new(),
+    let (driver, _steps) = scripted(Limits::default(), |input| {
+        if matches!(input, Input::User(_)) {
+            ALL.into_iter().map(sample).collect()
+        } else {
+            Vec::new()
+        }
     });
     let shutdown = Shutdown::new();
     let run = eileen_rt::task::spawn("test.driver", driver.run(components, shutdown.clone()));
@@ -483,22 +486,22 @@ async fn a_timer_fires_at_its_mono_time_and_a_cancelled_one_never_does() {
     let (probes, _seen) = Probes::new();
     let (feeder, sink) = probes.feeder("feeder", &[]);
     let mut users = 0;
-    let (driver, steps) = scripted(Limits::default(), move |input| match input {
-        Input::User(_) => {
-            users += 1;
-            if users == 1 {
-                // Timer 2 is cancelled in the step that set it, timer 3 by the next input.
-                vec![
-                    Effect::SetTimer { id: TimerId(1), at: secs(2) },
-                    Effect::SetTimer { id: TimerId(2), at: secs(3) },
-                    Effect::CancelTimer(TimerId(2)),
-                    Effect::SetTimer { id: TimerId(3), at: secs(5) },
-                ]
-            } else {
-                vec![Effect::CancelTimer(TimerId(3))]
-            }
+    let (driver, steps) = scripted(Limits::default(), move |input| {
+        if !matches!(input, Input::User(_)) {
+            return Vec::new();
         }
-        _ => Vec::new(),
+        users += 1;
+        if users == 1 {
+            // Timer 2 is cancelled in the step that set it, timer 3 by the next input.
+            vec![
+                Effect::SetTimer { id: TimerId(1), at: secs(2) },
+                Effect::SetTimer { id: TimerId(2), at: secs(3) },
+                Effect::CancelTimer(TimerId(2)),
+                Effect::SetTimer { id: TimerId(3), at: secs(5) },
+            ]
+        } else {
+            vec![Effect::CancelTimer(TimerId(3))]
+        }
     });
     let shutdown = Shutdown::new();
     let start = Instant::now();
