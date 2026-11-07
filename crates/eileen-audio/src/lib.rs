@@ -171,8 +171,8 @@
 //!   whole frames.
 //! - Tests turn on `fake` for the whole workspace's build: under resolver 3 a dev-dependency's
 //!   features join the one library unit whenever test targets are built, and `eileen-cli` links
-//!   that unit, so clippy over `--all-targets` never lints the shipped configuration. CI's clippy
-//!   without dev-dependencies (section 4.6, #174) is the only check of it.
+//!   that unit, so clippy over `--all-targets` never lints the shipped configuration. #174 amends
+//!   section 4.6 to add the one check of it, a clippy run over libraries and binaries alone.
 //! - Inputs the component sends carry zero for `seq`, `at` and `mono`: the runtime's input queue
 //!   gives each its place in the replay order and its times.
 //! - The test sources and sinks pace their buffers on the tokio clock and take their buffers'
