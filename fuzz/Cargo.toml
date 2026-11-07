@@ -3,9 +3,9 @@
 # Every target of section 4.7 is declared here, among them the three WP10 adds with its `-linux`
 # crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`), and `stub_script`, which WP3
 # adds for the stub harness's script and stdin parsers (section 3.3.16 asks a target of every
-# parser of its formats; section 4.7's table does not list it yet). Each target calls a
-# `fuzz_entry` function of the crate that owns the parser; that crate's corpus replay test runs
-# the same function on every OS (on Linux only for the `-linux` crates' targets).
+# parser of its formats). Each target calls a `fuzz_entry` function of the crate that owns the
+# parser; that crate's corpus replay test runs the same function on every OS (on Linux only for
+# the `-linux` crates' targets).
 
 [package]
 name = "eileen-fuzz"
