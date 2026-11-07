@@ -286,13 +286,23 @@ fn with_logs<F: Future>(test: F) -> (F::Output, Captured) {
     })
 }
 
-/// The `reason` of each `worker.refused` event captured.
+/// The `reason` of each `worker.refused` event captured, each checked to carry the session's
+/// id and a reason alone, so no text the CLI wrote and no path reaches the log.
 fn refusals(captured: &Captured) -> Vec<String> {
     captured
         .events_named(names::WORKER_REFUSED)
         .iter()
-        .map(|event| event.fields.get("reason").and_then(Value::as_str).unwrap().to_owned())
+        .map(|event| {
+            let fields: Vec<&str> = event.fields.keys().map(String::as_str).collect();
+            assert_eq!(fields, ["reason", "ws_id"], "a refusal logs its session and reason alone");
+            event.fields.get("reason").and_then(Value::as_str).unwrap().to_owned()
+        })
         .collect()
+}
+
+/// Whether anything captured holds the memory folder the `driver-memory-` scripts report.
+fn quotes_the_memory_folder(captured: &Captured) -> bool {
+    format!("{captured:?}").contains("<data>")
 }
 
 #[tokio::test]
@@ -431,14 +441,21 @@ async fn a_later_turn_and_an_interrupt_reach_the_session() {
     cancel(&mut worker).await;
 }
 
-#[tokio::test]
-async fn a_session_without_eileen_connected_is_never_bound() {
+#[test]
+fn a_session_without_eileen_connected_is_never_bound() {
     let dir = Scratch::new();
-    let mut worker = worker(&dir, "driver-no-eileen.ndjson");
-    let started = timeout(HANG, worker.start(spec())).await.unwrap();
-    assert_eq!(started.err(), Some(DriverError::EileenNotConnected), "refused at mcp_status");
-    assert_eq!(worker.bind(binding()).await, Err(DriverError::NoSession), "never bound");
-    assert_eq!(next(&mut worker).await, None, "no event from a refused session");
+    let ((), logs) = with_logs(async {
+        let mut worker = worker(&dir, "driver-no-eileen.ndjson");
+        let started = timeout(HANG, worker.start(spec())).await.unwrap();
+        assert_eq!(started.err(), Some(DriverError::EileenNotConnected), "refused at mcp_status");
+        assert_eq!(worker.bind(binding()).await, Err(DriverError::NoSession), "never bound");
+        assert_eq!(next(&mut worker).await, None, "no event from a refused session");
+    });
+    assert_eq!(
+        refusals(&logs),
+        [DriverError::EileenNotConnected.to_string()],
+        "the refusal is logged with its reason"
+    );
     assert_eq!(recorded_envs(&dir).len(), 1, "started once: a missing server is not retried");
 }
 
@@ -459,6 +476,7 @@ fn a_session_whose_first_init_reports_a_memory_path_is_killed_at_that_line() {
         [DriverError::MemoryPathReported.to_string()],
         "the kill is logged with its reason"
     );
+    assert!(!quotes_the_memory_folder(&logs), "no log quotes the folder the CLI reported");
     let envs = recorded_envs(&dir);
     assert_eq!(envs.len(), 1, "not restarted: the task already reached it");
     assert_eq!(
@@ -488,6 +506,7 @@ fn a_later_init_that_reports_a_memory_path_kills_the_session() {
         [DriverError::MemoryPathReported.to_string()],
         "the kill is logged with its reason"
     );
+    assert!(!quotes_the_memory_folder(&logs), "no log quotes the folder the CLI reported");
 }
 
 #[tokio::test]
