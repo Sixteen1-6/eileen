@@ -37,8 +37,8 @@ struct Asked {
     depth: Option<Depth>,
 }
 
-/// The most steers one worker may owe a turn for: past it the worker is told nothing more
-/// until it catches up.
+/// The most turns one worker may owe, its bound task's included: past it a steer is refused
+/// with a sentence until the worker catches up.
 const STEERS_OWED: u8 = 8;
 
 impl Core {
@@ -78,8 +78,9 @@ impl Core {
     }
 
     /// Steers the job `id`, or each running worker of a fan-out: an interrupt and the words as
-    /// a new user turn for a bound session, the words kept for the bind otherwise. The job
-    /// takes the focus.
+    /// a new user turn for a bound session, the words kept for the bind otherwise. A worker
+    /// that already owes `STEERS_OWED` turns is told nothing, and when no worker was told the
+    /// brain hears why. The job takes the focus.
     fn steer(&mut self, cx: &mut Cx<'_>, id: JobId, text: &str) -> Result<ToolResult, ToolResult> {
         let text = cut(text.trim(), TASK_CHARS);
         if text.is_empty() {
@@ -96,6 +97,7 @@ impl Core {
             return Err(text_result(format!("{name} has no worker I can tell."), true, None));
         }
         let mut sent: Vec<(JobId, WorkerSessionId)> = Vec::new();
+        let mut kept_for_bind = false;
         for worker in workers {
             let Some(live) = self.jobs.live.get_mut(&worker) else { continue };
             if live.bound {
@@ -107,7 +109,12 @@ impl Core {
                 let kept =
                     live.steer.take().map_or_else(|| text.clone(), |old| format!("{old}\n{text}"));
                 live.steer = Some(cut(&kept, TASK_CHARS));
+                kept_for_bind = true;
             }
+        }
+        if sent.is_empty() && !kept_for_bind {
+            let sentence = format!("{name} is still catching up; tell it again in a moment.");
+            return Err(text_result(sentence, true, None));
         }
         for (worker, session) in sent {
             cx.push(job_ctx(worker), Effect::Worker(session, WorkerCmd::Interrupt));

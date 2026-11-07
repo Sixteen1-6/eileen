@@ -31,8 +31,10 @@ pub const SLUG_MAX: usize = 40;
 /// this many in seven days, the oldest is forgotten first.
 pub const SLUGS_KEPT: usize = 1024;
 
-/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8).
-const ORDINALS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8), and
+/// the count a fan-out's acknowledgement says.
+pub(crate) const ORDINALS: [&str; 8] =
+    ["one", "two", "three", "four", "five", "six", "seven", "eight"];
 
 /// Words a slug does not start with.
 const ARTICLES: [&str; 3] = ["the", "a", "an"];

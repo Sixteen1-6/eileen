@@ -62,6 +62,10 @@ const DENIED: &str = "Eileen allows only file tools inside the job's own folder 
 /// The answer to the `PermissionRequest` tripwire (section 2.5).
 const TRIPWIRE: &str = "Eileen answers approvals through its own tool; do not retry this call.";
 
+/// Why a `jobs_dispatch` or `jobs_control` call that did not come from the brain's own shim,
+/// for a brain turn, was refused.
+const NOT_THE_CONVERSATION: &str = "Only the conversation can start or change a job.";
+
 /// Why a dispatch was refused when the kept jobs have no room for it.
 const FULL: &str = "Too many jobs are open; cancel one and ask again.";
 
@@ -80,9 +84,6 @@ const FANOUT_MAX: u8 = 8;
 
 /// The longest task a worker is given, in characters (section 3.3.2), steers included.
 pub(crate) const TASK_CHARS: usize = 8_000;
-
-/// How many workers a fan-out starts, in words.
-const NUMBERS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
 
 /// The most renders the core remembers tracking, so a render's late events never open a
 /// second job for it.
@@ -281,7 +282,7 @@ pub(crate) struct NewWorker {
 fn started(jobs: &[Job]) -> Option<ToolResult> {
     let first = jobs.first()?;
     let ack = if first.spec.fanout > 1 {
-        let count = NUMBERS.get(usize::from(first.spec.fanout).saturating_sub(1));
+        let count = lifecycle::ORDINALS.get(usize::from(first.spec.fanout).saturating_sub(1));
         let count = count.copied().unwrap_or("several");
         format!("Starting {count} {} workers on {}.", first.route.display_name(), first.name)
     } else {
@@ -375,10 +376,10 @@ impl Core {
     ) -> Result<TurnId, ToolResult> {
         let from_brain = matches!(request.caller, Caller::Shim { role: ShimRole::Brain, .. });
         let CallOrigin::Brain { turn, .. } = &request.origin else {
-            return Err(refusal("Only the conversation can start a job."));
+            return Err(refusal(NOT_THE_CONVERSATION));
         };
         if !from_brain {
-            return Err(refusal("Only the conversation can start a job."));
+            return Err(refusal(NOT_THE_CONVERSATION));
         }
         let in_flight = self.brain.live_turn().filter(|(live, _)| live == turn);
         let Some((turn, authority)) = in_flight else {
@@ -471,6 +472,9 @@ impl Core {
 
     /// A fan-out: its parent, which takes the focus, then one child per worker, each with its
     /// own session, the whole task in `compete` mode and its own sub-task in `split` mode.
+    /// `dispatch` has already made sure the registry has room for the parent and every child,
+    /// and the parent stays unfinished while they are accepted, so once the parent is kept
+    /// no child is refused.
     fn fan_out(&mut self, cx: &mut Cx<'_>, spec: &JobSpec, routed: &Routed) -> Option<Vec<Job>> {
         let id = JobId::from_parts(cx.mint(), cx.random());
         let hint = spec.title_hint.as_deref();
@@ -767,6 +771,10 @@ impl Core {
             End::Failed { .. } => Step::Fail,
             End::Cancelled { .. } => Step::Cancel,
         };
+        let cancelled_by = match &end {
+            End::Cancelled { by } => Some(*by),
+            End::Completed { .. } | End::Gathered { .. } | End::Failed { .. } => None,
+        };
         let taken = self.jobs.registry.step(id, step, cx.at).ok().cloned();
         // A job that cannot take this step from where it is stays live, so a later event of its
         // session still ends it; one already finished is live no longer.
@@ -802,14 +810,15 @@ impl Core {
             self.announcements.push(Announcement { job: id, text });
         }
         if let Some(parent) = job.spec.parent {
-            self.settle_parent(cx, parent);
+            self.settle_parent(cx, parent, cancelled_by);
         }
         self.refocus(cx);
     }
 
     /// A fan-out ends once every child has: completed when any child completed, cancelled
-    /// when the user cancelled every child, and failed otherwise.
-    fn settle_parent(&mut self, cx: &mut Cx<'_>, parent: JobId) {
+    /// when the user cancelled every child (by the source that cancelled the last, `last_by`),
+    /// and failed otherwise.
+    fn settle_parent(&mut self, cx: &mut Cx<'_>, parent: JobId, last_by: Option<CancelSource>) {
         let Some(of) = self.jobs.registry.get(parent).filter(|job| !job.status.is_terminal())
         else {
             return;
@@ -829,7 +838,7 @@ impl Core {
         let end = if finished > 0 {
             End::Gathered { finished: finished.min(total), total }
         } else if children.iter().all(|status| *status == JobStatus::Cancelled) {
-            End::Cancelled { by: CancelSource::Voice }
+            End::Cancelled { by: last_by.unwrap_or(CancelSource::Voice) }
         } else {
             End::Failed { why: "no agent finished".to_owned() }
         };

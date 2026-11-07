@@ -11,10 +11,10 @@
 //!   time spoken clause by clause, jobs (one or a fan-out of up to eight workers, each with a
 //!   cold worker session, routed by policy or the user's override, steered, rerouted, focused
 //!   and cancelled by name or pronoun, and app tasks that track an app's render with its
-//!   progress), mute, the completion announcement, the speech process's life (`life`: started on the first step, hang-dumped,
-//!   killed and restarted with a bounded backoff when it stops answering) and the HUD's
-//!   microphone state and reply line (`hud`). Later: the rest of section 6.3's list, turns heard
-//!   late first (`wp1/speech-late`).
+//!   progress), mute, the completion announcement, the speech process's life (`life`: started
+//!   on the first step, hang-dumped, killed and restarted with a bounded backoff when it stops
+//!   answering) and the HUD's microphone state and reply line (`hud`). Later: the rest of
+//!   section 6.3's list, turns heard late first (`wp1/speech-late`).
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
 //! - [`lifecycle`]: the job registry `Core::step` keeps, pure and cloneable: the job states and
 //!   the one legal graph of steps between them, names, slugs and fan-out ordinals given at

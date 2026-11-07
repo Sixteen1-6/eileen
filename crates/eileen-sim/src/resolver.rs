@@ -1,7 +1,8 @@
 //! [`SimResolver`]: the scripted intent resolver the simulated core uses in place of the stub,
 //! beside [`crate::world::SimSettings`]. It knows the phrases the minimal core answers itself
-//! and "cancel" followed by the words naming a job, resolves everything else to the brain, and finds a follow-up only for the phrases it is told
-//! about, and only when the core passed Eileen's last turn.
+//! and "cancel" followed by the words naming a job, resolves everything else to the brain, and
+//! finds a follow-up only for the phrases it is told about, and only when the core passed
+//! Eileen's last turn.
 
 use eileen_contracts::connectors::AppCapability;
 use eileen_contracts::intent::{
