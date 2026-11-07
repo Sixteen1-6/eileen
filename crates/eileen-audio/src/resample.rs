@@ -108,6 +108,7 @@ impl Conversion {
     }
 
     /// The rate it gives.
+    #[cfg(test)]
     pub(crate) const fn output_hz(self) -> u32 {
         match self {
             Self::From48kTo16k | Self::From44k1To16k => 16_000,
@@ -164,6 +165,7 @@ impl Resampler {
     }
 
     /// Its conversion.
+    #[cfg(test)]
     pub(crate) const fn conversion(&self) -> Conversion {
         self.conversion
     }

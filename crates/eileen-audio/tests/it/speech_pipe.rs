@@ -11,9 +11,6 @@
 //! answers each `Ping` with a `Pong` that carries the newest frame it read and the open turn, as
 //! decision D81 asks of the speech process.
 
-use std::num::NonZeroUsize;
-use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,29 +19,20 @@ use eileen_audio::fake::{MemoryLimits, StandIns, memory_transport};
 use eileen_audio::{
     AudioConfig, AudioError, AudioSource, AudioStream, CaptureCallback, CaptureInfo,
     ConnectionError, ConnectionId, Pace, SharedSource, SpeechConnection, StreamFormat, WavClip,
-    WavSource, component,
+    WavSource,
 };
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{AudioCmd, Effect, Input};
-use eileen_contracts::ids::{
-    Envelope, MonoTime, Personal, SessionId, SpeakId, TraceCtx, TurnId, WallTime,
-};
-use eileen_contracts::ports::{
-    Backpressure, ComponentCtx, ComponentError, EffectSource, InputSink, ShutdownSignal,
-};
+use eileen_contracts::ids::{Personal, SpeakId, TraceCtx, TurnId};
 use eileen_contracts::speech::{
     AudioFlags, Frame, FrameBody, FrameReader, ListenMode, SpeechCheck, SpeechCheckRequest,
     SpeechCmd, SpeechEventFrame, TurnEndReason, VoiceEvent,
 };
-use eileen_rt::channel::{self, Receiver, Sender};
-use eileen_trace::test_support::{Captured, capture};
-use eileen_trace::{EventRecord, names};
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use eileen_trace::names;
+use eileen_trace::test_support::Captured;
 use tokio::time::{Instant, sleep};
 
-/// Every wait in these tests that is not the subject of the test.
-const WAIT: Duration = Duration::from_secs(5);
+use crate::support::{Running, WAIT, logged, messages, ms, nz};
 
 /// An audio frame's bytes on the wire: a 32-byte header and 512 samples.
 const AUDIO_FRAME_WIRE_BYTES: usize = 32 + 512 * 2;
@@ -53,14 +41,6 @@ const AUDIO_FRAME_WIRE_BYTES: usize = 32 + 512 * 2;
 const FIRST: i16 = 8_192;
 /// The second command's level.
 const SECOND: i16 = 16_384;
-
-fn nz(n: usize) -> NonZeroUsize {
-    NonZeroUsize::new(n).unwrap()
-}
-
-const fn ms(n: u64) -> Duration {
-    Duration::from_millis(n)
-}
 
 /// A command spoken into the test clip: from `at`, for `len`, every sample at `level`.
 struct Say {
@@ -78,19 +58,6 @@ fn clip(total: Duration, says: &[Say]) -> WavClip {
         samples[start..start + samples_in(say.len)].fill(f32::from(say.level) / 32_767.0);
     }
     WavClip::new(StreamFormat { sample_rate_hz: 16_000, channels: 1 }, samples).unwrap()
-}
-
-/// Runs `body` on paused tokio time, as `#[tokio::test(start_paused = true)]` does, under a
-/// subscriber that captures every event, so the test can read what the component logged.
-fn logged<T>(body: impl Future<Output = T>) -> (T, Captured) {
-    capture(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()
-            .unwrap()
-            .block_on(body)
-    })
 }
 
 fn speak_cmd(speak: SpeakId) -> SpeechCmd {
@@ -127,46 +94,6 @@ fn channel_full(captured: &Captured, channel: &str) -> Vec<(Option<u64>, Option<
         .filter(|event| event.fields.get("channel").is_some_and(|c| c == channel))
         .map(|event| (event.fields["capacity"].as_u64(), event.fields["times"].as_u64()))
         .collect()
-}
-
-/// The events whose message is `message`.
-fn messages<'a>(captured: &'a Captured, message: &str) -> Vec<&'a EventRecord> {
-    captured
-        .events
-        .iter()
-        .filter(|event| event.fields.get("message").is_some_and(|m| m == message))
-        .collect()
-}
-
-fn envelope<T>(body: T) -> Envelope<T> {
-    Envelope { seq: 0, at: WallTime(0), mono: MonoTime(0), ctx: TraceCtx::default(), body }
-}
-
-struct Inputs(Sender<Envelope<Input>>);
-
-impl InputSink for Inputs {
-    fn send(&self, input: Envelope<Input>) -> Result<(), Backpressure> {
-        self.0.try_send(input).map_err(|_| Backpressure { capacity: self.0.capacity() })
-    }
-}
-
-struct Effects(Receiver<Envelope<Effect>>);
-
-impl EffectSource for Effects {
-    fn recv(&mut self) -> Pin<Box<dyn Future<Output = Option<Envelope<Effect>>> + Send + '_>> {
-        Box::pin(self.0.recv())
-    }
-}
-
-struct Stop(watch::Receiver<bool>);
-
-impl ShutdownSignal for Stop {
-    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let mut stop = self.0.clone();
-        Box::pin(async move {
-            let _stopped = stop.wait_for(|stop| *stop).await;
-        })
-    }
 }
 
 /// A microphone that counts the buffers its stream delivers, so a test sees capture stop.
@@ -211,10 +138,7 @@ impl Default for Setup {
 struct Rig {
     /// The test's side of the transport; `None` once the test has dropped it.
     stand_ins: Option<StandIns>,
-    effects: Sender<Envelope<Effect>>,
-    inputs: Receiver<Envelope<Input>>,
-    stop: watch::Sender<bool>,
-    task: JoinHandle<Result<(), ComponentError>>,
+    running: Running,
     /// Turn numbers already minted, so each stand-in mints new ones as a new process would.
     turns: u128,
     /// Buffers the microphone has delivered.
@@ -234,26 +158,18 @@ impl Rig {
             buffers: Arc::clone(&buffers),
         };
         let source: SharedSource = Arc::new(Mutex::new(microphone));
-        let config = AudioConfig { speech: Some(Arc::new(transport)), capture: Some(source) };
-        let audio = component(&config);
-        let (effects, effects_rx) = channel::bounded("test.effects", nz(64));
-        let (inputs_tx, inputs) = channel::bounded("test.inputs", nz(setup.inputs));
-        let (stop, stop_rx) = watch::channel(false);
-        let ctx = ComponentCtx {
-            inputs: Box::new(Inputs(inputs_tx)),
-            effects: Box::new(Effects(effects_rx)),
-            data_dir: PathBuf::from("data"),
-            session: SessionId::from_parts(1, 1),
-            shutdown: Box::new(Stop(stop_rx)),
+        let config = AudioConfig {
+            speech: Some(Arc::new(transport)),
+            capture: Some(source),
+            ..AudioConfig::default()
         };
-        let task = eileen_rt::task::spawn("test.audio", audio.start(ctx));
-        Self { stand_ins: Some(stand_ins), effects, inputs, stop, task, turns: 0, buffers }
+        let running = Running::start(&config, setup.inputs);
+        Self { stand_ins: Some(stand_ins), running, turns: 0, buffers }
     }
 
     /// Routes an effect to the component and gives it a millisecond to take it.
     async fn effect(&self, body: Effect) {
-        self.effects.send(envelope(body)).await.unwrap();
-        sleep(ms(1)).await;
+        self.running.effect(body).await;
     }
 
     async fn speech(&self, cmd: SpeechCmd) {
@@ -279,17 +195,12 @@ impl Rig {
 
     /// Every input the component has sent so far.
     fn inputs(&mut self) -> Vec<Input> {
-        std::iter::from_fn(|| self.inputs.try_recv().ok()).map(|input| input.body).collect()
+        self.running.inputs()
     }
 
     /// Stops the component and checks that it ended cleanly.
     async fn stop(self) {
-        self.stop.send(true).unwrap();
-        // Within a write's deadline and a read's, which a component stopping mid-write waits out,
-        // with room to spare.
-        let within = Duration::from_secs(10);
-        let ended = tokio::time::timeout(within, self.task).await.unwrap().unwrap();
-        assert_eq!(ended, Ok(()), "the component stops cleanly");
+        self.running.stop().await;
     }
 }
 

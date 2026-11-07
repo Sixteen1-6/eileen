@@ -240,10 +240,11 @@ The parts of the audio series, in merge order, as each opens:
    device frame; its tests add a write that misses its deadline, a command whose own write
    fails and the transport's shutdown, and #174 amends section 4.6 so CI lints the shipped
    configuration, which tests compile with `fake` on. Still to come in later parts: PCM into
-   playback and the playback commands, echo cancellation and the capture flags, the energy
-   fallback while no connection is up with its `BargeInWindow` events (BUILD.md section 2.8),
-   and `PlayPhrase` and `Record` as `never!`. `Bench` and `Providers` to the machine link are not
-   in the series: they land in WP4's first pull request after `wp0/machine-contracts`, with
+   playback and the playback commands (part 9), echo cancellation and the capture flags, the
+   energy fallback while no connection is up with its `BargeInWindow` events (BUILD.md section
+   2.8), and `PlayPhrase` and `Record` as `never!` (part 9). `Bench` and `Providers` to the
+   machine link are not in the series: they land in WP4's first pull request after
+   `wp0/machine-contracts`, with
    those events in `eileen_contracts::speech` (BUILD.md section 6.6, acceptance 14). The core's
    span id in each speech command frame stays 0 until an amendment of its own says how the id
    reaches the component; #173 proposed one way, and `amend/wp4-audio-settled` left it out,
@@ -251,9 +252,9 @@ The parts of the audio series, in merge order, as each opens:
 
 The amendment after the connection part:
 
-- #180 (`amend/wp4-audio-settled`, open): writes into BUILD.md what the parts proposed under
-  "Suggested guidance changes" and settles two open points. Capture and loopback run at the
-  endpoint's own rate, 48 kHz through the 3:1 conversion, 44.1 kHz through the 160:441
+- #180 (`amend/wp4-audio-settled`, merged 2026-11-07): writes into BUILD.md what the parts
+  proposed under "Suggested guidance changes" and settles two open points. Capture and loopback
+  run at the endpoint's own rate, 48 kHz through the 3:1 conversion, 44.1 kHz through the 160:441
   conversion or 16 kHz taken as it is, and a stream at any other rate (8, 32, 88.2 or 96 kHz) is
   refused with a logged reason, which `eileen doctor audio` shows (#148; sections 2.2, 2.8, 3.5,
   6.6 and 7). Eileen's own PCM becomes AEC3's reference once it has sounded for 50 ms since the
@@ -271,10 +272,57 @@ The amendment after the connection part:
   (`fuzz/AGENTS.md` and `fuzz/README.md`, #136). Evidence: the sources each change cites, read
   on `main`, listed in its pull request.
 
+The audio series after the amendment:
+
+9. `wp4/s1-audio-commands` (#183, open): playback through the component (BUILD.md section 6.6,
+   "The core end of the speech pipe" and "Duck, and what waits for W2"). `AudioConfig` gains
+   `playback`, a `SharedSink`; the component starts its render stream as it starts, with part
+   6's `Renderer` in the callback, and takes each PCM frame from the connection straight into
+   part 6's `Player`, never through `Core::step`: 24 kHz up to the sink's rate, a fresh
+   interpolator per utterance. `Duck`, `Unduck`, `Pause`, `Resume` and `Stop` go to the player,
+   and `Played`, `Paused`, `Stopped` and `Drained` reach the core as `Input::Playback`. The
+   render callback reports through a queue, so the component takes its events on the 10 ms pump,
+   which now runs while capture does or while playback has had something to do in the last
+   200 ms, and on the once-a-second report. `PlayPhrase` and `Record` fail a `never!` soft
+   assertion and are dropped with a warning that gives the reason; an `Earcon` is still logged
+   at debug for the next part. A sink at a rate playback cannot convert to, or one whose stream
+   does not start, leaves the component without playback, logged at warn, and the core hears
+   `Stalled` at each utterance's first PCM and `Stopped` at the first sample for each `Stop`. The
+   five playback commands are served as they arrive, even while a write on the pipe waits, and a
+   `Drained` never reaches the core between a clause's `ClauseReady` and its audio (decisions
+   below). `fake::played` gives what playback hands a device for given samples, so a test
+   compares a capture bit for bit, and the integration tests' shared plumbing moved to
+   `tests/it/support.rs`. The resampler's two accessors that only tests use are now `cfg(test)`,
+   which retires the module's `dead_code` expectation, as playback's is. To keep modules under
+   check 16's 800 lines, the component's playback and waits moved to `link/playback.rs` and
+   `link/wait.rs`, its capture side to `capture.rs`, and the renderer to `playback/render.rs`.
+   Evidence: the integration tests in `tests/it/playback_link.rs`, through the public API with a
+   stand-in and a `CaptureSink` on paused tokio time, each render callback inside
+   `allocation_counter::measure`: a reply's two clauses play as one stream bit for bit from the
+   next buffer, with `Played` per 50 ms of audio and `Drained` at the core beside the stand-in's
+   `ClauseReady` and `SpeakDone`; a dry spell before an announced clause's audio, which comes
+   after its `ClauseReady` and across two writes, never reaches the core, and the one after that
+   clause has played does, once; a `Drained` held for audio that never comes reaches the core when
+   the connection closes, not before; a duck takes effect from the next output callback
+   (invariant 2) and an unduck lifts it; a duck and a stop take effect from the next output
+   callback while a `Speak`'s write waits on a pipe the stand-in does not read; a pause holds at a
+   sample and a resume continues from exactly that sample, with `Played` counted across the
+   pause; a stop drops the rest and reports `Stopped` with the exact samples played, a position no
+   `Played` had given (what issue #151's core fix needs), and a clause of the stopped utterance
+   that comes after it is refused and logged; `PlayPhrase` and `Record` are dropped with a failed
+   soft assertion and a warning each; and speakers at 96 kHz get no render stream, say why, report
+   `Stalled` once per utterance and answer a `Stop`. Still to come: earcons (the next part), echo
+   cancellation and the capture flags, the energy fallback while no connection is up, and the
+   cpal device streams, whose part reports a render device lost mid-reply as `Stalled` or
+   `DeviceChanged`.
+
 The speech series has not opened yet. When it does, `tts.synth` cannot take its remote `speak`
 parent from the command frame, since the audio component sends `span` 0 until the plan settles
 how the core's span id reaches it; so the series builds no span against that parent before then,
-which would fail the span-parent check in every simulation run.
+which would fail the span-parent check in every simulation run. It sends each clause's PCM before
+that clause's `ClauseReady`, as `VoiceEvent::ClauseReady` documents: the audio component copes
+with the other order (part 9), but only the contract's order lets the player's own filter of a
+stale `Drained` do the work.
 
 ## Surprises
 
@@ -374,6 +422,35 @@ which would fail the span-parent check in every simulation run.
   task between them, and the trait never names a tokio type. A read must be cancel safe, so a
   read that misses its deadline loses nothing; a write that fails can leave half a frame, so the
   writer then refuses every write until the connection goes back.
+- Playback's events reach the core by polling (part 9): the render callback may not block or
+  allocate, so it cannot wake the component. The component takes them on its 10 ms pump while
+  capture runs, and with capture off while playback has had something to do (audio queued, an
+  event, a frame or a command) within the last 200 ms, which is longer than any endpoint's
+  callback period; the once-a-second report takes any later one. A muted, silent component still
+  wakes once a second, and a reply heard while muted reaches the core within a pump.
+- PCM with no playback, or for an utterance that takes no more audio, is dropped and logged at
+  debug (part 9): synthesis runs ahead of playback, so clauses of a stopped reply are ordinary.
+- A sink that was given and did not start reports `Stalled` at each utterance's first PCM and
+  answers each `Stop` with `Stopped` at the first sample, as the player reports an utterance
+  stopped before its audio (part 9, from review): the core has no speaking watchdog, so without
+  them every synthesized reply would hold the floor until a barge-in or a mute, and #151's core
+  fix waits for `Stopped`. With no sink given (`playback: None`, as the stub runs) nothing is
+  reported; whether it should be is the open question in #183. A device lost mid-reply is the
+  device part's to report.
+- The five playback commands never wait on the pipe (part 9, from review): while a write or a
+  closing connection's last read waits, `Duck`, `Unduck`, `Pause`, `Resume` and `Stop` go to the
+  player as they arrive, as a mute stops capture, since each is an atomic store or a bounded queue
+  operation. Without playback running they are parked like any other effect, and the loop answers
+  them.
+- A `Drained` is held while a clause the core has the `ClauseReady` of has not all its PCM (part
+  9, from review): the player's filter of a stale `Drained` sees only queued audio, so a
+  `ClauseReady` that came first, or PCM split across reads, would let a dry spell from before the
+  clause reach the core after its `ClauseReady` and end a closed reply with that clause unplayed.
+  Once the clause's samples have come the held `Drained` is dropped, since the renderer reports
+  the next dry spell, unless no audio was queued since. A later utterance's audio, a refusal of
+  the clause's PCM and a closed connection end the wait and pass it on; a `Stop` drops it, since
+  the renderer then reports `Stopped`, which ends the utterance in the core, and a `Drained`
+  before that `Stopped` could only confuse the stopped utterance's accounting #151 adds.
 - `SpeechTransport::accept` takes a deadline, as rule 7 asks of every wait on another process,
   and returns `AcceptError::TimedOut` when it passes, with the transport still usable. The core's
   120 s load deadline lives in another process's state machine, so it cannot stand in for one at
