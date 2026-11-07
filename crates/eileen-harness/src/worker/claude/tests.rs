@@ -11,12 +11,13 @@ use eileen_contracts::ids::{JobId, Personal, SkillId, TraceCtx};
 use eileen_contracts::jobs::JobKind;
 use eileen_contracts::learn::{SkillRef, SnapshotManifest};
 use eileen_trace::Redactor;
+use eileen_trace::test_support::capture;
 use serde_json::{Value, json};
-use tokio::io::{AsyncWriteExt as _, BufReader, duplex};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, BufReader, duplex};
 
 use super::{
-    ClaudeWorker, Lines, Status, check_init, eileen_status, first_turn, reply_to, unsupported,
-    user_line,
+    Asked, ClaudeWorker, Lines, Pipes, Status, check_init, eileen_status, first_turn, reply_to,
+    unsupported, user_line,
 };
 use crate::stream::{Init, Line, parse};
 use crate::{DriverError, HarnessConfig, WorkerDriver as _};
@@ -274,4 +275,88 @@ fn a_read_dropped_partway_keeps_the_part_of_the_line_it_had_read() {
     assert_eq!(line.as_deref(), Some(&whole[..]), "the whole line, once, without its ending");
     drop(writer);
     assert_eq!(at_once(lines.next()), None, "the blank line is passed over, then stdout ends");
+}
+
+/// An email-shaped string in a CLI's `initialize` reply, which carries the signed-in account
+/// (section 3.3.8). It names no real account.
+const ACCOUNT_EMAIL: &str = "someone.signed.in@example.com";
+
+/// A `control_response` to `request_id` with `subtype` and `response`.
+fn control_reply(request_id: &str, subtype: &str, response: &Value) -> String {
+    json!({
+        "type": "control_response",
+        "response": { "subtype": subtype, "request_id": request_id, "response": response },
+    })
+    .to_string()
+}
+
+/// What one readiness exchange did.
+#[derive(Debug)]
+struct Exchange {
+    ready: Result<(), Asked>,
+    /// The subtype of each control request the driver wrote, in order.
+    asked: Vec<String>,
+    /// Whether anything captured (a span, an event, any field) holds [`ACCOUNT_EMAIL`].
+    leaked: bool,
+    /// How many spans and events were captured.
+    logged: usize,
+}
+
+/// The readiness exchange over an in-memory pipe whose CLI side has already written `replies`,
+/// run with tracing captured.
+fn ready_against(replies: &[String]) -> Exchange {
+    let (driver_stdin, mut cli_stdin) = duplex(64 * 1024);
+    let (mut cli_stdout, driver_stdout) = duplex(64 * 1024);
+    let mut pipes = Pipes::new(driver_stdin, BufReader::new(driver_stdout));
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    let (ready, captured) = capture(|| {
+        runtime.block_on(async {
+            for reply in replies {
+                cli_stdout.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+            pipes.ready().await
+        })
+    });
+    // Closes the driver's end of stdin, so what it wrote reads to its end.
+    drop(pipes);
+    let mut written = String::new();
+    runtime.block_on(cli_stdin.read_to_string(&mut written)).unwrap();
+    let asked = written
+        .lines()
+        .map(|line| {
+            let request: Value = serde_json::from_str(line).unwrap();
+            request["request"]["subtype"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    let leaked = format!("{captured:?}").contains(ACCOUNT_EMAIL);
+    Exchange { ready, asked, leaked, logged: captured.events.len() + captured.spans.len() }
+}
+
+#[test]
+fn the_initialize_reply_is_dropped_unread_and_never_logged() {
+    let account = json!({
+        "account": { "email": ACCOUNT_EMAIL, "organization": "Example Org" },
+        "pid": 4242,
+        "claude_code_version": "2.1.316",
+    });
+    let connected = json!({ "mcpServers": [{ "name": "eileen", "status": "connected" }] });
+    let exchange = ready_against(&[
+        // A line that is no reply to the request is passed over unread as well.
+        json!({ "type": "system", "subtype": "notice", "account": ACCOUNT_EMAIL }).to_string(),
+        control_reply("eileen_ready_1", "success", &account),
+        control_reply("eileen_ready_2", "success", &connected),
+    ]);
+    assert!(matches!(exchange.ready, Ok(())), "ready once eileen is connected: {exchange:?}");
+    assert_eq!(exchange.asked, ["initialize", "mcp_status"], "the two requests, in order");
+    assert!(!exchange.leaked, "no span, event or field holds the account");
+    assert_eq!(exchange.logged, 0, "the readiness exchange logs nothing at all");
+
+    // An error reply that quotes the account is refused by the request's name alone.
+    let error = json!({ "error": format!("signed in as {ACCOUNT_EMAIL}") });
+    let exchange = ready_against(&[control_reply("eileen_ready_1", "error", &error)]);
+    let Err(Asked::Failed(refused)) = &exchange.ready else { panic!("refused: {exchange:?}") };
+    assert_eq!(*refused, DriverError::ControlRefused { request: "initialize" }, "by name");
+    assert!(!refused.to_string().contains(ACCOUNT_EMAIL), "the error quotes none of the reply");
+    assert!(!exchange.leaked, "no span, event or field holds the account");
+    assert_eq!(exchange.logged, 0, "nothing logged");
 }

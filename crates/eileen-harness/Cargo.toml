@@ -30,6 +30,8 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Captures the driver's logs in its unit tests.
+eileen-trace = { workspace = true, features = ["testing"] }
 insta.workspace = true
 
 [lints]

@@ -148,8 +148,12 @@
 //!   arrives, so a worker's readiness comes from the `initialize` and `mcp_status` control
 //!   requests, which it answers before any user line, and the D77 memory check runs at the
 //!   first turn's init (the amendment of 2026-11-01, #161). The core binds on
-//!   `WorkerEvent::Init` until that amendment's contract change gives it `WorkerEvent::Ready`,
-//!   so a live job does not bind until then (`FIXME(#161)` in `worker::claude`).
+//!   `WorkerEvent::Init` until the follow-up `wp3/worker-ready` adds `WorkerEvent::Ready` and
+//!   `WorkerEvent::Refused` and moves the core's bind to `Ready`, so a live job does not bind
+//!   until then (`FIXME(#5)` in `worker::claude` marks both places).
+//! - The CLI's `initialize` reply carries the signed-in account, so the worker driver checks
+//!   only that it succeeded and drops it unread: it is never logged, traced, kept or written to
+//!   a script, and the stub answers `initialize` with an empty response.
 //! - Not every denial looks like one: an `approve` call that fails reaches the model as a tool
 //!   error and is missing from `result.permission_denials`, so the parser reads it from the
 //!   tool result's text (`stream::DenialKind::ApproveFailed`). The CLI wraps any tool that

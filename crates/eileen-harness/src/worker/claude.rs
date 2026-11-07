@@ -45,7 +45,7 @@ use eileen_trace::Redactor;
 use eileen_trace::names;
 use eileen_trace::redact::LiteralGuard;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
 use super::{WorkerDriver, WorkerSession};
@@ -129,10 +129,10 @@ impl ClaudeWorker {
     async fn write(&mut self, line: &str) -> Result<(), DriverError> {
         let session = self.session_mut()?;
         let id = session.id;
-        let written = if session.process.torn {
+        let written = if session.process.io.torn {
             Err(DriverError::Write { kind: io::ErrorKind::Interrupted })
         } else {
-            session.process.write(line).await
+            session.process.io.write(line).await
         };
         if let Err(error) = written {
             tracing::warn!(name: names::WORKER_FAULT, ws_id = %id, fault = %error);
@@ -147,8 +147,9 @@ impl ClaudeWorker {
         if let Some(session) = &self.session {
             tracing::warn!(name: names::WORKER_REFUSED, ws_id = %session.id, reason = %reason);
         }
-        // FIXME(#161): queue `WorkerEvent::Refused` with the reason before the `Exited`, once
-        // the amendment's contract change lands, so the core fails the job with it.
+        // FIXME(#5): `wp3/worker-ready` queues `WorkerEvent::Refused` with the reason before the
+        // `Exited` (section 3.3.8), so the core fails the job with the refusal's sentence or
+        // starts it again with memory off (section 3.3.3).
         self.kill().await;
     }
 
@@ -248,9 +249,9 @@ impl WorkerDriver for ClaudeWorker {
             bound: false,
             _secrets: secrets,
         });
-        // FIXME(#161): queue `WorkerEvent::Ready { pid }` once the amendment's contract change
-        // lands; the core binds on it, and until then it binds on `Init`, which the CLI writes
-        // only after the first user line.
+        // FIXME(#5): `wp3/worker-ready` queues `WorkerEvent::Ready { pid }` here (section
+        // 3.3.8). The core binds on it; until then it binds on `Init`, which the CLI writes
+        // only after the first user line, so a live job does not bind.
         Ok(WorkerSession { session: spec.session, pid })
     }
 
@@ -308,7 +309,7 @@ impl WorkerDriver for ClaudeWorker {
             let session = self.session.as_mut()?;
             let redactor = &self.redactor;
             let parsed =
-                session.process.stdout.next().await.map(|body| stream::parse(body, redactor));
+                session.process.io.stdout.next().await.map(|body| stream::parse(body, redactor));
             let Some(line) = parsed else {
                 self.end(false).await;
                 continue;
@@ -379,13 +380,8 @@ impl Exit {
 #[derive(Debug)]
 struct Process {
     child: Child,
-    stdin: ChildStdin,
-    stdout: Lines<BufReader<ChildStdout>>,
+    io: Pipes<ChildStdin, BufReader<ChildStdout>>,
     pid: u32,
-    /// Whether a write was dropped partway, which may have left part of a line on stdin.
-    torn: bool,
-    /// The number of the last readiness request written.
-    asked: u32,
 }
 
 impl Process {
@@ -407,30 +403,12 @@ impl Process {
         let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
             return Err(DriverError::Spawn { kind: io::ErrorKind::BrokenPipe });
         };
-        Ok(Self {
-            child,
-            stdin,
-            stdout: Lines::new(BufReader::new(stdout)),
-            pid,
-            torn: false,
-            asked: 0,
-        })
+        Ok(Self { child, io: Pipes::new(stdin, BufReader::new(stdout)), pid })
     }
 
-    /// Waits, within `deadline`, until the session is ready for its job: `initialize`
-    /// answered, then `mcp_status` asked until `eileen` is connected.
+    /// Waits, within `deadline`, until the session is ready for its job (`Pipes::ready`).
     async fn wait_ready(&mut self, deadline: Duration) -> Result<(), DriverError> {
-        let ready = async {
-            self.ask("initialize").await?;
-            loop {
-                match eileen_status(&self.ask("mcp_status").await?) {
-                    Status::Connected => return Ok(()),
-                    Status::Pending => tokio::time::sleep(STATUS_POLL).await,
-                    Status::Refused => return Err(Asked::Failed(DriverError::EileenNotConnected)),
-                }
-            }
-        };
-        match with_deadline("claude.ready", deadline, ready).await {
+        match with_deadline("claude.ready", deadline, self.io.ready()).await {
             Ok(Err(Asked::Ended)) => {
                 let code = self.exit_code().await.code_or_none();
                 Err(DriverError::EndedBeforeReady { code })
@@ -441,9 +419,63 @@ impl Process {
         }
     }
 
+    /// The exit once the process and its job have exited, waited for within
+    /// [`EXIT_DEADLINE`]; past it, the job is killed and waited for once more.
+    async fn exit_code(&mut self) -> Exit {
+        match with_deadline("claude.exit", EXIT_DEADLINE, self.child.wait()).await {
+            Ok(Ok(status)) => Exit::Exited(status.code()),
+            Ok(Err(_)) => Exit::Exited(None),
+            Err(_) => self.kill_and_wait().await,
+        }
+    }
+
+    /// Kills the Job Object (on Linux the process group) and waits for it to empty.
+    async fn kill_and_wait(&mut self) -> Exit {
+        // It may have exited already, which leaves nothing to kill.
+        let _killed: io::Result<()> = self.child.start_kill();
+        match with_deadline("claude.kill", EXIT_DEADLINE, self.child.wait()).await {
+            Ok(Ok(status)) => Exit::Exited(status.code()),
+            Ok(Err(_)) => Exit::Exited(None),
+            Err(_) => Exit::Missed,
+        }
+    }
+}
+
+/// A session's stdin and stdout, kept apart from its process so the readiness exchange runs
+/// over an in-memory pipe in the unit tests.
+#[derive(Debug)]
+struct Pipes<W, R> {
+    stdin: W,
+    stdout: Lines<R>,
+    /// Whether a write was dropped partway, which may have left part of a line on stdin.
+    torn: bool,
+    /// The number of the last readiness request written.
+    asked: u32,
+}
+
+impl<W: AsyncWrite + Unpin, R: AsyncBufRead + Unpin> Pipes<W, R> {
+    const fn new(stdin: W, stdout: R) -> Self {
+        Self { stdin, stdout: Lines::new(stdout), torn: false, asked: 0 }
+    }
+
+    /// Waits until the session is ready for its job: `initialize` answered, then `mcp_status`
+    /// asked until `eileen` is connected. The caller bounds the wait.
+    async fn ready(&mut self) -> Result<(), Asked> {
+        // The reply carries the signed-in account (section 3.3.8): only its success counts,
+        // and it is dropped here, never logged, traced, recorded or kept.
+        drop(self.ask("initialize").await?);
+        loop {
+            match eileen_status(&self.ask("mcp_status").await?) {
+                Status::Connected => return Ok(()),
+                Status::Pending => tokio::time::sleep(STATUS_POLL).await,
+                Status::Refused => return Err(Asked::Failed(DriverError::EileenNotConnected)),
+            }
+        }
+    }
+
     /// Writes the control request `subtype` and reads stdout to its reply, whose `response`
     /// it returns. Nothing else the CLI writes before the job belongs to one, so it is passed
-    /// over.
+    /// over unread. An error reply becomes `ControlRefused`, which names only the request.
     async fn ask(&mut self, subtype: &'static str) -> Result<Value, Asked> {
         self.asked = self.asked.saturating_add(1);
         let request_id = format!("eileen_ready_{}", self.asked);
@@ -481,27 +513,6 @@ impl Process {
         };
         self.torn = written.is_err();
         written
-    }
-
-    /// The exit once the process and its job have exited, waited for within
-    /// [`EXIT_DEADLINE`]; past it, the job is killed and waited for once more.
-    async fn exit_code(&mut self) -> Exit {
-        match with_deadline("claude.exit", EXIT_DEADLINE, self.child.wait()).await {
-            Ok(Ok(status)) => Exit::Exited(status.code()),
-            Ok(Err(_)) => Exit::Exited(None),
-            Err(_) => self.kill_and_wait().await,
-        }
-    }
-
-    /// Kills the Job Object (on Linux the process group) and waits for it to empty.
-    async fn kill_and_wait(&mut self) -> Exit {
-        // It may have exited already, which leaves nothing to kill.
-        let _killed: io::Result<()> = self.child.start_kill();
-        match with_deadline("claude.kill", EXIT_DEADLINE, self.child.wait()).await {
-            Ok(Ok(status)) => Exit::Exited(status.code()),
-            Ok(Err(_)) => Exit::Exited(None),
-            Err(_) => Exit::Missed,
-        }
     }
 }
 
