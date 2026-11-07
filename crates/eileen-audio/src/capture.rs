@@ -79,11 +79,14 @@ impl Framer {
     }
 
     /// Takes one buffer of interleaved samples captured at `info.captured_at`. A buffer that ends
-    /// part way through a device frame loses its last partial frame.
+    /// part way through a device frame loses that partial frame and nothing else.
     pub(crate) fn push(&mut self, buffer: &[f32], info: CaptureInfo) {
         let Self { writer, channels, rate_hz, resampler, mono, speech, frame, filled, frame_at } =
             self;
         let width = usize::from(*channels);
+        // Whole device frames only, so every chunk below holds whole frames and downmixes.
+        let partial = buffer.len().checked_rem(width).unwrap_or_default();
+        let buffer = buffer.get(..buffer.len() - partial).unwrap_or_default();
         let mut done = 0_usize;
         for chunk in buffer.chunks(CHUNK_FRAMES.saturating_mul(width)) {
             let chunk_at = info.captured_at.saturating_add(offset(done, *rate_hz));
@@ -203,6 +206,42 @@ mod tests {
         assert_eq!(times.len(), 31, "one second at 16 kHz is 31 whole frames");
         assert_eq!(times[1], Duration::from_millis(32));
         assert_eq!(times[30], Duration::from_millis(960));
+    }
+
+    #[test]
+    fn a_buffer_that_ends_inside_a_device_frame_loses_only_that_partial_frame() {
+        // 48 kHz stereo buffers of 959 samples: 479 whole frames and one sample of the next, the
+        // same as the buffer of 958 samples beside it apart from that one sample.
+        let format = StreamFormat { sample_rate_hz: 48_000, channels: 2 };
+        let mut ragged_ring = SpeechRing::new(64, 64);
+        let mut whole_ring = SpeechRing::new(64, 64);
+        let mut ragged = Framer::new(format, ragged_ring.open_capture()).unwrap();
+        let mut whole = Framer::new(format, whole_ring.open_capture()).unwrap();
+        for n in 0..64_u64 {
+            // A ramp that wraps every 200 frames, so a frame cut in the wrong place shows in its
+            // samples, and a stray last sample at full scale, so one that leaked in shows too.
+            let buffer: Vec<f32> = (0..479_u64)
+                .flat_map(|k| {
+                    let level = f32::from(u16::try_from((n * 479 + k) % 200).unwrap()) / 400.0;
+                    [level, level]
+                })
+                .chain(std::iter::once(1.0))
+                .collect();
+            assert_eq!(buffer.len(), 959, "479 whole frames and one sample");
+            ragged.push(&buffer, at(n * 10));
+            whole.push(&buffer[..958], at(n * 10));
+        }
+        let frames = |ring: &mut SpeechRing| {
+            ring.connected();
+            let mut frames = Vec::new();
+            while let Some(frame) = ring.next_frame() {
+                frames.push((frame.seq, frame.captured_at, *frame.samples));
+            }
+            frames
+        };
+        let got = frames(&mut ragged_ring);
+        assert_eq!(got.len(), 19, "64 buffers of 479 frames at 48 kHz are 19 whole frames");
+        assert!(got == frames(&mut whole_ring), "the frames of buffers that end on a whole frame");
     }
 
     #[test]

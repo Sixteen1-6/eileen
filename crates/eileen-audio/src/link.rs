@@ -27,10 +27,17 @@
 //! latest `SetMode` and `SetHotwords` are kept, and other commands wait in a bounded queue for
 //! the next connection, any past its maximum dropped and logged.
 //!
-//! Every wait has a deadline: each accept, read and write. The pending accept, read and effect
-//! are owned futures that live across the loop's turns, so none is dropped part way; a read in
-//! flight when a write fails is awaited, within its deadline, so the connection's two halves
-//! rejoin before it goes back.
+//! Every wait has a deadline: each accept, read and write, a write's covering the whole of it.
+//! The pending accept, read and effect are owned futures that live across the loop's turns, so
+//! none is dropped part way; a read in flight when a write fails is awaited, within its deadline,
+//! so the connection's two halves rejoin before it goes back. The handoff is drained before each
+//! write and before that last read, so no wait of the loop's can fill it.
+//!
+//! A mute never waits on the pipe. While a write or that last read waits, the component keeps
+//! taking effects: a mute stops capture at once, and any other effect is parked, in order, for
+//! the loop to serve once the wait is over. Audio is written a frame at a time, so a mute that
+//! comes during a write lets only the frame already begun finish; the rest of the batch, captured
+//! before the mute, is dropped with the ring.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -42,13 +49,15 @@ use std::time::Duration;
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{AudioCmd, Effect, EffectFamily, Input};
 use eileen_contracts::ids::{Envelope, MonoTime, TraceCtx, WallTime};
-use eileen_contracts::ports::{Component, ComponentCtx, ComponentError, EffectSource, InputSink};
+use eileen_contracts::ports::{
+    Backpressure, Component, ComponentCtx, ComponentError, EffectSource, InputSink,
+};
 use eileen_contracts::speech::{
     Frame, FrameBody, FrameError, FrameReader, SpeechCheck, SpeechCmd, SpeechCommandFrame,
     VoiceEvent,
 };
 use eileen_trace::names;
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::{Instant, Interval, MissedTickBehavior};
 
 use crate::SharedSource;
 use crate::capture::Framer;
@@ -74,6 +83,10 @@ const PUMP_EVERY: Duration = Duration::from_millis(10);
 const FRAMES_PER_WRITE: usize = 32;
 /// Commands held while no connection is up.
 pub(crate) const HELD_COMMANDS: usize = 64;
+/// Effects that came while a write or a read waited, kept for the loop to serve after it. Past
+/// this many the component stops taking effects until the wait is over, and the runtime's own
+/// bounded queue holds the rest.
+const PARKED_EFFECTS: usize = 64;
 /// Bytes asked for in each read.
 const READ_BYTES: usize = 16 * 1024;
 /// The PC microphone's audio source number ([`eileen_contracts::speech::FrameHeader::source`]).
@@ -161,28 +174,32 @@ fn ticker(every: Duration) -> Interval {
 
 async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), ComponentError> {
     let ComponentCtx { inputs, effects, shutdown, .. } = ctx;
-    let mut speech = Link::new(inputs, component.speech, component.capture);
-    speech.set_capture(true);
+    let mut speech = Link::new(inputs, effects, component.speech, component.capture);
+    speech.capture.set(true);
     let mut stop = shutdown.wait();
-    let mut effect = Some(next_effect(effects));
     let mut pump = ticker(PUMP_EVERY);
     let mut ping = ticker(PING_EVERY);
     // Frames are waiting to be written at once, beyond the batch just written.
     let mut more = false;
     loop {
+        // Effects parked while a write or a read waited go first, in the order they came.
+        if let Some(envelope) = speech.incoming.parked.pop_front() {
+            speech.on_effect(envelope).await;
+            continue;
+        }
+        if speech.incoming.next.is_none() {
+            // The effect source has ended.
+            break;
+        }
         speech.rearm_accept();
         let drains = speech.drains();
         let reading = speech.live.as_mut().and_then(|live| live.reading.as_mut());
         tokio::select! {
             biased;
             () = &mut stop => break,
-            (effects, next) = maybe(effect.as_mut()) => match next {
-                Some(envelope) => {
-                    effect = Some(next_effect(effects));
-                    speech.on_effect(envelope).await;
-                }
-                None => break,
-            },
+            done = maybe(speech.incoming.next.as_mut()) => {
+                speech.incoming.arrived(done, &mut speech.capture);
+            }
             done = maybe(reading) => speech.on_read(done).await,
             accepted = maybe(speech.accepting.as_mut()) => {
                 speech.accepting = None;
@@ -230,48 +247,160 @@ struct Live {
     reading: Option<Owned<ReadDone>>,
 }
 
+/// The effects routed to the component: the wait for the next one, and those that came while a
+/// write or a read waited.
+struct Incoming {
+    /// The wait for the next effect; `None` once the source has ended.
+    next: Option<Owned<EffectDone>>,
+    /// Effects that came while a write or a read waited, oldest first; at most
+    /// [`PARKED_EFFECTS`].
+    parked: VecDeque<Envelope<Effect>>,
+}
+
+impl Incoming {
+    /// Takes what the wait for an effect gave and starts the next wait. A mute is served at
+    /// once, through `capture`, and drops any `SetCapture` still parked, which it comes after;
+    /// any other effect is parked for the loop.
+    fn arrived(&mut self, done: EffectDone, capture: &mut Capture) {
+        let (source, effect) = done;
+        let Some(envelope) = effect else {
+            self.next = None;
+            return;
+        };
+        self.next = Some(next_effect(source));
+        if matches!(envelope.body, Effect::Audio(AudioCmd::SetCapture(false))) {
+            self.parked
+                .retain(|parked| !matches!(parked.body, Effect::Audio(AudioCmd::SetCapture(_))));
+            capture.set(false);
+        } else {
+            self.parked.push_back(envelope);
+        }
+    }
+}
+
+/// Awaits `work` while taking effects as they come: a mute stops capture before `work` ends,
+/// and any other effect is parked for the loop. With [`PARKED_EFFECTS`] parked it takes no more
+/// until `work` ends.
+async fn racing<T>(
+    work: impl Future<Output = T>,
+    incoming: &mut Incoming,
+    capture: &mut Capture,
+) -> T {
+    let mut work = std::pin::pin!(work);
+    loop {
+        let room = incoming.parked.len() < PARKED_EFFECTS;
+        tokio::select! {
+            biased;
+            out = &mut work => return out,
+            done = maybe(incoming.next.as_mut()), if room => incoming.arrived(done, capture),
+        }
+    }
+}
+
+/// The microphone's side: its source, the stream while capture runs, and the ring it fills.
+struct Capture {
+    ring: SpeechRing,
+    source: Option<SharedSource>,
+    stream: Option<Box<dyn AudioStream>>,
+    /// Mutes so far, so a write of audio can tell that one came while it waited.
+    mutes: u64,
+}
+
+impl Capture {
+    /// Starts or stops capture. Stopping empties the ring, so nothing captured before a mute is
+    /// written after it, and the first frame after capture resumes carries the break flag.
+    fn set(&mut self, on: bool) {
+        if !on {
+            if let Some(stream) = self.stream.take() {
+                stream.stop();
+            }
+            self.ring.capture_stopped();
+            self.mutes = self.mutes.wrapping_add(1);
+            return;
+        }
+        if self.stream.is_some() {
+            return;
+        }
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let mut source = source.lock().unwrap_or_else(PoisonError::into_inner);
+        let framer = match Framer::new(source.format(), self.ring.open_capture()) {
+            Ok(framer) => framer,
+            Err(error) => {
+                tracing::warn!(%error, format = ?source.format(), "capture did not start");
+                return;
+            }
+        };
+        let started = source.start(framer.into_callback());
+        drop(source);
+        match started {
+            Ok(stream) => self.stream = Some(stream),
+            Err(error) => tracing::warn!(%error, "capture did not start"),
+        }
+    }
+}
+
 /// The component's state between the loop's turns.
 struct Link {
     inputs: Box<dyn InputSink>,
+    incoming: Incoming,
+    capture: Capture,
     transport: Option<Arc<dyn SpeechTransport>>,
     /// The wait for the next connection, while none is up and the transport is open.
     accepting: Option<Owned<Result<SpeechConnection, AcceptError>>>,
     live: Option<Live>,
-    ring: SpeechRing,
-    source: Option<SharedSource>,
-    stream: Option<Box<dyn AudioStream>>,
     /// The latest `SetMode` and `SetHotwords`, for every new connection.
     mode: Option<SpeechCommandFrame>,
     hotwords: Option<SpeechCommandFrame>,
     /// Other commands that came while no connection was up.
     held: VecDeque<SpeechCommandFrame>,
     held_dropped: u64,
-    /// Inputs the core's queue refused since the last report.
+    /// Frames the ring lost, in all, as the last report gave them.
+    ring_dropped: u64,
+    /// Inputs the core's queue refused, in all; the count the last report gave; and the
+    /// capacity the queue gave with its last refusal.
     inputs_refused: u64,
+    inputs_reported: u64,
+    inputs_capacity: usize,
     /// The bytes of the next write, kept to reuse their room.
     out: Vec<u8>,
+    /// Where each audio frame in `out` ends, so a write of audio can stop between two frames.
+    cuts: Vec<usize>,
 }
 
 impl Link {
     fn new(
         inputs: Box<dyn InputSink>,
+        effects: Box<dyn EffectSource>,
         transport: Option<Arc<dyn SpeechTransport>>,
         source: Option<SharedSource>,
     ) -> Self {
         Self {
             inputs,
+            incoming: Incoming {
+                next: Some(next_effect(effects)),
+                parked: VecDeque::with_capacity(PARKED_EFFECTS),
+            },
+            capture: Capture {
+                ring: SpeechRing::new(STORE_FRAMES, HANDOFF_FRAMES),
+                source,
+                stream: None,
+                mutes: 0,
+            },
             transport,
             accepting: None,
             live: None,
-            ring: SpeechRing::new(STORE_FRAMES, HANDOFF_FRAMES),
-            source,
-            stream: None,
             mode: None,
             hotwords: None,
             held: VecDeque::with_capacity(HELD_COMMANDS),
             held_dropped: 0,
+            ring_dropped: 0,
             inputs_refused: 0,
+            inputs_reported: 0,
+            inputs_capacity: 0,
             out: Vec::with_capacity(FRAMES_PER_WRITE * 1_056),
+            cuts: Vec::with_capacity(FRAMES_PER_WRITE),
         }
     }
 
@@ -315,7 +444,7 @@ impl Link {
             frames: FrameReader::for_core_after_hello(),
             reading: Some(next_read(reader, buf)),
         });
-        self.ring.connected();
+        self.capture.ring.connected();
         tracing::info!(connection = %id, "speech connected");
         let first: Vec<SpeechCommandFrame> =
             self.mode.iter().chain(self.hotwords.iter()).chain(self.held.iter()).cloned().collect();
@@ -339,6 +468,10 @@ impl Link {
         let Envelope { ctx, body, .. } = envelope;
         let family = body.family();
         if let Effect::Speech(cmd) = body {
+            // `span` is meant to name the core's span the command belongs to (section 2.13), the
+            // `speak` span for a `Speak`, so the speech process can open `tts.synth` under it.
+            // An effect's envelope carries no span id, so it stays 0 until the plan settles how
+            // one reaches this component; until then the speech series opens nothing under it.
             self.on_command(SpeechCommandFrame { ctx, span: 0, cmd }).await;
         } else if let Effect::Audio(cmd) = body {
             self.on_audio(&cmd);
@@ -352,7 +485,7 @@ impl Link {
 
     fn on_audio(&mut self, cmd: &AudioCmd) {
         match cmd {
-            AudioCmd::SetCapture(on) => self.set_capture(*on),
+            AudioCmd::SetCapture(on) => self.capture.set(*on),
             AudioCmd::Duck { .. }
             | AudioCmd::Unduck
             | AudioCmd::Pause { .. }
@@ -425,48 +558,16 @@ impl Link {
         }
     }
 
-    /// Starts or stops capture. Stopping empties the ring, so nothing captured before a mute is
-    /// written after it, and the first frame after capture resumes carries the break flag.
-    fn set_capture(&mut self, on: bool) {
-        if !on {
-            if let Some(stream) = self.stream.take() {
-                stream.stop();
-            }
-            self.ring.capture_stopped();
-            return;
-        }
-        if self.stream.is_some() {
-            return;
-        }
-        let Some(source) = self.source.as_ref() else {
-            return;
-        };
-        let mut source = source.lock().unwrap_or_else(PoisonError::into_inner);
-        let framer = match Framer::new(source.format(), self.ring.open_capture()) {
-            Ok(framer) => framer,
-            Err(error) => {
-                tracing::warn!(%error, format = ?source.format(), "capture did not start");
-                return;
-            }
-        };
-        let started = source.start(framer.into_callback());
-        drop(source);
-        match started {
-            Ok(stream) => self.stream = Some(stream),
-            Err(error) => tracing::warn!(%error, "capture did not start"),
-        }
-    }
-
     /// Writes the next batch of the ring's frames; true when more are waiting at once. With no
     /// connection up it moves the handoff's frames into the store instead.
     async fn pump(&mut self) -> bool {
         if self.live.is_none() {
-            self.ring.pull();
+            self.capture.ring.pull();
             return false;
         }
         let mut batch = 0;
         while batch < FRAMES_PER_WRITE {
-            let Some(frame) = self.ring.next_frame() else {
+            let Some(frame) = self.capture.ring.next_frame() else {
                 break;
             };
             let written = Frame::encode_audio_into(
@@ -476,8 +577,9 @@ impl Link {
                 frame.samples,
                 &mut self.out,
             );
-            if let Err(error) = written {
-                tracing::warn!(%error, "an audio frame did not encode");
+            match written {
+                Ok(()) => self.cuts.push(self.out.len()),
+                Err(error) => tracing::warn!(%error, "an audio frame did not encode"),
             }
             batch += 1;
         }
@@ -507,19 +609,28 @@ impl Link {
         }
     }
 
+    /// Logs what was dropped, when it changed since the last report: frames the ring lost and
+    /// inputs the core's queue refused, each as its running total, as every other
+    /// `channel.full` gives it.
     fn report(&mut self) {
-        let dropped = self.ring.take_dropped();
+        let dropped = self.capture.ring.take_dropped();
         if dropped > 0 {
+            self.ring_dropped = self.ring_dropped.saturating_add(dropped);
             tracing::warn!(
                 name: names::CHANNEL_FULL,
                 channel = "audio.speech.ring",
                 capacity = STORE_FRAMES,
-                times = dropped,
+                times = self.ring_dropped,
             );
         }
-        let refused = std::mem::take(&mut self.inputs_refused);
-        if refused > 0 {
-            tracing::warn!(name: names::CHANNEL_FULL, channel = "core.inputs", times = refused);
+        if self.inputs_refused != self.inputs_reported {
+            self.inputs_reported = self.inputs_refused;
+            tracing::warn!(
+                name: names::CHANNEL_FULL,
+                channel = "core.inputs",
+                capacity = self.inputs_capacity,
+                times = self.inputs_refused,
+            );
         }
     }
 
@@ -543,11 +654,11 @@ impl Link {
         }
     }
 
-    /// Takes every frame in `bytes`. A failed answer to a `Ping` does not stop it: the frames
-    /// after it are still taken, so no event already read is lost, and the failure is returned
-    /// at the end.
+    /// Takes every frame in `bytes`, then answers the `Ping`s among them with one `Pong`: a
+    /// `Pong` carries nothing of a `Ping`'s, and one write keeps the read's answer within one
+    /// write's deadline however many `Ping`s came.
     async fn take_bytes(&mut self, mut bytes: &[u8]) -> Result<(), Ended> {
-        let mut failed = None;
+        let mut pinged = false;
         while !bytes.is_empty() {
             let Some(live) = self.live.as_mut() else {
                 break;
@@ -555,53 +666,56 @@ impl Link {
             let (taken, frame) = live.frames.feed(bytes).map_err(Ended::Refused)?;
             bytes = bytes.get(taken..).unwrap_or_default();
             match frame {
-                Some(frame) => {
-                    if let Err(ended) = self.on_frame(frame).await {
-                        failed.get_or_insert(ended);
-                    }
-                }
+                Some(frame) => pinged |= self.on_frame(frame),
                 None if taken == 0 => break,
                 None => {}
             }
         }
-        failed.map_or(Ok(()), Err)
+        if !pinged {
+            return Ok(());
+        }
+        if let Err(error) = Frame::new(FrameBody::Pong).encode_into(&mut self.out) {
+            tracing::warn!(%error, "a Pong did not encode");
+        }
+        self.write_out().await
     }
 
-    async fn on_frame(&mut self, frame: Frame) -> Result<(), Ended> {
-        self.ring.on_speech_frame(&frame);
+    /// Takes one frame from the speech process; true for a `Ping`, which the caller answers.
+    fn on_frame(&mut self, frame: Frame) -> bool {
+        self.capture.ring.on_speech_frame(&frame);
         match frame.body {
-            FrameBody::Ping => {
-                if let Err(error) = Frame::new(FrameBody::Pong).encode_into(&mut self.out) {
-                    tracing::warn!(%error, "a Pong did not encode");
-                }
-                self.write_out().await?;
-            }
+            FrameBody::Ping => true,
             FrameBody::Pong => {
                 self.send(
                     Input::Sidecar(SidecarId::Speech, SidecarEvent::Heartbeat),
                     TraceCtx::default(),
                 );
+                false
             }
-            FrameBody::Event(event) => self.send(Input::Voice(event.event), event.ctx),
+            FrameBody::Event(event) => {
+                self.send(Input::Voice(event.event), event.ctx);
+                false
+            }
             FrameBody::Pcm { header, .. } => {
                 tracing::debug!(
                     speak = %header.speak,
                     clause = header.clause,
                     "PCM is played by a later part of the audio series"
                 );
+                false
             }
             // The reader refuses these from the speech process.
-            FrameBody::Audio(_) | FrameBody::Command(_) | FrameBody::Hello(_) => {}
+            FrameBody::Audio(_) | FrameBody::Command(_) | FrameBody::Hello(_) => false,
         }
-        Ok(())
     }
 
     /// Sends an input to the core. The runtime's input queue gives inputs their place in the
     /// replay order and their times, so the envelope leaves them zero.
     fn send(&mut self, body: Input, ctx: TraceCtx) {
         let input = Envelope { seq: 0, at: WallTime(0), mono: MonoTime(0), ctx, body };
-        if self.inputs.send(input).is_err() {
+        if let Err(Backpressure { capacity }) = self.inputs.send(input) {
             self.inputs_refused = self.inputs_refused.saturating_add(1);
+            self.inputs_capacity = capacity;
         }
     }
 
@@ -611,16 +725,43 @@ impl Link {
         }
     }
 
-    /// Writes what was encoded, if there is a connection to write it on.
+    /// Writes what was encoded, if there is a connection to write it on, within one deadline for
+    /// the whole of it. Moves the handoff's frames into the store first, so the wait loses none
+    /// of them. Audio goes a frame at a time: once a mute comes, only the frame already begun is
+    /// finished, and the rest of the batch, captured before the mute, is dropped as the ring's
+    /// frames were.
     async fn write_out(&mut self) -> Result<(), Ended> {
-        let result = match self.live.as_mut() {
-            Some(live) if !self.out.is_empty() => {
-                live.writer.write_all(&self.out, WRITE_WITHIN).await.map_err(Ended::Connection)
-            }
-            _ => Ok(()),
-        };
+        self.capture.ring.pull();
+        let result = self.write_pieces().await;
         self.out.clear();
+        self.cuts.clear();
         result
+    }
+
+    async fn write_pieces(&mut self) -> Result<(), Ended> {
+        let Self { live, out, cuts, incoming, capture, .. } = self;
+        let Some(live) = live.as_mut() else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + WRITE_WITHIN;
+        let mutes = capture.mutes;
+        let mut from = 0;
+        // Without cuts, `out` is one piece and holds no audio.
+        for end in cuts.iter().copied().chain(std::iter::once(out.len())) {
+            if end <= from {
+                continue;
+            }
+            if capture.mutes != mutes {
+                break;
+            }
+            let piece = out.get(from..end).unwrap_or_default();
+            let within = deadline.saturating_duration_since(Instant::now());
+            racing(live.writer.write_all(piece, within), incoming, capture)
+                .await
+                .map_err(Ended::Connection)?;
+            from = end;
+        }
+        Ok(())
     }
 
     /// Hands the connection back to the transport, with its read half: `reader` when the caller
@@ -652,12 +793,13 @@ impl Link {
 
     /// Waits for the read in flight, within its deadline, and takes the frames it brought, so an
     /// event the speech process sent before the connection broke still reaches the core. Moves
-    /// the handoff's frames into the store first, so the wait loses none of them. Returns the
-    /// read half.
+    /// the handoff's frames into the store first, so the wait loses none of them, and takes
+    /// effects meanwhile, so a mute does not wait for it. Returns the read half.
     async fn finish_read(&mut self) -> Option<SpeechReader> {
-        self.ring.pull();
+        self.capture.ring.pull();
         let reading = self.live.as_mut()?.reading.take()?;
-        let ReadDone { reader, buf, result } = reading.await;
+        let ReadDone { reader, buf, result } =
+            racing(reading, &mut self.incoming, &mut self.capture).await;
         if let Ok(n) = result
             && let Err(ended) = self.take_bytes(buf.get(..n).unwrap_or_default()).await
         {
@@ -671,12 +813,12 @@ impl Link {
     /// once a second for its `Ping`, not a hundred times. A new connection's replay runs on the
     /// loop's `more` flag, not on this tick.
     const fn drains(&self) -> bool {
-        self.stream.is_some()
+        self.capture.stream.is_some()
     }
 
     /// The component is stopping: capture stops and the connection goes back.
     async fn finish(&mut self) {
-        if let Some(stream) = self.stream.take() {
+        if let Some(stream) = self.capture.stream.take() {
             stream.stop();
         }
         self.close(None, Ended::Shutdown).await;
