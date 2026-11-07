@@ -250,7 +250,7 @@ The parts of the audio series, in merge order, as each opens:
 
 The amendment after the connection part:
 
-- `amend/wp4-audio-settled` (open): writes into BUILD.md what the parts proposed under
+- #180 (`amend/wp4-audio-settled`, open): writes into BUILD.md what the parts proposed under
   "Suggested guidance changes" and settles two open points. Capture and loopback run at the
   endpoint's own rate, 48 kHz or 44.1 kHz through the 160:441 conversion, and a stream at any
   other rate is refused with a logged reason (#148; sections 2.2, 2.8 and 6.6). Eileen's own PCM
