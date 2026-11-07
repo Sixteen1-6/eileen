@@ -33,7 +33,8 @@
 //!   and an open turn again under a new turn ID (`tests/it/speech_pipe.rs`).
 //! - The component never restarts anything: a broken connection, or one whose frame the codec
 //!   refused, goes back to the transport, which only closes it (`tests/it/speech_pipe.rs`).
-//! - Commands held while no connection is up are bounded (64), each one dropped past that logged.
+//! - Commands held while no connection is up are bounded (64), each one dropped past that logged
+//!   (`tests/it/speech_pipe.rs`).
 //! - The speech ring's capture callback and its reader share only an SPSC handoff (`rtrb`) and
 //!   two atomics, the next `seq` and the count of frames lost. Loom models in `ring::concurrency`
 //!   explore every order of those two under `cfg(loom)`; rtrb's own tests cover the handoff, and
@@ -69,11 +70,11 @@
 //! - Called by `eileen-cli`, which builds the component and implements [`SpeechTransport`] over
 //!   WP2's transport; WP2's tests use `fake`. Cross-crate items: [`SpeechTransport`],
 //!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`],
-//!   [`AudioConfig`] with its [`SharedSource`], [`SetupError`], and the test audio `eileen run --audio-source wav:<file>
-//!   --audio-sink capture:<file>` selects and other crates' tests use: [`WavClip`],
-//!   [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker, microphone and loopback,
-//!   [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The component never names the
-//!   pipe, spawns a process or sees the token.
+//!   [`AudioConfig`] with its [`SharedSource`], [`SetupError`], and the test audio
+//!   `eileen run --audio-source wav:<file> --audio-sink capture:<file>` selects and other crates'
+//!   tests use: [`WavClip`], [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker,
+//!   microphone and loopback, [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The
+//!   component never names the pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
 //!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
@@ -94,11 +95,13 @@
 //!   stand-in for the speech process over the memory transport, on paused tokio time: a late
 //!   connect, a kill and a reload each recognising every command once, the latest mode and
 //!   hotwords first, an overrun's break flag, mutes, the heartbeat and confirmation, a refused
-//!   frame, and the answers while no connection is up); unit tests for the capture framing
+//!   frame, the answers while no connection is up and the held commands' maximum, and the logs
+//!   of a clean stop and a dropped command); unit tests for the capture framing
 //!   (`capture::tests`, with the callback inside `allocation_counter::measure`), the DSP, the
-//!   ring's rules and the memory transport (paused tokio time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with `--lib
-//!   ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the same
-//!   models run once on a real thread), the test sources and sinks under paused tokio time
+//!   ring's rules and the memory transport (paused tokio time), loom for the ring's shared
+//!   atomics (`RUSTFLAGS="--cfg loom"`, with `--lib ring::concurrency`; no CI lane runs it yet,
+//!   section 4.6 plans one; without the flag the same models run once on a real thread), the
+//!   test sources and sinks under paused tokio time
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
 //!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
@@ -106,8 +109,9 @@
 //!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
 //!   and a speech video, made bit for bit the same on every platform, with the loopback two
 //!   chunks behind her stream (`aec::tests`: an ERLE floor against the loopback and against own
-//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a near-end command's energy kept alone, over
-//!   Eileen and over each bed, the reference switch to the chunk, the learning time, the flags,
+//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a
+//!   near-end command's energy kept alone, over Eileen and over each bed, the reference switch
+//!   to the chunk, the learning time, the flags,
 //!   and no false onset in ten minutes of each bed, counted from a fresh canceller, in four runs
 //!   of 153 s that each stay under the test profiles' time limit), the window assembly and the
 //!   detector's rules (`energy::tests`), and device tests on the owner's PC under
@@ -171,8 +175,9 @@
 //! - `channel.full` from the speech link, once a second at most for the ring: frames the ring
 //!   dropped (`audio.speech.ring`), a command held while no connection was up dropped past the
 //!   queue's maximum (`audio.speech.held`), and inputs the core's queue refused
-//!   (`core.inputs`). A connection handed back logs its id and reason at warn, a connection made
-//!   at info, and each accept wait that ends with none at debug.
+//!   (`core.inputs`). A connection handed back logs its id and reason at warn, or at info when
+//!   the component is stopping, a connection made at info, and each accept wait that ends with
+//!   none at debug.
 //! - `channel.full` when playback drops something for want of room, each `channel` with its own
 //!   `times`: a frame refused by the sample queue (`audio.playback`) or the marker queue
 //!   (`audio.playback.markers`), a new utterance past the live limit

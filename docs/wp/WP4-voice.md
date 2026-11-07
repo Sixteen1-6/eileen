@@ -210,8 +210,9 @@ The parts of the audio series, in merge order, as each opens:
    `eileen_audio::energy::tests` (the window assembly, the detector's rules, and both inside
    `allocation_counter::measure`). Acceptance 1's transcript-level check needs the recognizer
    and comes after both series (W2).
-8. `wp4/s1-audio-link` (#164, draft): the connection half of the component. `eileen_audio::component`
-   now returns the audio component, which takes the audio and speech effect families, captures
+8. `wp4/s1-audio-link` (#164, merged 2026-11-07): the connection half of the component.
+   `eileen_audio::component` now returns the audio component, which takes the audio and speech
+   effect families, captures
    from `AudioConfig::capture` (a `SharedSource`, new) into the ring from its start, and serves
    each connection `AudioConfig::speech` gives: the latest `SetMode` and `SetHotwords` first,
    then the commands held while none was up, then the ring's unconfirmed frames with their flags,
@@ -225,7 +226,8 @@ The parts of the audio series, in merge order, as each opens:
    resamplers and cuts 512-sample frames with their capture times, allocating nothing. Evidence:
    the integration tests in `tests/it/speech_pipe.rs` (acceptance 15's late connect, kill,
    reload, latest mode and hotwords, overrun and mute pieces, the heartbeat and confirmation, a
-   refused frame, and the `Speak` answer while no connection is up) and the unit tests in
+   refused frame, the `Speak` answer while no connection is up, the held commands' maximum of
+   64 with the drop logged, and a clean stop logging no warning) and the unit tests in
    `eileen_audio::capture::tests`. Still to come in later parts: PCM into playback and the
    playback commands, echo cancellation and the capture flags, the energy fallback while no
    connection is up, `PlayPhrase` and `Record` as `never!`, and `Bench` and `Providers` to the
@@ -552,8 +554,12 @@ The speech series has not opened yet.
   full queue refuses the new command, logged as `channel.full` on `audio.speech.held`. `Speak`
   and `Check` are never held, since they are answered at once. With no transport, or after it
   has shut down, nothing is held, since no connection will come.
-- With neither capture nor a connection up, the 10 ms drain is off, so a component wired with
-  no speech pipe (as `eileen-cli` still is) wakes once a second, not a hundred times.
+- While capture is off the 10 ms drain is off too: a mute empties the ring and nothing new
+  arrives, and a component wired with no microphone (as `eileen-cli` still is) never gets a
+  frame. So a muted component, connected or not, wakes once a second for its `Ping`, not a
+  hundred times; a new connection's replay runs on the loop's own flag, not on the tick.
+- A connection handed back logs at warn, except when the component itself is stopping, which
+  is an ordinary end and logs at info, so a clean run and stop logs no warning.
 - Inputs leave the component with `seq`, `at` and `mono` zero: only the runtime's input queue
   can give an input its place in the core-wide replay order, and the component reads no clock.
   `eileen-runtime` has no `InputSink` yet; WP2's queue fills them when it takes an input.
