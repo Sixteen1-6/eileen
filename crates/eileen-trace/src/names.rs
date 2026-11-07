@@ -154,6 +154,10 @@ names! {
         fields: ["incident_id", "trigger"];
     /// The async runtime woke late; lands under whatever was blocked.
     RUNTIME_STALLED = "runtime.stalled", Span, "core", parents: [Root, Any], outlives: false, fields: ["late_ms"];
+    /// One `Core::step`, which the runtime's driver opens at DEBUG around each input: the input's
+    /// place in the replay order, its kind and how many effects it caused. The core's own spans
+    /// name their parents, so none of them sits under it.
+    CORE_STEP = "core.step", Span, "core", parents: [Root], outlives: false, fields: ["seq", "input", "effects"];
 
     /// A span took longer than its threshold (the slow-span layer).
     SPAN_SLOW = "span.slow", Event, "all", parents: [Any], outlives: false,
@@ -187,6 +191,14 @@ names! {
     WORKER_FAULT = "worker.fault", Event, "core", parents: [Any], outlives: false, fields: ["ws_id", "fault"];
     /// A call to another process passed its deadline.
     DEADLINE_PASSED = "deadline.passed", Event, "all", parents: [Any], outlives: false, fields: ["call", "deadline_ms"];
+    /// The driver dropped an effect no running component serves, logged once per family per
+    /// run; `component` names the one that served it before it ended, or is `none`.
+    EFFECT_UNSERVED = "effect.unserved", Event, "core", parents: [Any], outlives: false, fields: ["family", "component"];
+    /// A component's task ended other than by stopping when asked: with an error, a panic, by
+    /// returning early, or aborted when it did not stop in time. A component's error text can
+    /// quote a path, so it goes in `pii.message`.
+    COMPONENT_ENDED = "component.ended", Event, "core", parents: [Any], outlives: false,
+        fields: ["component", "outcome", "pii.message"];
 }
 
 /// The row for `name`, if it is declared.
