@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use eileen_contracts::config::RoutingConfig;
 use eileen_contracts::harness::{
     EnvPolicy, HookEndpoint, SessionSpec, SessionToken, ShimEndpoint, WorkerEvent,
 };
@@ -24,13 +25,20 @@ use eileen_trace::Redactor;
 /// worst case, so a start that waits for `system/init` fails the test rather than passing.
 const READY: Duration = Duration::from_secs(90);
 
+/// The default config's fast model: aliases live only in config (section 2.3), and the probe
+/// runs no model turn, so the cheapest is enough.
+fn fast_model() -> String {
+    let routing = RoutingConfig::default();
+    routing.models.get("fast").cloned().expect("the default config names a fast model")
+}
+
 fn spec(session: WorkerSessionId) -> SessionSpec {
     SessionSpec {
         session,
         pool: None,
         kind: JobKind::Coding,
         route: Route::Claude,
-        model: "haiku".to_owned(),
+        model: fast_model(),
         effort: None,
         cwd: format!("run/{session}/cwd"),
         worktree: None,
