@@ -27,6 +27,14 @@
 //! - Mute stops the capture stream within one buffer (WP4 acceptance 9 tests it).
 //! - Every accept, read and write on a speech connection has a deadline, and every queue of the
 //!   memory transport a maximum (tests in `fake::tests`). A shipped binary never enables `fake`.
+//! - On each new speech connection the component sends the latest `SetMode` and `SetHotwords`
+//!   before any audio, then the commands held while none was up, then the ring's unconfirmed
+//!   frames, then live ones; so a late connect, a restart and a reload each recognise a turn once,
+//!   and an open turn again under a new turn ID (`tests/it/speech_pipe.rs`).
+//! - The component never restarts anything: a broken connection, or one whose frame the codec
+//!   refused, goes back to the transport, which only closes it (`tests/it/speech_pipe.rs`).
+//! - Commands held while no connection is up are bounded (64), each one dropped past that logged
+//!   (`tests/it/speech_pipe.rs`).
 //! - The speech ring's capture callback and its reader share only an SPSC handoff (`rtrb`) and
 //!   two atomics, the next `seq` and the count of frames lost. Loom models in `ring::concurrency`
 //!   explore every order of those two under `cfg(loom)`; rtrb's own tests cover the handoff, and
@@ -62,11 +70,11 @@
 //! - Called by `eileen-cli`, which builds the component and implements [`SpeechTransport`] over
 //!   WP2's transport; WP2's tests use `fake`. Cross-crate items: [`SpeechTransport`],
 //!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`],
-//!   [`AudioConfig`], [`SetupError`], and the test audio `eileen run --audio-source wav:<file>
-//!   --audio-sink capture:<file>` selects and other crates' tests use: [`WavClip`],
-//!   [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker, microphone and loopback,
-//!   [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The component never names the
-//!   pipe, spawns a process or sees the token.
+//!   [`AudioConfig`] with its [`SharedSource`], [`SetupError`], and the test audio
+//!   `eileen run --audio-source wav:<file> --audio-sink capture:<file>` selects and other crates'
+//!   tests use: [`WavClip`], [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker,
+//!   microphone and loopback, [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The
+//!   component never names the pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
 //!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
@@ -82,10 +90,18 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-audio`.
-//! - Layers: unit tests for the DSP, the ring's rules and the memory transport (paused tokio
-//!   time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with `--lib
-//!   ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the same
-//!   models run once on a real thread), the test sources and sinks under paused tokio time
+//! - Layers: integration tests of the component's end of the speech pipe in
+//!   `tests/it/speech_pipe.rs` (WP4 acceptance 15: a `WavSource` microphone and a scripted
+//!   stand-in for the speech process over the memory transport, on paused tokio time: a late
+//!   connect, a kill and a reload each recognising every command once, the latest mode and
+//!   hotwords first, an overrun's break flag, mutes, the heartbeat and confirmation, a refused
+//!   frame, the answers while no connection is up and the held commands' maximum, and the logs
+//!   of a clean stop and a dropped command); unit tests for the capture framing
+//!   (`capture::tests`, with the callback inside `allocation_counter::measure`), the DSP, the
+//!   ring's rules and the memory transport (paused tokio time), loom for the ring's shared
+//!   atomics (`RUSTFLAGS="--cfg loom"`, with `--lib ring::concurrency`; no CI lane runs it yet,
+//!   section 4.6 plans one; without the flag the same models run once on a real thread), the
+//!   test sources and sinks under paused tokio time
 //!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
 //!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
 //!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
@@ -93,8 +109,9 @@
 //!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
 //!   and a speech video, made bit for bit the same on every platform, with the loopback two
 //!   chunks behind her stream (`aec::tests`: an ERLE floor against the loopback and against own
-//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a near-end command's energy kept alone, over
-//!   Eileen and over each bed, the reference switch to the chunk, the learning time, the flags,
+//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a
+//!   near-end command's energy kept alone, over Eileen and over each bed, the reference switch
+//!   to the chunk, the learning time, the flags,
 //!   and no false onset in ten minutes of each bed, counted from a fresh canceller, in four runs
 //!   of 153 s that each stay under the test profiles' time limit), the window assembly and the
 //!   detector's rules (`energy::tests`), and device tests on the owner's PC under
@@ -130,6 +147,14 @@
 //!   Windows' converter, and synthesis keeps its own 147:80. Other rates are unsupported for now.
 //! - A speech connection's halves need a tokio runtime with its timer; a failed write leaves the
 //!   stream inside a frame, so the writer refuses every later write and the connection goes back.
+//! - A read on the speech connection that misses its deadline is not a failure, and the component
+//!   closes nothing for silence: the core counts missed heartbeats (each `Pong` is one) and
+//!   decides a restart, and during a reload it counts none until its load deadline passes.
+//! - The component's pending accept, read and effect are owned futures kept across its loop's
+//!   turns, so none is dropped part way; a read in flight when a write fails is awaited within
+//!   its deadline, so the two halves rejoin before the connection goes back.
+//! - Inputs the component sends carry zero for `seq`, `at` and `mono`: the runtime's input queue
+//!   gives each its place in the replay order and its times.
 //! - The test sources and sinks pace their buffers on the tokio clock and take their buffers'
 //!   times from sample positions, so under paused tokio time a test's audio moves only when the
 //!   test waits. Their callbacks run on a tokio task under the device's lock: a callback that
@@ -147,6 +172,12 @@
 //!
 //! # Logs and tracing
 //!
+//! - `channel.full` from the speech link, once a second at most for the ring: frames the ring
+//!   dropped (`audio.speech.ring`), a command held while no connection was up dropped past the
+//!   queue's maximum (`audio.speech.held`), and inputs the core's queue refused
+//!   (`core.inputs`). A connection handed back logs its id and reason at warn, or at info when
+//!   the component is stopping, a connection made at info, and each accept wait that ends with
+//!   none at debug.
 //! - `channel.full` when playback drops something for want of room, each `channel` with its own
 //!   `times`: a frame refused by the sample queue (`audio.playback`) or the marker queue
 //!   (`audio.playback.markers`), a new utterance past the live limit
@@ -164,10 +195,9 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use eileen_contracts::core_io::EffectFamily;
-use eileen_contracts::ports::{Component, IdleComponent};
+use eileen_contracts::ports::Component;
 
 // The component cancels the echo in its capture path with this, and runs the energy fallback
 // while the speech process is not connected, in a later part; until then only their tests use
@@ -177,6 +207,7 @@ use eileen_contracts::ports::{Component, IdleComponent};
     expect(dead_code, reason = "the component wires echo cancellation in a later part")
 )]
 mod aec;
+mod capture;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the component wires the energy fallback in a later part")
@@ -184,18 +215,13 @@ mod aec;
 mod energy;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
-// The component takes the ring in a later part of the audio series; until then only its tests
-// use it, and under loom only the concurrency models, which leave the rules' items unused.
-#[cfg_attr(
-    any(not(test), loom),
-    expect(dead_code, reason = "the component wires the ring in a later part")
-)]
+mod link;
 mod ring;
-// The component converts its capture and synthesis with these in a later part; until then only
-// their tests use them.
+// The capture callback converts with these; synthesis takes its conversion when the component
+// wires playback in a later part, so until then some items only tests use.
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the component wires the resamplers in a later part")
+    expect(dead_code, reason = "the component wires synthesis's conversion in a later part")
 )]
 mod resample;
 // The component plays the speech process's PCM through this in a later part; until then only its
@@ -223,25 +249,37 @@ pub use transport::{
 };
 pub use wav::{CaptureSink, WavClip, WavSource};
 
-/// What the audio component reads at start. Later parts of WP4's audio series add the source
-/// and sink choices.
+/// A capture source the component and its creator share: the component starts and stops its
+/// stream (mute stops it), and a test keeps a handle to the same source.
+pub type SharedSource = Arc<Mutex<dyn AudioSource>>;
+
+/// What the audio component reads at start. Later parts of WP4's audio series add the playback
+/// sink and the loopback.
 #[derive(Clone, Default)]
 pub struct AudioConfig {
     /// The speech process's connections; `None` runs without the speech pipe, as the stub and
     /// tests that need no speech process do.
     pub speech: Option<Arc<dyn SpeechTransport>>,
+    /// Where the microphone's audio comes from: the endpoint, or a test's [`WavSource`] or
+    /// [`RoomMixer`] microphone. `None` captures nothing.
+    pub capture: Option<SharedSource>,
 }
 
 impl fmt::Debug for AudioConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AudioConfig").field("speech", &self.speech.is_some()).finish()
+        f.debug_struct("AudioConfig")
+            .field("speech", &self.speech.is_some())
+            .field("capture", &self.capture.is_some())
+            .finish()
     }
 }
 
-/// The audio component. The stub accepts the audio family and does nothing.
+/// The audio component. It takes the audio and speech effect families: it captures into the
+/// speech ring from its start, and serves the speech pipe over the connections `cfg.speech`
+/// gives.
 #[must_use]
-pub fn component(_cfg: &AudioConfig) -> Box<dyn Component> {
-    Box::new(IdleComponent::new("audio", &[EffectFamily::Audio]))
+pub fn component(cfg: &AudioConfig) -> Box<dyn Component> {
+    Box::new(link::AudioComponent::new(cfg.speech.clone(), cfg.capture.clone()))
 }
 
 #[cfg(test)]
@@ -251,9 +289,9 @@ mod tests {
     use super::{AudioConfig, component};
 
     #[test]
-    fn the_stub_component_takes_the_audio_family() {
+    fn the_component_takes_the_audio_and_speech_families() {
         let audio = component(&AudioConfig::default());
         assert_eq!(audio.name(), "audio", "its name");
-        assert_eq!(audio.accepts(), [EffectFamily::Audio], "its family");
+        assert_eq!(audio.accepts(), [EffectFamily::Audio, EffectFamily::Speech], "its families");
     }
 }
