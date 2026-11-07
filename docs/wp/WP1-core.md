@@ -309,7 +309,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `eileen-core::tests::router::*`, `eileen-core::tests::fan_out::*`,
   `eileen-core::tests::apps::*`, `eileen-core::tests::refusals::*`, and the new cases in
   `eileen-core::tests::steering` and `eileen-core::lifecycle::tests`.
-- `amend/wp1-speech-reload` again (this pull request), from review of #146's merged text.
+- `amend/wp1-speech-reload` again (#188), from review of #146's merged text.
   Section 6.4 has `wp2/speech-transport` answer `HangDumpThenKill` with the kill alone, and
   spawn the process again only on the core's `Restart`, as section 6.3 and D81 have it; #178's
   wording read as a kill and a restart, which would have loaded the models twice for every
@@ -370,7 +370,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   interrupts the unfinished jobs and starts speech again on its first step. So strict replay of
   the minimal core starts only from the checkpoint taken at the core's start, and an incident
   whose start checkpoint has left the flight recorder's ring replays in scenario mode (sections
-  2.13 and 3.3.16 as this pull request amends them), until the contracts amendment with the full
+  2.13 and 3.3.16 as #188 amended them), until the contracts amendment with the full
   `Core::step` carries every field and a restore for replay skips what only a resume does (item
   4 of Next above).
 
