@@ -14,6 +14,13 @@
 //!   microphone state and reply line (`hud`). Later: the rest of section 6.3's list, turns heard
 //!   late first (`wp1/speech-late`).
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
+//! - [`lifecycle`]: the job registry `Core::step` keeps, pure and cloneable: the job states and
+//!   the one legal graph of steps between them, names, slugs and fan-out ordinals given at
+//!   accept, the approval deadline, cancel targets, a restart, and a coding job's checkout (in
+//!   place behind a snapshot ref, or in a worktree), which the core does not send yet.
+//! - The `UserError`s the core builds, with their sentences (`user_error`): so far
+//!   `JobKindUnavailable`, the refusal of an `ml_project` dispatch before routing and admission,
+//!   put on the bus for the HUD with its sentence as the call's error result.
 //! - [`CorePorts`] and [`CoreConfig`]: what the runtime hands the core at start, with
 //!   [`LocalTime`], the PC's offsets from UTC and when they change.
 //! - The `shell_command` fuzz target's entry (`fuzz_entry`).
@@ -29,7 +36,7 @@
 //! - No IO: the crate depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace` among
 //!   Eileen's crates (check 24), plus `tracing` for spans and `serde_json` for tool arguments,
 //!   and has no build dependencies (decision D84); time comes in as [`MonoTime`] and randomness as [`CoreRng`] (`disallowed-methods` bans the
-//!   system clock and generated IDs). IDs are minted from `MonoTime` and the RNG.
+//!   system clock and generated IDs). IDs are minted from the input's wall time and the RNG.
 //! - Maps that can reach an effect are ordered (`disallowed-types` in
 //!   `crates/eileen-core/clippy.toml` bans `HashMap`).
 //! - One utterance holds the floor at a time; the announcement queue is bounded (invariant 10).
@@ -47,7 +54,17 @@
 //!   every path is in the job's folders and outside any git component, a deny with a
 //!   do-not-retry reason for everything else, until W2's permission gate replaces this.
 //! - A job starts only from the brain's own shim, for the brain turn in flight, with the
-//!   authority the core sent that turn with; an ambient turn starts none (section 2.3).
+//!   authority the core sent that turn with; an ambient turn starts none (section 2.3). A kind
+//!   `JobKind::built_in_v0_1` rejects is refused with its `UserError` before routing and
+//!   admission, and no session starts.
+//! - Job states change only by a `lifecycle::Step`, along the graph `lifecycle::legal` writes
+//!   as pairs of states, and every job ends in exactly one terminal state (invariants 4 and
+//!   5). The core's first step, and only that one, interrupts every job the snapshot held
+//!   unfinished, however often the speech process stops and starts later; no ID the core mints
+//!   repeats across a restart: each ID's timestamp is after the last one's, which the snapshot
+//!   keeps (invariant 12).
+//! - The brain's text never picks a job's folder: a repository it names is untrusted, and only
+//!   an absolute path with no `.` or `..` part can become a checkout.
 //! - Unmuting is for the user's hands: an `eileen say` turn never unmutes.
 //! - A speech turn is routed once, however often its `EndOfTurn` arrives, and a turn open when
 //!   speech went down is never routed: its audio is replayed under a new turn.
@@ -66,7 +83,9 @@
 //! - Fast command: `cargo xtask test -p eileen-core`.
 //! - Layers: unit tests per module with a scripted resolver (`tests`), exhaustive turn-taking
 //!   (`eileen-sim::it::turn::exhaustive`), the simulator's slice and barge-in tests (`it::slice`,
-//!   `it::barge_in`), seeds and regressions, and scenario replay.
+//!   `it::barge_in`), seeds and regressions, and scenario replay. The job registry is checked
+//!   against a proptest-state-machine reference model on random command sequences
+//!   (`tests/it/job_model.rs`).
 //! - A bug here starts as a failing simulator seed or a scenario whose expectation broke.
 //!
 //! # Traps
@@ -79,7 +98,11 @@
 //!   by the core's own clause text, not by the speech process's character counts.
 //! - A worker session's `SessionSpec` leaves its hook and shim endpoints empty: the runtime
 //!   mints their tokens at spawn. Its working folder is `run/<session>/cwd`, relative to the
-//!   data directory.
+//!   data directory, for every job, a coding job with a repository included, and it names no
+//!   worktree and no snapshot: the harness does not yet record the in-place snapshot or create
+//!   worktrees, and the contract's `snapshot_ref` still reads as a snapshot to restore.
+//! - A restart interrupts queued jobs as well as running ones: the admission queue is not in
+//!   the snapshot, and no worker outlives the core.
 //! - The local time is the offset in force at each step's wall time, from [`LocalTime`]'s
 //!   changes, which the runtime reads at start for the current year and the next: a
 //!   daylight-saving change is followed with no restart, a change of time zone only from the
@@ -120,10 +143,12 @@ pub mod fuzz_entry;
 mod hud;
 mod job;
 mod life;
+pub mod lifecycle;
 mod route;
 mod spans;
 mod speech;
 pub mod turn;
+mod user_error;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -131,8 +156,10 @@ use std::fmt;
 use eileen_contracts::bus::{BusEvent, CancelSource};
 use eileen_contracts::config::Config;
 use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId, UserInput};
-use eileen_contracts::ids::{Envelope, JobId, MonoTime, SpeakId, TraceCtx, TurnId, WallTime};
-use eileen_contracts::jobs::{JobKind, TurnSource};
+use eileen_contracts::ids::{
+    Envelope, JobId, MonoTime, SpeakId, TraceCtx, TurnId, WallTime, WorkerSessionId,
+};
+use eileen_contracts::jobs::{Job, JobKind, TurnSource};
 use eileen_contracts::ports::{DictationCleaner, IntentResolver, SettingsValidator, SkillEngine};
 use eileen_contracts::record::CoreSnapshotV1;
 use eileen_contracts::speech::{VoiceCalibration, VoiceEvent};
@@ -234,6 +261,8 @@ struct Cx<'a> {
     rng: &'a mut CoreRng,
     effects: &'a mut Vec<Envelope<Effect>>,
     seq: u64,
+    /// The timestamp of the last ID minted, in milliseconds.
+    minted_ms: u64,
 }
 
 impl Cx<'_> {
@@ -254,9 +283,16 @@ impl Cx<'_> {
         self.push(ctx, Effect::Emit(event));
     }
 
-    /// Virtual milliseconds, the timestamp part of the IDs the core mints.
-    const fn ms(&self) -> u64 {
-        self.now.0 / 1_000_000
+    /// The timestamp part of the next ID the core mints: the step's wall-clock millisecond, or
+    /// one after the last ID minted, whichever is later. The last one is kept in the snapshot,
+    /// so a core restarted from it, whose monotonic clock and random numbers start again, never
+    /// mints an ID twice (invariant 12); a core restarted from an older snapshot is past it by
+    /// the wall clock.
+    const fn mint(&mut self) -> u64 {
+        let ms = if self.at.0 > 0 { self.at.0.unsigned_abs() / 1_000 } else { 0 };
+        let next = self.minted_ms.saturating_add(1);
+        self.minted_ms = if ms > next { ms } else { next };
+        self.minted_ms
     }
 
     /// 80 random bits for an ID.
@@ -313,6 +349,11 @@ pub struct Core {
     /// The HUD's line and the state last sent.
     hud: Hud,
     seq: u64,
+    /// The timestamp of the last ID minted, in milliseconds.
+    minted_ms: u64,
+    /// Whether a step has run, and with it the interruption of the jobs the snapshot held
+    /// unfinished: once per core, whatever the speech process does later.
+    stepped: bool,
     /// The snapshot the core started from, for the fields it does not run yet.
     resumed: CoreSnapshotV1,
 }
@@ -334,6 +375,7 @@ impl Core {
         let resumed = snapshot.unwrap_or_else(fresh_snapshot);
         let counter = |name: &str| resumed.counters.get(name).copied().unwrap_or(0);
         let timers = Timers { next: counter(COUNTER_TIMERS), live: BTreeMap::new() };
+        let minted_ms = counter(COUNTER_MINTED).max(latest_id_ms(&resumed.jobs));
         Self {
             config,
             ports,
@@ -351,12 +393,15 @@ impl Core {
             life: SpeechLife::default(),
             hud: Hud::default(),
             seq: counter(COUNTER_SEQ),
+            minted_ms,
+            stepped: false,
             resumed,
         }
     }
 
     /// Takes one input at `now` and appends the effects it causes. The first step, whatever its
-    /// input, also starts the speech process.
+    /// input, also interrupts the jobs the snapshot held unfinished, and the first step with the
+    /// speech process off starts it.
     pub fn step(
         &mut self,
         now: MonoTime,
@@ -365,7 +410,11 @@ impl Core {
         effects: &mut Vec<Envelope<Effect>>,
     ) {
         let Envelope { at, ctx, body, .. } = input;
-        let mut cx = Cx { now, at, rng, effects, seq: self.seq };
+        let mut cx = Cx { now, at, rng, effects, seq: self.seq, minted_ms: self.minted_ms };
+        if !self.stepped {
+            self.stepped = true;
+            self.interrupt_unfinished(&mut cx);
+        }
         if !self.life.started() {
             self.boot(&mut cx);
         }
@@ -389,6 +438,7 @@ impl Core {
         self.announce(&mut cx);
         self.refresh_hud(&mut cx);
         self.seq = cx.seq;
+        self.minted_ms = cx.minted_ms;
     }
 
     /// The state to checkpoint and replay from (section 3.3.16), built from the live state.
@@ -401,6 +451,7 @@ impl Core {
         snapshot.conversation_until = self.window.closes_at();
         snapshot.counters.insert(COUNTER_SEQ.to_owned(), self.seq);
         snapshot.counters.insert(COUNTER_TIMERS.to_owned(), self.timers.next);
+        snapshot.counters.insert(COUNTER_MINTED.to_owned(), self.minted_ms);
         snapshot
     }
 
@@ -498,6 +549,16 @@ impl Core {
 const COUNTER_SEQ: &str = "effect_seq";
 /// The snapshot counter of timer IDs.
 const COUNTER_TIMERS: &str = "timer_ids";
+/// The snapshot counter of the last minted ID's timestamp, in milliseconds.
+const COUNTER_MINTED: &str = "minted_ms";
+
+/// The latest timestamp among the IDs of `jobs` and their sessions, for a snapshot written
+/// before it kept [`COUNTER_MINTED`].
+fn latest_id_ms(jobs: &[Job]) -> u64 {
+    let ids =
+        jobs.iter().flat_map(|job| [Some(job.id.ulid()), job.session.map(WorkerSessionId::ulid)]);
+    ids.flatten().map(|id| id.timestamp_ms()).max().unwrap_or(0)
+}
 
 /// The snapshot of a core that has never run.
 fn fresh_snapshot() -> CoreSnapshotV1 {

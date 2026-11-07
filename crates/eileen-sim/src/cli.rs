@@ -1,8 +1,8 @@
 //! The `eileen-sim` command line, which `cargo xtask sim` runs as
 //! `cargo run --locked -p eileen-sim --bin eileen-sim -- <args>`.
 //!
-//! With no arguments it runs the pull request seed set. Exit codes: 0 every run passed, 1 an
-//! invariant broke or `--doublecheck` found two traces, 2 a usage or IO error.
+//! With no arguments it runs the pull request seed set with every profile. Exit codes: 0 every
+//! run passed, 1 an invariant broke or `--doublecheck` found two traces, 2 a usage or IO error.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -26,10 +26,10 @@ pub const COMMIT_ENV: &str = "EILEEN_SIM_COMMIT";
 pub const USAGE: &str = "\
 usage: eileen-sim [options]
 
-With no options, runs the pull request seed set with the default profile.
+With no options, runs the pull request seed set with every profile.
 
-  --seed <n>        run this seed
-  --profile <name>  use this profile (default: default)
+  --seed <n>        run this seed (with the default profile unless --profile names one)
+  --profile <name>  use only this profile
   --steps <n>       take this many steps instead of the profile's
   --doublecheck     run each seed twice and compare the trace hashes
   --replay <file>   replay a stored SimRegression (crates/eileen-sim/regressions/<name>.toml)
@@ -194,32 +194,50 @@ fn run_options(options: &Options, out: &mut dyn Write) -> Result<u8, CliError> {
         let report = run::replay(&regression)?;
         return Ok(report_one(&report, options.verbose, out)?);
     }
-    let profile =
-        Profile::load(options.profile.as_deref().unwrap_or("default")).map_err(RunError::from)?;
+    // One seed alone means the default profile, so a printed replay command, which names
+    // both, and a bare `--seed` agree.
+    let names: Vec<&str> = match (&options.profile, options.seed) {
+        (Some(name), _) => vec![name.as_str()],
+        (None, Some(_)) => vec!["default"],
+        (None, None) => profile::names(),
+    };
     let seeds: Vec<u64> = options.seed.map_or_else(|| PR_SEEDS.to_vec(), |seed| vec![seed]);
     let mut code = EXIT_PASS;
-    for seed in seeds {
-        let report = if options.doublecheck {
-            match run::doublecheck(&profile, seed, options.steps)? {
-                Ok(report) => report,
-                Err((first, second)) => {
-                    writeln!(
-                        out,
-                        "seed {seed}: FAIL doublecheck, the trace hashes differ \
-                         ({first:#018x} then {second:#018x})"
-                    )?;
-                    code = EXIT_FAIL;
-                    continue;
-                }
+    for name in names {
+        let profile = Profile::load(name).map_err(RunError::from)?;
+        for &seed in &seeds {
+            if run_one(&profile, seed, options, out)? != EXIT_PASS {
+                code = EXIT_FAIL;
             }
-        } else {
-            run::run_seed(&profile, seed, options.steps)?
-        };
-        if report_one(&report, options.verbose, out)? != EXIT_PASS {
-            code = EXIT_FAIL;
         }
     }
     Ok(code)
+}
+
+/// Runs `seed` with `profile` (twice with `--doublecheck`) and reports it.
+fn run_one(
+    profile: &Profile,
+    seed: u64,
+    options: &Options,
+    out: &mut dyn Write,
+) -> Result<u8, CliError> {
+    let report = if options.doublecheck {
+        match run::doublecheck(profile, seed, options.steps)? {
+            Ok(report) => report,
+            Err((first, second)) => {
+                writeln!(
+                    out,
+                    "seed {seed}: FAIL doublecheck of profile `{}`, the trace hashes differ \
+                     ({first:#018x} then {second:#018x})",
+                    profile.name
+                )?;
+                return Ok(EXIT_FAIL);
+            }
+        }
+    } else {
+        run::run_seed(profile, seed, options.steps)?
+    };
+    Ok(report_one(&report, options.verbose, out)?)
 }
 
 fn report_one(report: &RunReport, verbose: bool, out: &mut dyn Write) -> io::Result<u8> {
@@ -254,7 +272,9 @@ fn report_one(report: &RunReport, verbose: bool, out: &mut dyn Write) -> io::Res
 mod tests {
     use std::ffi::OsString;
 
-    use super::{EXIT_ERROR, EXIT_PASS, main};
+    use super::{EXIT_ERROR, EXIT_PASS, USAGE, main};
+    use crate::profile::names;
+    use crate::run::PR_SEEDS;
 
     fn run(args: &[&str]) -> (u8, String, String) {
         let mut out = Vec::new();
@@ -268,6 +288,22 @@ mod tests {
         let (code, out, _) = run(&["--seed", "3", "--steps", "100"]);
         assert_eq!(code, EXIT_PASS, "{out}");
         assert!(out.starts_with("seed 3: pass, 100 steps of profile `default`, trace 0x"), "{out}");
+    }
+
+    #[test]
+    fn with_no_seed_every_profile_runs_the_pull_request_seeds() {
+        let (code, out, _) = run(&["--steps", "5"]);
+        assert_eq!(code, EXIT_PASS, "{out}");
+        assert_eq!(out.lines().count(), names().len() * PR_SEEDS.len(), "one line a run: {out}");
+        for name in names() {
+            let profile = format!("profile `{name}`");
+            let runs = out.lines().filter(|line| line.contains(&profile)).count();
+            assert_eq!(runs, PR_SEEDS.len(), "every seed of `{name}`: {out}");
+        }
+        let (_, one, _) = run(&["--profile", "low-memory", "--steps", "5"]);
+        assert_eq!(one.lines().count(), PR_SEEDS.len(), "one profile when named: {one}");
+        assert!(one.lines().all(|line| line.contains("profile `low-memory`")), "{one}");
+        assert!(USAGE.contains("every profile"), "the usage says so");
     }
 
     #[test]

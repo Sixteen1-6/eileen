@@ -156,7 +156,7 @@ impl Core {
 
     /// Text typed in Eileen's own UI, or sent from the command line, as a turn of its own.
     pub(crate) fn typed(&mut self, cx: &mut Cx<'_>, text: &str, source: TurnSource) {
-        let turn = TurnId::from_parts(cx.ms(), cx.random());
+        let turn = TurnId::from_parts(cx.mint(), cx.random());
         self.utterance(cx, turn, text, source);
     }
 

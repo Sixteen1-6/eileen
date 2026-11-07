@@ -4,24 +4,33 @@
 //! time, calls `Core::step`, applies the effects to the simulated parts, checks every
 //! invariant, writes one line of the step log and feeds the trace hash. The parts: timers the
 //! core set, the speech process with its life and the playback device, a scripted brain and
-//! scripted worker sessions ([`crate::parts`]), the bus with one slow subscriber, the HUD's
-//! last state, the supervised children's lives (invariant 8), and the span collector
-//! ([`crate::collect`]), which keeps every span and log line the core produces on the
-//! simulator's thread for invariant 13.
+//! scripted worker sessions ([`crate::parts`]), the PC with its memory, paging, CPU load and
+//! power and a heavy app that grows and closes ([`crate::pc`]), read into `Input::Memory`
+//! every 5 s, the bus with one slow subscriber, the HUD's last state, the supervised
+//! children's lives (invariant 8), and the span collector ([`crate::collect`]), which keeps
+//! every span and log line the core produces on the simulator's thread for invariant 13.
 //! What the parts answer is scheduled at virtual times, and [`World::advance`] delivers it,
-//! and the timers, in time order, running the device's 10 ms callbacks as time passes.
+//! the timers and the memory readings, in time order, running the device's 10 ms callbacks as
+//! time passes.
+//!
+//! A world a test builds is fault-free; a seeded run switches the fault points of
+//! [`crate::faults`] on ([`World::set_faults`]), and every fault that fires is recorded with its
+//! step. The brain's pace comes from the profile, drawn from the world's own random stream,
+//! apart from the core's and the generator's.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
 
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
-use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId};
+use eileen_contracts::core_io::{ActivityEvent, Effect, Input, PlaybackEvent, TimerId};
+use eileen_contracts::harness::{BrainCmd, WorkerCmd, WorkerEvent};
 use eileen_contracts::hud::HudState;
-use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime};
+use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime, WorkerSessionId};
+use eileen_contracts::jobs::MemoryPressure;
 use eileen_contracts::ports::SettingsValidator;
-use eileen_contracts::record::InputRecord;
+use eileen_contracts::record::{FaultRecord, InputRecord};
 use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 use eileen_core::{Core, CoreConfig, CorePorts};
 use eileen_stdx::rng::CoreRng;
@@ -30,12 +39,16 @@ use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::collect::Collector;
+use crate::faults::Faults;
 use crate::hash::TraceHash;
 use crate::invariants::{
     self, AudioEvent, AudioRecord, ChildEvent, ChildRecord, Delivery, Violation,
 };
 use crate::parts::Brain as BrainPart;
-use crate::parts::{BrainReply, CALLBACK_MS, Device, Due, Process, Speech, Workers};
+use crate::parts::{
+    BrainReply, BrainTurn, CALLBACK_MS, Device, Due, Process, Speech, WorkerFault, Workers,
+};
+use crate::pc::{EileenUse, Load, MEMORY_SAMPLE_MS, Pc};
 use crate::profile::Profile;
 use crate::resolver::SimResolver;
 
@@ -46,6 +59,15 @@ const EPOCH_US: i64 = 1_767_225_600_000_000;
 const NS_PER_MS: u64 = 1_000_000;
 /// The width of the step log's input column.
 const INPUT_COLUMN: usize = 32;
+
+/// Whether the world's fault point `$site` fires in the step `$world` is taking: `buggify!`
+/// draws in a seeded run, a replay fires what its records name, and a world a test drives by
+/// hand fires nothing ([`Faults`]). Every site is listed in [`crate::faults::SITES`].
+macro_rules! fault {
+    ($world:ident, $site:literal) => {
+        $world.faults.hit($world.seq, $site, eileen_stdx::buggify!($site))
+    };
+}
 
 /// The settings validator the simulated core uses. `eileen-sim` may not depend on
 /// `eileen-config` (BUILD.md section 3.1), so it carries its own; like the stub, it refuses
@@ -138,6 +160,16 @@ pub struct World {
     device: Device,
     brain: BrainPart,
     workers: Workers,
+    /// The PC: memory, paging, CPU load, power and the heavy app.
+    pc: Pc,
+    /// When the next memory reading is due, ms.
+    next_reading_ms: u64,
+    /// Worker sessions started and not yet exited, which hold memory.
+    sessions: BTreeSet<WorkerSessionId>,
+    /// The fault points and every fault that fired.
+    faults: Faults,
+    /// The random numbers the parts draw their pace from (the brain's delays and dispatches).
+    parts_rng: CoreRng,
     /// The utterances the speech process holds, which playback events may name (invariant 10).
     speech_queue: Vec<SpeakId>,
     /// The supervised children's lives (invariant 8).
@@ -194,6 +226,16 @@ impl World {
         // replay, which mints none, hands the core the same numbers the run did.
         let mut core_rng = CoreRng::from_seed(seed);
         let id_rng = core_rng.fork();
+        // The input buffer of a seeded run takes the third stream, so the parts take the fourth.
+        let mut parts_rng = CoreRng::from_seed(seed);
+        for _ in 0..3 {
+            parts_rng.jump();
+        }
+        let mut due = Due::default();
+        if profile.media_at_start {
+            due.schedule(0, Input::Activity(ActivityEvent::OtherAudio { playing: true }));
+        }
+        let pc = Pc::new(&profile.pc, profile.eileen);
         let bus = Bus::new(
             usize::try_from(profile.bus_subscriber_capacity).unwrap_or(usize::MAX),
             usize::try_from(profile.bus_subscriber_drain).unwrap_or(usize::MAX),
@@ -207,11 +249,16 @@ impl World {
             core_rng,
             id_rng,
             timers: BTreeMap::new(),
-            due: Due::default(),
+            due,
             speech: Speech::default(),
             device: Device::new(),
             brain: BrainPart::default(),
             workers: Workers::default(),
+            pc,
+            next_reading_ms: MEMORY_SAMPLE_MS,
+            sessions: BTreeSet::new(),
+            faults: Faults::off(),
+            parts_rng,
             speech_queue: Vec::new(),
             children: Vec::new(),
             hud: None,
@@ -300,6 +347,46 @@ impl World {
     #[must_use]
     pub const fn hud(&self) -> Option<&HudState> {
         self.hud.as_ref()
+    }
+
+    /// The simulated PC.
+    #[must_use]
+    pub const fn pc(&self) -> &Pc {
+        &self.pc
+    }
+
+    /// Which of Eileen's processes hold memory now.
+    #[must_use]
+    pub fn eileen_use(&self) -> EileenUse {
+        EileenUse {
+            speech: matches!(self.speech.process(), Process::Loading | Process::Up | Process::Hung),
+            workers: u32::try_from(self.sessions.len()).unwrap_or(u32::MAX),
+            brains: self.brain.running(),
+        }
+    }
+
+    /// The memory reading the runtime would send now.
+    #[must_use]
+    pub fn memory(&self) -> MemoryPressure {
+        self.pc.reading(self.now_ms, self.eileen_use())
+    }
+
+    /// The CPU load and power now.
+    #[must_use]
+    pub fn load(&self) -> Load {
+        self.pc.load(self.now_ms)
+    }
+
+    /// Switches the fault points to `faults`: [`Faults::live`] for a seeded run,
+    /// [`Faults::scripted`] for a replay, [`Faults::every`] for a test that breaks one part.
+    pub fn set_faults(&mut self, faults: Faults) {
+        self.faults = faults;
+    }
+
+    /// Every fault that fired so far, each with the step it fired in.
+    #[must_use]
+    pub fn faults(&self) -> &[FaultRecord] {
+        self.faults.records()
     }
 
     /// The supervised children's lives so far.
@@ -436,6 +523,15 @@ impl World {
             .min_by_key(|(id, at)| (**at, **id))
             .map(|(id, at)| (*id, *at));
         let item = self.due.next_at().filter(|at| *at <= self.now_ms);
+        let reading = Some(self.next_reading_ms).filter(|at| *at <= self.now_ms);
+        // A memory reading goes first only when it is due strictly before the rest.
+        if let Some(at) = reading
+            && timer.is_none_or(|(_, timer_at)| at.saturating_mul(NS_PER_MS) < timer_at.0)
+            && item.is_none_or(|item| at < item)
+        {
+            self.next_reading_ms = at.saturating_add(MEMORY_SAMPLE_MS);
+            return Some(Input::Memory(self.memory()));
+        }
         let timer_first = match (timer, item) {
             (Some((_, at)), Some(item)) => at.0 < item.saturating_mul(NS_PER_MS),
             (Some(_), None) => true,
@@ -479,7 +575,10 @@ impl World {
             self.hash.record(&serde_json::to_vec(&effect).unwrap_or_default());
             self.apply_effect(effect);
         }
-        self.bus.take();
+        if !fault!(self, "sim.bus.stall") {
+            self.bus.take();
+        }
+        self.faults.sync(self.seq);
         let violation = self.check();
         let status =
             violation.as_ref().map_or_else(|| "ok".to_owned(), |v| format!("FAIL {}", v.number));
@@ -516,8 +615,19 @@ impl World {
             Input::Sidecar(child, SidecarEvent::Exited { .. }) => {
                 self.child(*child, ChildEvent::Down);
             }
-            Input::Sidecar(SidecarId::Speech, _) => {
+            Input::Sidecar(SidecarId::Speech, event) => {
                 self.speech.delivered(self.now_ms, input, &mut self.due);
+                if matches!(event, SidecarEvent::Heartbeat) && self.speech.process() == Process::Up
+                {
+                    if fault!(self, "sim.speech.crash") {
+                        self.crash_speech();
+                    } else if fault!(self, "sim.speech.hang") {
+                        self.hang_speech();
+                    }
+                }
+            }
+            Input::Worker(session, WorkerEvent::Exited { .. }) => {
+                self.sessions.remove(session);
             }
             Input::Playback(_)
             | Input::Voice(_)
@@ -571,27 +681,19 @@ impl World {
                 self.speech.command(now, cmd, &mut self.due);
             }
             Effect::Audio(cmd) => self.device.command(now, cmd, &mut self.due),
-            Effect::Brain(cmd) => self.brain.command(now, cmd, &mut self.due),
-            Effect::Worker(session, cmd) => {
-                self.workers.command(now, *session, cmd, &mut self.due);
-            }
-            Effect::Sidecar(child, cmd) => {
-                let event = match cmd {
-                    SidecarCmd::Start => ChildEvent::Started,
-                    SidecarCmd::Restart => ChildEvent::Restarted,
-                    SidecarCmd::HangDumpThenKill => ChildEvent::Down,
+            Effect::Brain(cmd) => {
+                let pace = match cmd {
+                    BrainCmd::Turn { .. } => self.brain_turn(),
+                    BrainCmd::Interrupt { .. }
+                    | BrainCmd::Recycle { .. }
+                    | BrainCmd::Promote { .. }
+                    | BrainCmd::Start { .. }
+                    | BrainCmd::Stop { .. } => BrainTurn::default(),
                 };
-                self.child(*child, event);
-                if *child == SidecarId::Speech {
-                    if *cmd != SidecarCmd::HangDumpThenKill && self.speech.loads_stuck() {
-                        self.child(*child, ChildEvent::Stuck);
-                    }
-                    self.speech.sidecar(now, *cmd, &mut self.due);
-                    if *cmd == SidecarCmd::HangDumpThenKill {
-                        self.speech_gone();
-                    }
-                }
+                self.brain.command(now, cmd, pace, &mut self.due);
             }
+            Effect::Worker(session, cmd) => self.worker_command(*session, cmd),
+            Effect::Sidecar(child, cmd) => self.sidecar_command(*child, *cmd),
             Effect::Hud(state) => self.hud = Some((**state).clone()),
             Effect::SetTimer { id, at } => {
                 self.timers.insert(id.0, *at);
@@ -611,6 +713,72 @@ impl World {
             | Effect::Notify(_) => {}
         }
         self.effects.push(effect);
+    }
+
+    /// A worker command reaches the session: a `Start` holds memory until the session exits,
+    /// and a `Bind` may crash or slow the session.
+    fn worker_command(&mut self, session: WorkerSessionId, cmd: &WorkerCmd) {
+        let fault = match cmd {
+            WorkerCmd::Start(_) => {
+                self.sessions.insert(session);
+                WorkerFault::None
+            }
+            WorkerCmd::Bind(_) if fault!(self, "sim.worker.crash") => WorkerFault::Crash,
+            WorkerCmd::Bind(_) if fault!(self, "sim.worker.slow") => WorkerFault::Slow,
+            WorkerCmd::Bind(_)
+            | WorkerCmd::Prompt { .. }
+            | WorkerCmd::Interrupt
+            | WorkerCmd::Cancel
+            | WorkerCmd::Recycle
+            | WorkerCmd::RemoveWorktree
+            | WorkerCmd::RestoreSnapshot { .. } => WorkerFault::None,
+        };
+        self.workers.command(self.now_ms, session, cmd, fault, &mut self.due);
+    }
+
+    /// The supervisor carries out a command for a child: the child's life is noted, and the
+    /// speech process starts (slowly, when the fault fires), restarts or is killed.
+    fn sidecar_command(&mut self, child: SidecarId, cmd: SidecarCmd) {
+        let event = match cmd {
+            SidecarCmd::Start => ChildEvent::Started,
+            SidecarCmd::Restart => ChildEvent::Restarted,
+            SidecarCmd::HangDumpThenKill => ChildEvent::Down,
+        };
+        self.child(child, event);
+        if child != SidecarId::Speech {
+            return;
+        }
+        if cmd != SidecarCmd::HangDumpThenKill {
+            if self.speech.loads_stuck() {
+                self.child(child, ChildEvent::Stuck);
+            }
+            if fault!(self, "sim.speech.slow_load") {
+                self.speech.slow_next_load();
+            }
+        }
+        self.speech.sidecar(self.now_ms, cmd, &mut self.due);
+        if cmd == SidecarCmd::HangDumpThenKill {
+            self.speech_gone();
+        }
+    }
+
+    /// How the brain answers the turn being sent: its pace drawn from the profile, and the
+    /// faults that fire for it.
+    fn brain_turn(&mut self) -> BrainTurn {
+        let brain = self.profile.brain;
+        let most = u64::from(brain.first_jitter_ms);
+        let jitter = if most == 0 { 0 } else { self.parts_rng.below(most.saturating_add(1)) };
+        let dispatch =
+            brain.dispatch_pct > 0 && self.parts_rng.chance(u32::from(brain.dispatch_pct), 100);
+        let stall = fault!(self, "sim.brain.stall").then_some(u64::from(brain.stall_ms));
+        let fail = fault!(self, "sim.brain.fail");
+        BrainTurn {
+            first_ms: u64::from(brain.first_ms).saturating_add(jitter),
+            delta_ms: u64::from(brain.delta_ms),
+            dispatch,
+            stall_ms: stall,
+            fail,
+        }
     }
 
     /// Every invariant the world checks, in number order; the first broken one.
@@ -752,6 +920,21 @@ mod tests {
         assert_eq!(world.advance(10), None, "10 ms: not yet");
         assert_eq!(world.advance(40), Some(Input::Timer(TimerId(9))), "50 ms: due");
         assert_eq!(world.advance(100), None, "fired once");
+    }
+
+    #[test]
+    fn the_fault_points_written_here_are_exactly_the_known_sites() {
+        // `buggify!` needs a literal, so each site is spelled at its `fault!` call; a typo there
+        // would fire in a run and leave a regression that cannot replay.
+        let written: std::collections::BTreeSet<&str> = include_str!("world.rs")
+            .split("fault!(self, \"")
+            .skip(1)
+            .filter_map(|after| after.split('"').next())
+            .collect();
+        assert!(!written.is_empty(), "the world has fault points");
+        let known: std::collections::BTreeSet<&str> =
+            crate::faults::SITES.iter().map(|(site, _)| *site).collect();
+        assert_eq!(written, known, "every fault! call names a site in faults::SITES, and back");
     }
 
     #[test]

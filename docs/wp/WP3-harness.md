@@ -478,6 +478,25 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   every host, so `github_token` goes on both.
 - A subagent tool in a spec's `builtin_tools` or `allowed_tools` is dropped, not refused: the
   session still starts, without it.
+- A Claude session, worker or brain, is ready when it answers `initialize` and `mcp_status`
+  reports `eileen` connected, not when it writes `system/init`, which CLI 2.1.316 writes only
+  after the first user line (`amend/worker-readiness`, #161 and its follow-up of 2026-11-07,
+  `type: amendment`). The harness component turns a worker's `start` into
+  `WorkerEvent::Ready { pid }`, or into `Refused` then `Exited` when `eileen` is not
+  connected, and the core binds on `Ready`; the brain's backend gives `BrainEvent::Ready` from
+  the same check, so `brain_events` stops mapping `Line::Init` to `Ready`. Every init is
+  checked for `eileen` connected and for a memory path other than the session's own folder
+  (any path while its writes are not `Native`); a failure kills the session at that line and
+  gives `Refused` then `Exited`, with no `Init` from that turn. The core starts a `Native`
+  session's job again once with memory off, fails any other refused job with the variant's
+  sentence, and holds a worker's `PreToolUse` until its session's `Init`. The `initialize`
+  reply carries the signed-in account, so it is checked and dropped, never logged or
+  recorded. One later WP3 pull request adds `Ready`, `Refused` and `WorkerRefusal` to
+  `eileen-contracts`, drops `pid` from `Init`, and changes the core's `worker_event` and the
+  simulator's worker sessions (`Ready` on `Start`, `Init` after the `Bind`) with their tests;
+  until it merges, a live job does not bind. The replayer (section 3.3.16, WP1) serves `Ready`
+  after a `Start`, `Init` after the `Bind` and a `Refused` with its `Exited` in place, and
+  D77's `NotesVersion` rides on `Ready`.
 
 ## Outcome
 

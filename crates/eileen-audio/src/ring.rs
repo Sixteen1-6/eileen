@@ -55,8 +55,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// deadline and a 60 s restart backoff step (BUILD.md section 6.6).
 pub(crate) const STORE_FRAMES: usize = 5_625;
 
-/// The handoff's frames: about 2 s, room for the reader task to fall behind for a while.
-pub(crate) const HANDOFF_FRAMES: usize = 64;
+/// The handoff's frames: about 4 s, room for the component to wait out a write's 2 s deadline
+/// and then a read's 1 s one before it drains the handoff again.
+pub(crate) const HANDOFF_FRAMES: usize = 128;
 
 /// A frame written more than this long after capture carries the replayed flag (D81).
 pub(crate) const REPLAYED_AFTER: Duration = Duration::from_millis(250);

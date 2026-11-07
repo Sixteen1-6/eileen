@@ -83,7 +83,7 @@ impl Core {
         cause: SpeakCause,
         clauses: Vec<String>,
     ) -> Option<SpeakId> {
-        let speak = SpeakId::from_parts(cx.ms(), cx.random());
+        let speak = SpeakId::from_parts(cx.mint(), cx.random());
         let chars: usize = clauses.iter().map(|clause| clause.chars().count()).sum();
         let voice = self.voice_for(cause);
         let mut out = Vec::new();
