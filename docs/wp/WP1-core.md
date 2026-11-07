@@ -329,6 +329,16 @@ Every pull request also meets the rules section 6.1 sets for every package.
   which would always have won. Section 3.3.4 lists `CancelSource` and plans `Typed`: a cancel
   asked for in a turn takes the variant named like the turn's `TurnSource`, else `Voice`
   (item 4 of Next).
+- `amend/wp1-job-pronouns` again, from review of #190's merged text. Section 2.5's order holds
+  over unfinished jobs only for a cancel, focus, steer, reroute or interrupt; a request about
+  what a job did (a status question naming a job, `ShowChanges`, `Keep`, `Undo`, "why did you
+  do that?") follows it over jobs that include finished ones, so "undo that" right after a
+  coding job's completion is announced undoes that job, not the focus job. The announced job's
+  window runs to when the request was heard, not to when the brain's call arrives. Section
+  3.3.4 maps a turn's source to `CancelSource` in an exhaustive match (`Scenario` and
+  `FirstRun` as `Voice`, no variant for `ClaudeSession`, `JobEvent` and `Connector`), says a
+  cancel from a CLI turn is recorded as `Voice` today as well as a typed one, and keeps a
+  provisional D79 line. The code and its tests are in items 2 and 4 of Next.
 - Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
   for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
   1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
@@ -338,7 +348,18 @@ Every pull request also meets the rules section 6.1 sets for every package.
      with many jobs (dispatch and fan-out, `Init` or `Ready`, `TurnDone` and `Exited`, steer,
      reroute, cancel, a restart from `snapshot()`) against the reference model's rows and
      events, and the simulator's checks of invariants 4, 5 and 12 with a core restart in the
-     world.
+     world. This pull request, or whichever WP1 pull request touches `control.rs` or
+     `lifecycle` first, also takes two fixes from review of #190. The core takes the announced
+     job once, when it routes the turn: `send_brain_turn` keeps `self.announced(cx.now)` on the
+     brain's `Live`, and `control` passes that to `Registry::pick` instead of reading
+     `announced` when the call arrives (section 2.5), tested in `tests::steering` with job A
+     announced ending at t, the focus on B, "cancel it" heard at t + 3 s and sent to the brain,
+     and `jobs_control { job: "it", action: cancel }` arriving at t + 12 s, giving
+     `JobCancelled` for A, not B. And a test in `lifecycle::tests` of `choose`'s parent arm: in
+     the two coding fan-outs of
+     `an_ordinal_or_an_agents_name_picks_the_agent_of_the_fan_out_in_focus`, "the coding job"
+     gives `Pick::Ask(vec![second, first])` with no focus and `Pick::One(first)` with the focus
+     on `first_one`.
   3. Invariants 2, 3 and 9 in the world's check after every step, with the generator pacing
      barge-in windows at 32 ms (acceptance 1), once #151 is fixed. Invariant 9's microphone
      part waits for the core to act on `MicInUseElsewhere` (#152), and the enumeration gains a
@@ -350,7 +371,15 @@ Every pull request also meets the rules section 6.1 sets for every package.
      the journal, the settings flow, the regret window, forget, route proposals and the
      first-run state machine; `CancelSource::Typed` in the pinned `bus` module, with a cancel
      asked for in a turn, on the fast path or through `jobs_control`, recorded by the turn's
-     source (section 3.3.4 as #190 planned it); the contracts amendment that adds to
+     source (section 3.3.4): the turn's `TurnSource` threaded to both cancel sites (on `Routed`
+     for `cancel_spoken`, on the brain's `Live` for `control` and `reroute`) and mapped in an
+     exhaustive match with no catch-all arm, tested so that `UserInput::Cli` "cancel the
+     render" gives `JobCancelled { by: Cli }`, `UserInput::Typed` gives `Typed`, a scenario's
+     turn gives `Voice`, and a `jobs_control` cancel or reroute from a typed turn gives `Typed`;
+     `jobs_control`'s `show_changes`, `keep` and `undo` once `FIXME(#5)`'s worktree and
+     snapshot wiring lands, naming jobs that include finished ones (section 2.5), with a test
+     that "undo that" right after a coding job's completion is announced, while another job
+     holds the focus, restores the coding job; the contracts amendment that adds to
      `CoreSnapshotV1` the speech process's life, the HUD's line and the rest of the live state,
      each with a default, with a restore for replay that skips what only a resume does,
      lifting section 3.3.16's rule that strict replay of the minimal core starts only from the
@@ -582,7 +611,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - Section 2.5 listed "it right after an announcement" last among the pronoun rules; the core
   tries it first for a pronoun, since the focus job would otherwise always win, and only for
   an unfinished job announced within `conversation.follow_up_s` with no reply since. Section
-  2.5 gives that order since #190. Names
+  2.5 gives that order since #190. `control` reads that window when the brain's `jobs_control`
+  call arrives, so a slow brain can carry a request heard inside it past its end; section 2.5
+  runs it to when the request was heard since the follow-up to #190, and item 2 of Next keeps
+  the announced job on the brain turn. `pick` passes over finished jobs because its callers
+  cancel, focus, steer and reroute; a request about what a job did names finished jobs too
+  (section 2.5), which `show_changes`, `keep` and `undo` need when they are built. Names
   match after the articles and the words "job", "task", "please" and "now" are dropped. Kind
   and route words name only jobs outside a fan-out, whose children are named by ordinal or
   name, and route words never name an app task or an `Act` job, which no route runs (their
@@ -622,8 +656,11 @@ Every pull request also meets the rules section 6.1 sets for every package.
   (`Live.told`, sent or still waiting) with the task. The old transcript is not attached
   (`FIXME(#3)`): sessions run with no session persistence and the harness keeps no
   transcript. A cancel through `jobs_control` is recorded as `Voice`:
-  `CancelSource` has no source for a typed brain turn, and a typed "cancel" on the fast path is
-  recorded as `Voice` too. Section 3.3.4 plans `Typed` since #190 (item 4 of Next). The new session's `cwd` is the old
+  `CancelSource` has no source for a typed brain turn, and a "cancel" from a typed or CLI turn
+  on the fast path is recorded as `Voice` too, though `Cli` exists, since neither cancel site
+  sees the turn's `TurnSource` (`Routed` and the brain's `Live` carry only its authority).
+  Section 3.3.4 plans `Typed` since #190 and maps every source since its follow-up (item 4 of
+  Next). The new session's `cwd` is the old
   session's `run/<session>/cwd`, as section 2.5 asks ("the same working directory"); section
   2.12's path classes name a session's own `run\<session>\cwd` its `JobFolder` and "another
   session's folder" `EileenData`, so the runtime's classifier must take the job folder from
