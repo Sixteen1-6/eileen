@@ -457,13 +457,14 @@ impl Run {
                     }
                     None => Flow::Continue,
                 },
-                Wake::Input => match input {
-                    Some(input) => self.step(input.ctx, input.body, MonoTime(0)).await,
-                    None => {
+                Wake::Input => {
+                    if let Some(input) = input {
+                        self.step(input.ctx, input.body, MonoTime(0)).await
+                    } else {
                         self.inputs = None;
                         Flow::Continue
                     }
-                },
+                }
             };
             if flow == Flow::Stop {
                 return Ok(());
