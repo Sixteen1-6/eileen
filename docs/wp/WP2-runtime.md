@@ -108,14 +108,19 @@ Every pull request also meets the rules section 6.1 sets for every package.
   layout `eileen_harness::session` writes, so the endpoint knows the session from the path
   (sections 2.5 and 6.4). The shim takes `--pipe`, `--role` and, for a worker, `--session`, with
   its token in `EILEEN_SHIM_TOKEN` and the core's process id in `EILEEN_CORE_PID` (section 2.5).
-  The runtime fills a worker's `SessionSpec.hook_endpoint` and `shim` as it routes the core's
-  `WorkerCmd::Start`, and the harness takes each brain instance's endpoints through
-  `eileen_harness::SessionEndpoints`, which `eileen-cli` implements over the new session
-  registry, `eileen_runtime::sessions` (section 3.3.8); WP3's `wp3/worker-brain` builds the
-  harness side. WP2 pins each of its six provisional modules with the pull request that first
-  produces it (section 3.3). The machine link's test moved from acceptance 15 to 14, so
-  `wp2/speech-transport` does not wait for `wp0/machine-contracts`. Section 6.4 lists the W1
-  order below.
+  For every Claude session it starts, a worker or a brain instance, the harness takes the
+  endpoints through `eileen_harness::SessionEndpoints::open` with the role `shim_role` gives
+  (`librarian` for a librarian job), and calls `close` after every end of that process;
+  `eileen-cli` implements the trait over the new session registry, `eileen_runtime::sessions`,
+  and the driver loop routes the core's `WorkerCmd::Start` unchanged (section 3.3.8). The trait
+  is WP2's proposal, which WP3's `wp3/worker-brain` confirms or changes (section 6.5). Every
+  session shares the runtime's one dispatcher pipe, made at start, as sections 2.12 and 3.3.9
+  had it. The endpoint answers a brain-role session's hooks itself, since the core knows no
+  brain instance's `ws_` id. WP2 pins `tools` and `tools/brain` in W1 and its other four
+  provisional modules with their W2 producers (section 3.3). The machine link's test moved from
+  acceptance 15 to 14, so `wp2/speech-transport` does not wait for `wp0/machine-contracts`; until
+  `eileen-guard` lands, `HangDumpThenKill` kills the speech process without a dump, with a
+  warning. Section 6.4 lists the W1 order below.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
   2. `amend/wp2-session-wiring` (this amendment).
@@ -129,18 +134,22 @@ Every pull request also meets the rules section 6.1 sets for every package.
      `Deadline` and says so.
   6. `wp2/shell-local-time`: the zone reader and its wiring into `CoreConfig.local_time`.
   7. `wp2/speech-transport` (after 3 and 4, since its caller check needs `Peer` and the
-     registry): acceptance 15, pinning `connectors`. `wp1/speech-life` (#141) and WP4's
-     `SpeechTransport` (#140) have merged.
+     registry): acceptance 15, with the interim kill without a dump. `wp1/speech-life` (#141)
+     and WP4's `SpeechTransport` (#140) have merged.
   8. `wp2/driver-loop`: the driver loop, effects routed by family, the bus with explicit
      `Lagged`, and `eileen run --console`'s view.
-  9. `wp2/hook-endpoint` (after 4 and 8): the session registry and the loopback server with the
-     session hooks, the guard, the tripwire, the client mapping and job check, and `bus.json`.
-  10. `wp2/dispatcher` (after 9): each session's pipe, the pure caller decision and
-      `eileen-shim`, pinning `tools` and `tools/brain`.
+  9. `wp2/hook-endpoint` (after 4 and 8): the session registry with `open` and `close`, and the
+     loopback server with the session hooks routed by role (a brain-role session's answered by
+     the endpoint), the guard, the tripwire, the client mapping and job check, and `bus.json`.
+     It implements no trait, since `SessionEndpoints` arrives with `wp3/worker-brain`.
+  10. `wp2/dispatcher` (after 9): the one dispatcher pipe, the pure caller decision and
+      `eileen-shim`, pinning `tools` and `tools/brain` and rewording the provisional doc line
+      and its test for every owner, with WP0 reviewing.
   11. `wp2/path-classes` (after 5 and 9): the `PathFact`s of each `PreToolUse` request, which
       slice S1's job needs; the `GitFact` and `UrlFact` rows follow in W2.
   12. `wp2/shell-tray`: the tray's mute item with the physical-click check, and the mute hotkey.
-  13. `wp2/s1-live` (after 6 to 12, `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech`).
+  13. `wp2/s1-live` (after 6 to 12, `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech`),
+      with the `SessionEndpoints` implementation in `eileen-cli`.
 
   WP3's #159 (`ClaudeWorker`, merged) spawns sessions with no job key and refuses a memory
   limit; its key, limit and the core's process id follow `wp2/supervisor-callers` in a WP3 pull
@@ -164,9 +173,15 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the token pin is 0.4.3.
 - The six provisional modules WP2 owns each carry the doc line "Provisional: WP2 pins this
   module in its first pull request", whose wording `eileen-contracts`' `it::modules` test
-  checks. Section 3.3 now pins each with its first producer, so the pull request that pins one
-  removes its line, and `tools/session`, `tools/dev` and `scenario` keep the older wording until
-  W2.
+  checks. Section 3.3 now pins each with its first producer, so `wp2/dispatcher` rewords the
+  line, the test, the `modules.toml` header and the crate doc to `<owner> pins this module`,
+  with WP0 reviewing, and each later pinning pull request removes its module's line.
+- The brain's settings file carries a blocking `PreToolUse` hook with no matcher, so every
+  `mcp__eileen__*` call the brain makes reaches the endpoint, while `Core::hook` on `main` denies
+  a session with no live job. Forwarding the brain's hooks to the core would have denied its
+  `jobs_dispatch`, so the endpoint answers them by role.
+- #142's test fixtures name the dispatcher pipe `eileen-dispatch-ws_...`. That is fixture data:
+  the harness writes whatever pipe the endpoints give, and the plan keeps one pipe per runtime.
 - `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
   for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
   by then, and says so.
