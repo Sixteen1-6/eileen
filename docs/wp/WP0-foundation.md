@@ -182,6 +182,28 @@ an amendment to WP10's file, still held for the owner; until it merges, the work
 lane's `session` job as the one known exception and fail once it gains the step. BUILD.md's
 sections 4.6 and 4b.3 gained `prune-caches` and this cache policy in amendments #143 and #170.
 
+Section 4.1's `serde_json` line is ahead of the root manifest until #157 merges. #181 (merged
+on 2026-11-07 as e8ec56e) made it `{ version = "1.0.154", features = ["float_roundtrip"] }` to
+match #157, which moves the feature from `eileen-record`'s manifest to the root
+`[workspace.dependencies]` and is still a draft, so `main`'s `Cargo.toml` still reads
+`serde_json = "1.0.154"`. No WP0 branch syncs that line: #157 does. If the owner declines #157,
+an amendment puts section 4.1's line back. The amendment from `amend/serde-json-pin` of the same
+day added `serde_json` to the dependencies members never add features to (sections 3.1 and 4.1,
+check 15), so two follow-ups come after #157, in this order. WP1 changes
+`crates/eileen-record/Cargo.toml` to `serde_json.workspace = true`, which is now required:
+check 15, once phase B builds it, fails on that crate until it does. WP3 then makes the
+`stub_script` fuzz target's round trip exact: `round_trips` in
+`crates/eileen-stub-harness/src/fuzz_entry.rs` compares with `before == after`, and `same`,
+which lets two floats differ by up to `8 * f64::EPSILON` relative because serde_json ran without
+the feature, goes with its doc comment. #157's test,
+`eileen-contracts::it::wire::a_written_float_reads_back_exactly`, passes in CI with or without
+#157's root entry, because CI builds the whole workspace and `eileen-record`'s feature is unified
+into every crate. Built alone, it shows the change: throwaway probe run 42395695216 ran
+`cargo test -p eileen-contracts --test it` on `main` with #157's test added, which failed on its
+second case (`-6.481044486608049e-108` read back one unit in the last place off), passed with
+`-p eileen-record` added to the same command, and passed alone with #157's root entry. Once WP1's
+change merges, the test's pass in CI depends on the root entry alone.
+
 ## Acceptance records
 
 Acceptance 4 (its fake-memory half), 5, 6 and 12 passed in pull request #73's CI run on its
