@@ -141,8 +141,10 @@ fn test_job_problems(name: &str, job: &[&str]) -> Vec<String> {
         .filter(|(_, step)| has_key(step, "uses: actions/upload-artifact@"))
         .map(|(at, _)| at)
         .collect();
-    let Some(&upload) =
-        uploads.iter().find(|at| steps[**at].contains("target/insta-pending/")).or(uploads.last())
+    let Some(&upload) = uploads
+        .iter()
+        .find(|at| steps[**at].contains("target/insta-pending/"))
+        .or_else(|| uploads.last())
     else {
         problems.push(format!("{name}: no upload keeps what a failed run leaves"));
         return problems;
@@ -320,9 +322,11 @@ jobs:
           include-hidden-files: true
 "#;
 
-/// Each case: what it breaks, its edits to `KEEPS_PENDING` (each `from` found there once),
-/// and the one problem it gives.
-const BROKEN_RULES: [(&str, &[(&str, &str)], &str); 15] = [
+/// One edit to `KEEPS_PENDING`: a text found there once, and what replaces it.
+type Edit = (&'static str, &'static str);
+
+/// Each case: what it breaks, its edits to `KEEPS_PENDING`, and the one problem it gives.
+const BROKEN_RULES: [(&str, &[Edit], &str); 15] = [
     (
         "the job's env without the folder",
         &[("      INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending\n", "")],
