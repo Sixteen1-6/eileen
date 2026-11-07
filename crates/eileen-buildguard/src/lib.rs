@@ -7,8 +7,8 @@
 //!
 //! - The two slot locks and `desktop.lock` with their holder records ([`slots`]), admission
 //!   by available memory, commit headroom and paging ([`admission`]), the wait and exit 75.
-//! - The machine-wide files: the memory samples, the 30 s paging windows and
-//!   `buildguard.toml`, with the baseline that writes it ([`samples`], [`baseline`]).
+//! - The machine-wide files: the memory samples, the 30 s paging windows, the hourly summaries
+//!   and `buildguard.toml`, with the baseline that writes it ([`samples`], [`baseline`]).
 //! - [`spawn_cargo`]: cargo in a kill-on-close Job Object at below-normal priority, or on Unix
 //!   in a process group its watchdog kills, at nice +10 ([`spawn`]).
 //!
@@ -20,8 +20,8 @@
 //! # Invariants
 //!
 //! - std and `windows-sys` only, so xtask compiles in seconds; unsafe code only in `ffi`.
-//! - The job count never falls as available memory rises (property test
-//!   `admission::tests::jobs_never_fall_as_memory_rises`).
+//! - The job count never falls as available memory rises, nor exceeds the logical core count
+//!   (`admission::tests::jobs_never_exceed_logical_cores_and_never_fall_as_memory_rises`).
 //! - A fake memory source never writes the machine-wide files (`guard::take_sample`).
 //! - The rule a build is admitted under depends on whether another build holds a slot, never
 //!   on which index is free, and a refused attempt takes no lock and writes no record

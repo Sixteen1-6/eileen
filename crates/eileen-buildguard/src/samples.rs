@@ -1,6 +1,6 @@
 //! The machine-wide memory files: their only writer and reader (BUILD.md section 6.1).
 //!
-//! Three files under [`machine_root`], whatever `EILEEN_DATA_DIR` says, because they describe
+//! Four files under [`machine_root`], whatever `EILEEN_DATA_DIR` says, because they describe
 //! the PC rather than one data directory:
 //!
 //! - `machine/memory-samples.jsonl`: 5 s samples from every guard process and the runtime, one
@@ -12,9 +12,12 @@
 //!   real memory, and only when the newest line ends at least 30 s before the new window
 //!   does, so two runtimes never write one window twice; lines older than 7 days are dropped
 //!   by the next writer that finds the file over 2 MB.
+//! - `machine/memory-hours.jsonl` (from WP0 phase B): one [`HourSummary`] per hour for 30
+//!   days, from which [`usual_of`] gives the machine profile the PC's usual memory (section
+//!   2.16).
 //! - `buildguard.toml`: the baseline's thresholds, written by `cargo xtask slots --baseline`.
 //!
-//! Both line files are appended under a short [`std::fs::File::try_lock`] on
+//! The line files are appended under a short [`std::fs::File::try_lock`] on
 //! `machine/memory-samples.lock`, so lines never interleave.
 //!
 //! The runtime needs nothing else from the guard: [`slot_held_now`] (and [`Store::slot_held`])
@@ -30,11 +33,18 @@ use std::time::Duration;
 use crate::clock::{Clock, RealClock, millis};
 use crate::json;
 
+mod hours;
+
+pub use hours::{
+    HOUR, HOURS_FILE, HOURS_KEEP, HOURS_TRIM_BYTES, HourSummary, USUAL_DAYS, USUAL_MIN_HOURS,
+    USUAL_MIN_SAMPLES, Usual, append_hour, hours, usual, usual_of,
+};
+
 /// The memory samples, relative to the machine root.
 pub const SAMPLES_FILE: &str = "machine/memory-samples.jsonl";
 /// The 30 s paging windows, relative to the machine root.
 pub const PAGING_FILE: &str = "machine/paging-30s.jsonl";
-/// The lock both line files are appended under, relative to the machine root.
+/// The lock the line files are appended under, relative to the machine root.
 pub const LOCK_FILE: &str = "machine/memory-samples.lock";
 /// The baseline's thresholds, relative to the machine root.
 pub const BASELINE_FILE: &str = "buildguard.toml";
