@@ -44,6 +44,7 @@ use eileen_core::{CoreConfig, CorePorts};
 use eileen_rt::channel::{self, Receiver, Sender};
 use eileen_stdx::clock::Clock;
 use eileen_stdx::rng::CoreRng;
+use eileen_stdx::soft_assert::{Mode, failures, with_mode};
 use eileen_trace::names;
 use eileen_trace::test_support::capture;
 use serde_json::Value;
@@ -555,6 +556,80 @@ async fn a_full_input_queue_answers_backpressure() {
     sleep(Duration::from_millis(1)).await;
     let seqs: Vec<u64> = steps_of(&steps).iter().map(|step| step.input.seq).collect();
     assert_eq!(seqs, [1, 2, 3, 4, 5], "the four taken and the one after, in order");
+
+    shutdown.trigger();
+    assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");
+}
+
+#[tokio::test(start_paused = true)]
+async fn inputs_take_seq_and_time_in_the_order_the_core_sees() {
+    let (probes, _seen) = Probes::new();
+    let (first, first_sink) = probes.feeder("first", &[]);
+    let (second, second_sink) = probes.feeder("second", &[]);
+    // The first input sets a timer for 1 s, which lands between the two rounds of sends.
+    let mut set = false;
+    let (driver, steps) = scripted(Limits::default(), move |input| {
+        if set || !matches!(input, Input::User(_)) {
+            return Vec::new();
+        }
+        set = true;
+        vec![Effect::SetTimer { id: TimerId(1), at: secs(1) }]
+    });
+    let shutdown = Shutdown::new();
+    let start = Instant::now();
+    let run =
+        eileen_rt::task::spawn("test.driver", driver.run(vec![first, second], shutdown.clone()));
+    let (first_sink, second_sink) = (first_sink.await.unwrap(), second_sink.await.unwrap());
+    let physical = || Input::Activity(ActivityEvent::PhysicalInput);
+
+    // Both components send at once, each with seq and times zero, then again at 1.5 s.
+    first_sink.send(envelope(toggle())).unwrap();
+    second_sink.send(envelope(physical())).unwrap();
+    first_sink.send(envelope(toggle())).unwrap();
+    sleep_until(start + Duration::from_millis(1_500)).await;
+    second_sink.send(envelope(physical())).unwrap();
+    first_sink.send(envelope(toggle())).unwrap();
+    sleep_until(start + Duration::from_secs(2)).await;
+    shutdown.trigger();
+    assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");
+
+    let half = MonoTime(1_500_000_000);
+    let seen: Vec<(u64, MonoTime, MonoTime, Input)> = steps_of(&steps)
+        .into_iter()
+        .map(|step| (step.input.seq, step.now, step.input.mono, step.input.body))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (1, secs(0), secs(0), toggle()),
+            (2, secs(0), secs(0), physical()),
+            (3, secs(0), secs(0), toggle()),
+            (4, secs(1), secs(1), Input::Timer(TimerId(1))),
+            (5, half, half, physical()),
+            (6, half, half, toggle()),
+        ],
+        "seq counts up in the order the core sees, the timer's included, and time never goes back"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_input_sent_with_a_seq_trips_the_soft_assertion() {
+    let (probes, _seen) = Probes::new();
+    let (feeder, sink) = probes.feeder("feeder", &[]);
+    let (driver, steps) = scripted(Limits::default(), |_| Vec::new());
+    let shutdown = Shutdown::new();
+    let run = eileen_rt::task::spawn("test.driver", driver.run(vec![feeder], shutdown.clone()));
+    let sink = sink.await.unwrap();
+    sleep(Duration::from_secs(3)).await;
+
+    let before = failures();
+    let stamped = Envelope { seq: 7, at: WallTime(9), mono: MonoTime(9), ..envelope(toggle()) };
+    let sent = with_mode(Mode::Report, || sink.send(stamped));
+    assert_eq!(sent, Ok(()), "a running Eileen still takes the input");
+    assert_eq!(failures(), before + 1, "and the soft assertion failed once");
+    sleep(Duration::from_millis(1)).await;
+    let first = steps_of(&steps).first().map(|step| (step.input.seq, step.input.mono));
+    assert_eq!(first, Some((1, secs(3))), "the queue's own stamp replaced what was sent");
 
     shutdown.trigger();
     assert_eq!(run.await.unwrap(), Ok(()), "the run ends well");

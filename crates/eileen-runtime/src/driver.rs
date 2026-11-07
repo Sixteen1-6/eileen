@@ -3,12 +3,14 @@
 //! claim them.
 //!
 //! - **Inputs.** Components send through one bounded [`eileen_rt::channel`]; a full queue answers
-//!   [`Backpressure`] at once and never grows. A component leaves an envelope's `seq` and times
-//!   zero and fills its `TraceCtx`. The driver gives each input its `seq` and its wall and
-//!   monotonic time from the [`Clock`] when it takes the input for its step, and steps the core
-//!   with that same monotonic time, so the order the core sees is the replay order, `seq` counts
-//!   up by one, and the core's time never runs backwards (a recorded input replays with its own
-//!   time, section 3.3.16).
+//!   [`Backpressure`] at once and never grows. A component sends an envelope's `seq` and times as
+//!   zero (a non-zero `seq` fails a soft assertion) and fills its `TraceCtx`. The input queue's
+//!   receiving end, in the driver, stamps each input's `seq` and its wall and monotonic time from
+//!   the [`Clock`] as it hands the input to the core, overwriting what was sent, and steps the
+//!   core with that same monotonic time (section 3.3.15). A fired timer takes its stamp the same
+//!   way, so `seq` is the order the core sees, counting up by one whatever the source, the
+//!   core's time never runs backwards along it, and a recorded input replays with its own time
+//!   (section 3.3.16).
 //! - **Effects.** Each effect goes, unchanged and in order, to the component whose
 //!   [`Component::accepts`] names its [`EffectFamily`], through that component's own bounded
 //!   queue. A family two components claim is a start error, and so is a component that claims
@@ -357,11 +359,17 @@ impl Timers {
     }
 }
 
-/// A component's sender into the core's input queue.
+/// A component's sender into the core's input queue. A component sends `seq` as zero: the
+/// driver stamps it, so a non-zero one is a component's bug, reported where it happens.
 struct Inputs(Sender<Envelope<Input>>);
 
 impl InputSink for Inputs {
     fn send(&self, input: Envelope<Input>) -> Result<(), Backpressure> {
+        eileen_stdx::never!(
+            input.seq != 0,
+            "a component sent an input with seq {}, which the input queue stamps",
+            input.seq
+        );
         self.0.try_send(input).map_err(|_| Backpressure { capacity: self.0.capacity() })
     }
 }

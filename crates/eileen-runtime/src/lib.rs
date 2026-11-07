@@ -27,9 +27,9 @@
 //!   (`driver::tests::a_full_input_queue_answers_backpressure`).
 //! - Each effect family has at most one component; a second claim, or a claim on `Timer`,
 //!   refuses to start (`driver::tests::a_family_claimed_twice_refuses_to_start`).
-//! - Inputs reach the core in `seq` order with times that never run backwards, and a timer comes
-//!   back no earlier than its `at`
-//!   (`driver::tests::a_timer_fires_at_its_mono_time_and_a_cancelled_one_never_does`).
+//! - Inputs, a fired timer's included, reach the core in `seq` order with times that never run
+//!   backwards, and a timer comes back at its `at` (WP2 acceptance 16,
+//!   `driver::tests::inputs_take_seq_and_time_in_the_order_the_core_sees`).
 //! - The `PreToolUse` endpoint never answers `allow`; `allow` comes only from a held `approve`
 //!   call after a `UserInput` approval (WP2 acceptance 3).
 //! - Only a runtime reading real memory writes the machine-wide memory files (section 6.1; WP2
@@ -62,8 +62,9 @@
 //!
 //! - The store's SQLite runs on the blocking pool, never on a runtime worker
 //!   (`eileen-runtime::store` is the only module here that may use vendored C).
-//! - A component leaves an input's `seq` and times zero: the driver stamps them as it takes the
-//!   input, and steps a fired timer at once, never through its own input queue.
+//! - A component sends an input's `seq` and times as zero (a non-zero `seq` fails a soft
+//!   assertion): the queue's receiving end in the driver stamps them as it hands the input to the
+//!   core, and stamps a fired timer the same way, never through its own queue.
 //! - A full component queue holds the driver, and the core with it, until there is room, so a
 //!   component keeps taking effects while it waits on anything else.
 //!
