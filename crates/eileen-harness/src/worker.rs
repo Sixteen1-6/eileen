@@ -1,7 +1,7 @@
 //! Worker drivers (section 3.3.8): one session of a vendor CLI that runs one job at a time.
 //! Claude's is built ([`ClaudeWorker`]); Codex and ACP are designed slots.
 
-mod claude;
+pub(crate) mod claude;
 
 use std::future::{Future, ready};
 use std::sync::Arc;

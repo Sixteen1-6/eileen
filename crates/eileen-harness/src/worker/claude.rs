@@ -590,7 +590,7 @@ impl<R: AsyncBufRead + Unpin> Lines<R> {
 
 /// Where `eileen` stands in an `mcp_status` reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Status {
+pub(crate) enum Status {
     Connected,
     /// Still connecting, or not listed yet.
     Pending,
@@ -600,7 +600,7 @@ enum Status {
 
 /// Where `eileen` stands in the `response` of an `mcp_status` reply, `{"mcpServers": [{"name",
 /// "status"}, ...]}`. The servers' shape is the one `system/init` lists them in.
-fn eileen_status(response: &Value) -> Status {
+pub(crate) fn eileen_status(response: &Value) -> Status {
     let status = response
         .get("mcpServers")
         .and_then(Value::as_array)
@@ -618,7 +618,7 @@ fn eileen_status(response: &Value) -> Status {
 
 /// The reply to the request `request_id` when `line` is one: its `response` (null when it has
 /// none) for a success, `Err` for an error.
-fn reply_to(line: &[u8], request_id: &str) -> Option<Result<Value, ()>> {
+pub(crate) fn reply_to(line: &[u8], request_id: &str) -> Option<Result<Value, ()>> {
     let value = serde_json::from_slice::<Value>(line).ok()?;
     if value.get("type").and_then(Value::as_str) != Some("control_response") {
         return None;
