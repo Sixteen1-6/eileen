@@ -417,6 +417,17 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   every host, so `github_token` goes on both.
 - A subagent tool in a spec's `builtin_tools` or `allowed_tools` is dropped, not refused: the
   session still starts, without it.
+- A Claude session is ready when it answers `initialize` and `mcp_status` reports `eileen`
+  connected, not when it writes `system/init`, which CLI 2.1.316 writes only after the first
+  user line (`amend/worker-readiness`, #161, `type: amendment`). The driver gives
+  `WorkerEvent::Ready { pid }` and the core binds on it; the first turn's init gives `Init`,
+  and every init is checked for `eileen` and for a memory folder, a failure killing the
+  session at that line with `WorkerEvent::Refused` before its `Exited`. One later WP3 pull
+  request adds `Ready`, `Refused` and `WorkerRefusal` to `eileen-contracts` with the core's
+  bind on `Ready` and the simulator's worker sessions answering `Start` with `Ready` and
+  giving `Init` after the `Bind`; until it merges, a live job does not bind. The replayer
+  (section 3.3.16, WP1) serves `Ready` after a `Start` and `Init` after the `Bind`, and D77's
+  `NotesVersion` rides on `Ready`.
 
 ## Outcome
 
