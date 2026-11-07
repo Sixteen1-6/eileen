@@ -8,16 +8,19 @@
 //! - [`Core`]: turn-taking and barge-in (pause, then decide, then resume or stop), the addressee
 //!   gate's minimal form (the name, the conversation window, a full built-in command), fast-path
 //!   dispatch of mute, unmute, stop, cancel, "go on" and "what time is it", one brain turn at a
-//!   time spoken clause by clause, one job with a cold worker session, mute, the completion
-//!   announcement, the speech process's life (`life`: started on the first step, hang-dumped,
-//!   killed and restarted with a bounded backoff when it stops answering) and the HUD's
-//!   microphone state and reply line (`hud`). Later: the rest of section 6.3's list, turns heard
-//!   late first (`wp1/speech-late`).
+//!   time spoken clause by clause, jobs (one or a fan-out of up to eight workers, each with a
+//!   cold worker session, routed by policy or the user's override, steered, rerouted, focused
+//!   and cancelled by name or pronoun, and app tasks that track an app's render with its
+//!   progress), mute, the completion announcement, the speech process's life (`life`: started
+//!   on the first step, hang-dumped, killed and restarted with a bounded backoff when it stops
+//!   answering) and the HUD's microphone state and reply line (`hud`). Later: the rest of
+//!   section 6.3's list, turns heard late first (`wp1/speech-late`).
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
 //! - [`lifecycle`]: the job registry `Core::step` keeps, pure and cloneable: the job states and
 //!   the one legal graph of steps between them, names, slugs and fan-out ordinals given at
-//!   accept, the approval deadline, cancel targets, a restart, and a coding job's checkout (in
-//!   place behind a snapshot ref, or in a worktree), which the core does not send yet.
+//!   accept, the approval deadline, which job a request names (names, ordinals, kind and route
+//!   words, pronouns), the focus job, a restart, and a coding job's checkout (in place behind
+//!   a snapshot ref, or in a worktree), which the core does not send yet.
 //! - The `UserError`s the core builds, with their sentences (`user_error`): so far
 //!   `JobKindUnavailable`, the refusal of an `ml_project` dispatch before routing and admission,
 //!   put on the bus for the HUD with its sentence as the call's error result.
@@ -53,8 +56,11 @@
 //! - A worker's `PreToolUse` is never allowed: no decision only for its kind's file tools when
 //!   every path is in the job's folders and outside any git component, a deny with a
 //!   do-not-retry reason for everything else, until W2's permission gate replaces this.
-//! - A job starts only from the brain's own shim, for the brain turn in flight, with the
-//!   authority the core sent that turn with; an ambient turn starts none (section 2.3). A kind
+//! - A job starts, and `jobs_control` changes one, only from the brain's own shim, for the
+//!   brain turn in flight, with the authority the core sent that turn with; an ambient turn
+//!   starts and changes none (section 2.3). At most 16 worker sessions run at once.
+//! - At most one unfinished job has the focus; when it ends, the focus moves to the newest
+//!   unfinished job outside a fan-out. A fan-out's parent ends once, after its last child. A kind
 //!   `JobKind::built_in_v0_1` rejects is refused with its `UserError` before routing and
 //!   admission, and no session starts.
 //! - Job states change only by a `lifecycle::Step`, along the graph `lifecycle::legal` writes
@@ -135,9 +141,11 @@
 
 mod addressee;
 mod announce;
+mod app_task;
 mod brain;
 mod clauses;
 mod clock;
+mod control;
 #[doc(hidden)]
 pub mod fuzz_entry;
 mod hud;
@@ -155,6 +163,7 @@ use std::fmt;
 
 use eileen_contracts::bus::{BusEvent, CancelSource};
 use eileen_contracts::config::Config;
+use eileen_contracts::connectors::{ConnectorEvent, SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId, UserInput};
 use eileen_contracts::ids::{
     Envelope, JobId, MonoTime, SpeakId, TraceCtx, TurnId, WallTime, WorkerSessionId,
@@ -427,6 +436,10 @@ impl Core {
             Input::ToolCall(request) => self.tool_call(&mut cx, ctx, request),
             Input::User(input) => self.user(&mut cx, input),
             Input::Timer(id) => self.timer(&mut cx, id),
+            Input::Sidecar(
+                SidecarId::Apps,
+                SidecarEvent::Event(ConnectorEvent::App { app, event }),
+            ) => self.app_event(&mut cx, &app, event),
             Input::Sidecar(which, event) => self.sidecar(&mut cx, which, &event),
             Input::ToolResult(..)
             | Input::Learn(_)
@@ -521,9 +534,7 @@ impl Core {
             }
             UserInput::Typed { text } => self.typed(cx, text.get(), TurnSource::Typed),
             UserInput::Cli { text } => self.typed(cx, text.get(), TurnSource::Cli),
-            UserInput::CancelJob(id) => {
-                self.cancel_job(cx, Some(&job::by_id(id)), CancelSource::Hud);
-            }
+            UserInput::CancelJob(id) => self.cancel(cx, id, CancelSource::Hud),
             UserInput::Approve(_)
             | UserInput::Deny(_)
             | UserInput::PauseDesktopJobs

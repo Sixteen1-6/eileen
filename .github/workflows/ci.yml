@@ -112,6 +112,14 @@ jobs:
         run: cargo deny --locked check
       - name: Unused dependencies (cargo-machete)
         run: cargo machete
+      - name: No pending snapshot committed
+        # The test jobs write insta's pending files under target/, so one in the tree came from
+        # a hand copy, and no test would notice it (xtask test `ci_keeps_pending_snapshots`).
+        run: |
+          if git ls-files -- '*.snap.new' '*.pending-snap' | grep .; then
+            echo "::error::Remove the pending snapshot files listed above: move a .snap.new over its .snap, or write a .pending-snap's new value into its inline literal (AGENTS.md, Testing)."
+            exit 1
+          fi
 
   logic-linux:
     name: logic-linux
@@ -156,6 +164,15 @@ jobs:
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
+        # insta writes no pending snapshot when it detects CI. With `new` it writes a failing or
+        # new snapshot as a .snap.new (an inline one as .<file>.pending-snap), under the pending
+        # folder at the path it would take in the repository, so none lands in the tree. The
+        # upload below keeps the folder, and a lane takes a changed snapshot from the run instead
+        # of building on the owner's PC (xtask test `ci_keeps_pending_snapshots`). The folder is
+        # absolute because nextest runs each test binary from its crate's folder.
+        env:
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo nextest run --workspace --locked --profile ci
       - name: Simulator pull request seeds, twice each (WP0 acceptance 7)
         # What `cargo xtask sim --doublecheck` runs; CI runners are not build-guarded.
@@ -163,17 +180,26 @@ jobs:
           EILEEN_SIM_COMMIT: ${{ github.sha }} # printed with a failure's replay command
         run: cargo run --locked -p eileen-sim --bin eileen-sim -- --doublecheck
       - name: Doc tests
+        env:
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo test --workspace --doc --locked
       - name: Docs, warnings denied
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
-      - name: Keep the test report
+      - name: Keep the test report and the pending snapshots
+        # Downloaded, the artifact holds nextest/ci/junit.xml and, when a snapshot failed,
+        # insta-pending/<repository path>. upload-artifact leaves out hidden files unless told
+        # otherwise, and an inline snapshot's pending file is one.
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logic-linux-junit
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/insta-pending/
+          include-hidden-files: true
           if-no-files-found: ignore
       - name: Date the cached dependency artifacts to this save
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
@@ -305,15 +331,25 @@ jobs:
         with:
           tool: cargo-nextest@0.9.148
       - name: Tests
+        # Pending snapshots, as in logic-linux.
+        env:
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo nextest run --workspace --locked --profile ci
       - name: Doc tests
+        env:
+          INSTA_UPDATE: new
+          INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
         run: cargo test --workspace --doc --locked
-      - name: Keep the test report
+      - name: Keep the test report and the pending snapshots
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-test-junit
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/insta-pending/
+          include-hidden-files: true
           if-no-files-found: ignore
       - name: Date the cached dependency artifacts to this save
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
