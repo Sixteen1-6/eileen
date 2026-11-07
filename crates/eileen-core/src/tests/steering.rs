@@ -1,23 +1,21 @@
-//! Many jobs through `Core::step` (BUILD.md section 2.5): a fan-out and its children, the
-//! focus job and how it moves, which job spoken words name, steer reaching the bound session,
-//! reroute, the router, and an app task with its progress.
+//! Changing jobs through `Core::step` (BUILD.md section 2.5): the focus job and how it moves,
+//! which job spoken words name, a steer reaching the bound session or waiting for the bind,
+//! and a reroute, with what it carries over and the bound on live workers it keeps. Fan-outs
+//! are in `fan_out`, the router in `router`, app tasks in `apps`, the refusals in `refusals`;
+//! the helpers here serve them all.
 
 use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
-use eileen_contracts::config::KindRouting;
-use eileen_contracts::connectors::{AppEvent, ConnectorEvent, SidecarEvent, SidecarId};
-use eileen_contracts::core_io::{Effect, Input, ToolCallRequest, UserInput};
+use eileen_contracts::core_io::{Effect, Input, ToolCallRequest};
 use eileen_contracts::harness::{SessionSpec, WorkerCmd, WorkerEvent};
 use eileen_contracts::ids::{JobId, ToolName, TurnId, Untrusted, WorkerSessionId};
-use eileen_contracts::jobs::{Job, JobKind, JobStatus};
-use eileen_contracts::tools::brain::JobsDispatchOutput;
+use eileen_contracts::jobs::{Job, JobStatus};
 use serde_json::{Value, json};
 
 use super::jobs::{BRAIN, addressed, dispatch_from, finished, init, tool_reply};
 use super::{Harness, ask_brain, done, events};
-use crate::CoreConfig;
 
 /// A `jobs_control` call from the brain's shim, for `turn`.
-fn control(turn: TurnId, args: Value) -> Input {
+pub(super) fn control(turn: TurnId, args: Value) -> Input {
     Input::ToolCall(ToolCallRequest {
         caller: BRAIN,
         origin: addressed(turn),
@@ -30,7 +28,7 @@ fn control(turn: TurnId, args: Value) -> Input {
 }
 
 /// The jobs a step accepted: id, name and ordinal.
-fn accepted_all(effects: &[Effect]) -> Vec<(JobId, String, Option<u8>)> {
+pub(super) fn accepted_all(effects: &[Effect]) -> Vec<(JobId, String, Option<u8>)> {
     events(effects)
         .into_iter()
         .filter_map(|e| {
@@ -44,7 +42,7 @@ fn accepted_all(effects: &[Effect]) -> Vec<(JobId, String, Option<u8>)> {
 }
 
 /// The sessions a step started, with their specs.
-fn starts(effects: &[Effect]) -> Vec<(WorkerSessionId, SessionSpec)> {
+pub(super) fn starts(effects: &[Effect]) -> Vec<(WorkerSessionId, SessionSpec)> {
     effects
         .iter()
         .filter_map(|e| {
@@ -58,28 +56,27 @@ fn starts(effects: &[Effect]) -> Vec<(WorkerSessionId, SessionSpec)> {
 }
 
 /// The commands a step sent to worker sessions.
-fn commands(effects: &[Effect]) -> Vec<(WorkerSessionId, WorkerCmd)> {
+pub(super) fn commands(effects: &[Effect]) -> Vec<(WorkerSessionId, WorkerCmd)> {
     effects
         .iter()
         .filter_map(|e| if let Effect::Worker(s, cmd) = e { Some((*s, cmd.clone())) } else { None })
         .collect()
 }
 
-/// The structured output of a successful `jobs_dispatch`.
-fn dispatched(effects: &[Effect]) -> JobsDispatchOutput {
-    let output = effects.iter().find_map(|e| {
-        if let Effect::ToolReply { result, .. } = e { result.output.clone() } else { None }
-    });
-    serde_json::from_value(output.expect("an output").get().clone()).expect("its schema")
+/// The task the step bound a session to, if it bound one.
+pub(super) fn bound_task(effects: &[Effect]) -> Option<String> {
+    commands(effects).into_iter().find_map(|(_, cmd)| {
+        if let WorkerCmd::Bind(binding) = cmd { Some(binding.task) } else { None }
+    })
 }
 
 /// The job `id` as the core keeps it.
-fn row(h: &Harness, id: JobId) -> Job {
+pub(super) fn row(h: &Harness, id: JobId) -> Job {
     h.core.snapshot().jobs.into_iter().find(|job| job.id == id).expect("kept")
 }
 
 /// What Eileen replied aloud in a step.
-fn replies(effects: &[Effect]) -> Vec<String> {
+pub(super) fn replies(effects: &[Effect]) -> Vec<String> {
     events(effects)
         .into_iter()
         .filter_map(|e| {
@@ -93,16 +90,16 @@ fn replies(effects: &[Effect]) -> Vec<String> {
 }
 
 /// Everything waiting to be announced, in order.
-fn announcements(h: &mut Harness) -> Vec<String> {
+pub(super) fn announcements(h: &mut Harness) -> Vec<String> {
     std::iter::from_fn(|| h.core.announcements.pop()).map(|a| a.text).collect()
 }
 
-fn job_args(kind: &str, title: &str) -> Value {
+pub(super) fn job_args(kind: &str, title: &str) -> Value {
     json!({ "kind": kind, "task": format!("do {title}"), "title_hint": title })
 }
 
 /// Dispatches one job of `kind` named `title` in a new brain turn; returns it and its session.
-fn start(h: &mut Harness, kind: &str, title: &str) -> (JobId, WorkerSessionId) {
+pub(super) fn start(h: &mut Harness, kind: &str, title: &str) -> (JobId, WorkerSessionId) {
     let turn = ask_brain(h, "Eileen, start a job");
     let effects = h.step(dispatch_from(BRAIN, addressed(turn), job_args(kind, title)));
     h.step(done(turn));
@@ -111,168 +108,13 @@ fn start(h: &mut Harness, kind: &str, title: &str) -> (JobId, WorkerSessionId) {
     (job, session)
 }
 
-fn flaky(fanout: u8) -> Value {
-    json!({
-        "kind": "coding",
-        "task": "fix the flaky login tests",
-        "title_hint": "flaky login tests",
-        "fanout": fanout
-    })
-}
-
-#[test]
-fn a_fan_out_accepts_a_parent_and_one_child_per_worker_each_with_its_own_session() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, launch three agents to fix the flaky login tests");
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), flaky(3)));
-    let jobs = accepted_all(&effects);
-    let names: Vec<(&str, Option<u8>)> =
-        jobs.iter().map(|(_, name, ordinal)| (name.as_str(), *ordinal)).collect();
-    assert_eq!(
-        names,
-        [
-            ("flaky login tests", None),
-            ("agent one", Some(1)),
-            ("agent two", Some(2)),
-            ("agent three", Some(3))
-        ],
-        "the parent, then its children in accept order"
-    );
-    let sessions = starts(&effects);
-    assert_eq!(sessions.len(), 3, "one cold session per worker, none for the parent");
-    let folders: std::collections::BTreeSet<&str> =
-        sessions.iter().map(|(_, spec)| spec.cwd.as_str()).collect();
-    assert_eq!(folders.len(), 3, "each worker in a folder of its own");
-    let output = dispatched(&effects);
-    assert_eq!(output.ack, "Starting three Claude workers on flaky login tests.", "the ack");
-    assert_eq!(output.jobs.len(), 4, "the parent and its children");
-    let parent = row(&h, jobs[0].0);
-    assert_eq!((parent.session, parent.spec.fanout), (None, 3), "the parent has no session");
-    assert!(parent.focus, "the fan-out takes the focus");
-    for (child, _, _) in &jobs[1..] {
-        let child = row(&h, *child);
-        assert_eq!(child.spec.parent, Some(parent.id), "{}: points at its parent", child.name);
-        assert_eq!(child.spec.task, "fix the flaky login tests", "compete: the whole task");
-        assert!(!child.focus, "{}: not the focus", child.name);
-        assert_eq!(child.slug, format!("{}-{}", parent.slug, child.ordinal.unwrap()), "slug");
-    }
-}
-
-#[test]
-fn split_mode_gives_each_worker_its_own_sub_task_and_the_parent_runs_with_the_first() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, fix the parser and the lexer at once");
-    let args = json!({
-        "kind": "coding",
-        "task": "fix the parser and the lexer",
-        "title_hint": "the front end",
-        "fanout": 2,
-        "mode": "split",
-        "subtasks": ["fix the parser", "fix the lexer"]
-    });
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
-    let parent = accepted_all(&effects)[0].0;
-    let sessions = starts(&effects);
-    let effects = h.step(Input::Worker(sessions[1].0, init()));
-    let bound = commands(&effects).into_iter().find_map(|(_, cmd)| {
-        if let WorkerCmd::Bind(binding) = cmd { Some(binding.task) } else { None }
-    });
-    assert_eq!(bound.as_deref(), Some("fix the lexer"), "agent two's own sub-task");
-    let started = events(&effects)
-        .into_iter()
-        .any(|e| matches!(e, BusEvent::JobStarted { job, .. } if *job == parent));
-    assert!(started, "the parent runs with its first child: {effects:?}");
-    assert_eq!(row(&h, parent).status, JobStatus::Running, "its row");
-    let again = h.step(Input::Worker(sessions[0].0, init()));
-    assert!(
-        !events(&again)
-            .iter()
-            .any(|e| matches!(e, BusEvent::JobStarted { job, .. } if *job == parent)),
-        "and starts once"
-    );
-}
-
-#[test]
-fn a_fan_out_ends_once_after_its_last_child_with_one_announcement() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, launch three agents to fix the flaky login tests");
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), flaky(3)));
+/// A reroute of the job named `name` to deep depth, from a new brain turn; returns its effects.
+fn reroute_to_deep(h: &mut Harness, name: &str) -> Vec<Effect> {
+    let turn = ask_brain(h, "Eileen, send it to a stronger model");
+    let args = json!({ "job": { "name": name }, "action": { "reroute": { "depth": "deep" } } });
+    let effects = h.step(control(turn, args));
     h.step(done(turn));
-    let parent = accepted_all(&effects)[0].0;
-    let sessions: Vec<WorkerSessionId> = starts(&effects).into_iter().map(|(s, _)| s).collect();
-    for session in &sessions {
-        h.step(Input::Worker(*session, init()));
-    }
-    h.step(Input::Worker(sessions[0], finished()));
-    h.step(Input::Worker(sessions[2], WorkerEvent::Exited { code: Some(1) }));
-    assert_eq!(row(&h, parent).status, JobStatus::Running, "one child still runs");
-    let effects = h.step(Input::Worker(sessions[1], finished()));
-    let ends: Vec<&BusEvent> = events(&effects)
-        .into_iter()
-        .filter(|e| matches!(e, BusEvent::JobCompleted { job, .. } if *job == parent))
-        .collect();
-    assert_eq!(ends.len(), 1, "the parent completes once: {effects:?}");
-    assert!(
-        matches!(
-            ends[0],
-            BusEvent::JobCompleted { summary, .. } if summary.get() == "2 of 3 agents finished."
-        ),
-        "{ends:?}"
-    );
-    assert_eq!(
-        announcements(&mut h),
-        [
-            "Agent three failed: the worker stopped before it finished.",
-            "Flaky login tests is done: 2 of 3 agents finished."
-        ],
-        "a child's failure, then the whole fan-out; no child's completion on its own"
-    );
-}
-
-#[test]
-fn cancelling_a_fan_out_cancels_each_running_child_once() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, launch two agents to fix the flaky login tests");
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), flaky(2)));
-    h.step(done(turn));
-    let parent = accepted_all(&effects)[0].0;
-    let effects = h.say("cancel");
-    let cancelled: Vec<(JobId, CancelSource)> = events(&effects)
-        .into_iter()
-        .filter_map(|e| {
-            if let BusEvent::JobCancelled { job, by } = e { Some((*job, *by)) } else { None }
-        })
-        .collect();
-    assert_eq!(cancelled.len(), 3, "the parent and its two children: {effects:?}");
-    assert_eq!(cancelled[0], (parent, CancelSource::Voice), "the focus job, by voice");
-    assert!(cancelled[1..].iter().all(|(_, by)| *by == CancelSource::Parent), "by their parent");
-    let killed = commands(&effects).iter().filter(|(_, c)| *c == WorkerCmd::Cancel).count();
-    assert_eq!(killed, 2, "both sessions end");
-    assert!(announcements(&mut h).is_empty(), "nothing the user cancelled is announced");
-}
-
-#[test]
-fn a_fan_out_ends_cancelled_by_whoever_cancelled_its_last_agent() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, launch two agents to fix the flaky login tests");
-    let effects = h.step(dispatch_from(BRAIN, addressed(turn), flaky(2)));
-    h.step(done(turn));
-    let jobs = accepted_all(&effects);
-    let (parent, one, two) = (jobs[0].0, jobs[1].0, jobs[2].0);
-    h.step(Input::User(UserInput::CancelJob(one)));
-    assert_eq!(row(&h, parent).status, JobStatus::Queued, "agent two is still open");
-    let effects = h.step(Input::User(UserInput::CancelJob(two)));
-    let by = events(&effects).into_iter().find_map(|e| {
-        if let BusEvent::JobCancelled { job, by } = e
-            && *job == parent
-        {
-            Some(*by)
-        } else {
-            None
-        }
-    });
-    assert_eq!(by, Some(CancelSource::Hud), "from the HUD, as its last agent was: {effects:?}");
-    assert!(announcements(&mut h).is_empty(), "nothing the user cancelled is announced");
+    effects
 }
 
 #[test]
@@ -307,11 +149,8 @@ fn a_steer_interrupts_the_bound_session_and_gives_it_the_words_as_a_new_turn() {
     let effects = h.step(control(turn, early));
     assert!(commands(&effects).is_empty(), "not bound yet: nothing to interrupt");
     let effects = h.step(Input::Worker(session, init()));
-    let bound = commands(&effects).into_iter().find_map(|(_, cmd)| {
-        if let WorkerCmd::Bind(binding) = cmd { Some(binding.task) } else { None }
-    });
     assert_eq!(
-        bound.as_deref(),
+        bound_task(&effects).as_deref(),
         Some("do the test agent\n\nThe user added: only look at the parser"),
         "the words go with the task"
     );
@@ -344,6 +183,27 @@ fn a_steer_interrupts_the_bound_session_and_gives_it_the_words_as_a_new_turn() {
             .any(|e| matches!(e, BusEvent::JobCompleted { job: j, .. } if *j == job)),
         "the steered turn does: {effects:?}"
     );
+}
+
+#[test]
+fn a_steer_waiting_for_the_bind_cuts_a_long_task_and_never_the_words() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, sort out the long list");
+    let long = "x".repeat(7_990);
+    let args = json!({ "kind": "general", "task": long, "title_hint": "the long list" });
+    let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
+    h.step(done(turn));
+    let (session, _) = starts(&effects).first().cloned().expect("a session");
+    let turn = ask_brain(&mut h, "Eileen, tell the long list to skip the first row");
+    let steer = json!({
+        "job": { "name": "the long list" },
+        "action": { "steer": { "text": "skip the first row" } }
+    });
+    h.step(control(turn, steer));
+    let task = bound_task(&h.step(Input::Worker(session, init()))).expect("bound");
+    assert!(task.ends_with("\n\nThe user added: skip the first row"), "the words whole: {task}");
+    assert!(task.starts_with("xxx"), "after as much of the task as fits");
+    assert_eq!(task.chars().count(), 8_000, "the whole within the task limit");
 }
 
 #[test]
@@ -429,39 +289,65 @@ fn a_reroute_starts_the_same_task_on_a_stronger_model_in_the_same_folder_and_can
 }
 
 #[test]
-fn the_router_takes_an_override_then_the_policy_then_the_depths_model() {
-    let mut config = CoreConfig::default();
-    let research = KindRouting { model: Some("strong".to_owned()), ..KindRouting::default() };
-    config.config.routing.kinds.insert(JobKind::Research, research);
-    let mut h = Harness::with(config, Vec::new());
-    let mut route = |args: Value| {
-        let turn = ask_brain(&mut h, "Eileen, use the fast model for this");
-        let effects = h.step(dispatch_from(BRAIN, addressed(turn), args));
-        h.step(done(turn));
-        let accepted = events(&effects).into_iter().find_map(|e| {
-            if let BusEvent::JobAccepted { job, model, reason, .. } = e {
-                Some((*job, model.clone(), reason.clone()))
-            } else {
-                None
-            }
+fn a_reroute_gives_the_new_worker_what_the_user_told_the_old_one() {
+    let mut h = Harness::new();
+    let (_, session) = start(&mut h, "coding", "the test agent");
+    let tell = |h: &mut Harness, text: &str| {
+        let turn = ask_brain(h, "Eileen, tell the test agent something");
+        let args = json!({
+            "job": { "name": "the test agent" },
+            "action": { "steer": { "text": text } }
         });
-        let (job, model, reason) = accepted.expect("accepted");
-        (model, reason, row(&h, job).override_words.map(|w| w.get().clone()))
+        let effects = h.step(control(turn, args));
+        h.step(done(turn));
+        effects
     };
-    let policy = route(job_args("research", "the price check"));
-    let wanted = ("strong".to_owned(), "the routing policy for research".to_owned(), None);
-    assert_eq!(policy, wanted, "the policy for the kind, with no override words");
-    let mut asked = job_args("research", "the price check");
-    asked["model"] = json!("fast");
-    let (model, reason, words) = route(asked);
-    assert_eq!((model.as_str(), reason.as_str()), ("fast", "asked for the model fast"), "override");
-    assert_eq!(words.as_deref(), Some("Eileen, use the fast model for this"), "with the words");
-    let mut quick = job_args("general", "the report");
-    quick["depth"] = json!("quick");
-    assert_eq!(route(quick).0, "fast", "quick uses the fast model");
-    let default = route(job_args("general", "the report"));
-    assert_eq!(default.0, "mid", "considered uses the mid model");
-    assert_eq!(default.1, "the default for considered depth", "and says so");
+    tell(&mut h, "only look at the parser");
+    let effects = reroute_to_deep(&mut h, "the test agent");
+    let (_, new_session) = starts(&effects).first().cloned().expect("a new session");
+    assert_ne!(new_session, session, "a session of its own");
+    let task = bound_task(&h.step(Input::Worker(new_session, init()))).expect("bound");
+    assert_eq!(
+        task, "do the test agent\n\nThe user added: only look at the parser",
+        "a word given before the old session was ready goes with the task"
+    );
+    let sent = tell(&mut h, "skip the slow tests");
+    assert_eq!(commands(&sent).len(), 2, "this one reaches the bound session: {sent:?}");
+    let effects = reroute_to_deep(&mut h, "the test agent");
+    let (_, third) = starts(&effects).first().cloned().expect("a third session");
+    let task = bound_task(&h.step(Input::Worker(third, init()))).expect("bound");
+    assert_eq!(
+        task, "do the test agent\n\nThe user added: only look at the parser\nskip the slow tests",
+        "words already sent to a bound worker are given again, oldest first"
+    );
+}
+
+#[test]
+fn a_reroute_with_sixteen_workers_live_ends_the_old_session_before_it_starts_the_new() {
+    let mut h = Harness::new();
+    let turn = ask_brain(&mut h, "Eileen, start sixteen reports");
+    for n in 0..16 {
+        let args = job_args("general", &format!("report {n}"));
+        let (is_error, text) =
+            tool_reply(&h.step(dispatch_from(BRAIN, addressed(turn), args))).expect("a reply");
+        assert!(!is_error, "report {n} starts: {text}");
+    }
+    h.step(done(turn));
+    let effects = reroute_to_deep(&mut h, "report 0");
+    assert_eq!(tool_reply(&effects).map(|(e, _)| e), Some(false), "moved: {effects:?}");
+    let mut live = 16_i32;
+    let mut most = live;
+    for effect in &effects {
+        if matches!(effect, Effect::Worker(_, WorkerCmd::Start(_))) {
+            live += 1;
+        }
+        if matches!(effect, Effect::Worker(_, WorkerCmd::Cancel)) {
+            live -= 1;
+        }
+        most = most.max(live);
+    }
+    assert_eq!(most, 16, "never more than sixteen sessions, even for a moment: {effects:?}");
+    assert_eq!(live, 16, "one ended and one started");
 }
 
 #[test]
@@ -508,68 +394,4 @@ fn spoken_words_name_a_job_by_kind_ask_between_two_and_say_when_none_fits() {
             .any(|e| matches!(e, BusEvent::JobCancelled { job, .. } if *job == two)),
         "a route word: the focus moved to the newest, the hotel search: {effects:?}"
     );
-}
-
-/// The apps sidecar's report of Resolve's render `render_job`.
-fn render(event: AppEvent) -> Input {
-    let app = "resolve".to_owned();
-    Input::Sidecar(SidecarId::Apps, SidecarEvent::Event(ConnectorEvent::App { app, event }))
-}
-
-#[test]
-fn a_render_is_an_app_task_with_progress_and_a_spoken_end() {
-    let mut h = Harness::new();
-    let (coding, _) = start(&mut h, "coding", "the parser fix");
-    let effects = h.step(render(AppEvent::RenderStarted { render_job: "r1".to_owned() }));
-    let accepted = events(&effects).into_iter().find_map(|e| {
-        if let BusEvent::JobAccepted { job, name, kind, .. } = e {
-            Some((*job, name.clone(), *kind))
-        } else {
-            None
-        }
-    });
-    let (job, name, kind) = accepted.expect("an app task");
-    assert_eq!((name.as_str(), kind), ("the render", JobKind::AppTask), "named the render");
-    assert!(starts(&effects).is_empty(), "no Claude session");
-    assert_eq!(row(&h, job).status, JobStatus::Running, "running at once");
-    assert!(row(&h, coding).focus, "an app's own render does not take the focus");
-    let again = h.step(render(AppEvent::RenderStarted { render_job: "r1".to_owned() }));
-    assert!(accepted_all(&again).is_empty(), "one job per render");
-    let effects = h.step(render(AppEvent::RenderProgress { render_job: "r1".to_owned(), pct: 60 }));
-    assert!(
-        events(&effects).iter().any(|e| matches!(
-            e,
-            BusEvent::JobProgressed { job: j, pct: Some(60), .. } if *j == job
-        )),
-        "progress with its percent: {effects:?}"
-    );
-    assert_eq!(row(&h, job).progress_pct, Some(60), "on its row");
-    let stray = h.step(render(AppEvent::RenderProgress { render_job: "r9".to_owned(), pct: 5 }));
-    assert!(events(&stray).is_empty(), "a render no job tracks");
-    let effects = h.step(render(AppEvent::RenderDone { render_job: "r1".to_owned(), ok: true }));
-    assert!(
-        events(&effects)
-            .iter()
-            .any(|e| matches!(e, BusEvent::JobCompleted { job: j, .. } if *j == job)),
-        "completed"
-    );
-    assert_eq!(announcements(&mut h), ["The render is done."], "announced, unattributed");
-}
-
-#[test]
-fn cancelling_a_render_stops_tracking_it_and_says_the_app_goes_on() {
-    let mut h = Harness::new();
-    h.step(render(AppEvent::RenderStarted { render_job: "r1".to_owned() }));
-    let effects = h.say("cancel the render");
-    assert!(
-        events(&effects).iter().any(|e| matches!(e, BusEvent::JobCancelled { .. })),
-        "{effects:?}"
-    );
-    assert_eq!(
-        replies(&effects),
-        ["I stopped tracking that; the app is still running it."],
-        "Eileen cannot stop the app's own render"
-    );
-    let late = h.step(render(AppEvent::RenderDone { render_job: "r1".to_owned(), ok: true }));
-    assert!(events(&late).is_empty(), "one terminal state only");
 }

@@ -1,5 +1,6 @@
 //! The minimal core through `Core::step`, with a scripted resolver: the gate, the fast path,
-//! one brain turn and mute; barge-in is in `barge_in`, the one job in `jobs`.
+//! one brain turn and mute. Barge-in is in `barge_in`, one job in `jobs`, many jobs in
+//! `steering`, `fan_out`, `router`, `apps` and `refusals`, and the speech process in `life`.
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
@@ -19,7 +20,7 @@ use eileen_contracts::ids::{
 use eileen_contracts::intent::{
     Capabilities, CoreCommand, FollowUp, Resolution, ResolveCtx, SlotValues,
 };
-use eileen_contracts::jobs::{Cost, TurnAuthority};
+use eileen_contracts::jobs::{Cost, Depth, TurnAuthority};
 use eileen_contracts::learn::{
     CheckPlan, ForgetTarget, Outcome, PhrasingFact, Recipe, ReplayRefusal, ReplayState, ReplayStep,
     RouteStat, ShadowVerdict, SkillMeta, SkillRef, StepResult, TrajectoryStep, Transition,
@@ -95,6 +96,9 @@ impl IntentResolver for Scripted {
     fn rebuild(&mut self, _: &[SkillMeta], _: &[PhrasingFact]) {}
 
     fn resolve(&self, utterance: &str, _: &ResolveCtx) -> Resolution {
+        if utterance.starts_with("think hard") {
+            return Resolution::Brain { depth: Some(Depth::Deep), addressee_unsure: false };
+        }
         let command = match utterance {
             "what time is it" => Some(CoreCommand::WhatTime),
             "stop" => Some(CoreCommand::Stop),
@@ -683,7 +687,11 @@ fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
     assert!(spoken(&h.step(delta(turn, "Rivers carry water. "))).is_empty(), "its text is dropped");
 }
 
+mod apps;
 mod barge_in;
+mod fan_out;
 mod jobs;
 mod life;
+mod refusals;
+mod router;
 mod steering;

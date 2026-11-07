@@ -184,8 +184,8 @@ fn words_name_a_job_by_name_slug_ordinal_kind_and_route_in_that_order() {
     assert_eq!(pick(name("the coding job")), Pick::One(fan), "a kind word names no child");
     assert_eq!(
         pick(name("Claude's job")),
-        Pick::Ask(vec![fan, render, price, report]),
-        "a route word that fits several jobs, none in focus, asks, newest first"
+        Pick::Ask(vec![fan, price, report]),
+        "a route word that fits several jobs, none in focus, asks, newest first, never the render"
     );
     assert_eq!(pick(name("the other file")), Pick::Nothing, "words that fit no job");
     assert_eq!(pick(JobRef::Ordinal(3)), Pick::Nothing, "no third agent");
@@ -232,6 +232,61 @@ fn the_focus_is_held_by_one_job_and_moves_off_a_finished_one() {
     assert!(registry.focus_on(report, WallTime(16)).is_empty(), "never a finished job");
     let count = registry.jobs().iter().filter(|job| job.focus).count();
     assert_eq!(count, 1, "exactly one job holds the focus");
+}
+
+#[test]
+fn a_route_word_and_the_focus_pass_over_an_apps_own_render() {
+    let mut registry = Registry::default();
+    for (n, hint, kind) in [(1, "the report", JobKind::General), (2, "render", JobKind::AppTask)] {
+        let job = job(&registry, n, hint, kind, None);
+        registry.accept(job).unwrap();
+    }
+    let [report, render] = [1, 2].map(|n| JobId::from_parts(n, u128::from(n)));
+    assert_eq!(
+        registry.pick(Some(&name("Claude's job")), None),
+        Pick::One(report),
+        "not the render"
+    );
+    assert_eq!(registry.refocus(WallTime(10)), [report], "the focus passes over the newer render");
+    registry.step(report, Step::Cancel, WallTime(11)).unwrap();
+    assert_eq!(registry.pick(Some(&name("Claude's job")), None), Pick::Nothing, "no route runs it");
+    let moved = registry.refocus(WallTime(12));
+    assert_eq!(moved, [report, render], "the render takes it once nothing else is open");
+}
+
+#[test]
+fn an_ordinal_or_an_agents_name_picks_the_agent_of_the_fan_out_in_focus() {
+    let mut registry = Registry::default();
+    for (n, hint) in [(1, "flaky login tests"), (4, "the parser fix")] {
+        let parent = job(&registry, n, hint, JobKind::Coding, None);
+        registry.accept(parent).unwrap();
+        let of = JobId::from_parts(n, u128::from(n));
+        for child in [n + 1, n + 2] {
+            let child = job(&registry, child, "", JobKind::Coding, Some(of));
+            registry.accept(child).unwrap();
+        }
+    }
+    let [first, first_one, first_two, second, _, second_two] =
+        [1, 2, 3, 4, 5, 6].map(|n| JobId::from_parts(n, u128::from(n)));
+    let agent_two = [JobRef::Ordinal(2), name("agent two")];
+    for target in &agent_two {
+        let picked = registry.pick(Some(target), None);
+        assert_eq!(
+            picked,
+            Pick::Ask(vec![second_two, first_two]),
+            "{target:?}: no focus, a question"
+        );
+    }
+    for (focus, wanted, why) in [
+        (first, first_two, "the first fan-out in focus"),
+        (second, second_two, "the second fan-out in focus"),
+        (first_one, first_two, "a sibling of the agent followed"),
+    ] {
+        registry.focus_on(focus, WallTime(10));
+        for target in &agent_two {
+            assert_eq!(registry.pick(Some(target), None), Pick::One(wanted), "{target:?}: {why}");
+        }
+    }
 }
 
 #[test]
