@@ -646,8 +646,9 @@ pub struct Toast {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MachineEvent {
-    /// The facts, at start before the brain starts, and after each change the OS reports. Boxed
-    /// so that `Input` stays small; the wire form is the same.
+    /// The facts, at start before the brain starts, and after each change the OS reports.
+    // Boxed so that `Input` stays small, as `Effect::Hud` boxes its state; the wire form is the
+    // same.
     Facts(Box<MachineFacts>),
     /// The usual memory, at start and after each hourly summary.
     Usual(UsualMemory),
