@@ -682,7 +682,7 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `CancelSource` has no source for a typed brain turn, and a "cancel" from a typed or CLI turn
   on the fast path is recorded as `Voice` too, though `Cli` exists, since neither cancel site
   sees the turn's `TurnSource` (`Routed` and the brain's `Live` carry only its authority).
-  Section 3.3.4 plans `Typed` since #190 and maps every source since its follow-up (item 4 of
+  Section 3.3.4 plans `Typed` since #190 and maps every source since its follow-up (item 3 of
   Next). The new session's `cwd` is the old
   session's `run/<session>/cwd`, as section 2.5 asks ("the same working directory"); section
   2.12's path classes name a session's own `run\<session>\cwd` its `JobFolder` and "another
