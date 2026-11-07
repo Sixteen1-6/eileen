@@ -27,6 +27,16 @@
 //! latest `SetMode` and `SetHotwords` are kept, and other commands wait in a bounded queue for
 //! the next connection, any past its maximum dropped and logged.
 //!
+//! Playback (section 6.6, "Duck, and what waits for W2"): the component starts the render
+//! stream of `AudioConfig::playback` as it starts, with the renderer in its callback, and takes
+//! each PCM frame the speech process sends straight into the player, never through `Core::step`
+//! (section 3.3.7). `Duck`, `Unduck`, `Pause`, `Resume` and `Stop` go to the player, and what it
+//! reports reaches the core as `Input::Playback`. The pump takes those events every 10 ms while
+//! capture runs, and otherwise while playback has something to do and for
+//! [`PLAYBACK_SETTLES`] after, so a muted, silent component still wakes only for its `Ping`.
+//! `PlayPhrase` and `Record` are W2 work that the core does not send until then: one that comes
+//! anyway fails a `never!` soft assertion and is dropped with a logged reason.
+//!
 //! Every wait has a deadline: each accept, read and write, a write's covering the whole of it.
 //! The pending accept, read and effect are owned futures that live across the loop's turns, so
 //! none is dropped part way; a read in flight when a write fails is awaited, within its deadline,
@@ -47,26 +57,27 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
-use eileen_contracts::core_io::{AudioCmd, Effect, EffectFamily, Input};
+use eileen_contracts::core_io::{AudioCmd, Effect, EffectFamily, Input, PlaybackEvent};
 use eileen_contracts::ids::{Envelope, MonoTime, TraceCtx, WallTime};
 use eileen_contracts::ports::{
     Backpressure, Component, ComponentCtx, ComponentError, EffectSource, InputSink,
 };
 use eileen_contracts::speech::{
-    Frame, FrameBody, FrameError, FrameReader, SpeechCheck, SpeechCmd, SpeechCommandFrame,
-    VoiceEvent,
+    Frame, FrameBody, FrameError, FrameReader, PcmHeader, SpeechCheck, SpeechCmd,
+    SpeechCommandFrame, VoiceEvent,
 };
 use eileen_trace::names;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 
-use crate::SharedSource;
 use crate::capture::Framer;
+use crate::playback::{self, PlayError, Player};
 use crate::ring::{HANDOFF_FRAMES, STORE_FRAMES, SpeechRing};
-use crate::stream::AudioStream;
+use crate::stream::{AudioStream, RenderInfo};
 use crate::transport::{
     AcceptError, ConnectionError, ConnectionId, SpeechConnection, SpeechReader, SpeechTransport,
     SpeechWriter,
 };
+use crate::{SharedSink, SharedSource};
 
 /// A `Ping` goes this often on a connection.
 pub(crate) const PING_EVERY: Duration = Duration::from_secs(1);
@@ -91,20 +102,27 @@ const PARKED_EFFECTS: usize = 64;
 const READ_BYTES: usize = 16 * 1024;
 /// The PC microphone's audio source number ([`eileen_contracts::speech::FrameHeader::source`]).
 const MICROPHONE: u16 = 0;
+/// How long after playback last had something to do (audio queued, an event reported, a frame or
+/// a command taken) the pump still takes its events every 10 ms while capture is off: longer than
+/// any endpoint's callback period, so what the callback after a stop, a pause or the queue's last
+/// sample reports reaches the core within a pump. Past it the once-a-second report takes them.
+const PLAYBACK_SETTLES: Duration = Duration::from_millis(200);
 
-/// The audio component: capture into the speech ring and the core end of the speech pipe.
-/// Playback, echo cancellation and the energy fallback join it in later parts.
+/// The audio component: capture into the speech ring, playback and the core end of the speech
+/// pipe. Echo cancellation and the energy fallback join it in later parts.
 pub(crate) struct AudioComponent {
     speech: Option<Arc<dyn SpeechTransport>>,
     capture: Option<SharedSource>,
+    playback: Option<SharedSink>,
 }
 
 impl AudioComponent {
     pub(crate) const fn new(
         speech: Option<Arc<dyn SpeechTransport>>,
         capture: Option<SharedSource>,
+        playback: Option<SharedSink>,
     ) -> Self {
-        Self { speech, capture }
+        Self { speech, capture, playback }
     }
 }
 
@@ -174,7 +192,8 @@ fn ticker(every: Duration) -> Interval {
 
 async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), ComponentError> {
     let ComponentCtx { inputs, effects, shutdown, .. } = ctx;
-    let mut speech = Link::new(inputs, effects, component.speech, component.capture);
+    let playback = component.playback.as_ref().and_then(Playback::start);
+    let mut speech = Link::new(inputs, effects, component.speech, component.capture, playback);
     speech.capture.set(true);
     let mut stop = shutdown.wait();
     let mut pump = ticker(PUMP_EVERY);
@@ -278,6 +297,14 @@ impl Incoming {
     }
 }
 
+/// Drops an audio command the audio series does not serve, which the core sends only from W2
+/// (section 6.6): a warning with its reason, and a failed `never!` soft assertion, so a test or
+/// the simulator that sends one fails while a running Eileen carries on.
+fn unserved(command: &'static str, reason: &'static str) {
+    tracing::warn!(command, reason, "an audio command the audio series does not serve was dropped");
+    eileen_stdx::never!(true, "the core sent {command}, which the audio series does not serve");
+}
+
 /// Awaits `work` while taking effects as they come: a mute stops capture before `work` ends,
 /// and any other effect is parked for the loop. With [`PARKED_EFFECTS`] parked it takes no more
 /// until `work` ends.
@@ -341,11 +368,71 @@ impl Capture {
     }
 }
 
+/// Eileen's playback: the player, the render stream its renderer fills, and when it last had
+/// something to do.
+struct Playback {
+    player: Player,
+    stream: Box<dyn AudioStream>,
+    /// When it last had something to do; `None` before it first had.
+    active_at: Option<Instant>,
+}
+
+impl Playback {
+    /// Starts the render stream of `sink`, with the renderer in its callback. A sink at a rate
+    /// playback has no conversion to, or one whose stream does not start, leaves the component
+    /// without playback, logged.
+    fn start(sink: &SharedSink) -> Option<Self> {
+        let mut sink = sink.lock().unwrap_or_else(PoisonError::into_inner);
+        let format = sink.format();
+        let (player, mut renderer) =
+            match playback::playback(format, playback::default_queue(format)) {
+                Ok(halves) => halves,
+                Err(error) => {
+                    tracing::warn!(%error, ?format, "playback did not start");
+                    return None;
+                }
+            };
+        let started =
+            sink.start(Box::new(move |out: &mut [f32], info: RenderInfo| renderer.fill(out, info)));
+        drop(sink);
+        match started {
+            Ok(stream) => Some(Self { player, stream, active_at: None }),
+            Err(error) => {
+                tracing::warn!(%error, ?format, "playback did not start");
+                None
+            }
+        }
+    }
+
+    /// Notes that playback has something to do now.
+    fn touch(&mut self) {
+        self.active_at = Some(Instant::now());
+    }
+
+    /// Whether the pump still takes its events: it had something to do within
+    /// [`PLAYBACK_SETTLES`].
+    fn active(&self) -> bool {
+        self.active_at.is_some_and(|at| at.elapsed() < PLAYBACK_SETTLES)
+    }
+
+    /// The next event playback reports, if one waits. An event, or audio still queued, counts as
+    /// something to do.
+    fn next_event(&mut self) -> Option<PlaybackEvent> {
+        let event = self.player.next_event();
+        if event.is_some() || self.player.has_audio() {
+            self.touch();
+        }
+        event
+    }
+}
+
 /// The component's state between the loop's turns.
 struct Link {
     inputs: Box<dyn InputSink>,
     incoming: Incoming,
     capture: Capture,
+    /// Playback, if `AudioConfig::playback` gave a sink and its stream started.
+    playback: Option<Playback>,
     transport: Option<Arc<dyn SpeechTransport>>,
     /// The wait for the next connection, while none is up and the transport is open.
     accepting: Option<Owned<Result<SpeechConnection, AcceptError>>>,
@@ -375,6 +462,7 @@ impl Link {
         effects: Box<dyn EffectSource>,
         transport: Option<Arc<dyn SpeechTransport>>,
         source: Option<SharedSource>,
+        playback: Option<Playback>,
     ) -> Self {
         Self {
             inputs,
@@ -388,6 +476,7 @@ impl Link {
                 stream: None,
                 mutes: 0,
             },
+            playback,
             transport,
             accepting: None,
             live: None,
@@ -490,15 +579,62 @@ impl Link {
             | AudioCmd::Unduck
             | AudioCmd::Pause { .. }
             | AudioCmd::Resume { .. }
-            | AudioCmd::Stop { .. }
-            | AudioCmd::PlayPhrase { .. }
-            | AudioCmd::Earcon(_)
-            | AudioCmd::Record { .. } => {
-                tracing::debug!(
-                    ?cmd,
-                    "this audio command is served by a later part of the audio series"
-                );
+            | AudioCmd::Stop { .. } => match self.playback.as_mut() {
+                Some(playback) => {
+                    playback.player.apply(cmd);
+                    playback.touch();
+                }
+                None => tracing::debug!(?cmd, "there is no playback; the command changes nothing"),
+            },
+            AudioCmd::Earcon(earcon) => {
+                tracing::debug!(?earcon, "earcons are played by a later part of the audio series");
             }
+            AudioCmd::PlayPhrase { .. } => unserved(
+                "PlayPhrase",
+                "the phrase cache is W2 work; until then the core speaks every reply through Speak",
+            ),
+            AudioCmd::Record { .. } => {
+                unserved("Record", "recording for the first run and enrollment is W2 work")
+            }
+        }
+    }
+
+    /// Plays a PCM frame from the speech process: straight into the player, never through the
+    /// core (section 3.3.7).
+    fn play(&mut self, header: PcmHeader, samples: &[i16]) {
+        let Some(playback) = self.playback.as_mut() else {
+            tracing::debug!(
+                speak = %header.speak,
+                clause = header.clause,
+                "there is no playback; PCM dropped"
+            );
+            return;
+        };
+        let pushed = playback.player.push(header, samples);
+        playback.touch();
+        match pushed {
+            // A frame with no room was logged by the player as `channel.full`.
+            Ok(()) | Err(PlayError::Full { .. } | PlayError::Utterances { .. }) => {}
+            // Synthesis runs ahead of playback, so clauses of a stopped utterance still come.
+            Err(error @ PlayError::Ended) => tracing::debug!(
+                speak = %header.speak,
+                clause = header.clause,
+                %error,
+                "PCM for an utterance that takes no more audio was refused"
+            ),
+            Err(error @ PlayError::Rate { .. }) => tracing::warn!(
+                speak = %header.speak,
+                clause = header.clause,
+                %error,
+                "PCM at a rate playback does not take was refused"
+            ),
+        }
+    }
+
+    /// Passes what playback reported to the core, as `Input::Playback`.
+    fn report_playback(&mut self) {
+        while let Some(event) = self.playback.as_mut().and_then(Playback::next_event) {
+            self.send(Input::Playback(event), TraceCtx::default());
         }
     }
 
@@ -558,9 +694,11 @@ impl Link {
         }
     }
 
-    /// Writes the next batch of the ring's frames; true when more are waiting at once. With no
-    /// connection up it moves the handoff's frames into the store instead.
+    /// Passes playback's events to the core, then writes the next batch of the ring's frames;
+    /// true when more are waiting at once. With no connection up it moves the handoff's frames
+    /// into the store instead.
     async fn pump(&mut self) -> bool {
+        self.report_playback();
         if self.live.is_none() {
             self.capture.ring.pull();
             return false;
@@ -595,9 +733,11 @@ impl Link {
         }
     }
 
-    /// Once a second: a `Ping` on the connection, and the counts of what was dropped.
+    /// Once a second: a `Ping` on the connection, the counts of what was dropped, and any event
+    /// playback reported after the pump stopped taking them.
     async fn on_second(&mut self) {
         self.report();
+        self.report_playback();
         if self.live.is_none() {
             return;
         }
@@ -696,12 +836,8 @@ impl Link {
                 self.send(Input::Voice(event.event), event.ctx);
                 false
             }
-            FrameBody::Pcm { header, .. } => {
-                tracing::debug!(
-                    speak = %header.speak,
-                    clause = header.clause,
-                    "PCM is played by a later part of the audio series"
-                );
+            FrameBody::Pcm { header, samples } => {
+                self.play(header, &samples);
                 false
             }
             // The reader refuses these from the speech process.
@@ -808,18 +944,22 @@ impl Link {
         Some(reader)
     }
 
-    /// Whether the ring needs draining: capture runs. With capture off the ring holds nothing (a
-    /// mute empties it, and with no microphone nothing ever arrives), so a muted component wakes
-    /// once a second for its `Ping`, not a hundred times. A new connection's replay runs on the
-    /// loop's `more` flag, not on this tick.
-    const fn drains(&self) -> bool {
-        self.capture.stream.is_some()
+    /// Whether the pump runs: capture runs, or playback had something to do within
+    /// [`PLAYBACK_SETTLES`]. With capture off the ring holds nothing (a mute empties it, and with
+    /// no microphone nothing ever arrives), so a muted component that is not speaking wakes once
+    /// a second for its `Ping`, not a hundred times. A new connection's replay runs on the loop's
+    /// `more` flag, not on this tick.
+    fn drains(&self) -> bool {
+        self.capture.stream.is_some() || self.playback.as_ref().is_some_and(Playback::active)
     }
 
-    /// The component is stopping: capture stops and the connection goes back.
+    /// The component is stopping: capture and playback stop and the connection goes back.
     async fn finish(&mut self) {
         if let Some(stream) = self.capture.stream.take() {
             stream.stop();
+        }
+        if let Some(playback) = self.playback.take() {
+            playback.stream.stop();
         }
         self.close(None, Ended::Shutdown).await;
     }

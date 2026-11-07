@@ -444,6 +444,11 @@ impl Player {
         tracing::warn!(name: names::CHANNEL_FULL, channel = queue.channel(), capacity, times);
     }
 
+    /// Whether audio is queued that the renderer has not yet handed to the device.
+    pub(crate) fn has_audio(&self) -> bool {
+        self.samples.slots() < self.capacity
+    }
+
     /// Serves a playback command and returns whether it was one.
     pub(crate) fn apply(&mut self, cmd: &AudioCmd) -> bool {
         match *cmd {
