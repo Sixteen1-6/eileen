@@ -304,7 +304,7 @@ fn a_reroute_gives_the_new_worker_what_the_user_told_the_old_one() {
     };
     tell(&mut h, "only look at the parser");
     let effects = reroute_to_deep(&mut h, "the test agent");
-    let (_, new_session) = starts(&effects).first().cloned().expect("a new session");
+    let (new_session, _) = starts(&effects).first().cloned().expect("a new session");
     assert_ne!(new_session, session, "a session of its own");
     let task = bound_task(&h.step(Input::Worker(new_session, init()))).expect("bound");
     assert_eq!(
@@ -314,7 +314,7 @@ fn a_reroute_gives_the_new_worker_what_the_user_told_the_old_one() {
     let sent = tell(&mut h, "skip the slow tests");
     assert_eq!(commands(&sent).len(), 2, "this one reaches the bound session: {sent:?}");
     let effects = reroute_to_deep(&mut h, "the test agent");
-    let (_, third) = starts(&effects).first().cloned().expect("a third session");
+    let (third, _) = starts(&effects).first().cloned().expect("a third session");
     let task = bound_task(&h.step(Input::Worker(third, init()))).expect("bound");
     assert_eq!(
         task, "do the test agent\n\nThe user added: only look at the parser\nskip the slow tests",
