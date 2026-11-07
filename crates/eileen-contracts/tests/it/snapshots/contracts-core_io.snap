@@ -762,6 +762,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
             "notify"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "To the machine profile's drivers (section 2.16).",
+          "properties": {
+            "machine": {
+              "$ref": "#/$defs/MachineCmd"
+            }
+          },
+          "required": [
+            "machine"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -846,6 +859,11 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         {
           "const": "notify",
           "description": "`Effect::Notify`.",
+          "type": "string"
+        },
+        {
+          "const": "machine",
+          "description": "`Effect::Machine`.",
           "type": "string"
         }
       ]
@@ -1264,6 +1282,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
             "timer"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the machine profile's drivers (section 2.16).",
+          "properties": {
+            "machine": {
+              "$ref": "#/$defs/MachineEvent"
+            }
+          },
+          "required": [
+            "machine"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1325,6 +1356,128 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "const": "up",
           "description": "Released.",
           "type": "string"
+        }
+      ]
+    },
+    "MachineCmd": {
+      "description": "To the machine profile's drivers (section 2.16).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Run these benchmarks: the runtime runs `DiskRead` and sends the other kinds to the\nspeech process.",
+          "properties": {
+            "bench": {
+              "properties": {
+                "kinds": {
+                  "description": "The kinds to run.",
+                  "items": {
+                    "$ref": "#/$defs/BenchKind"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kinds"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bench"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Write `machine\\plan.toml`, which `eileen doctor machine` reads with Eileen stopped.",
+          "properties": {
+            "write_plan": {
+              "$ref": "#/$defs/MachinePlan"
+            }
+          },
+          "required": [
+            "write_plan"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MachineEvent": {
+      "description": "From the machine profile's drivers (section 2.16): the runtime, through `MachineProbe`, the\nhourly summaries and the speech process.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The facts, at start before the brain starts, and after each change the OS reports. Boxed\nso that `Input` stays small; the wire form is the same.",
+          "properties": {
+            "facts": {
+              "$ref": "#/$defs/MachineFacts"
+            }
+          },
+          "required": [
+            "facts"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The usual memory, at start and after each hourly summary.",
+          "properties": {
+            "usual": {
+              "$ref": "#/$defs/UsualMemory"
+            }
+          },
+          "required": [
+            "usual"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every 30 s.",
+          "properties": {
+            "load": {
+              "properties": {
+                "build_slot_held": {
+                  "description": "Whether a build slot lock is held.",
+                  "type": "boolean"
+                },
+                "cpu_busy_pct": {
+                  "description": "CPU busy since the last reading, percent.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "power": {
+                  "$ref": "#/$defs/PowerState",
+                  "description": "The power source and battery saver."
+                }
+              },
+              "required": [
+                "cpu_busy_pct",
+                "power",
+                "build_slot_held"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "load"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "After each benchmark, the runtime's own or the speech process's.",
+          "properties": {
+            "bench": {
+              "$ref": "#/$defs/MachineBench"
+            }
+          },
+          "required": [
+            "bench"
+          ],
+          "type": "object"
         }
       ]
     },
