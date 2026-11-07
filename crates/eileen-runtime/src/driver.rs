@@ -587,21 +587,26 @@ impl Run {
             self.unserved(family, Some(name));
             return Ok(Flow::Continue);
         };
-        let mut send = pin!(outlet.send(effect));
+        let mut sending = pin!(outlet.send(effect));
         loop {
             let ended = tokio::select! {
                 biased;
                 _ = self.stop.wait_for(|stop| *stop) => return Ok(Flow::Stop),
-                sent = &mut send => {
-                    if sent.is_err() {
-                        self.unserved(family, Some(name));
+                result = &mut sending => {
+                    if result.is_ok() {
+                        return Ok(Flow::Continue);
                     }
-                    return Ok(Flow::Continue);
+                    None
                 }
-                ended = first_ended(&mut self.tasks) => ended,
+                ended = first_ended(&mut self.tasks) => Some(ended),
             };
-            // When the component that ended is this one, its queue has closed, and the send
-            // ends with the effect unserved on the next turn.
+            let Some(ended) = ended else {
+                // The queue has closed, so its component has ended.
+                self.unserved(family, Some(name));
+                return Ok(Flow::Continue);
+            };
+            // When the component that ended is this one, its queue has closed too, and the
+            // send ends with the effect unserved on the next turn.
             self.ended(ended)?;
         }
     }
