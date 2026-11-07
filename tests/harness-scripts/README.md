@@ -55,7 +55,7 @@ written by hand. The owner-run recording replaces them.
 | `driver-pending.ndjson` | A session whose servers list `eileen` as `pending` for as long as it runs, which passes its init deadline and is never bound | `driver-no-eileen.ndjson` with the server's status changed |
 | `driver-memory-path.ndjson` | A session whose first turn's `system/init` reports an auto-memory folder (`memory_paths.auto`), which is killed at that line | `worker-hello.ndjson`'s `system/init` with `memory_paths` added; the field's name is the one `eileen_harness::stream` reads, and the path is a placeholder |
 | `driver-memory-later.ndjson` | A first turn that narrates and holds, then a second turn whose `system/init` reports an auto-memory folder, which is killed at that line | `driver-job.ndjson`'s first lines and `driver-memory-path.ndjson`'s init |
-| `driver-token.ndjson` | A Bash call whose command quotes the test session's shim token, which the driver redacts, then a hold until the session is cancelled | `driver-job.ndjson`'s tool call with its command changed; the token is the test's placeholder, never a real one |
+| `driver-token.ndjson` | A Bash call whose command quotes the test session's shim and hook tokens, which the driver redacts, then a hold until the session is cancelled | `driver-job.ndjson`'s tool call with its command changed; the tokens are the test's placeholders, never real ones |
 
 Scripts recorded from new real sessions on the owner's PC, including the partial messages of a
 brain turn, come with the owner-run pull request, and `cargo xtask contract-claude` compares

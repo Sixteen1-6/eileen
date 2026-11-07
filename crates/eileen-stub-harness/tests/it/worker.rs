@@ -51,6 +51,9 @@ const VENDOR_SESSION: &str = "a3b57c79-73b3-485d-8511-c5ae9b1cdac5";
 /// The shim token the test session carries, which `driver-token.ndjson` quotes.
 const SHIM_TOKEN: &str = "shim-token-for-the-stub";
 
+/// The hook token the test session carries, which `driver-token.ndjson` quotes too.
+const HOOK_TOKEN: &str = "hook-token-for-the-stub";
+
 /// The `PATH` the user's environment holds, which a worker gets as it is.
 const USER_PATH: &str = if cfg!(windows) { r"C:\eileen-test\bin" } else { "/eileen-test/bin" };
 
@@ -180,7 +183,7 @@ fn spec() -> SessionSpec {
         hook_endpoint: HookEndpoint {
             port: 47_001,
             path: "hooks".to_owned(),
-            token: SessionToken::new("hook-token-for-the-stub".to_owned()),
+            token: SessionToken::new(HOOK_TOKEN.to_owned()),
         },
         shim: ShimEndpoint {
             pipe: "eileen-test-pipe".to_owned(),
@@ -548,13 +551,15 @@ fn a_later_init_that_reports_a_memory_path_kills_the_session() {
 }
 
 #[tokio::test]
-async fn a_tool_input_that_quotes_a_session_token_is_redacted() {
+async fn a_tool_input_that_quotes_the_session_tokens_is_redacted() {
     let dir = Scratch::new();
     let mut worker = started(&dir, "driver-token.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::ToolUse { .. })).await;
     let Some(WorkerEvent::ToolUse { input, .. }) = events.last() else { panic!("{events:?}") };
     let text = input.get().to_string();
-    assert!(!text.contains(SHIM_TOKEN), "the token is redacted: {text}");
+    for token in [SHIM_TOKEN, HOOK_TOKEN] {
+        assert!(!text.contains(token), "{token} is redacted: {text}");
+    }
     assert!(text.contains("echo [redacted"), "the rest of the command stays: {text}");
     cancel(&mut worker).await;
 }
