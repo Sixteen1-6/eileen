@@ -105,8 +105,8 @@ impl Core {
         let depth_said =
             ask.depth.is_some_and(|asked| ask.depth_said || self.brain.live_depth() == Some(asked));
         let deep = (kind == JobKind::DeepAnswer && depth == Depth::Deep).then_some(&routing.deep);
-        let configured = policy.route.or(deep.map(|deep| deep.backend));
-        let route = ask.route.or(configured.filter(|route| route.built_in_v0_1()));
+        let configured = policy.route.or_else(|| deep.map(|deep| deep.backend));
+        let route = ask.route.or_else(|| configured.filter(|route| route.built_in_v0_1()));
         let route = route.unwrap_or(Route::Claude);
         let policy_model = policy.model.filter(|_| policy.route.is_none_or(|named| named == route));
         let (model, reason) = if let Some(model) = ask.model.clone() {
