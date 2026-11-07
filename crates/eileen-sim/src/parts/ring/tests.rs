@@ -42,7 +42,14 @@ fn shape(events: &[VoiceEvent]) -> Vec<(TurnId, &'static str)> {
                 VoiceEvent::Partial { .. } => "partial",
                 VoiceEvent::SpeechEnded { .. } => "speech ended",
                 VoiceEvent::EndOfTurn { .. } => "end",
-                _ => "other",
+                VoiceEvent::Calibration(_)
+                | VoiceEvent::BargeInWindow { .. }
+                | VoiceEvent::ClauseReady { .. }
+                | VoiceEvent::SpeakDone { .. }
+                | VoiceEvent::Embedding { .. }
+                | VoiceEvent::CheckResult { .. }
+                | VoiceEvent::SpeakerMatch { .. }
+                | VoiceEvent::Health { .. } => "other",
             };
             (turn_of(event).unwrap_or_else(|| turn(0)), kind)
         })
@@ -140,9 +147,9 @@ fn voice_due(due: &mut Due, now_ms: u64) -> Vec<VoiceEvent> {
     let inputs: Vec<Input> = std::iter::from_fn(|| due.pop(now_ms)).collect();
     inputs
         .into_iter()
-        .map(|input| match input {
-            Input::Voice(event) => event,
-            other => panic!("only voice events are due: {other:?}"),
+        .map(|input| {
+            let Input::Voice(event) = input else { panic!("only voice events are due") };
+            event
         })
         .collect()
 }
