@@ -28,8 +28,8 @@ slice.
 - Branch: `wp3/<topic>`; the slice's pull request is `wp3/worker-brain`.
 - Depends on: WP0 phase A. Wave: W1. Desktop: no.
 - Owns: `crates/eileen-harness`, `crates/eileen-stub-harness`, `tests/harness-scripts/`,
-  `scenarios/claude/`, the fuzz targets `stream_json_line` and `control_message` with their
-  corpora and regressions, and this file.
+  `scenarios/claude/`, the fuzz targets `stream_json_line`, `control_message` and
+  `stub_script` with their corpora and regressions, and this file.
 
 ## Done when
 
@@ -357,6 +357,13 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   tokens with a private redactor, and the tokens would reach the log files unredacted. It needs
   an amendment to section 3.3.15 (`component(cfg, redactor: Arc<Redactor>)`) agreed with WP2,
   whose `eileen-cli` wiring passes the guard's redactor.
+- `amend/stub-script-fuzz` (#156, `type: amendment`): puts the `stub_script` fuzz target that
+  `wp3/stub-play` (#154) built into the plan. Section 3.3.16 asks a fuzz target of each parser
+  of its shared formats, `StubScriptLine` among them, but section 4.7's table had no row for
+  the stub harness. The table now has `stub_script` (stub harness scripts and the stdin lines a
+  driver writes to the stub, WP3), and section 6.5's Owns list, like the list above, names it.
+  The comment at the top of `fuzz/Cargo.toml`, WP0's file, no longer says the table lacks the
+  target; only that comment changes. No new tests: `it::fuzz_corpus` already replays the seeds.
 
 ## Surprises
 
