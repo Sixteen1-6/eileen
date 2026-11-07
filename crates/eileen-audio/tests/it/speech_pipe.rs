@@ -35,6 +35,8 @@ use eileen_contracts::speech::{
     SpeechCmd, SpeechEventFrame, TurnEndReason, VoiceEvent,
 };
 use eileen_rt::channel::{self, Receiver, Sender};
+use eileen_trace::names;
+use eileen_trace::test_support::{Captured, capture};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
@@ -71,6 +73,19 @@ fn clip(total: Duration, says: &[Say]) -> WavClip {
         samples[start..start + samples_in(say.len)].fill(f32::from(say.level) / 32_767.0);
     }
     WavClip::new(StreamFormat { sample_rate_hz: 16_000, channels: 1 }, samples).unwrap()
+}
+
+/// Runs `body` on paused tokio time, as `#[tokio::test(start_paused = true)]` does, under a
+/// subscriber that captures every event, so the test can read what the component logged.
+fn logged<T>(body: impl Future<Output = T>) -> (T, Captured) {
+    capture(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(body)
+    })
 }
 
 fn envelope<T>(body: T) -> Envelope<T> {
@@ -733,4 +748,64 @@ async fn while_no_connection_is_up_commands_are_answered_kept_or_held() {
     assert_eq!(stand_in.got[1], Got::Command(embed), "then the held command");
     assert!(matches!(stand_in.got[2], Got::Audio { .. }), "then audio: {:?}", stand_in.got[2]);
     rig.stop().await;
+}
+
+#[test]
+fn at_most_64_commands_wait_for_the_next_connection_and_one_past_that_is_logged() {
+    let embed =
+        |request| SpeechCmd::Embed { request, text: Personal::new("open the timeline".to_owned()) };
+    let (got, captured) = logged(async {
+        let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
+        for request in 0..=64 {
+            rig.speech(embed(request)).await;
+        }
+        let mut stand_in = rig.connect();
+        stand_in.run_for(ms(500)).await.unwrap();
+        rig.stop().await;
+        stand_in.got
+    });
+
+    let held: Vec<u64> = got
+        .iter()
+        .filter_map(|got| {
+            if let Got::Command(SpeechCmd::Embed { request, .. }) = got {
+                Some(*request)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(held, (0..64).collect::<Vec<u64>>(), "the first 64, in order, and not the 65th");
+    assert!(matches!(got[64], Got::Audio { .. }), "then audio: {:?}", got[64]);
+    let dropped: Vec<_> = captured
+        .events_named(names::CHANNEL_FULL)
+        .into_iter()
+        .filter(|event| event.fields.get("channel").is_some_and(|c| c == "audio.speech.held"))
+        .collect();
+    assert_eq!(dropped.len(), 1, "the one past the maximum is logged: {dropped:?}");
+    assert_eq!(dropped[0].fields["capacity"], 64, "with the queue's maximum");
+    assert_eq!(dropped[0].fields["times"], 1, "as its first drop");
+}
+
+#[test]
+fn a_stop_hands_the_connection_back_with_no_warning() {
+    let ((), captured) = logged(async {
+        let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
+        let mut stand_in = rig.connect();
+        stand_in.run_for(Duration::from_secs(2)).await.unwrap();
+        rig.stop().await;
+        drop(stand_in);
+    });
+
+    let warnings: Vec<_> = captured.events.iter().filter(|event| event.level == "WARN").collect();
+    assert!(warnings.is_empty(), "a clean run and stop warn of nothing: {warnings:?}");
+    let handed_back = captured
+        .events
+        .iter()
+        .find(|event| {
+            event.fields.get("message").is_some_and(|m| m == "speech connection handed back")
+        })
+        .expect("the hand-back is logged");
+    assert_eq!(handed_back.level, "INFO", "at info, as an ordinary stop");
+    assert_eq!(handed_back.fields["reason"], "the component is stopping", "with its reason");
 }
