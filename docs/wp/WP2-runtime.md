@@ -128,10 +128,17 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `eileen_runtime::driver`. `Driver::new` takes the caller's `CoreConfig` and `CorePorts` with a
   `Setup` (data directory, core session, clock, the core's RNG and snapshot, and `Limits`), and
   `Driver::run` owns the core in the task that awaits it. Components send through one bounded
-  `eileen_rt` channel and get `Backpressure` when it is full; the driver stamps each input's
-  `seq`, wall and monotonic time from the clock as it takes it for its step and steps the core
-  with that time, so `seq` is the step order and the core's time never runs backwards (what the
-  simulator does and what strict replay needs). Each effect goes unchanged to the one component
+  `eileen_rt` channel and get `Backpressure` when it is full. The input queue stamps each input
+  as section 3.3.15 asks: a component sends `seq` and times as zero (a non-zero `seq` fails a
+  `never!` in the sink), and the queue's receiving end in the driver stamps `seq`, wall and
+  monotonic time from the clock as it hands the input to the core, and steps the core with that
+  time. A fired timer takes its stamp the same way, so `seq` is the order the core sees and the
+  core's time never runs backwards along it, which is what the simulator does and what strict
+  replay needs; stamping in the sink instead would give a queued input a lower `seq` and an
+  earlier time than a timer stepped before it. Acceptance 16 holds for what the core sees; its
+  input-tap half waits for the flight recorder (W2). `Envelope`'s `seq`, `at` and `mono` docs in
+  `eileen-contracts` now say so, with WP0 reviewing; the `core_io` schema snapshot changes only
+  in those descriptions. Each effect goes unchanged to the one component
   that claims its family, through that component's own bounded queue; a family claimed twice,
   or `Timer` claimed by a component, refuses to start before anything runs. Families nobody
   serves (in W1 `Persist`, `Learn`, `Settings`, `Incident`, `Notify`, `ToolForward`, `Hud`,
@@ -162,8 +169,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
      and WP4's `SpeechTransport` (#140) have merged.
   8. The driver loop, in two pull requests, since neither needs the other's code:
      - `wp2/driver` (open, no dependencies): `eileen_runtime::driver`, one task owning the core,
-       inputs through one bounded queue, effects routed by family, the core's timers on tokio
-       time, `ComponentCtx` and shutdown.
+       the input queue with its stamps (acceptance 16, but for the input tap), effects routed by
+       family, the core's timers on tokio time, `ComponentCtx` and shutdown.
      - `wp2/driver-loop` (after `wp2/driver`): the bus with explicit `Lagged` behind the `Emit`
        family, and `eileen run --console`'s view.
   9. `wp2/hook-endpoint` (after 4 and 8): the session registry with `open` and `close`, and the
