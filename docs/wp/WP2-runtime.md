@@ -72,7 +72,8 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 13. Machine identity: the install id and `fleet\machine.toml` lifecycle, and no raw MachineGuid or
     install id in any other file Eileen writes.
 14. The machine profile's runtime: the facts, hourly and plan files, change events within 1 s,
-    `eileen doctor machine`, and the probe's readings on the owner's PC.
+    `eileen doctor machine`, the machine link carrying a benchmark to a test audio side and back,
+    and the probe's readings on the owner's PC.
 15. The speech transport, with stand-in speech processes: only the spawned process with the
     right token is handed over and reported `Ready` once, a squatter on the name makes the
     transport fail closed, nothing restarts until the core says so, and the pipe's DACL grants
@@ -101,17 +102,49 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `Win32_System_SystemServices` and `Win32_System_Ioctl`. BUILD.md sections 2.1, 2.12, 3.1,
   3.3.3, 3.3.7, 3.3.9, 3.4, 4.1, 6.2, 6.4, 6.5 and 7 and the root `Cargo.toml` say so;
   `Cargo.lock` does not change.
-- Next, in this order once the amendment merges: `wp2/supervisor-pipes` (`PipeServer` and
-  `PipeConn` with the pipe ends' process ids, and the incident when a next instance cannot be
-  made), `wp2/supervisor-callers` (`Peer` and `PeerFacts`, the `Jobs` registry with the changes
-  to `spawn`, `ChildSpec` and `Child` that WP0 reviews, `tcp_client_pid` and
-  `write_user_only`), `wp2/path-probe-trait` (the trait and `FakePathProbe` in
-  `eileen-platform`, then `WinPathProbe` in `eileen-shell-win`) and `wp2/shell-local-time`
-  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` waits for
-  both `ipc` pull requests, since its caller check needs `Peer` and the registry;
-  `wp1/speech-life` (#141) and WP4's `SpeechTransport` (#140) have merged. WP3's #159
-  (`ClaudeWorker`, merged) spawns sessions with no job key and refuses a memory limit; its key,
-  limit and the core's process id follow `wp2/supervisor-callers` in a WP3 pull request.
+- `amend/wp2-session-wiring` (amendment, docs only): reconciles BUILD.md with what WP3's #142
+  and WP1's #130 merged and suggested. Each session's hooks post to
+  `<HookEndpoint.path>/<event in kebab case>` with the path `v1/hooks/claude/<session>`, the
+  layout `eileen_harness::session` writes, so the endpoint knows the session from the path
+  (sections 2.5 and 6.4). The shim takes `--pipe`, `--role` and, for a worker, `--session`, with
+  its token in `EILEEN_SHIM_TOKEN` and the core's process id in `EILEEN_CORE_PID` (section 2.5).
+  The runtime fills a worker's `SessionSpec.hook_endpoint` and `shim` as it routes the core's
+  `WorkerCmd::Start`, and the harness takes each brain instance's endpoints through
+  `eileen_harness::SessionEndpoints`, which `eileen-cli` implements over the new session
+  registry, `eileen_runtime::sessions` (section 3.3.8); WP3's `wp3/worker-brain` builds the
+  harness side. WP2 pins each of its six provisional modules with the pull request that first
+  produces it (section 3.3). The machine link's test moved from acceptance 15 to 14, so
+  `wp2/speech-transport` does not wait for `wp0/machine-contracts`. Section 6.4 lists the W1
+  order below.
+- W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
+  1. `amend/wp2-ipc-home` (#171, merged).
+  2. `amend/wp2-session-wiring` (this amendment).
+  3. `wp2/supervisor-pipes`: `PipeServer` and `PipeConn` with the pipe ends' process ids, and
+     the incident when a next instance cannot be made.
+  4. `wp2/supervisor-callers` (after 3): `Peer`, `PeerFacts` and the `Jobs` registry with the
+     changes to `spawn`, `ChildSpec` and `Child` that WP0 reviews, `tcp_client_pid` and
+     `write_user_only`.
+  5. `wp2/path-probe-trait`: the trait and `FakePathProbe` in `eileen-platform`, then
+     `WinPathProbe` in `eileen-shell-win`. If #77 is still held, it builds on `main`'s
+     `Deadline` and says so.
+  6. `wp2/shell-local-time`: the zone reader and its wiring into `CoreConfig.local_time`.
+  7. `wp2/speech-transport` (after 3 and 4, since its caller check needs `Peer` and the
+     registry): acceptance 15, pinning `connectors`. `wp1/speech-life` (#141) and WP4's
+     `SpeechTransport` (#140) have merged.
+  8. `wp2/driver-loop`: the driver loop, effects routed by family, the bus with explicit
+     `Lagged`, and `eileen run --console`'s view.
+  9. `wp2/hook-endpoint` (after 4 and 8): the session registry and the loopback server with the
+     session hooks, the guard, the tripwire, the client mapping and job check, and `bus.json`.
+  10. `wp2/dispatcher` (after 9): each session's pipe, the pure caller decision and
+      `eileen-shim`, pinning `tools` and `tools/brain`.
+  11. `wp2/path-classes` (after 5 and 9): the `PathFact`s of each `PreToolUse` request, which
+      slice S1's job needs; the `GitFact` and `UrlFact` rows follow in W2.
+  12. `wp2/shell-tray`: the tray's mute item with the physical-click check, and the mute hotkey.
+  13. `wp2/s1-live` (after 6 to 12, `wp3/worker-brain`, `wp4/s1-audio` and `wp4/s1-speech`).
+
+  WP3's #159 (`ClaudeWorker`, merged) spawns sessions with no job key and refuses a memory
+  limit; its key, limit and the core's process id follow `wp2/supervisor-callers` in a WP3 pull
+  request.
 
 ## Surprises
 
@@ -129,6 +162,11 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `Cargo.lock` holds three `getrandom` versions. 0.3.4 arrives only as a build dependency of
   `zip` 2.6.1 on Windows, while 0.4.3 is already in every binary through `ulid`'s `rand`, so
   the token pin is 0.4.3.
+- The six provisional modules WP2 owns each carry the doc line "Provisional: WP2 pins this
+  module in its first pull request", whose wording `eileen-contracts`' `it::modules` test
+  checks. Section 3.3 now pins each with its first producer, so the pull request that pins one
+  removes its line, and `tools/session`, `tools/dev` and `scenario` keep the older wording until
+  W2.
 - `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
   for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
   by then, and says so.
