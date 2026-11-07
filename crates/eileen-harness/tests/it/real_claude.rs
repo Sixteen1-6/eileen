@@ -3,12 +3,16 @@
 //! turn runs and nothing is spent: it shows that the CLI answers the readiness requests
 //! (`initialize`, then `mcp_status`) before any user line, which the amendment of 2026-11-01
 //! (#161) builds readiness on. The session's `eileen-shim` path names no file, so the CLI
-//! reports the `eileen` server as failed and `start` refuses the session at once, well inside
-//! its deadline, instead of waiting for a `system/init` that never comes.
+//! reports the `eileen` server as failed and `start` refuses the session at once, instead of
+//! waiting for a `system/init` that never comes.
+//!
+//! The init deadline stays at its default (`eileen_harness::INIT_DEADLINE`), since a cold start
+//! on a loaded PC took 30 to 111 s (section 0) and a shorter one could fail a CLI that answers
+//! correctly. Any deadline fails a start that waits for the init, because none comes before a
+//! user line.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use eileen_contracts::config::RoutingConfig;
 use eileen_contracts::harness::{
@@ -20,10 +24,6 @@ use eileen_harness::locate::{LocateEnv, locate_claude};
 use eileen_harness::session::HostEnv;
 use eileen_harness::{ClaudeWorker, DriverError, HarnessConfig, WorkerDriver as _};
 use eileen_trace::Redactor;
-
-/// Far above a cold start on a loaded PC (section 0), and far below the default deadline's
-/// worst case, so a start that waits for `system/init` fails the test rather than passing.
-const READY: Duration = Duration::from_secs(90);
 
 /// The default config's fast model: aliases live only in config (section 2.3), and the probe
 /// runs no model turn, so the cheapest is enough.
@@ -91,7 +91,6 @@ async fn start_is_answered_through_mcp_status_before_any_user_line() {
             names_ignore_case: cfg!(windows),
             ..HostEnv::default()
         },
-        init_deadline: READY,
         ..HarnessConfig::default()
     };
     let mut worker = ClaudeWorker::new(cfg, Arc::new(Redactor::new()));
