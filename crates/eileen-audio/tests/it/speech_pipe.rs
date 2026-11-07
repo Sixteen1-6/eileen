@@ -14,13 +14,15 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eileen_audio::fake::{MemoryLimits, StandIns, memory_transport};
 use eileen_audio::{
-    AudioConfig, ConnectionError, ConnectionId, Pace, SharedSource, SpeechConnection, StreamFormat,
-    WavClip, WavSource, component,
+    AudioConfig, AudioError, AudioSource, AudioStream, CaptureCallback, CaptureInfo,
+    ConnectionError, ConnectionId, Pace, SharedSource, SpeechConnection, StreamFormat, WavClip,
+    WavSource, component,
 };
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
 use eileen_contracts::core_io::{AudioCmd, Effect, Input};
@@ -35,14 +37,17 @@ use eileen_contracts::speech::{
     SpeechCmd, SpeechEventFrame, TurnEndReason, VoiceEvent,
 };
 use eileen_rt::channel::{self, Receiver, Sender};
-use eileen_trace::names;
 use eileen_trace::test_support::{Captured, capture};
+use eileen_trace::{EventRecord, names};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
 /// Every wait in these tests that is not the subject of the test.
 const WAIT: Duration = Duration::from_secs(5);
+
+/// An audio frame's bytes on the wire: a 32-byte header and 512 samples.
+const AUDIO_FRAME_WIRE_BYTES: usize = 32 + 512 * 2;
 
 /// The first command's level, as an `i16` sample.
 const FIRST: i16 = 8_192;
@@ -88,6 +93,51 @@ fn logged<T>(body: impl Future<Output = T>) -> (T, Captured) {
     })
 }
 
+fn speak_cmd(speak: SpeakId) -> SpeechCmd {
+    SpeechCmd::Speak {
+        speak,
+        voice: "default".to_owned(),
+        clauses: vec!["Done.".to_owned()],
+        whole_line: "Done.".to_owned(),
+    }
+}
+
+fn embed(request: u64) -> SpeechCmd {
+    SpeechCmd::Embed { request, text: Personal::new("open the timeline".to_owned()) }
+}
+
+fn end_of_turn(text: &str) -> VoiceEvent {
+    VoiceEvent::EndOfTurn {
+        turn: TurnId::from_parts(9, 1),
+        text: Personal::new(text.to_owned()),
+        smart_turn_pct: 90,
+        silence_ms: 32,
+        asr_confidence_pct: 90,
+        reason: TurnEndReason::SmartTurn,
+        source: 0,
+        level_db: -20,
+    }
+}
+
+/// The `channel.full` events logged for `channel`, as their capacity and count.
+fn channel_full(captured: &Captured, channel: &str) -> Vec<(Option<u64>, Option<u64>)> {
+    captured
+        .events_named(names::CHANNEL_FULL)
+        .into_iter()
+        .filter(|event| event.fields.get("channel").is_some_and(|c| c == channel))
+        .map(|event| (event.fields["capacity"].as_u64(), event.fields["times"].as_u64()))
+        .collect()
+}
+
+/// The events whose message is `message`.
+fn messages<'a>(captured: &'a Captured, message: &str) -> Vec<&'a EventRecord> {
+    captured
+        .events
+        .iter()
+        .filter(|event| event.fields.get("message").is_some_and(|m| m == message))
+        .collect()
+}
+
 fn envelope<T>(body: T) -> Envelope<T> {
     Envelope { seq: 0, at: WallTime(0), mono: MonoTime(0), ctx: TraceCtx::default(), body }
 }
@@ -119,26 +169,75 @@ impl ShutdownSignal for Stop {
     }
 }
 
+/// A microphone that counts the buffers its stream delivers, so a test sees capture stop.
+struct Counted {
+    clip: WavSource,
+    buffers: Arc<AtomicU64>,
+}
+
+impl AudioSource for Counted {
+    fn format(&self) -> StreamFormat {
+        self.clip.format()
+    }
+
+    fn start(
+        &mut self,
+        mut on_buffer: CaptureCallback,
+    ) -> Result<Box<dyn AudioStream>, AudioError> {
+        let buffers = Arc::clone(&self.buffers);
+        self.clip.start(Box::new(move |buffer: &[f32], info: CaptureInfo| {
+            buffers.fetch_add(1, Ordering::Relaxed);
+            on_buffer(buffer, info);
+        }))
+    }
+}
+
+/// How a test sets the rig up.
+#[derive(Clone, Copy)]
+struct Setup {
+    /// The memory transport's maxima.
+    limits: MemoryLimits,
+    /// The core's input queue, which the test empties only when it reads it.
+    inputs: usize,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self { limits: MemoryLimits::default(), inputs: 4_096 }
+    }
+}
+
 /// The audio component running on a test clip, with the test's side of its transport.
 struct Rig {
-    stand_ins: StandIns,
+    /// The test's side of the transport; `None` once the test has dropped it.
+    stand_ins: Option<StandIns>,
     effects: Sender<Envelope<Effect>>,
     inputs: Receiver<Envelope<Input>>,
     stop: watch::Sender<bool>,
     task: JoinHandle<Result<(), ComponentError>>,
     /// Turn numbers already minted, so each stand-in mints new ones as a new process would.
     turns: u128,
+    /// Buffers the microphone has delivered.
+    buffers: Arc<AtomicU64>,
 }
 
 impl Rig {
     fn start(clip: WavClip) -> Self {
-        let (transport, stand_ins) = memory_transport(MemoryLimits::default());
-        let source: SharedSource =
-            Arc::new(Mutex::new(WavSource::new(clip, Pace::RealTime).unwrap()));
+        Self::start_with(clip, Setup::default())
+    }
+
+    fn start_with(clip: WavClip, setup: Setup) -> Self {
+        let (transport, stand_ins) = memory_transport(setup.limits);
+        let buffers = Arc::new(AtomicU64::new(0));
+        let microphone = Counted {
+            clip: WavSource::new(clip, Pace::RealTime).unwrap(),
+            buffers: Arc::clone(&buffers),
+        };
+        let source: SharedSource = Arc::new(Mutex::new(microphone));
         let config = AudioConfig { speech: Some(Arc::new(transport)), capture: Some(source) };
         let audio = component(&config);
         let (effects, effects_rx) = channel::bounded("test.effects", nz(64));
-        let (inputs_tx, inputs) = channel::bounded("test.inputs", nz(4_096));
+        let (inputs_tx, inputs) = channel::bounded("test.inputs", nz(setup.inputs));
         let (stop, stop_rx) = watch::channel(false);
         let ctx = ComponentCtx {
             inputs: Box::new(Inputs(inputs_tx)),
@@ -148,7 +247,7 @@ impl Rig {
             shutdown: Box::new(Stop(stop_rx)),
         };
         let task = eileen_rt::task::spawn("test.audio", audio.start(ctx));
-        Self { stand_ins, effects, inputs, stop, task, turns: 0 }
+        Self { stand_ins: Some(stand_ins), effects, inputs, stop, task, turns: 0, buffers }
     }
 
     /// Routes an effect to the component and gives it a millisecond to take it.
@@ -163,14 +262,19 @@ impl Rig {
 
     /// Connects a new stand-in, as a speech process that has loaded its models.
     fn connect(&mut self) -> StandIn {
-        let connection = self.stand_ins.connect().unwrap();
+        let connection = self.stand_ins.as_mut().unwrap().connect().unwrap();
         self.turns += 1_000;
         StandIn::new(connection, self.turns)
     }
 
     /// Waits for the component to hand a connection back.
     async fn handed_back(&mut self) -> ConnectionId {
-        self.stand_ins.handed_back(WAIT).await.unwrap()
+        self.stand_ins.as_mut().unwrap().handed_back(WAIT).await.unwrap()
+    }
+
+    /// Buffers the microphone has delivered so far.
+    fn buffers(&self) -> u64 {
+        self.buffers.load(Ordering::Relaxed)
     }
 
     /// Every input the component has sent so far.
@@ -549,25 +653,39 @@ async fn a_reload_closes_and_reconnects_on_the_same_path() {
     rig.stop().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_overrun_sets_the_break_flag_on_the_first_frame_written_after_the_gap() {
+#[test]
+fn an_overrun_sets_the_break_flag_on_the_first_frame_written_after_the_gap() {
     // The ring holds 180 s; a stand-in 185 s late finds the oldest frames dropped, the command
     // among them.
-    let mut rig = Rig::start(clip(
-        Duration::from_secs(190),
-        &[Say { at: ms(1_000), len: ms(500), level: FIRST }],
-    ));
-    sleep(Duration::from_secs(185)).await;
-    let mut late = rig.connect();
-    late.run_for(Duration::from_secs(2)).await.unwrap();
+    let ((audio, turns), captured) = logged(async {
+        let mut rig = Rig::start(clip(
+            Duration::from_secs(190),
+            &[Say { at: ms(1_000), len: ms(500), level: FIRST }],
+        ));
+        sleep(Duration::from_secs(185)).await;
+        let mut late = rig.connect();
+        late.run_for(Duration::from_secs(2)).await.unwrap();
+        rig.stop().await;
+        (late.audio(), late.turns)
+    });
 
-    let audio = late.audio();
     assert!(audio[0].seq > 100, "the oldest frames were dropped: first {}", audio[0].seq);
     assert!(audio[0].flags.contains(AudioFlags::BREAK), "the first frame after the gap breaks");
     assert!(audio[1..].iter().all(|heard| !heard.flags.contains(AudioFlags::BREAK)), "only it");
     assert!(audio.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1), "none missing after");
-    assert!(late.turns.is_empty(), "the dropped command is never heard");
-    rig.stop().await;
+    assert!(turns.is_empty(), "the dropped command is never heard");
+
+    // Once a second while frames are dropped, each report gives the running total, as every
+    // other `channel.full` does.
+    let dropped = channel_full(&captured, "audio.speech.ring");
+    assert!(dropped.len() >= 4, "a report each second from 180 s: {dropped:?}");
+    assert!(dropped.iter().all(|(capacity, _)| *capacity == Some(5_625)), "{dropped:?}");
+    let totals: Vec<u64> = dropped.iter().map(|(_, times)| times.unwrap()).collect();
+    assert!(totals.windows(2).all(|pair| pair[1] > pair[0]), "a running total: {totals:?}");
+    assert!(
+        *totals.last().unwrap() >= audio[0].seq - 1,
+        "it counts every frame dropped before the first one written: {totals:?}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -713,22 +831,14 @@ async fn while_no_connection_is_up_commands_are_answered_kept_or_held() {
     let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
     let speak = SpeakId::from_parts(1, 7);
     let hotwords = SpeechCmd::SetHotwords { words: vec!["Eileen".to_owned()] };
-    let embed =
-        SpeechCmd::Embed { request: 3, text: Personal::new("open the timeline".to_owned()) };
     rig.speech(hotwords.clone()).await;
-    rig.speech(SpeechCmd::Speak {
-        speak,
-        voice: "default".to_owned(),
-        clauses: vec!["Done.".to_owned()],
-        whole_line: "Done.".to_owned(),
-    })
-    .await;
+    rig.speech(speak_cmd(speak)).await;
     rig.speech(SpeechCmd::Check {
         request: 7,
         check: SpeechCheckRequest::NameRecognisable { name: "Eileen".to_owned() },
     })
     .await;
-    rig.speech(embed.clone()).await;
+    rig.speech(embed(3)).await;
 
     let events = voice(&rig.inputs());
     assert_eq!(events.len(), 2, "{events:?}");
@@ -745,15 +855,13 @@ async fn while_no_connection_is_up_commands_are_answered_kept_or_held() {
     let mut stand_in = rig.connect();
     stand_in.run_for(ms(500)).await.unwrap();
     assert_eq!(stand_in.got[0], Got::Command(hotwords), "the hotwords first");
-    assert_eq!(stand_in.got[1], Got::Command(embed), "then the held command");
+    assert_eq!(stand_in.got[1], Got::Command(embed(3)), "then the held command");
     assert!(matches!(stand_in.got[2], Got::Audio { .. }), "then audio: {:?}", stand_in.got[2]);
     rig.stop().await;
 }
 
 #[test]
 fn at_most_64_commands_wait_for_the_next_connection_and_one_past_that_is_logged() {
-    let embed =
-        |request| SpeechCmd::Embed { request, text: Personal::new("open the timeline".to_owned()) };
     let (got, captured) = logged(async {
         let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
         for request in 0..=64 {
@@ -777,14 +885,11 @@ fn at_most_64_commands_wait_for_the_next_connection_and_one_past_that_is_logged(
         .collect();
     assert_eq!(held, (0..64).collect::<Vec<u64>>(), "the first 64, in order, and not the 65th");
     assert!(matches!(got[64], Got::Audio { .. }), "then audio: {:?}", got[64]);
-    let dropped: Vec<_> = captured
-        .events_named(names::CHANNEL_FULL)
-        .into_iter()
-        .filter(|event| event.fields.get("channel").is_some_and(|c| c == "audio.speech.held"))
-        .collect();
-    assert_eq!(dropped.len(), 1, "the one past the maximum is logged: {dropped:?}");
-    assert_eq!(dropped[0].fields["capacity"], 64, "with the queue's maximum");
-    assert_eq!(dropped[0].fields["times"], 1, "as its first drop");
+    assert_eq!(
+        channel_full(&captured, "audio.speech.held"),
+        [(Some(64), Some(1))],
+        "the one past the maximum is logged once, with the queue's maximum, as its first drop"
+    );
 }
 
 #[test]
@@ -808,4 +913,167 @@ fn a_stop_hands_the_connection_back_with_no_warning() {
         .expect("the hand-back is logged");
     assert_eq!(handed_back.level, "INFO", "at info, as an ordinary stop");
     assert_eq!(handed_back.fields["reason"], "the component is stopping", "with its reason");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_write_that_misses_its_deadline_hands_the_connection_back_and_loses_no_frame() {
+    let mut rig = Rig::start(clip(Duration::from_secs(14), &[]));
+    sleep(ms(500)).await;
+    let mut first = rig.connect();
+    first.run_for(Duration::from_secs(1)).await.unwrap();
+    // The stand-in stops reading. Live audio fills the 64 KiB pipe in about 2 s, and the write
+    // after that waits for room until its 2 s deadline.
+    sleep(Duration::from_secs(3)).await;
+    // While that write waits, the stand-in ends a turn through the newest frame it read (the
+    // component's read in flight takes it), and the core asks for speech.
+    let confirmed = first.newest;
+    first.event(end_of_turn("said before the break")).await;
+    let speak = SpeakId::from_parts(1, 9);
+    rig.speech(speak_cmd(speak)).await;
+    assert!(voice(&rig.inputs()).is_empty(), "nothing yet: the write still waits");
+
+    assert_eq!(rig.handed_back().await, ConnectionId::new(1), "handed back at the deadline");
+    sleep(ms(10)).await;
+    assert_eq!(
+        voice(&rig.inputs()),
+        [end_of_turn("said before the break"), VoiceEvent::SpeakDone { speak }],
+        "the event sent before the break reaches the core, and the Speak is answered"
+    );
+
+    drop(first);
+    let mut second = rig.connect();
+    second.run_for(Duration::from_secs(1)).await.unwrap();
+    let audio = second.audio();
+    assert_eq!(audio[0].seq, confirmed + 1, "the replay starts after the frame the turn confirmed");
+    assert!(audio.iter().all(|heard| !heard.flags.contains(AudioFlags::BREAK)), "no break");
+    assert!(
+        audio.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1),
+        "no frame lost while the loop waited out the write"
+    );
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_command_whose_write_fails_is_served_as_one_that_came_with_no_connection() {
+    // A pipe that holds 64 bytes, a stand-in that reads nothing, and capture off, so the `Speak`
+    // is the one write that waits.
+    let limits = MemoryLimits { buffer_bytes: nz(64), ..MemoryLimits::default() };
+    let setup = Setup { limits, ..Setup::default() };
+    let mut rig = Rig::start_with(clip(Duration::from_secs(10), &[]), setup);
+    rig.effect(Effect::Audio(AudioCmd::SetCapture(false))).await;
+    let _deaf = rig.connect();
+    sleep(ms(100)).await;
+    let speak = SpeakId::from_parts(1, 9);
+    rig.speech(speak_cmd(speak)).await;
+    assert!(voice(&rig.inputs()).is_empty(), "nothing while its write waits");
+
+    assert_eq!(rig.handed_back().await, ConnectionId::new(1), "its write missed the deadline");
+    sleep(ms(10)).await;
+    assert_eq!(
+        voice(&rig.inputs()),
+        [VoiceEvent::SpeakDone { speak }],
+        "answered as a Speak that came with no connection up"
+    );
+    rig.stop().await;
+}
+
+#[test]
+fn once_the_transport_shuts_down_nothing_is_held_and_a_speak_is_still_answered() {
+    let speak = SpeakId::from_parts(1, 9);
+    let (events, captured) = logged(async move {
+        let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
+        rig.speech(embed(1)).await;
+        // The test's side of the transport goes, so the accept in flight ends with `Shutdown`.
+        rig.stand_ins = None;
+        sleep(ms(10)).await;
+        rig.speech(embed(2)).await;
+        rig.speech(speak_cmd(speak)).await;
+        let events = voice(&rig.inputs());
+        rig.stop().await;
+        events
+    });
+
+    assert_eq!(events, [VoiceEvent::SpeakDone { speak }], "the Speak is still answered");
+    let shut = messages(
+        &captured,
+        "the speech transport has shut down; no more connections, held commands dropped",
+    );
+    assert_eq!(shut.len(), 1, "the shutdown is logged once: {shut:?}");
+    assert_eq!(shut[0].fields["held"], 1, "with the held command it dropped");
+    let dropped = messages(&captured, "no speech connection will come; the command is dropped");
+    assert_eq!(dropped.len(), 1, "the later command is dropped, not held: {dropped:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mute_during_a_stalled_write_stops_capture_at_once_and_begins_no_new_frame() {
+    let mut rig = Rig::start(clip(Duration::from_secs(20), &[]));
+    sleep(Duration::from_secs(6)).await;
+    // The stand-in reads nothing yet, so the replay fills the 64 KiB pipe and the next write
+    // waits part way through a frame.
+    let mut stand_in = rig.connect();
+    sleep(ms(100)).await;
+    let before = rig.buffers();
+    rig.effect(Effect::Audio(AudioCmd::SetCapture(false))).await;
+    sleep(ms(10)).await;
+    let stopped = rig.buffers();
+    assert!(stopped - before <= 1, "at most the buffer in progress: {}", stopped - before);
+    sleep(ms(800)).await;
+    assert_eq!(rig.buffers(), stopped, "capture stopped within one buffer of the mute");
+
+    stand_in.run_for(Duration::from_secs(1)).await.unwrap();
+    let audio = stand_in.audio();
+    // The pipe held 62 whole frames and the start of a 63rd, which is finished; no frame not yet
+    // begun is written after the mute, though the batch being written had 32.
+    let begun = (64 * 1_024_usize).div_ceil(AUDIO_FRAME_WIRE_BYTES);
+    assert_eq!(audio.len(), begun, "only the frames the pipe held or had begun");
+    assert!(audio.windows(2).all(|pair| pair[1].seq == pair[0].seq + 1), "in order from 1");
+
+    rig.effect(Effect::Audio(AudioCmd::SetCapture(true))).await;
+    stand_in.run_for(Duration::from_secs(1)).await.unwrap();
+    let heard = stand_in.audio();
+    let resumed = &heard[begun..];
+    assert!(!resumed.is_empty(), "capture runs again");
+    assert!(resumed[0].flags.contains(AudioFlags::BREAK), "the first frame after the mute breaks");
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_pings_of_one_read_are_answered_with_one_pong() {
+    let mut rig = Rig::start(clip(Duration::from_secs(10), &[]));
+    sleep(ms(500)).await;
+    let mut stand_in = rig.connect();
+    stand_in.run_for(ms(100)).await.unwrap();
+    let ping = Frame::new(FrameBody::Ping).encode().unwrap();
+    let three = [ping.as_slice(); 3].concat();
+    stand_in.connection.writer().write_all(&three, WAIT).await.unwrap();
+    stand_in.run_for(ms(100)).await.unwrap();
+    assert_eq!(stand_in.count(&Got::Pong), 1, "one Pong answers the three Pings of one read");
+    rig.stop().await;
+}
+
+#[test]
+fn inputs_the_core_refuses_are_logged_once_a_second_with_its_capacity_and_a_running_total() {
+    let ((), captured) = logged(async {
+        // No connection, so each `Speak` is answered at once with `SpeakDone`; the core's queue
+        // holds one input and the test never reads it.
+        let rig = Rig::start_with(
+            clip(Duration::from_secs(10), &[]),
+            Setup { inputs: 1, ..Setup::default() },
+        );
+        for n in 0..4 {
+            rig.speech(speak_cmd(SpeakId::from_parts(1, n))).await;
+        }
+        sleep(Duration::from_secs(1)).await;
+        for n in 4..6 {
+            rig.speech(speak_cmd(SpeakId::from_parts(1, n))).await;
+        }
+        sleep(Duration::from_secs(2)).await;
+        rig.stop().await;
+    });
+
+    assert_eq!(
+        channel_full(&captured, "core.inputs"),
+        [(Some(1), Some(3)), (Some(1), Some(5))],
+        "a report in each second that saw a refusal, with the queue's capacity and the total"
+    );
 }
