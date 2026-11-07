@@ -29,7 +29,7 @@ records when they exist.
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
 | 7 | `wp0/ci-pending-snapshots` | Pull request #133, merged on 2026-11-07 as f56604e, after a rebase that day onto `main` with #139 that moved its tests into `xtask::workflows::tests`; alone on that `main`, they failed in run 42386485533 and passed with the workflow change in run 42386891065. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree. It merged before `wp0/machine-contracts`, which takes its pinned snapshots from CI by this route. Its review's fixes follow in pull request #176, from the same branch, and its amendment of sections 4.6, 4.7, 4b.3 and 6.1 in pull request #177 |
 | 8 | `wp0/ci-cache-fresh` | Pull request #139, merged on 2026-11-01 as 833ab4c, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974. Its amendment, pull request #143, merged on 2026-11-07 as 499c945, and its follow-up amendment, pull request #170, merged on 2026-11-07 as c05fa14 |
-| 9 | `wp0/machine-contracts` | Pull request #191, opened as a draft on 2026-11-07: phase B's machine profile foundations (section 2.16, decision D76), the pull request WP1 acceptance 16, WP2's machine part, WP4 acceptance 14, WP7, WP8 and WP10's `MachineProbe` wait on |
+| 9 | `wp0/machine-contracts` | Pull request #191, a draft since 2026-11-07, green in run 42403291607 on 3573cea: phase B's machine profile foundations (section 2.16, decision D76), the pull request WP1 acceptance 16, WP2's machine part, WP4 acceptance 14, WP7, WP8 and WP10's `MachineProbe` wait on |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -299,6 +299,28 @@ paths; `it::` is a crate's integration test target):
   `it::machine::a_cloned_image_with_two_install_ids_gives_two_hashes`,
   `it::machine::an_unusable_os_id_gives_the_install_id_only_hash` and
   `it::machine::file_identity_reads_etc_then_falls_back_to_dbus`.
+
+Acceptance 13 passed in pull request #191's run 42403291607 on its head 3573cea: `logic-linux`
+ran 1,814 of 1,814 tests on `ubuntu-latest` and `windows-test` 1,280 of 1,280 on
+`windows-latest`, with clippy clean on both. The snapshots came from runs 42402150037 and
+42402719544, whose only failures were the snapshot tests this pull request changes. By clause:
+
+- In `eileen-contracts`, the `machine` snapshot pinned and the `core_io`, `bus`, `hud` and
+  `config` snapshots updated (`it::schemas::machine_matches_its_snapshot` and the four others),
+  the text walk covering the module (`it::text::free_text_is_wrapped_or_allowlisted`,
+  `it::text::the_machine_profile_s_names_are_wrapped_and_its_plain_strings_listed`), and
+  `machine::tests::performance_cores_is_six_for_the_owners_shape` and
+  `machine::tests::performance_cores_is_four_for_the_one_class_laptop`.
+- In `eileen-platform`, `it::machine_probe::the_three_fixture_machines_round_trip_through_facts_toml`,
+  `it::machine_probe::each_fixture_week_holds_the_usual_memory_it_names` and
+  `it::machine_probe::facts_past_its_deadline_answers_deadline_exceeded`.
+- In `eileen-buildguard`, `it::processes::two_processes_appending_one_hour_leave_one_line`,
+  `samples::tests::hour_lines_past_30_days_are_dropped`,
+  `samples::tests::usual_is_the_25th_percentile_of_hourly_medians_with_plan_items_added_back`,
+  `samples::tests::usual_leaves_out_hours_under_360_samples`,
+  `samples::tests::usual_is_none_with_fewer_than_24_qualifying_hours` and the property test
+  `admission::tests::jobs_never_exceed_logical_cores_and_never_fall_as_memory_rises`, which
+  checks 2, 4, 8 and 22 cores in every case.
 
 Acceptance 7 passed in pull request #98's run 40223792187: `logic-linux` ran the simulator's 12
 pull request seeds twice each with `--doublecheck` (one trace hash per seed) in 61 s including
