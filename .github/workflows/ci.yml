@@ -163,6 +163,12 @@ jobs:
           tool: cargo-nextest@0.9.148
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Clippy of the shipped configuration, warnings denied
+        # With --all-targets the features only dev-dependencies ask for (eileen-audio's `fake`,
+        # eileen-trace's `testing`, tokio's `test-util`) join the one library unit of each crate,
+        # so the step above never lints what eileen-cli links. Libraries and binaries alone leave
+        # dev-dependencies out, and with them those features.
+        run: cargo clippy --workspace --locked -- -D warnings
       - name: Tests
         # insta writes no pending snapshot when it detects CI. With `new` it writes a failing or
         # new snapshot as a .snap.new (an inline one as .<file>.pending-snap), under the pending
@@ -265,6 +271,12 @@ jobs:
         run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Clippy of the shipped configuration, warnings denied
+        # With --all-targets the features only dev-dependencies ask for (eileen-audio's `fake`,
+        # eileen-trace's `testing`, tokio's `test-util`) join the one library unit of each crate,
+        # so the step above never lints what eileen-cli links. Libraries and binaries alone leave
+        # dev-dependencies out, and with them those features.
+        run: cargo clippy --workspace --locked -- -D warnings
       - name: Date the cached dependency artifacts to this save
         # On a restore that is not a full match, rust-cache deletes the entries of these folders
         # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
