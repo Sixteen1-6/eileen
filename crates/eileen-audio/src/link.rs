@@ -408,7 +408,10 @@ impl Link {
 
     fn hold(&mut self, command: SpeechCommandFrame) {
         if self.transport.is_none() {
-            tracing::debug!(cmd = ?command.cmd, "no speech connection will come; the command is dropped");
+            tracing::debug!(
+                cmd = ?command.cmd,
+                "no speech connection will come; the command is dropped"
+            );
         } else if self.held.len() < HELD_COMMANDS {
             self.held.push_back(command);
         } else {
@@ -630,7 +633,11 @@ impl Link {
         let Some(live) = self.live.take() else {
             return;
         };
-        tracing::warn!(connection = %live.id, reason = %ended, "speech connection handed back");
+        if matches!(ended, Ended::Shutdown) {
+            tracing::info!(connection = %live.id, reason = %ended, "speech connection handed back");
+        } else {
+            tracing::warn!(connection = %live.id, reason = %ended, "speech connection handed back");
+        }
         let Some(reader) = reader else {
             return;
         };
@@ -659,9 +666,12 @@ impl Link {
         Some(reader)
     }
 
-    /// Whether the ring needs draining: capture runs, or a connection is up.
+    /// Whether the ring needs draining: capture runs. With capture off the ring holds nothing (a
+    /// mute empties it, and with no microphone nothing ever arrives), so a muted component wakes
+    /// once a second for its `Ping`, not a hundred times. A new connection's replay runs on the
+    /// loop's `more` flag, not on this tick.
     const fn drains(&self) -> bool {
-        self.stream.is_some() || self.live.is_some()
+        self.stream.is_some()
     }
 
     /// The component is stopping: capture stops and the connection goes back.
