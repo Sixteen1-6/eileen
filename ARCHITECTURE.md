@@ -42,8 +42,8 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-stdx` | lib | neutral | Clock and ID ports, named threads and sleep, the seeded RNG, assertions, fault points, checked casts |
 | `eileen-trace` | lib | neutral | Tracing setup, span names and their parent table, redaction and the scenario privacy rules, the flight recorder ring |
 | `eileen-rt` | lib | neutral | The named task wrappers, bounded channels |
-| `eileen-platform` | lib | neutral | The traits each operating system implements, including app hooks, secrets and system volume |
-| `eileen-supervisor` | lib | neutral, Windows module | Spawning children in kill-on-close Job Objects; process QoS |
+| `eileen-platform` | lib | neutral | The traits each operating system implements, including app hooks, secrets, system volume and path probes |
+| `eileen-supervisor` | lib | neutral, Windows module | Spawning children in kill-on-close Job Objects; process QoS; the pipes, caller checks and user-only token files (`ipc`) |
 | `eileen-buildguard` | lib | neutral, Windows module | Build slots admitted by free memory, shared by `cargo xtask` and build-heavy coding jobs |
 | `eileen-core` | lib | neutral | The sans-IO state machine that makes every decision |
 | `eileen-record` | lib | neutral | Recordings, checkpoints, the blob store, trimming |
@@ -52,7 +52,7 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-runtime` | lib | neutral | Drivers that carry out the core's effects: store, bus, loopback endpoint, dispatcher, sidecars, incidents |
 | `eileen-mcp` | lib | neutral | rmcp glue, the shim protocol, the core-side tool handlers |
 | `eileen-crash` | lib | neutral, Windows module | Panic hook and crash handler client |
-| `eileen-shell-win` | lib | Windows | Tray, global hotkeys with the physical-key check, Raw Input, toasts, the Start menu and sign-in entries, the credential store |
+| `eileen-shell-win` | lib | Windows | Tray, global hotkeys with the physical-key check, Raw Input, toasts, the Start menu and sign-in entries, the credential store, path probes and the time zone reader |
 | `eileen-scenarios` | lib | neutral | Saving, sharing and submitting scenarios; the real-desktop runner |
 | `eileen-cli` | bin | neutral | The `eileen` binary and composition root |
 | `eileen-shim` | bin | neutral | Per-session stdio MCP server forwarding to the dispatcher |

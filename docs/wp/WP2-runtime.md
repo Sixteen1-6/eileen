@@ -32,13 +32,15 @@ WAV source, the transcript stub and the stub harness.
   (`cargo xtask desktop-lock --hold`).
 - Owns: `crates/eileen-runtime`, `crates/eileen-mcp`, `crates/eileen-cli`, `crates/eileen-shim`,
   `crates/eileen-crash`, `crates/eileen-guard`, `crates/eileen-shell-win`,
-  `crates/eileen-scenarios`, `TESTING.md`, `docs/DEBUGGING.md`, `scenarios/runtime/`, the fuzz
-  targets `mcp_client_message`, `mcp_tool_arguments`, `dispatch_line`, `worker_hook_payload`,
-  `http_request` and `scenario_file` with their corpora and regressions, and this file.
+  `crates/eileen-scenarios`, the `ipc` module of `crates/eileen-supervisor` and the `PathProbe`
+  trait with its fake in `crates/eileen-platform` (decision D86), `TESTING.md`,
+  `docs/DEBUGGING.md`, `scenarios/runtime/`, the fuzz targets `mcp_client_message`,
+  `mcp_tool_arguments`, `dispatch_line`, `worker_hook_payload`, `http_request` and
+  `scenario_file` with their corpora and regressions, and this file.
 
 ## Done when
 
-The acceptance list of BUILD.md section 6.4, items 1 to 14, each recorded under Progress with its
+The acceptance list of BUILD.md section 6.4, items 1 to 15, each recorded under Progress with its
 evidence when it holds. The lines below are reminders; the full text in BUILD.md is the bar.
 
 1. Slice S1 passes live on the owner's PC, with latencies and the `desktop.lock` hold recorded,
@@ -69,20 +71,51 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
     install id in any other file Eileen writes.
 14. The machine profile's runtime: the facts, hourly and plan files, change events within 1 s,
     `eileen doctor machine`, and the probe's readings on the owner's PC.
+15. The speech transport, with stand-in speech processes: only the spawned process with the
+    right token is handed over and reported `Ready` once, a squatter on the name makes the
+    transport fail closed, nothing restarts until the core says so, and the pipe's DACL grants
+    only the current user.
 
 Every pull request also meets the rules section 6.1 sets for every package.
 
 ## Progress
 
-Not started.
+- `amend/wp2-ipc-home` (amendment, decision D86): settles where the Win32 calls of the pipes,
+  caller checks and path classification live, since `eileen-runtime` forbids unsafe code, stays
+  neutral and may not depend on a `-win` crate. `eileen-supervisor` gains an `ipc` module that
+  WP2 builds (pipe servers made as the first instance with remote clients rejected and a
+  user-only DACL, both ends' process ids, the image path, a registry of the Job Objects `spawn`
+  made with `in_job` and `in_any_job`, the owner of a loopback connection, user-only token
+  files); `eileen-platform` gains `PathProbe` with a fake, implemented in `eileen-shell-win`;
+  `CoreConfig.local_time` comes from `eileen-shell-win`'s zone reader through the composition
+  root; `getrandom` 0.4.3 mints the tokens; the `windows` union gains `Win32_System_Time` and
+  `Win32_NetworkManagement_NetManagement`. BUILD.md sections 2.12, 3.1, 3.3.3, 3.3.7, 3.4, 4.1
+  and 6.4 and the root `Cargo.toml` say so; `Cargo.lock` does not change.
+- Next, in this order once the amendment merges: `wp2/supervisor-pipes` (the `ipc` pipe server
+  and the pipe ends' process ids, with `server_pid` for the speech process),
+  `wp2/supervisor-callers` (the Job Object registry, `image_path`, `tcp_client_pid` and
+  `write_user_only`), `wp2/path-probe-trait` (the trait and `FakePathProbe` in
+  `eileen-platform`, then `WinPathProbe` in `eileen-shell-win`) and `wp2/shell-local-time`
+  (the zone reader and its wiring into `CoreConfig.local_time`). `wp2/speech-transport` waits
+  for the `ipc` pipes as well as for `wp1/speech-life` and WP4's `SpeechTransport`.
 
 ## Surprises
 
-None yet.
+- process-wrap 10.0.1 keeps the handle of the Job Object it makes private (`JobObjectChild`
+  exposes none), so `IsProcessInJob` and section 2.1's breakaway limit cannot reach it; the
+  supervisor makes each child's Job Object itself under D86, keeping the same limits.
+- `Cargo.lock` holds three `getrandom` versions. 0.3.4 arrives only as a build dependency of
+  `zip` 2.6.1 on Windows, while 0.4.3 is already in every binary through `ulid`'s `rand`, so
+  the token pin is 0.4.3.
+- `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
+  for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
+  by then, and says so.
 
 ## Decisions
 
-None yet.
+- D86: pipes and caller checks live in `eileen-supervisor`'s `ipc` module, path probes behind
+  the `PathProbe` platform trait; Linux forms are WP10's, and until then `ipc` answers
+  `Unsupported` on Linux.
 
 ## Outcome
 
