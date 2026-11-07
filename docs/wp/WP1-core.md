@@ -309,6 +309,18 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `eileen-core::tests::router::*`, `eileen-core::tests::fan_out::*`,
   `eileen-core::tests::apps::*`, `eileen-core::tests::refusals::*`, and the new cases in
   `eileen-core::tests::steering` and `eileen-core::lifecycle::tests`.
+- `amend/wp1-speech-reload` again (#188), from review of #146's merged text.
+  Section 6.4 has `wp2/speech-transport` answer `HangDumpThenKill` with the kill alone, and
+  spawn the process again only on the core's `Restart`, as section 6.3 and D81 have it; #178's
+  wording read as a kill and a restart, which would have loaded the models twice for every
+  hang. Sections 2.13, 3.3.16 and 6.3 treat the minimal core's snapshot as a resume snapshot
+  (Surprises below) and name the contracts amendment that lifts the start-only rule for strict
+  replay (item 4 of Next). The clause that a backoff step longer than 10 s is kept in full when
+  the kill's `Exited` never comes gains its tests:
+  `eileen-core::tests::life::a_kill_whose_exit_never_comes_keeps_a_16_s_step_in_full` (five
+  kills in a row: no restart at 10 s, a restart at 16 s) and
+  `eileen-core::tests::life::a_kill_whose_exit_never_comes_restarts_at_10_s_after_a_4_s_step`
+  (three kills in a row: no restart at the 4 s step, a restart at 10 s).
 - Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
   for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
   1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
@@ -328,8 +340,15 @@ Every pull request also meets the rules section 6.1 sets for every package.
      focus job), sessions and the warm pool, memory admission (with the worker cap in place of
      `job::MAX_LIVE`), the permission gate, approvals, announcements as data, the input lock,
      the journal, the settings flow, the regret window, forget, route proposals and the
-     first-run state machine; `eileen-replay`'s strict and scenario modes; and the scenarios
-     of `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
+     first-run state machine; the contracts amendment that adds to `CoreSnapshotV1` the speech
+     process's life, the HUD's line and the rest of the live state, each with a default, with a
+     restore for replay that skips what only a resume does, lifting section 3.3.16's rule that
+     strict replay of the minimal core starts only from the core's start, and tested by a
+     strict replay from a mid-session checkpoint, taken while speech is up and a job is
+     running, that matches the recording; `eileen-replay`'s strict and scenario modes (strict
+     mode refusing any checkpoint of the minimal core but the start's, with a plain message, if
+     it lands before that amendment); and the scenarios of `scenarios/feel/`,
+     `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
   5. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
      `heavy-app` and `roomy` profiles and `scenarios/machine/`, and with the first reload the
      core orders that stops recognition, the speech process's reload rule (the 5 s count
@@ -344,9 +363,16 @@ Every pull request also meets the rules section 6.1 sets for every package.
   amended section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
   comes within 120 s, to the machine profile's core part, which orders the first such reload
   (item 5 of Next above).
-- The speech process's life and the HUD's line are not in `CoreSnapshotV1`, so strict replay of
-  the minimal core starts from the checkpoint taken at the core's start (section 3.3.16 as #146
-  amended it) until a contracts amendment adds them with the full `Core::step`.
+- The minimal core's `CoreSnapshotV1` is a resume snapshot, not a replay checkpoint. It lacks
+  the core's live state (the speech process's life, the HUD's line, the turn phase, the
+  utterance holding the floor and what Eileen last said, live timers, the brain turn, the
+  announcement queue and the speech turns already handled), and a core restored from it
+  interrupts the unfinished jobs and starts speech again on its first step. So strict replay of
+  the minimal core starts only from the checkpoint taken at the core's start, and an incident
+  whose start checkpoint has left the flight recorder's ring replays in scenario mode (sections
+  2.13 and 3.3.16 as #188 amended them), until the contracts amendment with the full
+  `Core::step` carries every field and a restore for replay skips what only a resume does (item
+  4 of Next above).
 
 - A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
   commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
