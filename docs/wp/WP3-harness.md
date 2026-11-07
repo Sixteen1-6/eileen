@@ -329,6 +329,34 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   restore, build slots, `JOB_OBJECT_LIMIT_JOB_MEMORY`, rate-limit events, a stub grandchild
   to show the kill takes the whole Job Object, and `session_files` reading the host from
   `HarnessConfig::host` instead of a third argument.
+- `wp3/claude-worker-review`: fixes from a review of #159. `bind` carries the text of a skill
+  the session's snapshot lacks instead of `Follow skill eileen-learned:<id>`, under a heading
+  that names the skill only to say where the steps came from, so the model is not sent to call
+  a skill outside the manifest (section 2.10, which marks such a call `snapshot_tampered`); a
+  skill's text without its skill is refused (`DriverError::UnnamedInlineSkill`). `start`
+  creates the working folder only when it is the session's scratch folder under its run folder
+  (a `..` disqualifies it), and refuses any other that is not an existing folder before writing
+  anything, so a mistyped repository is never made empty in the user's tree. A session being
+  ended keeps the deadline of the wait it is in, so a `next_event` dropped again and again
+  still kills it at its deadline, and a cancel kills a session that a dropped call left waiting
+  for its own exit. Its tokens stay registered until its stderr forwarding has ended, within
+  the same deadline, since the log sinks redact a line when it is logged. The stdout reader
+  gives a line cut at the cap as it was kept, one byte past the cap, so a line whose byte past
+  the cap is `\r` is no longer taken for one at the cap; it keeps a line of exactly the cap
+  ending in `\r\n` whole, and gives its buffer back to 64 KiB after each line. `driver-job`, `driver-skill` and `driver-crash`
+  were copies of the `worker-` scripts, which the tests now play. Unit tests cover the
+  readiness poll from not listed through pending to connected on a paused clock, the CLI's
+  error-reply shape in the privacy check, the line cap, the working folder, and the three
+  ending cases against a real quiet process (the stub cannot close its stdout and live on,
+  since it forbids unsafe code and on Windows a child would inherit its stdout). The
+  `real_claude` probe keeps the default init deadline. Left for later, before
+  `wp3/worker-brain` wires workers: `eileen_harness::component` is built from
+  `&HarnessConfig` alone (section 3.3.15), `ComponentCtx` carries no redactor and
+  `HarnessConfig` derives `Eq`, so it cannot reach the process's `Redactor` that
+  `TraceGuard::redactor()` hands the log sinks. Workers built there would register session
+  tokens with a private redactor, and the tokens would reach the log files unredacted. It needs
+  an amendment to section 3.3.15 (`component(cfg, redactor: Arc<Redactor>)`) agreed with WP2,
+  whose `eileen-cli` wiring passes the guard's redactor.
 
 ## Surprises
 

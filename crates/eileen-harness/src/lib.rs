@@ -44,12 +44,15 @@
 //!   auto-memory folder (D77) kills the session at that line, before the model's first
 //!   message, with a `worker.refused` log. It spawns through `eileen_supervisor` in the Claude
 //!   class with exactly the session's environment, and its hook and shim tokens are registered
-//!   with the process's redactor while it lives; every write to it and every wait for its
-//!   readiness or its exit has a deadline; a write that fails or passes its deadline ends the
-//!   session, since part of a line may have reached the CLI; cancel kills its Job Object and
-//!   waits for the job to empty; `next_event` is cancel-safe; a spec asking for what the
-//!   driver does not carry out yet (snapshots, worktrees, build slots, a job memory limit) is
-//!   refused (`eileen-stub-harness::it::worker`, `worker::claude::tests`).
+//!   with the process's redactor until its last stderr line is logged; only its scratch
+//!   working folder is created, and a repository named as its working folder must exist; every
+//!   write to it and every wait for its readiness or its exit has a deadline, and a wait for
+//!   its exit keeps its deadline across dropped calls; a write that fails or passes its
+//!   deadline ends the session, since part of a line may have reached the CLI; cancel kills its
+//!   Job Object and waits for the job to empty, also when a dropped call left it waiting for its
+//!   own exit; `next_event` is cancel-safe; a spec asking for what the driver does not carry out
+//!   yet (snapshots, worktrees, build slots, a job memory limit) is refused
+//!   (`eileen-stub-harness::it::worker`, `worker::claude::tests`).
 //! - A stream-json line longer than `stream::MAX_LINE_BYTES` is malformed before it is parsed,
 //!   an unknown `type` is `Unknown`, and a tool's input is redacted by the `Redactor` string by
 //!   string before it is serialized and leaves the parser, at most 2 KB (`stream::tests`, and the
@@ -298,8 +301,9 @@ pub enum DriverError {
     /// The session's files could not be built.
     #[error(transparent)]
     Session(#[from] session::SessionError),
-    /// The session's run folder could not be written.
-    #[error("the session's {what} could not be written: {kind}")]
+    /// The session's run folder could not be written, or the working folder it names outside
+    /// the run folder (the job's repository) is not an existing folder.
+    #[error("the session's {what} could not be prepared: {kind}")]
     Files {
         /// What was being written.
         what: &'static str,
@@ -355,6 +359,10 @@ pub enum DriverError {
     /// A user turn came before the job's first line.
     #[error("the session has no job yet")]
     NotBound,
+    /// The job carries a skill's text but names no skill, so nothing would say where its steps
+    /// came from (section 2.10).
+    #[error("the job carries a skill's text but names no skill")]
+    UnnamedInlineSkill,
     /// The interrupt was not written.
     #[error(transparent)]
     Interrupt(#[from] stream::control::SendError),
