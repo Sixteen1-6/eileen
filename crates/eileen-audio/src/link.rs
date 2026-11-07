@@ -579,13 +579,14 @@ impl Link {
             | AudioCmd::Unduck
             | AudioCmd::Pause { .. }
             | AudioCmd::Resume { .. }
-            | AudioCmd::Stop { .. } => match self.playback.as_mut() {
-                Some(playback) => {
+            | AudioCmd::Stop { .. } => {
+                if let Some(playback) = self.playback.as_mut() {
                     playback.player.apply(cmd);
                     playback.touch();
+                } else {
+                    tracing::debug!(?cmd, "there is no playback; the command changes nothing");
                 }
-                None => tracing::debug!(?cmd, "there is no playback; the command changes nothing"),
-            },
+            }
             AudioCmd::Earcon(earcon) => {
                 tracing::debug!(?earcon, "earcons are played by a later part of the audio series");
             }
@@ -594,7 +595,7 @@ impl Link {
                 "the phrase cache is W2 work; until then the core speaks every reply through Speak",
             ),
             AudioCmd::Record { .. } => {
-                unserved("Record", "recording for the first run and enrollment is W2 work")
+                unserved("Record", "recording for the first run and enrollment is W2 work");
             }
         }
     }
