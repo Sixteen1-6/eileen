@@ -419,9 +419,8 @@ impl Process {
 
     /// Waits, within `deadline`, until the session is ready for its job (`Pipes::ready`).
     async fn wait_ready(&mut self, deadline: Duration) -> Result<(), Asked> {
-        with_deadline("claude.ready", deadline, self.io.ready()).await.unwrap_or_else(|_| {
-            Err(Asked::Failed(DriverError::ReadyDeadline { secs: deadline.as_secs() }))
-        })
+        let missed = Err(Asked::Failed(DriverError::ReadyDeadline { secs: deadline.as_secs() }));
+        with_deadline("claude.ready", deadline, self.io.ready()).await.unwrap_or(missed)
     }
 
     /// The exit once the process and its job have exited, waited for within
