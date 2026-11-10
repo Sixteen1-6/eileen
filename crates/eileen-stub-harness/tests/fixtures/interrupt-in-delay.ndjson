@@ -1,0 +1,3 @@
+{"kind":"await_user"}
+{"kind":"event","json":{"type":"system","subtype":"init","session_id":"delay-session","model":"claude-haiku-5-5"}}
+{"kind":"delay","ms":600000}

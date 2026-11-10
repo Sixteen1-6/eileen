@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use eileen_contracts::bus::{BusEvent, SpeakCause, TurnRoute};
+use eileen_contracts::connectors::SidecarId;
 use eileen_contracts::ids::{
     Envelope, JobId, MonoTime, Personal, SpeakId, TraceCtx, TurnId, Untrusted, WallTime,
 };
@@ -13,7 +14,8 @@ use eileen_trace::{EventRecord, SpanRecord};
 use serde_json::{Value, json};
 
 use super::{
-    Delivery, bus_events_are_attributed, spans_follow_the_table, utterances_do_not_overlap,
+    ChildEvent, ChildRecord, Delivery, bus_events_are_attributed,
+    children_restart_with_bounded_backoff, spans_follow_the_table, utterances_do_not_overlap,
 };
 
 fn turn(n: u64) -> TurnId {
@@ -123,6 +125,97 @@ fn invariant_6_fails_when_ignored_speech_is_heard() {
     assert!(error.detail.contains("ignored and still heard"), "{error}");
 }
 
+/// The speech process's life: `(seconds, event)`.
+fn life(events: &[(u64, ChildEvent)]) -> Vec<ChildRecord> {
+    events
+        .iter()
+        .map(|(s, event)| ChildRecord { at_ms: s * 1_000, child: SidecarId::Speech, event: *event })
+        .collect()
+}
+
+#[test]
+fn invariant_8_holds_for_a_backoff_that_doubles_and_starts_over() {
+    use ChildEvent::{Down, Restarted, Started};
+    let records = life(&[
+        (0, Started),
+        (10, Down),
+        (11, Restarted),
+        (11, Down),
+        (13, Restarted),
+        (13, Down),
+        (17, Restarted),
+        (200, Down),
+        (200, Down),
+        (201, Restarted),
+    ]);
+    assert_eq!(children_restart_with_bounded_backoff(&records, 300_000), Ok(()), "kept");
+}
+
+#[test]
+fn invariant_8_fails_on_a_restart_sooner_than_a_second() {
+    use ChildEvent::{Down, Restarted, Started};
+    let records = vec![
+        ChildRecord { at_ms: 0, child: SidecarId::Speech, event: Started },
+        ChildRecord { at_ms: 5_000, child: SidecarId::Speech, event: Down },
+        ChildRecord { at_ms: 5_400, child: SidecarId::Speech, event: Restarted },
+    ];
+    let error = children_restart_with_bounded_backoff(&records, 6_000).unwrap_err();
+    assert_eq!(error.number, 8, "{error}");
+    assert!(error.detail.contains("400 ms after it went down"), "{error}");
+}
+
+#[test]
+fn invariant_8_fails_on_a_step_over_a_minute_or_a_child_left_down() {
+    use ChildEvent::{Down, Restarted, Started};
+    let late = life(&[(0, Started), (10, Down), (71, Restarted)]);
+    let error = children_restart_with_bounded_backoff(&late, 71_000).unwrap_err();
+    assert!(error.detail.contains("61000 ms after it went down"), "{error}");
+    let left = life(&[(0, Started), (10, Down)]);
+    assert_eq!(children_restart_with_bounded_backoff(&left, 70_000), Ok(()), "60 s is allowed");
+    let error = children_restart_with_bounded_backoff(&left, 70_001).unwrap_err();
+    assert!(error.detail.contains("was not restarted"), "{error}");
+}
+
+#[test]
+fn invariant_8_fails_on_a_hung_child_never_killed() {
+    use ChildEvent::{Down, Hung, Restarted, Started, Stuck};
+    let killed = life(&[(0, Started), (10, Hung), (15, Down), (16, Restarted)]);
+    assert_eq!(children_restart_with_bounded_backoff(&killed, 30_000), Ok(()), "killed at 5 s");
+    let never = life(&[(0, Started), (10, Hung)]);
+    assert_eq!(children_restart_with_bounded_backoff(&never, 15_000), Ok(()), "not due yet");
+    let error = children_restart_with_bounded_backoff(&never, 15_001).unwrap_err();
+    assert_eq!(error.number, 8, "{error}");
+    assert!(error.detail.contains("not killed by 15000 ms"), "{error}");
+    let late = life(&[(0, Started), (10, Hung), (16, Down)]);
+    let error = children_restart_with_bounded_backoff(&late, 16_000).unwrap_err();
+    assert!(error.detail.contains("after its kill was due at 15000 ms"), "{error}");
+    let load = life(&[(0, Started), (10, Down), (11, Restarted), (11, Stuck)]);
+    assert_eq!(children_restart_with_bounded_backoff(&load, 131_000), Ok(()), "120 s to load");
+    let error = children_restart_with_bounded_backoff(&load, 131_001).unwrap_err();
+    assert!(error.detail.contains("not killed by 131000 ms"), "{error}");
+}
+
+#[test]
+fn invariant_8_fails_on_a_restart_of_a_child_that_was_up() {
+    use ChildEvent::{Restarted, Started};
+    let error =
+        children_restart_with_bounded_backoff(&life(&[(0, Started), (5, Restarted)]), 5_000)
+            .unwrap_err();
+    assert!(error.detail.contains("while it was up"), "{error}");
+}
+
+#[test]
+fn invariant_8_fails_on_too_many_restarts_in_a_minute() {
+    use ChildEvent::{Down, Restarted, Started};
+    let mut events = vec![(0, Started)];
+    for n in 0..7 {
+        events.push((n * 2, Down));
+        events.push((n * 2 + 1, Restarted));
+    }
+    let error = children_restart_with_bounded_backoff(&life(&events), 14_000).unwrap_err();
+    assert!(error.detail.contains("restarted 7 times"), "{error}");
+}
+
 fn speaking(seq: u64, s: SpeakId) -> Envelope<BusEvent> {
     envelope(
         seq,
@@ -228,3 +321,5 @@ fn invariant_13_fails_on_a_turn_without_its_id() {
     let error = spans_follow_the_table(&spans, &lines).unwrap_err();
     assert!(error.detail.contains("no turn id"), "{error}");
 }
+
+mod audio;

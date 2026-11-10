@@ -1,0 +1,39 @@
+---
+source: crates/eileen-harness/src/session/tests.rs
+expression: portable_argv(&files)
+---
+[
+  "-p",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--include-partial-messages",
+  "--include-hook-events",
+  "--model",
+  "claude-haiku-5-5",
+  "--effort",
+  "low",
+  "--system-prompt",
+  "You are Eileen.",
+  "--setting-sources",
+  "",
+  "--settings",
+  "/data/eileen/run/ws_01M3250V000000000000000003/claude-settings.json",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "/data/eileen/run/ws_01M3250V000000000000000003/mcp.json",
+  "--tools",
+  "",
+  "--allowedTools",
+  "mcp__eileen__*",
+  "--disallowedTools",
+  "Task,Agent",
+  "--permission-mode",
+  "dontAsk",
+  "--permission-prompt-tool",
+  "mcp__eileen__approve",
+  "--no-session-persistence",
+  "--no-chrome"
+]

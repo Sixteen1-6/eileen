@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"<tool_use_error>Error calling tool (Bash): Eileen: approval service failed (test)</tool_use_error>","is_error":true,"tool_use_id":"toolu_01D9KR4kkXZYak21HjntpSjP"}]}}

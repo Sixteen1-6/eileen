@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"<tool_use_error>Error calling tool (Bash): Error: MCP tool mcp__eileen__approve (passed via --permission-prompt-tool) not found. Available MCP tools: none</tool_use_error>","is_error":true,"tool_use_id":"toolu_01SEWvrRK3TybWWkZvWGkRSy"}]}}

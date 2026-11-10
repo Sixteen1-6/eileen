@@ -1,0 +1,1 @@
+{"type":"system","subtype":"hook_response","hook_id":"691c425d-cb10-4a41-a553-a80521793b3d","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse","output":"connect ECONNREFUSED 127.0.0.1:51439","stdout":"","stderr":"connect ECONNREFUSED 127.0.0.1:51439","outcome":"error","uuid":"18a3067e-1156-47d0-acdf-e2bd99e859a5","session_id":"19e53e96-153e-484c-ab0c-30b95daef503"}

@@ -1,0 +1,23 @@
+---
+source: crates/eileen-harness/src/session/tests.rs
+expression: portable_json(&files.mcp_config)
+---
+{
+  "mcpServers": {
+    "eileen": {
+      "args": [
+        "--pipe",
+        "\\\\.\\pipe\\eileen-dispatch-ws_01M3250V000000000000000001",
+        "--role",
+        "worker",
+        "--session",
+        "ws_01M3250V000000000000000001"
+      ],
+      "command": "/opt/eileen/eileen-shim",
+      "env": {
+        "EILEEN_SHIM_TOKEN": "${EILEEN_SHIM_TOKEN}"
+      },
+      "type": "stdio"
+    }
+  }
+}

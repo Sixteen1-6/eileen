@@ -18,11 +18,47 @@ unsafe = "forbid"
 [package.metadata.cargo-machete]
 ignored = ["cpal"]
 
+[features]
+# `fake`, the in-memory speech transport, for other crates' tests (WP2's). Only dev-dependencies
+# turn it on, so no shipped binary carries it.
+fake = []
+
 [dependencies]
 eileen-contracts.workspace = true
+# The test sources' and sinks' paced tasks, and the memory transport's channels.
+eileen-rt.workspace = true
+# Their numeric conversions.
+eileen-stdx.workspace = true
+# The event names playback logs a dropped frame under.
+eileen-trace.workspace = true
+# WavSource and CaptureSink read and write WAV files.
+hound.workspace = true
+rtrb.workspace = true
+# AEC3 with noise suppression and the high-pass filter (BUILD.md section 2.8).
+sonora.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cpal.workspace = true
+
+# The ring's own atomics come from loom under `--cfg loom`, so its loom tests explore them; no
+# build without that flag takes loom.
+[target.'cfg(loom)'.dependencies]
+loom.workspace = true
+
+[dev-dependencies]
+# The capture side's no-allocation check (decision D82): a dev-dependency only, so its global
+# allocator reaches only this crate's test binaries.
+allocation-counter.workspace = true
+# The integration tests (tests/it) drive the component over the in-memory transport.
+eileen-audio = { workspace = true, features = ["fake"] }
+# Playback's tests read the drop it logs.
+eileen-trace = { workspace = true, features = ["testing"] }
+# The resamplers' tests measure each conversion's spectrum against BUILD.md section 6.6's bar.
+realfft.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

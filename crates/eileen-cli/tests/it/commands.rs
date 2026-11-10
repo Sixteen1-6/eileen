@@ -1,5 +1,5 @@
-//! Every command form of BUILD.md section 3.5 parses and reaches a crate that says it is not
-//! built yet, and `eileen run` wires every component.
+//! Every command form of BUILD.md section 3.5 parses, every one not built yet reaches a crate
+//! that says so, and `eileen run` wires every component.
 
 use clap::Parser as _;
 use eileen_cli::{Cli, run, wiring};
@@ -21,7 +21,6 @@ const COMMANDS: &[&[&str]] = &[
     &["about"],
     &["setup"],
     &["doctor"],
-    &["doctor", "claude"],
     &["doctor", "audio"],
     &["doctor", "resolve"],
     &["doctor", "resolve", "--route", "mcp"],
@@ -101,6 +100,19 @@ const COMMANDS: &[&[&str]] = &[
     &["mcp-probe"],
     &["bench"],
 ];
+
+/// The forms whose command is built. They are parsed here and not run: `eileen doctor claude`
+/// starts the installed claude CLI, and the crate that implements each one tests it.
+const BUILT: &[&[&str]] = &[&["doctor", "claude"]];
+
+#[test]
+fn every_built_command_parses() {
+    for args in BUILT {
+        let line = args.join(" ");
+        let parsed = Cli::try_parse_from(std::iter::once("eileen").chain(args.iter().copied()));
+        assert!(parsed.is_ok(), "`eileen {line}` does not parse: {:?}", parsed.err());
+    }
+}
 
 #[test]
 fn every_command_of_section_3_5_says_not_built_yet() {

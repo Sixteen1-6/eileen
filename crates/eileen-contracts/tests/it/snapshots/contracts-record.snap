@@ -636,7 +636,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "object"
         },
         {
-          "description": "Ask for permission, as the CLI's hook would.",
+          "description": "Played the way the CLI behaves under `dontAsk`: a tool use posted to the `PreToolUse`\nguard, with an `ask` routed to the permission-prompt tool. It is not the\n`PermissionRequest` hook, which never fires on that path.",
           "properties": {
             "kind": {
               "const": "permission_request",

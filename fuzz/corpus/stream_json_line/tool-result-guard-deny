@@ -1,0 +1,1 @@
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: Eileen: tier 3, blocked (test guard)","is_error":true,"tool_use_id":"toolu_01BUAWis45bYchXjZgxUTqVZ"}]}}

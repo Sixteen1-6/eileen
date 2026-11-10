@@ -1,25 +1,50 @@
 //! The speech pipe (BUILD.md section 3.3.7) and what flows through it.
 //!
 //! Named pipe `\\.\pipe\eileen-speech-<session>` (a Unix socket under `$XDG_RUNTIME_DIR` in
-//! Linux tests), user-only ACL, created by the core and opened by `eileen-speech` with a token
-//! from its environment. Every frame is a [`FrameHeader`] and `len` bytes of body; `len` is
-//! checked against the kind's maximum before anything is allocated ([`FrameHeader::decode`]).
-//! VAD, ASR and barge-in state are keyed by `source`. PCM goes straight to the audio driver; the
-//! core only sees `ClauseReady`, `Played` and `Paused`.
+//! Linux tests), user-only ACL, created by the core and opened by `eileen-speech`, which sends
+//! the token from its environment in a [`FrameKind::Hello`] frame, the first frame on every
+//! connection. VAD, ASR and barge-in state are keyed by `source`. PCM goes straight to the audio
+//! driver; the core only sees `ClauseReady`, `Played` and `Paused`.
 //!
-//! Two framing details are WP0 placeholders that WP4 settles with its `speech_frame` parser,
-//! since the plan leaves them open: how the JSON [`PcmHeader`] of a PCM frame ends (a newline
-//! here) and the cap on command and event bodies ([`FrameKind::max_len`], 256 KiB here). Both
-//! are code, not schema, so settling them changes no snapshot.
+//! # Framing
+//!
+//! Every frame is a [`FrameHeader`] and `len` bytes of body. [`FrameHeader::decode`] checks the
+//! kind, the flags and `len` against the kind's maximum ([`FrameKind::max_len`]) before anything
+//! is allocated. The header's fields carry the meanings of decision D81, written on each field.
+//! Samples are `i16`, little-endian like the header.
+//!
+//! The two details section 3.3.7 left open are settled here. Both are code, not schema:
+//!
+//! - A PCM frame's body is its [`PcmHeader`] as compact JSON, one newline byte (`0x0A`), then
+//!   the samples. Compact JSON holds no raw newline (one inside a string is escaped), so the
+//!   first newline ends the header, and it must come within [`PCM_HEADER_MAX`] bytes.
+//! - Command and event bodies are at most [`JSON_BODY_MAX`] bytes (256 KiB). The largest real
+//!   body is a `Speak` of a long reply, its clauses and whole line together, a few tens of
+//!   kilobytes; the cap leaves room for that and keeps a corrupt length from reserving more.
+//!
+//! [`Frame`] is a whole frame as a value and [`Frame::encode_into`] writes one;
+//! [`Frame::encode_audio_into`] writes an audio frame straight from a borrowed window of samples.
+//! [`FrameReader`] reads frames from bytes as they arrive and reserves a body only after its
+//! header passed. A reader is made for one end ([`FrameKind::sender`]) and refuses a kind its
+//! peer may not send. The core's readers also refuse a second `Hello`, and the one that starts a
+//! connection refuses any frame before the first. Both ends of the pipe use this codec, so neither crate depends on the other. The
+//! transport (WP2) checks the `Hello`'s token before it hands a connection on; the codec only
+//! reads it.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::BitOr;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::harness::SessionToken;
 use crate::ids::{Personal, SpeakId, TraceCtx, TurnId};
 use crate::schema::Registry;
+
+mod codec;
+
+pub use codec::{Frame, FrameBody, FrameReader};
 
 /// The fixed header of every speech-pipe frame: 32 bytes, little-endian on the wire.
 #[repr(C)]
@@ -27,16 +52,27 @@ use crate::schema::Registry;
 pub struct FrameHeader {
     /// The frame kind (see [`FrameKind`]).
     pub kind: u8,
-    /// Reserved flags, zero today.
+    /// On an audio frame, its flags (decision D81, [`AudioFlags`]), each one true of its frame:
+    /// bit 0 replayed (written more than 250 ms after capture: from the ring after a new
+    /// connection, or after the speech process stopped reading); bit 1 break (frames are
+    /// missing before it, because capture stopped or the ring dropped some, so voice activity
+    /// and recognition start fresh); bit 2 playback (Eileen's own playback was sounding at
+    /// capture); bit 3 other audio (other audio was playing at capture). The other bits are
+    /// zero, and every other kind carries zero.
     pub flags: u8,
     /// The audio source: 0 is the PC microphone; later audio connectors (earbuds, a phone) get
     /// their own number.
     pub source: u16,
     /// The body's length in bytes.
     pub len: u32,
-    /// The sender's frame counter.
+    /// On an audio frame, its number among the frames captured since the core started, from 1
+    /// (decision D81). It never restarts with a connection, so a replayed frame keeps the number
+    /// it was captured with, and a gap in the numbers is frames the ring dropped. On every frame
+    /// the speech process sends, the number of the newest audio frame it has read, or 0 before
+    /// the first. Zero on the core's other frames.
     pub seq: u64,
-    /// The turn's ULID bytes, or zeros.
+    /// On a `Pong` from the speech process, the ULID bytes of the turn open at the audio frame
+    /// its `seq` names, or zeros when none is open (decision D81). Zeros on every other frame.
     pub turn: [u8; 16],
 }
 
@@ -46,22 +82,25 @@ pub struct FrameHeader {
 pub enum FrameKind {
     /// 1, core to speech: 512 samples of `i16`, 16 kHz mono (one 32 ms window), `len` 1024.
     Audio,
-    /// 2, core to speech: JSON [`SpeechCommandFrame`].
+    /// 2, core to speech: JSON [`SpeechCommandFrame`], at most 256 KiB.
     Command,
-    /// 3, speech to core: JSON [`SpeechEventFrame`].
+    /// 3, speech to core: JSON [`SpeechEventFrame`], at most 256 KiB.
     Event,
-    /// 4, speech to core: JSON [`PcmHeader`], then `i16` samples; at most 1 MiB.
+    /// 4, speech to core: JSON [`PcmHeader`], a newline, then `i16` samples; at most 1 MiB.
     Pcm,
-    /// 5, a heartbeat every second.
+    /// 5, a heartbeat every second, sent by each end; no body.
     Ping,
-    /// 6, the heartbeat's answer.
+    /// 6, the heartbeat's answer; no body. The speech process's carries the open turn.
     Pong,
+    /// 7, speech to core: JSON [`SpeechHelloFrame`], at most 256 bytes, the first frame on every
+    /// connection (decision D81).
+    Hello,
 }
 
 impl FrameKind {
     /// Every kind, in wire order.
-    pub const ALL: [Self; 6] =
-        [Self::Audio, Self::Command, Self::Event, Self::Pcm, Self::Ping, Self::Pong];
+    pub const ALL: [Self; 7] =
+        [Self::Audio, Self::Command, Self::Event, Self::Pcm, Self::Ping, Self::Pong, Self::Hello];
 
     /// The kind's byte on the wire.
     #[must_use]
@@ -73,6 +112,7 @@ impl FrameKind {
             Self::Pcm => 4,
             Self::Ping => 5,
             Self::Pong => 6,
+            Self::Hello => 7,
         }
     }
 
@@ -86,27 +126,126 @@ impl FrameKind {
             4 => Some(Self::Pcm),
             5 => Some(Self::Ping),
             6 => Some(Self::Pong),
+            7 => Some(Self::Hello),
             _ => None,
         }
     }
 
-    /// The largest body this kind may carry, in bytes. The 256 KiB for commands and events is a
-    /// placeholder WP4 settles (see the module doc).
+    /// The largest body this kind may carry, in bytes (an audio body is exactly this long).
     #[must_use]
     pub const fn max_len(self) -> u32 {
         match self {
             Self::Audio => AUDIO_FRAME_BYTES,
-            Self::Command | Self::Event => 256 * 1024,
-            Self::Pcm => 1024 * 1024,
+            Self::Command | Self::Event => JSON_BODY_MAX,
+            Self::Pcm => PCM_BODY_MAX,
             Self::Ping | Self::Pong => 0,
+            Self::Hello => HELLO_BODY_MAX,
+        }
+    }
+
+    /// The end of the pipe that may send this kind.
+    #[must_use]
+    pub const fn sender(self) -> FrameSender {
+        match self {
+            Self::Audio | Self::Command => FrameSender::Core,
+            Self::Event | Self::Pcm | Self::Hello => FrameSender::Speech,
+            Self::Ping | Self::Pong => FrameSender::Either,
         }
     }
 }
 
+/// Which end of the speech pipe may send a kind of frame ([`FrameKind::sender`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameSender {
+    /// Only the core.
+    Core,
+    /// Only the speech process.
+    Speech,
+    /// Both ends: the heartbeat and its answer.
+    Either,
+}
+
+/// The samples in an audio frame: one 32 ms window at 16 kHz.
+pub const AUDIO_FRAME_SAMPLES: usize = 512;
+
 /// The body of an audio frame: 512 samples of 2 bytes.
 pub const AUDIO_FRAME_BYTES: u32 = 1024;
 
-/// Why a frame header was refused.
+/// The largest command or event body (see the module doc).
+pub const JSON_BODY_MAX: u32 = 256 * 1024;
+
+/// The largest PCM body, its header included.
+pub const PCM_BODY_MAX: u32 = 1024 * 1024;
+
+/// The largest JSON header of a PCM frame, its newline included (see the module doc).
+pub const PCM_HEADER_MAX: usize = 256;
+
+/// The largest hello body.
+pub const HELLO_BODY_MAX: u32 = 256;
+
+/// The flags of an audio frame (decision D81), each one true of its frame. Only audio frames
+/// carry flags; [`FrameHeader::flags`] gives their bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct AudioFlags(u8);
+
+impl AudioFlags {
+    /// No flag.
+    pub const NONE: Self = Self(0);
+    /// Written more than 250 ms after capture: from the ring after a new connection, or after
+    /// the speech process stopped reading. The speech process raises no barge-in window for it
+    /// and marks a turn whose speech began in it `SpeechStarted.replayed`.
+    pub const REPLAYED: Self = Self(1);
+    /// Frames are missing before this one, because capture stopped or the ring dropped some, so
+    /// voice activity and recognition start fresh.
+    pub const BREAK: Self = Self(1 << 1);
+    /// Eileen's own playback was sounding at capture.
+    pub const PLAYBACK: Self = Self(1 << 2);
+    /// Other audio was playing at capture.
+    pub const OTHER_AUDIO: Self = Self(1 << 3);
+
+    /// Every bit a flag uses.
+    const USED: u8 = 0b1111;
+
+    /// The flags' byte on the wire.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The flags for a wire byte, or `None` when it sets a bit no flag uses.
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Option<Self> {
+        if bits & !Self::USED == 0 { Some(Self(bits)) } else { None }
+    }
+
+    /// Whether every flag of `other` is set here.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Whether no flag is set.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The flags of both.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl BitOr for AudioFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+/// Why a frame was refused, read or written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameError {
     /// An unknown kind byte.
@@ -115,9 +254,38 @@ pub enum FrameError {
     BadLength {
         /// The kind.
         kind: FrameKind,
-        /// The length the header claims.
+        /// The length the header claims, or the body's length when writing.
         len: u32,
     },
+    /// Flags on a kind other than audio, or a bit no flag uses.
+    BadFlags {
+        /// The kind.
+        kind: FrameKind,
+        /// The flags byte.
+        flags: u8,
+    },
+    /// A JSON body that does not parse as its kind's type, or did not serialize.
+    BadJson {
+        /// The kind.
+        kind: FrameKind,
+    },
+    /// A PCM body with no newline after its JSON header within [`PCM_HEADER_MAX`] bytes.
+    MissingPcmTerminator,
+    /// Samples whose byte count is odd.
+    OddSamples,
+    /// A kind the other end may not send ([`FrameKind::sender`]): the core sending an event, or
+    /// the speech process sending audio.
+    WrongDirection {
+        /// The kind.
+        kind: FrameKind,
+    },
+    /// A frame from the speech process before its `Hello`.
+    BeforeHello {
+        /// The kind.
+        kind: FrameKind,
+    },
+    /// A second `Hello` on one connection.
+    SecondHello,
 }
 
 impl fmt::Display for FrameError {
@@ -127,6 +295,21 @@ impl fmt::Display for FrameError {
             Self::BadLength { kind, len } => {
                 write!(f, "a {kind:?} frame may not be {len} bytes (at most {})", kind.max_len())
             }
+            Self::BadFlags { kind, flags } => {
+                write!(f, "a {kind:?} frame may not carry flags {flags:#04x}")
+            }
+            Self::BadJson { kind } => write!(f, "a {kind:?} frame's JSON body is not valid"),
+            Self::MissingPcmTerminator => {
+                write!(f, "a PCM frame's JSON header has no newline within {PCM_HEADER_MAX} bytes")
+            }
+            Self::OddSamples => write!(f, "a frame's samples are an odd number of bytes"),
+            Self::WrongDirection { kind } => {
+                write!(f, "a {kind:?} frame came from an end that may not send it")
+            }
+            Self::BeforeHello { kind } => {
+                write!(f, "a {kind:?} frame came before the speech process's Hello")
+            }
+            Self::SecondHello => write!(f, "a second Hello came on one connection"),
         }
     }
 }
@@ -158,7 +341,8 @@ impl FrameHeader {
         out
     }
 
-    /// Reads a header and checks its kind and length before the caller allocates the body.
+    /// Reads a header and checks its kind, length and flags before the caller allocates the
+    /// body.
     pub fn decode(bytes: &[u8; Self::SIZE]) -> Result<(FrameKind, Self), FrameError> {
         let [kind, flags, s0, s1, l0, l1, l2, l3, q0, q1, q2, q3, q4, q5, q6, q7, turn @ ..] =
             *bytes;
@@ -170,19 +354,29 @@ impl FrameHeader {
             seq: u64::from_le_bytes([q0, q1, q2, q3, q4, q5, q6, q7]),
             turn,
         };
-        let frame_kind = FrameKind::from_code(kind).ok_or(FrameError::UnknownKind(kind))?;
-        let len_ok = match frame_kind {
-            FrameKind::Audio => header.len == AUDIO_FRAME_BYTES,
+        Ok((header.check()?, header))
+    }
+
+    /// The header's kind, once its kind, length and flags are allowed.
+    fn check(&self) -> Result<FrameKind, FrameError> {
+        let kind = FrameKind::from_code(self.kind).ok_or(FrameError::UnknownKind(self.kind))?;
+        let (len_ok, flags_ok) = match kind {
+            FrameKind::Audio => {
+                (self.len == AUDIO_FRAME_BYTES, AudioFlags::from_bits(self.flags).is_some())
+            }
             FrameKind::Command
             | FrameKind::Event
             | FrameKind::Pcm
             | FrameKind::Ping
-            | FrameKind::Pong => header.len <= frame_kind.max_len(),
+            | FrameKind::Pong
+            | FrameKind::Hello => (self.len <= kind.max_len(), self.flags == 0),
         };
-        if len_ok {
-            Ok((frame_kind, header))
+        if !len_ok {
+            Err(FrameError::BadLength { kind, len: self.len })
+        } else if !flags_ok {
+            Err(FrameError::BadFlags { kind, flags: self.flags })
         } else {
-            Err(FrameError::BadLength { kind: frame_kind, len: header.len })
+            Ok(kind)
         }
     }
 }
@@ -220,6 +414,17 @@ pub struct PcmHeader {
     pub sample_rate: u32,
 }
 
+/// The body of a hello frame: the per-session token the core put in the speech process's
+/// environment. The speech process sends it only after checking that the pipe's server is the
+/// core's process, and the transport compares it (section 3.3.7). The token is a
+/// [`SessionToken`], like the dispatcher pipe's, so `Debug` hides it, `==` compares every byte,
+/// and recordings replace it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SpeechHelloFrame {
+    /// The token.
+    pub token: SessionToken,
+}
+
 /// The languages a component handles, as BCP 47 tags, reported by the component itself: a
 /// speech stage from its model's entry in `models.toml`, a brain backend or worker driver for
 /// its resolved model (the Claude backend and driver report `Any`). Eileen's code holds no list
@@ -243,6 +448,10 @@ pub enum VoiceEvent {
         turn: TurnId,
         /// The audio source.
         source: u16,
+        /// The speech began in a replayed audio frame ([`AudioFlags::REPLAYED`]): heard late,
+        /// so the turn is addressed only by the name and never answers an approval, a question
+        /// or a confirm step (BUILD.md section 2.8).
+        replayed: bool,
     },
     /// A partial transcript; it reaches only the HUD state while it is current.
     Partial {
@@ -526,6 +735,7 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<SpeechCommandFrame>();
     r.add::<SpeechEventFrame>();
     r.add::<PcmHeader>();
+    r.add::<SpeechHelloFrame>();
     r.add::<LanguageSupport>();
     r.add::<VoiceEvent>();
     r.add::<TurnEndReason>();
