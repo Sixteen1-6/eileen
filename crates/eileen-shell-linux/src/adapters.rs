@@ -30,9 +30,9 @@
 use std::collections::BTreeSet;
 
 use eileen_contracts::ids::Untrusted;
+use eileen_contracts::machine::{AdapterFacts, AdapterKind, CpuFacts, CpuVendor};
 
 use crate::SysRoot;
-use crate::facts::{AdapterFacts, AdapterKind, CpuFacts, CpuVendor};
 use crate::pci::{parse_uevent, pci_name};
 
 /// NVIDIA's PCI vendor id.

@@ -2,8 +2,10 @@
 //! carry nothing that names the user or the machine.
 
 use std::path::Path;
+use std::time::Duration;
 
 use eileen_contracts::connectors::Platform;
+use eileen_platform::{Deadline, MachineProbe};
 use eileen_shell_linux::LinuxMachineProbe;
 
 #[test]
@@ -11,7 +13,8 @@ fn this_machine_reads_facts_that_hold_together() {
     // A folder that does not exist yet: the volume is measured at its nearest existing parent.
     let data_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("live").join("not-created");
     let probe = LinuxMachineProbe::system(&data_dir);
-    let facts = probe.facts().unwrap();
+    // Far past BUILD.md 2.16's 200 ms: a loaded CI runner is not the PC that budget is for.
+    let facts = probe.facts(Deadline::after(Duration::from_secs(30))).unwrap();
     let (busy_pct, _) = probe.load().unwrap();
     assert!(busy_pct <= 100, "a share: {busy_pct}");
     assert_eq!(facts.os, Platform::Linux, "Linux");
