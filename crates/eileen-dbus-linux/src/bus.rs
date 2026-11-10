@@ -55,8 +55,9 @@ pub async fn system_bus_within(timeout: Duration) -> Result<zbus::Connection, Db
 ///
 /// - Only a Unix socket's address, `unix:path=` or `unix:abstract=`, is followed. Any other is
 ///   [`DbusError::Invalid`] before any connect: zbus would start a program for some
-///   (`unixexec:`, or `ibus:`, which runs `ibus address`) and reach the network for others
-///   (`tcp:`, `nonce-tcp:`), and this crate never starts a process.
+///   (`unixexec:`, or `ibus:`, which runs `ibus address`, once any crate in the build turns on
+///   zbus's feature of that name) and reach the network for others (`tcp:`, `nonce-tcp:`), and
+///   this crate never starts a process.
 /// - A socket where no bus listens is [`DbusError::Unavailable`].
 pub async fn bus_at_within(
     address: &str,

@@ -304,7 +304,7 @@ fn id(connection: &zbus::Connection, number: u32) -> NotificationId {
 }
 
 /// Asserts that `error` is `Invalid` for `what` because the reply's types were not the
-/// specification's: its detail is zvariant's signature mismatch, which names the reply's
+/// specification's: its detail is zbus's signature mismatch, which names the reply's
 /// signature, and never the name of an error the server answered instead.
 fn assert_mistyped(error: &DbusError, what: &str, signature: &str) {
     let DbusError::Invalid { what: call, detail } = error else {
