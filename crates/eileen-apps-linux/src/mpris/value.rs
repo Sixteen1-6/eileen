@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use eileen_contracts::desktop::{MediaState, sanitize};
 use eileen_contracts::ids::Untrusted;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 use super::PREFIX;
 
@@ -29,7 +29,7 @@ const NO_TRACK: &str = "/org/mpris/MediaPlayer2/TrackList/NoTrack";
 const MAX_VARIANT_DEPTH: usize = 4;
 
 /// One interface's properties, as `org.freedesktop.DBus.Properties.GetAll` returns them.
-pub(super) type Properties = HashMap<String, OwnedValue>;
+pub(super) type Properties = HashMap<String, OwnedVariant>;
 
 /// What the `Player` interface's properties say.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl Playback {
             ..Self::default()
         };
         let metadata = player.get("Metadata").map(|metadata| unwrapped(metadata));
-        if let Some(Value::Dict(entries)) = metadata {
+        if let Some(Variant::Dict(entries)) = metadata {
             for (key, value) in entries.iter() {
                 let Some(key) = text(key) else {
                     continue;
@@ -153,10 +153,10 @@ fn whole(value: f64) -> Option<i64> {
 }
 
 /// The value inside its variant layers.
-fn unwrapped<'v>(value: &'v Value<'v>) -> &'v Value<'v> {
+fn unwrapped<'v>(value: &'v Variant<'v>) -> &'v Variant<'v> {
     let mut value = value;
     for _ in 0..MAX_VARIANT_DEPTH {
-        let Value::Value(inner) = value else {
+        let Variant::Variant(inner) = value else {
             break;
         };
         value = inner;
@@ -165,28 +165,28 @@ fn unwrapped<'v>(value: &'v Value<'v>) -> &'v Value<'v> {
 }
 
 /// A string value.
-fn text<'v>(value: &'v Value<'v>) -> Option<&'v str> {
-    if let Value::Str(text) = unwrapped(value) { Some(text.as_str()) } else { None }
+fn text<'v>(value: &'v Variant<'v>) -> Option<&'v str> {
+    if let Variant::Str(text) = unwrapped(value) { Some(text.as_str()) } else { None }
 }
 
 /// A boolean value.
-fn flag(value: &Value<'_>) -> Option<bool> {
-    if let Value::Bool(flag) = unwrapped(value) { Some(*flag) } else { None }
+fn flag(value: &Variant<'_>) -> Option<bool> {
+    if let Variant::Bool(flag) = unwrapped(value) { Some(*flag) } else { None }
 }
 
 /// A whole number of microseconds, from any of D-Bus's number types: `x` as the specification
 /// gives `mpris:length` and `Position`, but also `t`, `d` and the narrower integers.
 #[expect(clippy::wildcard_enum_match_arm, reason = "every other D-Bus type is not a number")]
-fn micros(value: &Value<'_>) -> Option<i64> {
+fn micros(value: &Variant<'_>) -> Option<i64> {
     match unwrapped(value) {
-        Value::I64(number) => Some(*number),
-        Value::U64(number) => i64::try_from(*number).ok(),
-        Value::F64(number) => whole(*number),
-        Value::I32(number) => Some(i64::from(*number)),
-        Value::U32(number) => Some(i64::from(*number)),
-        Value::I16(number) => Some(i64::from(*number)),
-        Value::U16(number) => Some(i64::from(*number)),
-        Value::U8(number) => Some(i64::from(*number)),
+        Variant::I64(number) => Some(*number),
+        Variant::U64(number) => i64::try_from(*number).ok(),
+        Variant::F64(number) => whole(*number),
+        Variant::I32(number) => Some(i64::from(*number)),
+        Variant::U32(number) => Some(i64::from(*number)),
+        Variant::I16(number) => Some(i64::from(*number)),
+        Variant::U16(number) => Some(i64::from(*number)),
+        Variant::U8(number) => Some(i64::from(*number)),
         _ => None,
     }
 }
@@ -194,10 +194,10 @@ fn micros(value: &Value<'_>) -> Option<i64> {
 /// The first string of a list of strings that is not blank once sanitized, sanitized; or a lone
 /// string where a player sends one in place of the list. An entry that sanitizing empties, such
 /// as a lone bidirectional mark, is passed over.
-fn first_text(value: &Value<'_>) -> Option<Untrusted<String>> {
+fn first_text(value: &Variant<'_>) -> Option<Untrusted<String>> {
     let value = unwrapped(value);
     let items =
-        if let Value::Array(items) = value { items.inner() } else { std::slice::from_ref(value) };
+        if let Variant::Array(items) = value { items.inner() } else { std::slice::from_ref(value) };
     items
         .iter()
         .filter_map(|item| text(item))
@@ -207,9 +207,9 @@ fn first_text(value: &Value<'_>) -> Option<Untrusted<String>> {
 
 /// The track an `mpris:trackid` names: an object path, or a string that is one, as some
 /// players send it; never the no-track path.
-fn track_id(value: &Value<'_>) -> Option<OwnedObjectPath> {
+fn track_id(value: &Variant<'_>) -> Option<OwnedObjectPath> {
     let value = unwrapped(value);
-    let path = if let Value::ObjectPath(path) = value { path.as_str() } else { text(value)? };
+    let path = if let Variant::ObjectPath(path) = value { path.as_str() } else { text(value)? };
     if path == NO_TRACK {
         return None;
     }
@@ -221,23 +221,23 @@ mod tests {
     use std::collections::HashMap;
 
     use eileen_contracts::ids::Untrusted;
-    use zbus::zvariant::{ObjectPath, OwnedValue, Str, Value};
+    use zbus::{ObjectPath, OwnedVariant, Str, Variant};
 
     use super::{
         Playback, Properties, app_name, bus_name_part, can, first_text, media_state, micros,
         micros_of, seconds, track_id,
     };
 
-    fn owned(value: Value<'static>) -> OwnedValue {
+    fn owned(value: Variant<'static>) -> OwnedVariant {
         value.try_into_owned().unwrap()
     }
 
-    fn properties(entries: Vec<(&str, Value<'static>)>) -> Properties {
+    fn properties(entries: Vec<(&str, Variant<'static>)>) -> Properties {
         entries.into_iter().map(|(key, value)| (key.to_owned(), owned(value))).collect()
     }
 
-    fn nested(value: Value<'static>) -> Value<'static> {
-        Value::Value(Box::new(value))
+    fn nested(value: Variant<'static>) -> Variant<'static> {
+        Variant::Variant(Box::new(value))
     }
 
     /// `text` as the readers give it.
@@ -247,17 +247,17 @@ mod tests {
 
     #[test]
     fn numbers_of_every_type_are_microseconds() {
-        assert_eq!(micros(&Value::I64(-5)), Some(-5), "x, the specification's type");
-        assert_eq!(micros(&Value::U64(90_000_000)), Some(90_000_000), "t");
-        assert_eq!(micros(&Value::U64(u64::MAX)), None, "t beyond x");
-        assert_eq!(micros(&Value::F64(30.6)), Some(31), "d, rounded");
-        assert_eq!(micros(&Value::F64(f64::NAN)), None, "d, not a number");
-        assert_eq!(micros(&Value::I32(-7)), Some(-7), "i");
-        assert_eq!(micros(&Value::U32(7)), Some(7), "u");
-        assert_eq!(micros(&Value::U8(7)), Some(7), "y");
-        assert_eq!(micros(&nested(Value::I64(12))), Some(12), "inside a second variant");
-        assert_eq!(micros(&Value::Str(Str::from("12"))), None, "a string is not a number");
-        assert_eq!(micros(&Value::Bool(true)), None, "nor is a boolean");
+        assert_eq!(micros(&Variant::I64(-5)), Some(-5), "x, the specification's type");
+        assert_eq!(micros(&Variant::U64(90_000_000)), Some(90_000_000), "t");
+        assert_eq!(micros(&Variant::U64(u64::MAX)), None, "t beyond x");
+        assert_eq!(micros(&Variant::F64(30.6)), Some(31), "d, rounded");
+        assert_eq!(micros(&Variant::F64(f64::NAN)), None, "d, not a number");
+        assert_eq!(micros(&Variant::I32(-7)), Some(-7), "i");
+        assert_eq!(micros(&Variant::U32(7)), Some(7), "u");
+        assert_eq!(micros(&Variant::U8(7)), Some(7), "y");
+        assert_eq!(micros(&nested(Variant::I64(12))), Some(12), "inside a second variant");
+        assert_eq!(micros(&Variant::Str(Str::from("12"))), None, "a string is not a number");
+        assert_eq!(micros(&Variant::Bool(true)), None, "nor is a boolean");
     }
 
     #[test]
@@ -271,30 +271,32 @@ mod tests {
 
     #[test]
     fn the_artist_is_the_first_name_of_a_list_or_a_lone_string() {
-        let list = Value::from(vec!["", "Ada", "Grace"]);
+        let list = Variant::from(vec!["", "Ada", "Grace"]);
         assert_eq!(first_text(&list), Some(untrusted("Ada")), "the first non-empty entry");
-        assert_eq!(first_text(&Value::from("Solo")), Some(untrusted("Solo")), "a lone string");
-        assert_eq!(first_text(&Value::from(Vec::<&str>::new())), None, "an empty list");
-        assert_eq!(first_text(&Value::from("  ")), None, "blank");
-        assert_eq!(first_text(&Value::I64(3)), None, "not text");
+        assert_eq!(first_text(&Variant::from("Solo")), Some(untrusted("Solo")), "a lone string");
+        assert_eq!(first_text(&Variant::from(Vec::<&str>::new())), None, "an empty list");
+        assert_eq!(first_text(&Variant::from("  ")), None, "blank");
+        assert_eq!(first_text(&Variant::I64(3)), None, "not text");
     }
 
     #[test]
     fn an_artist_that_sanitizing_empties_is_passed_over() {
-        let marked = Value::from(vec!["\u{200E}", "\u{FEFF} \u{0007}", "Ada"]);
+        let marked = Variant::from(vec!["\u{200E}", "\u{FEFF} \u{0007}", "Ada"]);
         assert_eq!(
             first_text(&marked),
             Some(untrusted("Ada")),
             "marks and controls alone are blank"
         );
         assert_eq!(
-            first_text(&Value::from("\u{200F}Grace\u{202E}")),
+            first_text(&Variant::from("\u{200F}Grace\u{202E}")),
             Some(untrusted("Grace")),
             "the entry chosen is sanitized"
         );
-        assert_eq!(first_text(&Value::from("\u{200E}")), None, "a lone string of marks");
-        let metadata =
-            Value::from(HashMap::from([("xesam:artist", Value::from(vec!["\u{200E}", "Ada"]))]));
+        assert_eq!(first_text(&Variant::from("\u{200E}")), None, "a lone string of marks");
+        let metadata = Variant::from(HashMap::from([(
+            "xesam:artist",
+            Variant::from(vec!["\u{200E}", "Ada"]),
+        )]));
         let player = properties(vec![("Metadata", metadata)]);
         let state = media_state("org.mpris.MediaPlayer2.web", untrusted("Web"), &player);
         assert_eq!(state.artist, Some(untrusted("Ada")), "the state's artist");
@@ -303,14 +305,14 @@ mod tests {
     #[test]
     fn a_players_text_is_sanitized_and_kept_to_512_characters() {
         let long = "a".repeat(600);
-        let metadata = Value::from(HashMap::from([
-            ("xesam:title", Value::from("\u{202E}Deep\u{0007} Blue")),
-            ("xesam:artist", Value::from(long.clone())),
+        let metadata = Variant::from(HashMap::from([
+            ("xesam:title", Variant::from("\u{202E}Deep\u{0007} Blue")),
+            ("xesam:artist", Variant::from(long.clone())),
         ]));
         let playback = Playback::read(&properties(vec![("Metadata", metadata)]));
         assert_eq!(playback.title, Some(untrusted("Deep Blue")), "the title, without its controls");
         assert_eq!(playback.artist, Some(untrusted(&"a".repeat(512))), "the artist, cut to 512");
-        let root = properties(vec![("Identity", Value::from(long))]);
+        let root = properties(vec![("Identity", Variant::from(long))]);
         let app = app_name("org.mpris.MediaPlayer2.long", &root);
         assert_eq!(app.get().chars().count(), 512, "the app's name, cut to 512");
     }
@@ -318,18 +320,18 @@ mod tests {
     #[test]
     fn a_track_id_is_an_object_path_but_never_no_track() {
         let path =
-            |text: &'static str| Value::ObjectPath(ObjectPath::from_static_str(text).unwrap());
+            |text: &'static str| Variant::ObjectPath(ObjectPath::from_static_str(text).unwrap());
         assert_eq!(
             track_id(&path("/org/eileen/Track/1")).as_deref().map(ObjectPath::as_str),
             Some("/org/eileen/Track/1"),
             "o, the specification's type"
         );
         assert_eq!(
-            track_id(&Value::from("/com/example/track/7")).as_deref().map(ObjectPath::as_str),
+            track_id(&Variant::from("/com/example/track/7")).as_deref().map(ObjectPath::as_str),
             Some("/com/example/track/7"),
             "a string that is a path"
         );
-        assert_eq!(track_id(&Value::from("example:track:7")), None, "a string that is not");
+        assert_eq!(track_id(&Variant::from("example:track:7")), None, "a string that is not");
         assert_eq!(track_id(&path("/org/mpris/MediaPlayer2/TrackList/NoTrack")), None, "no track");
     }
 
@@ -353,23 +355,25 @@ mod tests {
     fn the_app_is_the_identity_then_the_desktop_entry_then_the_bus_name() {
         let name = "org.mpris.MediaPlayer2.vlc.instance7389";
         let both = properties(vec![
-            ("Identity", Value::from("VLC")),
-            ("DesktopEntry", Value::from("vlc")),
+            ("Identity", Variant::from("VLC")),
+            ("DesktopEntry", Variant::from("vlc")),
         ]);
         assert_eq!(app_name(name, &both), untrusted("VLC"), "Identity first");
-        let entry =
-            properties(vec![("Identity", Value::from(" ")), ("DesktopEntry", Value::from("vlc"))]);
+        let entry = properties(vec![
+            ("Identity", Variant::from(" ")),
+            ("DesktopEntry", Variant::from("vlc")),
+        ]);
         assert_eq!(app_name(name, &entry), untrusted("vlc"), "a blank Identity is passed over");
-        let odd = properties(vec![("Identity", Value::I64(4))]);
+        let odd = properties(vec![("Identity", Variant::I64(4))]);
         assert_eq!(app_name(name, &odd), untrusted("vlc"), "an Identity that is not text");
-        let hostile = properties(vec![("Identity", Value::from("V\u{202E}LC\u{0007}"))]);
+        let hostile = properties(vec![("Identity", Variant::from("V\u{202E}LC\u{0007}"))]);
         assert_eq!(app_name(name, &hostile), untrusted("VLC"), "sanitized");
     }
 
     #[test]
     fn a_can_property_left_out_or_mistyped_allows_its_action() {
         let player =
-            properties(vec![("CanPlay", Value::Bool(false)), ("CanSeek", Value::from("no"))]);
+            properties(vec![("CanPlay", Variant::Bool(false)), ("CanSeek", Variant::from("no"))]);
         assert!(!can(&player, "CanPlay"), "false refuses");
         assert!(can(&player, "CanSeek"), "a string is not a boolean");
         assert!(can(&player, "CanPause"), "left out");
@@ -377,17 +381,17 @@ mod tests {
 
     #[test]
     fn metadata_in_odd_shapes_is_still_read() {
-        let metadata = Value::from(HashMap::from([
-            ("xesam:title", nested(Value::from("Deep"))),
-            ("xesam:artist", Value::from("Solo")),
-            ("mpris:length", Value::F64(90e6)),
-            ("mpris:trackid", Value::from("not a path")),
-            ("xesam:album", Value::from("Ignored")),
+        let metadata = Variant::from(HashMap::from([
+            ("xesam:title", nested(Variant::from("Deep"))),
+            ("xesam:artist", Variant::from("Solo")),
+            ("mpris:length", Variant::F64(90e6)),
+            ("mpris:trackid", Variant::from("not a path")),
+            ("xesam:album", Variant::from("Ignored")),
         ]));
         let player = properties(vec![
-            ("PlaybackStatus", Value::from("playing")),
+            ("PlaybackStatus", Variant::from("playing")),
             ("Metadata", nested(metadata)),
-            ("Position", Value::U64(3)),
+            ("Position", Variant::U64(3)),
         ]);
         let playback = Playback::read(&player);
         assert!(playback.playing, "the status, whatever its case");
@@ -396,15 +400,15 @@ mod tests {
         assert_eq!(playback.length_us, Some(90_000_000), "a floating length");
         assert_eq!(playback.position_us, Some(3), "an unsigned position");
         assert_eq!(playback.track, None, "a track id that is no path");
-        let junk = properties(vec![("Metadata", Value::from("junk"))]);
+        let junk = properties(vec![("Metadata", Variant::from("junk"))]);
         assert_eq!(Playback::read(&junk), Playback::default(), "metadata that is no map");
     }
 
     #[test]
     fn a_state_leaves_out_what_the_player_does_not_say() {
         let player = properties(vec![
-            ("Position", Value::I64(-1)),
-            ("Metadata", Value::from(HashMap::from([("mpris:length", Value::I64(0))]))),
+            ("Position", Variant::I64(-1)),
+            ("Metadata", Variant::from(HashMap::from([("mpris:length", Variant::I64(0))]))),
         ]);
         let state = media_state("org.mpris.MediaPlayer2.quiet", untrusted("Quiet"), &player);
         assert_eq!(state.app, "Quiet", "the app's name, as the contract takes it");

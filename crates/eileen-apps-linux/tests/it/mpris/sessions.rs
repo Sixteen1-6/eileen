@@ -12,8 +12,8 @@ use eileen_dbus_linux::testing::{PrivateBus, next_message};
 use eileen_dbus_linux::{METHOD_TIMEOUT, next};
 use tokio::time::Instant;
 use zbus::MessageStream;
+use zbus::OwnedObjectPath;
 use zbus::message::Type;
-use zbus::zvariant::OwnedObjectPath;
 
 use super::fake::{
     Call, FLOAT, FULL, Gate, OBJECT, ODD, Player, SilentRoot, TRACK, calls, float_player,

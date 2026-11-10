@@ -48,8 +48,8 @@
 //! every call to another process a deadline. Checks past their bound are left to their thread,
 //! and the answer is a [`FileError::Io`] that says they timed out. Each runs on a thread of its
 //! own, not on the runtime's blocking pool, which a hung check would hold for good: on
-//! `eileen-dbus-linux`'s bridge, whose two blocking threads zbus connects a bus with, two such
-//! checks would leave no bus able to connect. [`Opener::checking_files_on`] gives them a pool.
+//! `eileen-dbus-linux`'s bridge, whose two blocking threads are zbus's alone, two such checks
+//! would leave none for zbus. [`Opener::checking_files_on`] gives them a pool.
 //!
 //! # D-Bus activation
 //!
@@ -98,7 +98,7 @@ use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use zbus::names::WellKnownName;
-use zbus::zvariant::{Fd, OwnedObjectPath, Value};
+use zbus::{Fd, OwnedObjectPath, Variant};
 
 use crate::{AppKind, DesktopEntry, FileError};
 
@@ -202,7 +202,7 @@ impl Opener {
     /// there, as it does not for a thread of its own. Dropping that runtime, as `#[tokio::main]`
     /// does on return, waits for each check it is running, a hung one included: end it with
     /// `Runtime::shutdown_background` or `shutdown_timeout`. Never the D-Bus bridge's runtime,
-    /// whose blocking threads zbus needs to connect a bus.
+    /// whose blocking threads are zbus's alone.
     #[must_use]
     pub fn checking_files_on(mut self, pool: Handle) -> Self {
         self.pool = Some(pool);
@@ -315,7 +315,7 @@ impl Opener {
         let what = target.what();
         let mut request = Request::new(&self.conn)?;
         request.responses().await?;
-        let options = HashMap::from([("handle_token", Value::from(request.token()))]);
+        let options = HashMap::from([("handle_token", Variant::from(request.token()))]);
         let (conn, portal, interface) = (&self.conn, Some(PORTAL), Some(OPEN_URI));
         let reply = match target {
             Target::Uri(uri) => {
@@ -516,7 +516,7 @@ fn object_path(name: &str) -> String {
 
 /// The `platform_data` sent with `Activate` and `Open`: empty, as Eileen has no startup
 /// notification ID or activation token to pass on.
-fn platform_data() -> HashMap<&'static str, Value<'static>> {
+fn platform_data() -> HashMap<&'static str, Variant<'static>> {
     HashMap::new()
 }
 

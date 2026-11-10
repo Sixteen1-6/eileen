@@ -112,7 +112,7 @@ impl LinuxApps {
     /// its call's deadline. Once the runtime has shut down, a read answers `Io` at once, unrun.
     /// Dropping it, as `#[tokio::main]` does on return, waits for each read it is running, a
     /// hung one included: end it with `Runtime::shutdown_background` or `shutdown_timeout`.
-    /// Never the D-Bus bridge's runtime, whose blocking threads zbus needs to connect a bus.
+    /// Never the D-Bus bridge's runtime, whose blocking threads are zbus's alone.
     #[must_use]
     pub fn reading_files_on(mut self, pool: Handle) -> Self {
         self.pool = Some(pool);

@@ -333,7 +333,7 @@ fn paths_are_checked_while_the_bridges_blocking_threads_are_taken() {
     let mut seen = fakes.editor(&bus);
     let bridge = Bridge::on_private_bus(&bus).unwrap();
     let apps = LinuxApps::new(bridge.clone(), session("en_US.UTF-8", "ubuntu:GNOME", None));
-    // The session bus first: zbus connects on a blocking thread, so none could connect after.
+    // The session bus first, so that only the checks below could wait for a blocking thread.
     assert_eq!(apps.open_url("https://example.com"), Ok(()), "connected");
     assert_eq!(fakes.run(call_seen(&mut opened)).method, "OpenURI", "the web address");
     let editor = listed(&apps, "Text Editor");
