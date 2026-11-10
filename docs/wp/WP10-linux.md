@@ -177,8 +177,10 @@ Planned, not yet opened:
   - `PathProbe` in `eileen-shell-linux` (BUILD.md section 3.4), after `wp2/path-probe-trait`
     (item 5) adds the trait and its fake, as LINUX.md section 5 plans it, with the desktop-entry
     parser moved into `eileen-dbus-linux`, which `eileen-shell-linux` may use (or section 3.1's
-    row amended), and new readers of `mimeapps.list` and shared-mime-info's `globs2`, the
-    latter with a fuzz target. Until then a path that needs a probe is `Unknown` on Linux
+    row amended), a mode of that parser for `mimeapps.list`, whose keys are MIME types with
+    `/`, `.` and `+` that the desktop-entry mode refuses, with the `desktop_entry` fuzz target
+    extended to it (or a target of its own), and a new reader of shared-mime-info's `globs2`
+    with a fuzz target. Until then a path that needs a probe is `Unknown` on Linux
     (D86);
   - `LocalTime` from `/etc/localtime`, after `wp2/shell-local-time` (item 6) wires Windows' zone
     reader into `CoreConfig.local_time`. Until then Linux logs a warning at start and uses UTC
@@ -415,17 +417,23 @@ their interfaces, which can stay neutral and still take the Linux forms behind t
    as Windows writes them, and the classifier's grammar (drives, UNC, `\\?\`) is Windows'; on
    Linux a fully qualified path starts with `/`. `full_path` can apply `..` only where the OS
    reads it lexically: POSIX resolves it after the link before it, so the Linux probe leaves it
-   to `final_path`.
-8. **`link_names` with the count.** Linux cannot list a file's other names. If `link_names`
-   answered the link count beside the names found, the classifier could take fewer names than
-   the count as `Unknown` on any OS, with no Linux rule of its own.
+   to `final_path`. `FinalPath`'s missing parts never hold `.` or `..` on either OS (Windows'
+   `GetFullPathNameW` removed them; Linux's `final_path` applies them within the missing parts),
+   which `FakePathProbe` can keep as an invariant, so the classifier's tests never meet a
+   missing part that climbs out of the folder it was found under.
+8. **`link_names` with the count.** Linux cannot list a file's other names, so its probe
+   answers `Refused` for a file that is not a folder and has more than one link, and needs
+   nothing from WP2 for that. If `link_names` answered the link count beside the names found,
+   the classifier could take fewer names than the count as `Unknown` on any OS: an improvement,
+   not a dependency.
 9. **`handler` is the extension's.** On Linux the program that opens a file follows its MIME
    type, which GIO may take from the file's first bytes, so `runs_code` cannot rest on the
    extension's handler alone there; the trait's doc can say the answer is the extension's
    default.
 10. **`share` needs no change.** No Linux path has a host and a share. A mount that shows this
-    machine's files under another name, or reaches another host, is `final_path`'s `Refused` on
-    Linux, which the classifier already takes as `Unknown`.
+    machine's files under another name (found by device, so WSLg's `/mnt/wslg/distro` among
+    them), or reaches another host, is `final_path`'s `Refused` on Linux, which the classifier
+    already takes as `Unknown`.
 
 ## Surprises
 
@@ -506,6 +514,11 @@ their interfaces, which can stay neutral and still take the Linux forms behind t
 - rustix 1.1.5, the workspace's, wraps `SO_PEERCRED` but not `SO_PEERPIDFD` (Linux 6.5), so the
   one call that gives a peer's pidfd from its socket needs `libc`, which BUILD.md section 4.1
   does not pin (Planned).
+- WSLg mounts the distribution's own root file system a second time, read-only, at
+  `/mnt/wslg/distro` (same device, root `/`), so every file under `/home` has a second name
+  there. A bind-mount rule by mount root (field 4 of `mountinfo` other than `/`) misses it, and
+  would refuse every path on a btrfs install whose subvolumes mount with roots `/@` and
+  `/@home`, so `PathProbe` on Linux finds second names by device (LINUX.md section 5).
 
 ## Decisions to record
 
@@ -844,17 +857,23 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   error and fall back to no shared folder. Until the cgroup scope of LINUX.md section 5 exists, a
   caller's job on Linux is the session each child's `setsid` gives it: `PeerFacts.jobs` names
   the keys whose session the peer is in. Once the scope exists, `in_any_job` also counts a
-  process under any entry's scope, and `jobs` stays by session.
+  process under any entry's scope, and `jobs` stays by session. A peer counts as in an entry's
+  session only while the entry's pidfd shows its leader running or a zombie
+  (`pidfd_send_signal(pidfd, 0)`), so a session number reused after the leader is reaped matches
+  no entry.
 - Why: The XDG runtime folder is the user's, per machine, local, mode 0700, and gone at the last
   logout and at reboot, so a per-boot token never reaches a disk, a backup or a second machine
   that shares an NFS home, as `~/.local/state/eileen/run/` would let it. A session can be left
-  but not joined (`setsid(2)`, `setpgid(2)`), so membership by session cannot be forged, where a
-  process of the user can write itself into a scope that the user's service manager made
-  [inferred: L1 checks the owner of a user scope's files on Ubuntu 26.04].
+  but not joined (`setsid(2)`, `setpgid(2)`), and the leader's pidfd shows the session's number
+  still held, so membership by session cannot be forged, where a process of the user can write
+  itself into a scope that the user's service manager made [inferred: L1 checks the owner of a
+  user scope's files on Ubuntu 26.04]. Without the pidfd check, a same-user process could wait
+  for an emptied session's number and take it with `setsid`.
 - Consequences: LINUX.md section 5's data folder table gains the row and its path classes the
   folder, as `EileenData`. The runtime folder sits in memory under logind's size limit, so the
   sessions' folders under `run/` stay small. A process that leaves its session loses every role
-  and passes the "outside every Eileen job" checks: BUILD.md section 7's open risk, cheaper on
+  and passes the "outside every Eileen job" checks, and so does a member that outlives its
+  leader in another process group once the leader is reaped: BUILD.md section 7's open risk, cheaper on
   Linux, until v0.2's sandbox. Under WSLg the parent folder is 0777 (Surprises), which the
   folder's own check makes harmless. The `ipc` pull requests under Planned build it.
 - Source: LINUX.md section 5; the XDG Base Directory specification; unix(7), setsid(2),
@@ -953,7 +972,10 @@ Measured so far, each where it is recorded:
   `XDG_RUNTIME_DIR` is `/mnt/wslg/runtime-dir`, a tmpfs of mode 0777; `getconf CLK_TCK` is 100;
   Yama's `ptrace_scope` and `fs.protected_hardlinks` are 1; `/mnt/c` and `/mnt/d` are `9p`
   mounts of `C:\` and `D:\`; the kernel headers define `SO_PEERPIDFD` and
-  `INET_DIAG_CGROUP_ID`; and an owner can set a file's sticky bit (`chmod 1600`).
+  `INET_DIAG_CGROUP_ID`; an owner can set a file's sticky bit (`chmod 1600`); and
+  `/mnt/wslg/distro` is a read-only second mount of the root file system (`8:64`, root `/`,
+  the same as `/`), where `/mnt/wslg/distro/home/ayham` has the device and inode of
+  `/home/ayham`.
 
 Not yet verified:
 
