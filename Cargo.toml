@@ -145,17 +145,20 @@ minidumper = "0.11.0"
 # Linux (docs/LINUX.md): for the -linux crates. rustix 1.1.5 (2026-09-16) is already in the lock
 # through tempfile; `statvfs` needs its fs feature.
 rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"] }
-# zbus 5.19.0 (2026-08-09, MIT) speaks D-Bus on Eileen's tokio runtime, not on its own async-io
-# executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
-# releases from 2026-10-09 to 2026-10-16 for five crates of its tree, so the pull request whose
-# member first uses zbus locks them with `cargo update --precise` at zbus_names 4.3.4, zvariant and
-# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.17, the workspace's own pin.
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+# zbus 6.1.0 (2026-10-23, MIT) speaks D-Bus on Eileen's tokio runtime, not on its own (zruntime,
+# its default-rt feature). 6.2.0 (2026-10-29) and 6.2.1 (2026-11-01) are inside the cooling-off
+# period, and `=` keeps a fresh resolve from taking them: zbus has had four releases in 16 days.
+# 6.0 merged zvariant, zvariant_derive and zbus_names into zbus and put its client and server APIs
+# behind its proxy and service features, which the -linux crates that use them turn on, as
+# eileen-dbus-linux turns on tracing, which 5.x always had. The lock holds the crates 6.1.0 adds at
+# releases past the cooling-off period, zbus_macros 6.1.0, zbus_utils 6.0.0 and zruntime 0.2.1,
+# where a fresh resolve would take 6.2.1, 6.1.0 and 0.2.2.
+zbus = { version = "=6.1.0", default-features = false, features = ["tokio"] }
 # quick-xml 0.42.0 (2026-08-22, MIT) reads GTK's recently-used.xbel; it has no default features.
 quick-xml = "0.42.0"
 # Not pinned: zbus-secret-service-keyring-store 1.0.1, the Secret Service store for SecretStore.
-# It turns on zbus's default features, which bring back the async-io executor, so SecretStore on
-# Linux waits for a store that leaves async-io off.
+# It asks for zbus 5 with its default features, which would put a second zbus, with its own
+# async-io executor, beside 6.1.0, so SecretStore on Linux waits for a store that leaves it off.
 
 # Audio and speech
 cpal = "0.18.2"

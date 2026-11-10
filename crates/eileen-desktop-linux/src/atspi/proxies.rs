@@ -9,8 +9,8 @@
 //! `no_proxy_fills_a_property_cache`); an object's proxy names the app's unique name, never a
 //! well-known one.
 
+use zbus::OwnedObjectPath;
 use zbus::proxy::{CacheProperties, Defaults};
-use zbus::zvariant::OwnedObjectPath;
 
 use super::ObjectRef;
 
@@ -22,8 +22,7 @@ pub(super) type Reference = (String, OwnedObjectPath);
 #[zbus::proxy(
     interface = "org.a11y.Bus",
     default_service = "org.a11y.Bus",
-    default_path = "/org/a11y/bus",
-    gen_blocking = false
+    default_path = "/org/a11y/bus"
 )]
 pub(super) trait Bus {
     /// The accessibility bus's address.
@@ -34,8 +33,7 @@ pub(super) trait Bus {
 #[zbus::proxy(
     interface = "org.a11y.Status",
     default_service = "org.a11y.Bus",
-    default_path = "/org/a11y/bus",
-    gen_blocking = false
+    default_path = "/org/a11y/bus"
 )]
 pub(super) trait Status {
     /// Whether toolkits are asked to put their trees on the accessibility bus.
@@ -44,7 +42,7 @@ pub(super) trait Status {
 }
 
 /// An object's `org.a11y.atspi.Accessible`.
-#[zbus::proxy(interface = "org.a11y.atspi.Accessible", gen_blocking = false)]
+#[zbus::proxy(interface = "org.a11y.atspi.Accessible")]
 pub(super) trait Accessible {
     /// Its name.
     #[zbus(property)]
@@ -65,7 +63,7 @@ pub(super) trait Accessible {
 }
 
 /// An object's `org.a11y.atspi.Text`.
-#[zbus::proxy(interface = "org.a11y.atspi.Text", gen_blocking = false)]
+#[zbus::proxy(interface = "org.a11y.atspi.Text")]
 pub(super) trait Text {
     /// The text from `start_offset` to `end_offset`, in characters.
     fn get_text(&self, start_offset: i32, end_offset: i32) -> zbus::Result<String>;
@@ -77,8 +75,8 @@ where
     P: Defaults + From<zbus::Proxy<'a>>,
 {
     zbus::proxy::Builder::<P>::new(conn)
-        .destination(&object.bus)?
-        .path(&object.path)?
+        .destination(&object.bus)
+        .path(&object.path)
         .cache_properties(CacheProperties::No)
         .build()
         .await

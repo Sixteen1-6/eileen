@@ -7,6 +7,7 @@
 //! messages in order, so a wrong report would have come first.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use eileen_apps_linux::{MprisEvent, MprisSessions, MprisWatch};
@@ -15,8 +16,8 @@ use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::METHOD_TIMEOUT;
 use eileen_dbus_linux::testing::{PrivateBus, next_message, nothing_ready, round_trip};
 use tokio::time::Instant;
+use zbus::Variant;
 use zbus::message::Type;
-use zbus::zvariant::Value;
 use zbus::{MatchRule, MessageStream};
 
 use super::fake::{
@@ -54,12 +55,10 @@ async fn player_reads(service: &zbus::Connection) -> MessageStream {
     let rule = MatchRule::builder()
         .msg_type(Type::MethodCall)
         .interface(PROPERTIES)
-        .unwrap()
         .member("GetAll")
-        .unwrap()
         .path(OBJECT)
-        .unwrap()
-        .build();
+        .build()
+        .unwrap();
     MessageStream::for_match_rule(rule, service, None).await.unwrap()
 }
 
@@ -105,7 +104,7 @@ async fn the_watch_reports_each_player_then_each_change() {
 
     player.get_mut().await.metadata = vec![
         ("mpris:trackid", track_path("/org/eileen/Track/2")),
-        ("xesam:title", Value::from("Song Two")),
+        ("xesam:title", Variant::from("Song Two")),
     ];
     player.get().await.metadata_changed(player.signal_emitter()).await.unwrap();
     let second = MediaState {
@@ -182,7 +181,8 @@ async fn only_a_players_own_signals_read_it_and_an_unchanged_state_reports_nothi
     // seek, which comes after them.
     let first = interface(&full).await;
     first.get_mut().await.status = "Stopped";
-    let nothing: (&str, HashMap<&str, Value<'_>>, Vec<&str>) = (PLAYER, HashMap::new(), Vec::new());
+    let nothing: (&str, HashMap<&str, Variant<'_>>, Vec<&str>) =
+        (PLAYER, HashMap::new(), Vec::new());
     stranger
         .emit_signal(None::<&str>, OBJECT, PROPERTIES, "PropertiesChanged", &nothing)
         .await
@@ -333,13 +333,10 @@ async fn a_name_owner_change_the_bus_did_not_send_is_ignored() {
     let bus = PrivateBus::start();
     let full = serve(&bus, FULL, full_root(), full_player()).await;
     // A peer that serves a player of its own but owns no player's name.
-    let forged = Player::new("Playing", vec![("xesam:title", Value::from("Forged"))], None);
+    let forged = Player::new("Playing", vec![("xesam:title", Variant::from("Forged"))], None);
     let stranger = zbus::connection::Builder::address(bus.address())
-        .unwrap()
         .serve_at(OBJECT, Root { identity: Some("Stranger"), desktop_entry: None })
-        .unwrap()
         .serve_at(OBJECT, forged)
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -483,11 +480,10 @@ async fn a_listing_that_fails_leaves_the_watch_open_and_the_next_signal_lists_ag
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)
         .interface("org.eileen.Test")
-        .unwrap()
         .member("Jam")
-        .unwrap()
-        .build();
-    let jam = MessageStream::for_match_rule(rule, &conn, Some(1)).await.unwrap();
+        .build()
+        .unwrap();
+    let jam = MessageStream::for_match_rule(rule, &conn, Some(NonZeroUsize::MIN)).await.unwrap();
     let jammer = bus.connect().await;
     for _ in 0..2 {
         jammer

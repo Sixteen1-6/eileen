@@ -35,11 +35,9 @@ use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use zbus::match_rule::Builder;
 use zbus::message::Flags;
 use zbus::names::{OwnedUniqueName, UniqueName};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
-use zbus::{Connection, MatchRule, Message};
+use zbus::{Connection, MatchRule, Message, ObjectPath, OwnedObjectPath, OwnedVariant};
 
 use crate::DbusError;
 use crate::stream::{Signals, subscribe};
@@ -65,7 +63,7 @@ pub struct Response {
     /// 0 success, 1 cancelled by the user, 2 ended another way (the module's doc).
     pub code: u32,
     /// The results, by key, as the portal documents them for the call.
-    pub results: HashMap<String, OwnedValue>,
+    pub results: HashMap<String, OwnedVariant>,
 }
 
 /// One portal request: its `handle_token`, its handle, and the subscription to its `Response`.
@@ -111,10 +109,10 @@ impl Request {
         let rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender(PORTAL)
-            .and_then(|rule| rule.path(self.path.clone()))
-            .and_then(|rule| rule.interface(REQUEST))
-            .and_then(|rule| rule.member("Response"))
-            .map(Builder::build);
+            .path(self.path.clone())
+            .interface(REQUEST)
+            .member("Response")
+            .build();
         self.responses = Some(subscribe(&self.conn, rule, WHAT).await?);
         Ok(())
     }
@@ -174,10 +172,10 @@ impl Request {
     /// that has already ended is not there to close. [`close_request`] waits for the answer.
     pub async fn close(&self) {
         let close = async {
-            let message = Message::method_call(self.path.clone(), "Close")?
-                .destination(PORTAL)?
-                .interface(REQUEST)?
-                .with_flags(Flags::NoReplyExpected)?
+            let message = Message::method_call(self.path.clone(), "Close")
+                .destination(PORTAL)
+                .interface(REQUEST)
+                .with_flags(Flags::NO_REPLY_EXPECTED)
                 .build(&())?;
             self.conn.send(&message).await
         };

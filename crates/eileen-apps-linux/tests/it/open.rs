@@ -19,7 +19,7 @@ use rustix::fs::{CWD, Mode as Permissions, OFlags, fcntl_getfl, mkfifoat};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use zbus::message::Header;
-use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue};
+use zbus::{OwnedFd, OwnedObjectPath, OwnedVariant};
 
 /// A deadline no answer on a private bus comes near.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -89,7 +89,7 @@ impl FakePortal {
     async fn answer(
         &self,
         mut call: PortalCall,
-        options: &HashMap<String, OwnedValue>,
+        options: &HashMap<String, OwnedVariant>,
         header: &Header<'_>,
         connection: &zbus::Connection,
     ) -> Result<OwnedObjectPath, PortalError> {
@@ -126,7 +126,7 @@ impl FakePortal {
         &self,
         parent_window: &str,
         uri: &str,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<OwnedObjectPath, PortalError> {
@@ -138,7 +138,7 @@ impl FakePortal {
         &self,
         parent_window: &str,
         fd: OwnedFd,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<OwnedObjectPath, PortalError> {
@@ -151,7 +151,7 @@ impl FakePortal {
         &self,
         parent_window: &str,
         fd: OwnedFd,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<OwnedObjectPath, PortalError> {
@@ -226,7 +226,7 @@ impl OddPortal {
         &self,
         parent_window: &str,
         uri: &str,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
     ) -> String {
         let options = options.into_keys().count();
         format!("{} ({parent_window:?}, {uri}, {options} options)", self.reply)
@@ -257,7 +257,7 @@ async fn respond_to(
     handle: &str,
     code: u32,
 ) {
-    let results: HashMap<String, OwnedValue> = HashMap::new();
+    let results: HashMap<String, OwnedVariant> = HashMap::new();
     connection
         .emit_signal(destination, handle, REQUEST, "Response", &(code, results))
         .await
@@ -384,7 +384,10 @@ struct FakeApp {
 
 #[zbus::interface(name = "org.freedesktop.Application")]
 impl FakeApp {
-    async fn activate(&self, platform_data: HashMap<String, OwnedValue>) -> Result<(), SpawnError> {
+    async fn activate(
+        &self,
+        platform_data: HashMap<String, OwnedVariant>,
+    ) -> Result<(), SpawnError> {
         if self.behaviour == Behaviour::ExitAtStart {
             return Err(SpawnError::ChildExited("exited with status 1".to_owned()));
         }
@@ -397,7 +400,7 @@ impl FakeApp {
         Ok(())
     }
 
-    async fn open(&self, uris: Vec<String>, platform_data: HashMap<String, OwnedValue>) {
+    async fn open(&self, uris: Vec<String>, platform_data: HashMap<String, OwnedVariant>) {
         let platform_data = platform_data.into_keys().collect();
         self.calls.send(AppCall { method: "Open", uris, platform_data }).await.unwrap();
     }

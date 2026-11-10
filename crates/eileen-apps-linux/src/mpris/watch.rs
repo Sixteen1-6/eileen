@@ -17,7 +17,6 @@ use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{
     DbusError, Names, OwnerChange, OwnerChanges, Signals, Stream, drain, owner_changes, subscribe,
 };
-use zbus::match_rule::Builder;
 use zbus::message::Type;
 use zbus::names::OwnedUniqueName;
 use zbus::{Connection, MatchRule, Message};
@@ -239,8 +238,8 @@ impl Players {
 ///
 /// The watch holds signal streams, so the traps that `eileen-dbus-linux`'s stream module gives
 /// for them hold for it: keep polling it, since its full queues would stop the connection
-/// reading, method replies included, and drop it inside the tokio runtime's context. So a
-/// `subscribe` adapter polls the watch in a runtime task and releases it by ending the task.
+/// reading, method replies included, or drop it. So a `subscribe` adapter polls the watch in a
+/// runtime task and releases it by ending the task.
 #[must_use = "a watch reports nothing unless it is polled"]
 pub struct MprisWatch {
     /// The bus the reads go to.
@@ -269,17 +268,17 @@ impl MprisWatch {
         let properties_changed = MatchRule::builder()
             .msg_type(Type::Signal)
             .interface("org.freedesktop.DBus.Properties")
-            .and_then(|rule| rule.member("PropertiesChanged"))
-            .and_then(|rule| rule.path(OBJECT))
-            .and_then(|rule| rule.add_arg(PLAYER))
-            .map(Builder::build);
+            .member("PropertiesChanged")
+            .path(OBJECT)
+            .add_arg(PLAYER)
+            .build();
         let properties_changed = subscribe(conn, properties_changed, SUBSCRIPTION).await?;
         let seeked = MatchRule::builder()
             .msg_type(Type::Signal)
             .interface(PLAYER)
-            .and_then(|rule| rule.member("Seeked"))
-            .and_then(|rule| rule.path(OBJECT))
-            .map(Builder::build);
+            .member("Seeked")
+            .path(OBJECT)
+            .build();
         let seeked = subscribe(conn, seeked, SUBSCRIPTION).await?;
         let mut watch = Self {
             conn: conn.clone(),

@@ -13,7 +13,6 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use zbus::match_rule::Builder;
 use zbus::message::Sequence;
 use zbus::names::{BusName, OwnedBusName, OwnedUniqueName};
 use zbus::{Connection, MatchRule, Message};
@@ -25,8 +24,6 @@ use crate::stream::{Signals, Stream, drain, subscribe};
 const BUS: &str = "org.freedesktop.DBus";
 /// The bus's object.
 const BUS_PATH: &str = "/org/freedesktop/DBus";
-/// The bus's answer to `GetNameOwner` for a name nothing owns.
-const NAME_HAS_NO_OWNER: &str = "org.freedesktop.DBus.Error.NameHasNoOwner";
 /// What [`name_owner`]'s errors name.
 const LOOKUP: &str = "name owner";
 /// What [`owner_changes`]' errors name.
@@ -45,7 +42,9 @@ pub async fn name_owner(
     let reply = conn.call_method(Some(BUS), BUS_PATH, Some(BUS), "GetNameOwner", &name).await;
     let reply = match reply {
         Ok(reply) => reply,
-        Err(zbus::Error::MethodError(error, _, _)) if error.as_str() == NAME_HAS_NO_OWNER => {
+        // The bus's answer for a name nothing owns. zbus reports the error names its `fdo`
+        // module defines, this one among them, as `Error::FDO`.
+        Err(zbus::Error::FDO(error)) if matches!(*error, zbus::fdo::Error::NameHasNoOwner(_)) => {
             return Ok(None);
         }
         Err(error) => return Err(failed(error)),
@@ -109,14 +108,14 @@ pub async fn owner_changes(conn: &Connection, names: Names<'_>) -> Result<OwnerC
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(BUS)
-        .and_then(|rule| rule.path(BUS_PATH))
-        .and_then(|rule| rule.interface(BUS))
-        .and_then(|rule| rule.member("NameOwnerChanged"))
-        .and_then(|rule| match names {
-            Names::Name(name) => rule.arg(0, name),
-            Names::Namespace(namespace) => rule.arg0ns(namespace),
-        })
-        .map(Builder::build);
+        .path(BUS_PATH)
+        .interface(BUS)
+        .member("NameOwnerChanged");
+    let rule = match names {
+        Names::Name(name) => rule.arg(0, name),
+        Names::Namespace(namespace) => rule.arg0ns(namespace),
+    }
+    .build();
     Ok(OwnerChanges { messages: subscribe(conn, rule, SUBSCRIPTION).await? })
 }
 
@@ -158,7 +157,6 @@ mod tests {
     /// A `NameOwnerChanged` from the bus with these arguments.
     fn signal(args: (&str, &str, &str)) -> zbus::Message {
         zbus::Message::signal("/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged")
-            .unwrap()
             .build(&args)
             .unwrap()
     }
@@ -191,7 +189,6 @@ mod tests {
         }
         let other =
             zbus::Message::signal("/org/freedesktop/DBus", "org.freedesktop.DBus", "NameLost")
-                .unwrap()
                 .build(&("org.example.App",))
                 .unwrap();
         assert_eq!(OwnerChange::of(&other), None, "another signal");

@@ -113,7 +113,6 @@ impl PrivateBus {
     /// A connection builder for the bus.
     fn builder(&self) -> zbus::connection::Builder<'static> {
         zbus::connection::Builder::address(self.address.as_str())
-            .expect("the daemon printed a valid address")
     }
 
     /// The daemon's process ID, for a test of the guard.
@@ -216,12 +215,10 @@ pub async fn serve<I: zbus::object_server::Interface>(
 ) -> zbus::Connection {
     bus.builder()
         .name(name)
-        .expect("a valid bus name")
         .serve_at(path, iface)
-        .expect("a valid object path")
         .build()
         .await
-        .expect("the fake service is on the bus")
+        .expect("the fake service is on the bus, at a valid name and path")
 }
 
 /// The next message `stream` brings. Panics when the stream ends or brings a read error.

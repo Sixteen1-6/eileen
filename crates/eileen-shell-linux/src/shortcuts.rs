@@ -43,7 +43,7 @@
 //! Traps:
 //!
 //! - Every signal stream's traps hold (`eileen-dbus-linux`'s crate doc): poll [`ShortcutEvents`]
-//!   steadily or drop it, inside the tokio runtime's context. It takes every signal the portal
+//!   steadily or drop it. It takes every signal the portal
 //!   sends under its object, other portals' broadcasts among them, which keeps the session's
 //!   `Closed` in order with its shortcuts' signals.
 //! - On GNOME, `Activated` and `Deactivated` are not a key's state, and the stream passes each
@@ -63,10 +63,9 @@ use std::time::Duration;
 
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{Request, Signals, Stream, drain, subscribe};
-use zbus::match_rule::Builder;
 use zbus::names::OwnedUniqueName;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, Message};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 use crate::DbusError;
 
@@ -140,7 +139,7 @@ impl ShortcutsSession {
         app_id: &str,
         deadline: Duration,
     ) -> Result<Self, DbusError> {
-        let no_options = HashMap::<&str, Value<'_>>::new();
+        let no_options = HashMap::<&str, Variant<'_>>::new();
         let app_id = app_id.replace('\0', "");
         let registered = (app_id.as_str(), &no_options);
         // Passed over: a portal without the registry, or one that refuses the ID, still serves.
@@ -153,8 +152,8 @@ impl ShortcutsSession {
             // The request's token names the session too: its handle has a prefix of its own.
             let token = request.token();
             let options = HashMap::from([
-                ("handle_token", Value::from(token)),
-                ("session_handle_token", Value::from(token)),
+                ("handle_token", Variant::from(token)),
+                ("session_handle_token", Variant::from(token)),
             ]);
             conn.call_method(
                 Some(PORTAL),
@@ -184,14 +183,14 @@ impl ShortcutsSession {
         &self.handle
     }
 
-    /// The session's events from now on. Call it before [`Self::bind`], and poll and drop the
-    /// stream in the tokio runtime's context.
+    /// The session's events from now on. Call it before [`Self::bind`], in the tokio runtime's
+    /// context, and poll the stream steadily or drop it.
     pub async fn events(&self) -> Result<ShortcutEvents, DbusError> {
         let rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender(PORTAL)
-            .and_then(|rule| rule.path_namespace(PORTAL_PATH))
-            .map(Builder::build);
+            .path_namespace(PORTAL_PATH)
+            .build();
         let signals = subscribe(&self.conn, rule, SIGNALS_WHAT).await?;
         let (portal, session) = (self.portal.clone(), self.handle.clone());
         Ok(ShortcutEvents { signals, portal, session, ended: false })
@@ -212,7 +211,7 @@ impl ShortcutsSession {
         request.responses().await?;
         let reply = {
             let list: Vec<_> = shortcuts.iter().map(Shortcut::to_portal).collect();
-            let options = HashMap::from([("handle_token", Value::from(request.token()))]);
+            let options = HashMap::from([("handle_token", Variant::from(request.token()))]);
             let body = (&self.handle, list, "", options);
             self.conn
                 .call_method(Some(PORTAL), PORTAL_PATH, Some(SHORTCUTS), "BindShortcuts", &body)
@@ -242,11 +241,11 @@ impl ShortcutsSession {
 
 impl Shortcut {
     /// The shortcut as `BindShortcuts` takes it: its ID, and its description and trigger.
-    fn to_portal(&self) -> (&str, HashMap<&'static str, Value<'_>>) {
+    fn to_portal(&self) -> (&str, HashMap<&'static str, Variant<'_>>) {
         let mut options =
-            HashMap::from([("description", Value::from(self.description.replace('\0', "")))]);
+            HashMap::from([("description", Variant::from(self.description.replace('\0', "")))]);
         if let Some(trigger) = &self.trigger {
-            options.insert("preferred_trigger", Value::from(trigger.as_str()));
+            options.insert("preferred_trigger", Variant::from(trigger.as_str()));
         }
         (self.id.as_str(), options)
     }
@@ -323,14 +322,14 @@ fn event_of(
 
 /// An `Activated` or `Deactivated` signal's arguments: the session's handle, the shortcut's ID,
 /// the time and the options.
-type Edge = (OwnedObjectPath, String, u64, HashMap<String, OwnedValue>);
+type Edge = (OwnedObjectPath, String, u64, HashMap<String, OwnedVariant>);
 
 /// A shortcut as the portal describes it: its ID and its details.
-type Described = (String, HashMap<String, OwnedValue>);
+type Described = (String, HashMap<String, OwnedVariant>);
 
 /// The shortcuts in `list` with the trigger each one's details describe.
 fn bound(list: Vec<Described>) -> Vec<BoundShortcut> {
-    let trigger = |details: &HashMap<String, OwnedValue>| {
+    let trigger = |details: &HashMap<String, OwnedVariant>| {
         let described =
             details.get("trigger_description").and_then(|text| <&str>::try_from(text).ok());
         Untrusted::new(described.unwrap_or_default().to_owned())

@@ -30,16 +30,17 @@
 //!   `max_queued` messages ([`QUEUE_SIZE`] for the streams made here, zbus's default of 64 for
 //!   others), then stops reading the connection, so every call on it waits, the method timeout
 //!   then failing each one. Poll every stream steadily, or drop it.
-//! - **Drop a stream inside the tokio runtime's context** (a task, `block_on` or
-//!   `Runtime::enter`): zbus spawns a task there to remove the stream's match rule.
-//!   Dropped on a plain thread, as a `Subscription`'s release closure may be, a stream panics
-//!   in zbus's destructor and leaves its rule on the bus; dropped while a panic unwinds, it
-//!   aborts the process.
+//! - **A dropped stream's rule goes through its connection's runtime.** zbus queues the removal
+//!   of the stream's match rule as a task there, from whichever thread drops the stream, so a
+//!   stream may drop on a plain thread, as a `Subscription`'s release closure may drop it. zbus 5
+//!   spawned that task in the current tokio context and panicked outside one; zbus 6 does not.
+//!   Once the runtime has ended, the task never runs, and the connection has ended with it.
 //! - **A signal sent before its stream exists never reaches it**: subscribe, then call.
 //! - **zbus cannot compare a rule's well-known sender with a signal's unique one.** It checks a
 //!   unique-name sender itself (the bus's own name counts as one), but a rule that names a
 //!   service's well-known name lets through any sender's signal addressed to this connection.
 
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
@@ -55,6 +56,12 @@ pub use zbus::export::futures_core::Stream;
 /// still have.
 pub const QUEUE_SIZE: usize = 256;
 
+/// [`QUEUE_SIZE`] as zbus takes a queue's size, which is never zero.
+const QUEUED: NonZeroUsize = match NonZeroUsize::new(QUEUE_SIZE) {
+    Some(size) => size,
+    None => NonZeroUsize::MIN,
+};
+
 /// The most signals one poll of a stream takes from a subscription before it yields.
 pub const DRAIN_CAP: usize = 64;
 
@@ -68,7 +75,7 @@ pub async fn subscribe(
     what: &'static str,
 ) -> Result<Signals, DbusError> {
     let failed = |error: zbus::Error| DbusError::from_zbus(what, &error);
-    let messages = MessageStream::for_match_rule(rule.map_err(failed)?, conn, Some(QUEUE_SIZE))
+    let messages = MessageStream::for_match_rule(rule.map_err(failed)?, conn, Some(QUEUED))
         .await
         .map_err(failed)?;
     Ok(Signals { messages })

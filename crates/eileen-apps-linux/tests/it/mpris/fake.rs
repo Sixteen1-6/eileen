@@ -10,7 +10,7 @@ use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::testing::PrivateBus;
 use tokio::sync::Notify;
 use zbus::object_server::{Interface, InterfaceRef, SignalEmitter};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 /// The object every player serves.
 pub(super) const OBJECT: &str = "/org/mpris/MediaPlayer2";
@@ -94,7 +94,7 @@ pub(super) struct Gate {
 /// calls it receives.
 pub(super) struct Player {
     pub(super) status: &'static str,
-    pub(super) metadata: Vec<(&'static str, Value<'static>)>,
+    pub(super) metadata: Vec<(&'static str, Variant<'static>)>,
     pub(super) position: Option<i64>,
     pub(super) volume: f64,
     pub(super) can_control: Option<bool>,
@@ -112,7 +112,7 @@ impl Player {
     /// A player in `status` that says it can do everything.
     pub(super) fn new(
         status: &'static str,
-        metadata: Vec<(&'static str, Value<'static>)>,
+        metadata: Vec<(&'static str, Variant<'static>)>,
         position: Option<i64>,
     ) -> Self {
         Self {
@@ -175,7 +175,7 @@ impl Player {
     }
 
     #[zbus(property)]
-    fn metadata(&self) -> HashMap<String, OwnedValue> {
+    fn metadata(&self) -> HashMap<String, OwnedVariant> {
         self.metadata
             .iter()
             .map(|(key, value)| {
@@ -226,8 +226,8 @@ impl Player {
 }
 
 /// A track id, as the specification gives it: an object path.
-pub(super) fn track_path(path: &'static str) -> Value<'static> {
-    Value::ObjectPath(ObjectPath::from_static_str(path).unwrap())
+pub(super) fn track_path(path: &'static str) -> Variant<'static> {
+    Variant::ObjectPath(ObjectPath::from_static_str(path).unwrap())
 }
 
 /// Playing, with full metadata: the track id as an object path, the artists as a list and the
@@ -235,10 +235,10 @@ pub(super) fn track_path(path: &'static str) -> Value<'static> {
 pub(super) fn full_player() -> Player {
     let metadata = vec![
         ("mpris:trackid", track_path(TRACK)),
-        ("xesam:title", Value::from("Song One")),
-        ("xesam:artist", Value::from(vec!["Ada", "Grace"])),
-        ("xesam:album", Value::from("Album")),
-        ("mpris:length", Value::I64(240_000_000)),
+        ("xesam:title", Variant::from("Song One")),
+        ("xesam:artist", Variant::from(vec!["Ada", "Grace"])),
+        ("xesam:album", Variant::from("Album")),
+        ("mpris:length", Variant::I64(240_000_000)),
     ];
     Player::new("Playing", metadata, Some(42_500_000))
 }
@@ -263,7 +263,7 @@ pub(super) fn full_state() -> MediaState {
 /// as an unsigned number. It leaves out `Position`, every `Can` property and both names.
 pub(super) fn odd_player() -> Player {
     let metadata =
-        vec![("xesam:artist", Value::from("Solo")), ("mpris:length", Value::U64(90_000_000))];
+        vec![("xesam:artist", Variant::from("Solo")), ("mpris:length", Variant::U64(90_000_000))];
     Player {
         can_control: None,
         can_play: None,
@@ -295,9 +295,9 @@ pub(super) fn odd_state() -> MediaState {
 /// track id as a string; its only name is its desktop entry.
 pub(super) fn float_player() -> Player {
     let metadata = vec![
-        ("mpris:trackid", Value::from("/org/eileen/Track/9")),
-        ("xesam:title", Value::Value(Box::new(Value::from("Deep")))),
-        ("mpris:length", Value::F64(30_500_000.0)),
+        ("mpris:trackid", Variant::from("/org/eileen/Track/9")),
+        ("xesam:title", Variant::Variant(Box::new(Variant::from("Deep")))),
+        ("mpris:length", Variant::F64(30_500_000.0)),
     ];
     Player::new("Stopped", metadata, Some(0))
 }
@@ -337,26 +337,13 @@ pub(super) async fn serve_with(
     player: Player,
     name_flags: fn(zbus::connection::Builder<'static>) -> zbus::connection::Builder<'static>,
 ) -> zbus::Connection {
-    let builder = zbus::connection::Builder::address(bus.address()).unwrap().name(name).unwrap();
-    name_flags(builder)
-        .serve_at(OBJECT, root)
-        .unwrap()
-        .serve_at(OBJECT, player)
-        .unwrap()
-        .build()
-        .await
-        .unwrap()
+    let builder = zbus::connection::Builder::address(bus.address()).name(name);
+    name_flags(builder).serve_at(OBJECT, root).serve_at(OBJECT, player).build().await.unwrap()
 }
 
 /// A connection that owns `name` and serves nothing.
 pub(super) async fn named(bus: &PrivateBus, name: &'static str) -> zbus::Connection {
-    zbus::connection::Builder::address(bus.address())
-        .unwrap()
-        .name(name)
-        .unwrap()
-        .build()
-        .await
-        .unwrap()
+    zbus::connection::Builder::address(bus.address()).name(name).build().await.unwrap()
 }
 
 /// The fake player a connection serves.

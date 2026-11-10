@@ -46,7 +46,7 @@ use tokio::time::{Instant, timeout_at};
 use zbus::Connection;
 use zbus::names::{OwnedUniqueName, WellKnownName};
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+use zbus::{ObjectPath, OwnedObjectPath};
 
 use self::value::{Playback, Properties, app_name, can, media_state, micros_of};
 pub use self::watch::{MprisEvent, MprisWatch};
@@ -95,8 +95,7 @@ const CANNOT_SEEK: &str = "the player cannot seek";
 /// The `Player` interface's methods that [`MprisSessions::control`] calls.
 #[zbus::proxy(
     interface = "org.mpris.MediaPlayer2.Player",
-    default_path = "/org/mpris/MediaPlayer2",
-    gen_blocking = false
+    default_path = "/org/mpris/MediaPlayer2"
 )]
 trait Player {
     /// Starts or resumes playback.
@@ -239,7 +238,6 @@ impl MprisSessions {
         let failed = |error: zbus::Error| DbusError::from_zbus(PLAYER_CALL, &error);
         let proxy = PlayerProxy::builder(&self.conn)
             .destination(owner)
-            .map_err(failed)?
             .cache_properties(CacheProperties::No)
             .build()
             .await
@@ -441,32 +439,32 @@ mod tests {
     use eileen_contracts::tools::apps::MediaAction;
     use eileen_dbus_linux::DbusError;
     use tokio::time::{Instant, sleep};
-    use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+    use zbus::{ObjectPath, OwnedObjectPath, Variant};
 
     use super::value::Properties;
     use super::{Call, join_all, plan};
 
-    fn player(entries: Vec<(&str, Value<'static>)>) -> Properties {
+    fn player(entries: Vec<(&str, Variant<'static>)>) -> Properties {
         entries
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value.try_into_owned().unwrap()))
             .collect()
     }
 
-    fn track(length_us: i64) -> Value<'static> {
-        Value::from(std::collections::HashMap::from([
+    fn track(length_us: i64) -> Variant<'static> {
+        Variant::from(std::collections::HashMap::from([
             (
                 "mpris:trackid",
-                Value::ObjectPath(ObjectPath::from_static_str("/org/eileen/Track/1").unwrap()),
+                Variant::ObjectPath(ObjectPath::from_static_str("/org/eileen/Track/1").unwrap()),
             ),
-            ("mpris:length", Value::I64(length_us)),
+            ("mpris:length", Variant::I64(length_us)),
         ]))
     }
 
     #[test]
     fn each_action_makes_its_call() {
         let full = player(vec![
-            ("PlaybackStatus", Value::from("Playing")),
+            ("PlaybackStatus", Variant::from("Playing")),
             ("Metadata", track(240_000_000)),
         ]);
         let id = OwnedObjectPath::try_from("/org/eileen/Track/1").unwrap();
@@ -488,13 +486,13 @@ mod tests {
     #[test]
     fn a_toggle_that_cannot_pause_plays() {
         let paused = player(vec![
-            ("PlaybackStatus", Value::from("Paused")),
-            ("CanPause", Value::Bool(false)),
+            ("PlaybackStatus", Variant::from("Paused")),
+            ("CanPause", Variant::Bool(false)),
         ]);
         assert_eq!(plan(&MediaAction::Toggle, &paused).unwrap(), Call::Play, "Play, not PlayPause");
         let playing = player(vec![
-            ("PlaybackStatus", Value::from("Playing")),
-            ("CanPause", Value::Bool(false)),
+            ("PlaybackStatus", Variant::from("Playing")),
+            ("CanPause", Variant::Bool(false)),
         ]);
         assert!(
             matches!(plan(&MediaAction::Toggle, &playing), Err(DbusError::Refused { .. })),
@@ -504,7 +502,7 @@ mod tests {
 
     #[test]
     fn a_seek_without_a_track_id_moves_from_the_position() {
-        let no_track = player(vec![("Position", Value::I64(20_000_000))]);
+        let no_track = player(vec![("Position", Variant::I64(20_000_000))]);
         assert_eq!(
             plan(&MediaAction::Seek { seconds: 50.0 }, &no_track).unwrap(),
             Call::Seek(30_000_000),

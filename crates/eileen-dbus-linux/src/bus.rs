@@ -40,16 +40,12 @@ pub async fn system_bus() -> Result<zbus::Connection, DbusError> {
 
 /// The user's session bus, each method call bounded by `timeout`.
 pub async fn session_bus_within(timeout: Duration) -> Result<zbus::Connection, DbusError> {
-    let builder = zbus::connection::Builder::session()
-        .map_err(|error| DbusError::from_zbus(SESSION, &error))?;
-    build_within(builder, SESSION, timeout).await
+    build_within(zbus::connection::Builder::session(), SESSION, timeout).await
 }
 
 /// The system bus, each method call bounded by `timeout`.
 pub async fn system_bus_within(timeout: Duration) -> Result<zbus::Connection, DbusError> {
-    let builder = zbus::connection::Builder::system()
-        .map_err(|error| DbusError::from_zbus(SYSTEM, &error))?;
-    build_within(builder, SYSTEM, timeout).await
+    build_within(zbus::connection::Builder::system(), SYSTEM, timeout).await
 }
 
 /// The bus at `address`, a D-Bus server address such as `unix:path=/run/user/1000/at-spi/bus`,
@@ -59,8 +55,9 @@ pub async fn system_bus_within(timeout: Duration) -> Result<zbus::Connection, Db
 ///
 /// - Only a Unix socket's address, `unix:path=` or `unix:abstract=`, is followed. Any other is
 ///   [`DbusError::Invalid`] before any connect: zbus would start a program for some
-///   (`unixexec:`, or `ibus:`, which runs `ibus address`) and reach the network for others
-///   (`tcp:`, `nonce-tcp:`), and this crate never starts a process.
+///   (`unixexec:`, or `ibus:`, which runs `ibus address`, once any crate in the build turns on
+///   zbus's feature of that name) and reach the network for others (`tcp:`, `nonce-tcp:`), and
+///   this crate never starts a process.
 /// - A socket where no bus listens is [`DbusError::Unavailable`].
 pub async fn bus_at_within(
     address: &str,
@@ -70,9 +67,7 @@ pub async fn bus_at_within(
     let Some(address) = unix_address(address) else {
         return Err(DbusError::Invalid { what, detail: "not a unix socket's address".to_owned() });
     };
-    let builder = zbus::connection::Builder::address(address)
-        .map_err(|error| DbusError::from_zbus(what, &error))?;
-    build_within(builder, what, timeout).await
+    build_within(zbus::connection::Builder::address(address), what, timeout).await
 }
 
 /// `address`, parsed, when it is a Unix socket's, at a path or an abstract name: the one kind of
@@ -84,7 +79,9 @@ fn unix_address(address: &str) -> Option<zbus::Address> {
 }
 
 /// The connection `builder` makes, each method call bounded by `timeout`; errors name `what`.
-/// The private test bus builds its connections here too, so the tests run this path.
+/// The private test bus builds its connections here too, so the tests run this path. zbus 6's
+/// builder keeps what its constructor could not use (a bus address that does not parse, from
+/// `DBUS_SESSION_BUS_ADDRESS` or the caller) and answers it here, from `build`.
 pub(crate) async fn build_within(
     builder: zbus::connection::Builder<'_>,
     what: &'static str,
@@ -99,7 +96,17 @@ pub(crate) async fn build_within(
 
 #[cfg(test)]
 mod tests {
-    use super::unix_address;
+    use std::time::Duration;
+
+    use super::{build_within, unix_address};
+    use crate::DbusError;
+
+    #[tokio::test]
+    async fn a_builders_error_comes_from_build_and_is_named_as_before() {
+        let builder = zbus::connection::Builder::address("not an address");
+        let error = build_within(builder, "the bus", Duration::from_secs(1)).await.unwrap_err();
+        assert_eq!(error, DbusError::Unavailable { what: "the bus" }, "zbus 6 defers it to build");
+    }
 
     #[test]
     fn only_a_unix_socket_is_an_address_to_follow() {

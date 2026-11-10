@@ -68,16 +68,12 @@ fn logind_lists_the_lock_until_the_request_drops() {
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(LOGIND)
-            .unwrap()
             .path(MANAGER_PATH)
-            .unwrap()
             .interface("org.freedesktop.DBus.Properties")
-            .unwrap()
             .member("PropertiesChanged")
-            .unwrap()
             .arg(0, MANAGER)
-            .unwrap()
-            .build();
+            .build()
+            .unwrap();
         let mut changes = MessageStream::for_match_rule(rule, system, None).await.unwrap();
         // The drop returns once the holder has closed logind's descriptor. logind sees it close
         // in its own time, drops the lock and then says so in the manager's `BlockInhibited`.

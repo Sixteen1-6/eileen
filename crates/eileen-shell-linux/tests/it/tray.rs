@@ -22,8 +22,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, watch};
 use zbus::fdo;
 use zbus::message::Header;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::{MatchRule, Message};
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 use crate::shell_host::{DESKTOP_ENTRY, settings};
 
@@ -50,7 +50,7 @@ const SHORT_DEADLINE: Deadline = Deadline::after(Duration::from_secs(1));
 /// An icon as pixels, `a(iiay)`.
 type Pixmaps = Vec<(i32, i32, Vec<u8>)>;
 /// A node as `GetLayout` sends it, `(ia{sv}av)`.
-type Layout = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
+type Layout = (i32, HashMap<String, OwnedVariant>, Vec<OwnedVariant>);
 
 /// One registration, as the fake watcher saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,7 +123,7 @@ impl FakeWatcher {
 async fn icon_of(conn: &zbus::Connection, service: &str) -> Option<String> {
     let asked = (ITEM, "IconName");
     let get = conn.call_method(Some(service), ITEM_PATH, Some(PROPERTIES), "Get", &asked);
-    let icon: OwnedValue = get.await.ok()?.body().deserialize().ok()?;
+    let icon: OwnedVariant = get.await.ok()?.body().deserialize().ok()?;
     String::try_from(icon).ok()
 }
 
@@ -140,7 +140,7 @@ pub(super) struct Node {
 
 impl Node {
     /// The node `value` holds, `(ia{sv}av)`.
-    fn of(value: OwnedValue) -> Self {
+    fn of(value: OwnedVariant) -> Self {
         let (id, properties, children) = Layout::try_from(value).unwrap();
         let text = |name: &str| properties.get(name).map(|v| String::try_from(v.clone()).unwrap());
         let check = properties.get("toggle-state").map(|v| i32::try_from(v.clone()).unwrap());
@@ -253,7 +253,7 @@ impl Rig {
         path: &str,
         interface: &str,
         name: &str,
-    ) -> OwnedValue {
+    ) -> OwnedVariant {
         let properties = Some(PROPERTIES);
         let asked = (interface, name);
         let get = self.host().call_method(Some(item), path, properties, "Get", &asked);
@@ -264,7 +264,7 @@ impl Rig {
     /// A method's reply from the menu of `item`.
     pub(super) fn menu_call<B>(&self, item: &str, method: &str, body: &B) -> zbus::Result<Message>
     where
-        B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
+        B: zbus::export::serde::Serialize + zbus::DynamicType,
     {
         self.runtime.block_on(self.host().call_method(
             Some(item),
@@ -279,13 +279,13 @@ impl Rig {
     pub(super) fn layout(&self, item: &str, parent: i32, depth: i32) -> (u32, Node) {
         let reply = self.menu_call(item, "GetLayout", &(parent, depth, Vec::<String>::new()));
         let (revision, node): (u32, Layout) = reply.unwrap().body().deserialize().unwrap();
-        let value = zbus::zvariant::Value::from(node);
+        let value = zbus::Variant::from(node);
         (revision, Node::of(value.try_into_owned().unwrap()))
     }
 
     /// Sends the menu of `item` the event `event` on the node `id`.
     pub(super) fn menu_event(&self, item: &str, id: i32, event: &str) -> zbus::Result<()> {
-        let data = OwnedValue::from(0_i32);
+        let data = OwnedVariant::from(0_i32);
         self.menu_call(item, "Event", &(id, event, data, 0_u32)).map(drop)
     }
 
@@ -294,10 +294,10 @@ impl Rig {
         let rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender(item)
-            .and_then(|rule| rule.path(path))
-            .and_then(|rule| rule.interface(interface))
-            .and_then(|rule| rule.member(member))
-            .map(zbus::match_rule::Builder::build);
+            .path(path)
+            .interface(interface)
+            .member(member)
+            .build();
         self.runtime.block_on(subscribe(self.host(), rule, "test signals")).unwrap()
     }
 
@@ -325,6 +325,8 @@ pub(super) fn error_name<T>(result: zbus::Result<T>) -> Option<String> {
     match result {
         Ok(_answer) => None,
         Err(zbus::Error::MethodError(name, _, _)) => Some(name.to_string()),
+        // An error reply whose name zbus's `fdo` module defines, `InvalidArgs` among them.
+        Err(zbus::Error::FDO(error)) => Some(zbus::DBusError::name(error.as_ref()).to_string()),
         Err(error) => panic!("an error reply: {error}"),
     }
 }
@@ -411,7 +413,7 @@ fn a_clicked_item_reaches_the_sink_by_its_id_and_a_stale_one_is_an_id_error() {
     shell.set_tray(TrayState { menu, ..state() }).unwrap();
     let stale = rig.menu_event(&item, quit, "clicked");
     assert_eq!(error_name(stale).as_deref(), Some(INVALID_ARGS), "an item shown no more");
-    let click = |id: i32| (id, "clicked", OwnedValue::from(0_i32), 0_u32);
+    let click = |id: i32| (id, "clicked", OwnedVariant::from(0_i32), 0_u32);
     let group = rig.menu_call(&item, "EventGroup", &(vec![click(mute), click(quit)],));
     let errors: Vec<i32> = group.unwrap().body().deserialize().unwrap();
     assert_eq!(errors, [quit], "the stale id, as an id error");
@@ -437,8 +439,8 @@ fn the_menu_answers_for_its_items_and_never_asks_to_update() {
     let label = vec!["label".to_owned()];
     let labels = |ids: Vec<i32>| -> Vec<(i32, Option<String>)> {
         let reply = rig.menu_call(&item, "GetGroupProperties", &(ids, &label)).unwrap();
-        let groups: Vec<(i32, HashMap<String, OwnedValue>)> = reply.body().deserialize().unwrap();
-        let text = |value: &OwnedValue| String::try_from(value.clone()).unwrap();
+        let groups: Vec<(i32, HashMap<String, OwnedVariant>)> = reply.body().deserialize().unwrap();
+        let text = |value: &OwnedVariant| String::try_from(value.clone()).unwrap();
         groups.into_iter().map(|(id, found)| (id, found.get("label").map(text))).collect()
     };
     assert_eq!(labels(vec![quit, 99]), [(quit, Some("Quit".to_owned()))], "known ids alone");
@@ -446,7 +448,7 @@ fn the_menu_answers_for_its_items_and_never_asks_to_update() {
     assert_eq!(labels(Vec::new()), all, "no ids: the root and every item");
     let property = |id: i32, name: &str| {
         let reply = rig.menu_call(&item, "GetProperty", &(id, name))?;
-        Ok(String::try_from(reply.body().deserialize::<OwnedValue>()?)?)
+        String::try_from(reply.body().deserialize::<OwnedVariant>()?)
     };
     assert_eq!(property(quit, "label").unwrap(), "Quit", "one property");
     assert_eq!(error_name(property(99, "label")).as_deref(), Some(INVALID_ARGS), "unknown item");

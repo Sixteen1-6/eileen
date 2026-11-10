@@ -7,7 +7,6 @@ use std::task::{Context, Poll, Wake, Waker};
 use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, ready_now, round_trip, serve};
 use eileen_dbus_linux::{DRAIN_CAP, DbusError, QUEUE_SIZE, Signals, drain, subscribe};
 use zbus::MatchRule;
-use zbus::match_rule::Builder;
 use zbus::message::Type;
 
 /// The fake service's name.
@@ -27,11 +26,7 @@ impl Ticker {}
 
 /// The rule for the fake's signals named `member`.
 fn rule(member: &str) -> zbus::Result<MatchRule<'_>> {
-    MatchRule::builder()
-        .msg_type(Type::Signal)
-        .interface(INTERFACE)
-        .and_then(|rule| rule.member(member))
-        .map(Builder::build)
+    MatchRule::builder().msg_type(Type::Signal).interface(INTERFACE).member(member).build()
 }
 
 /// Sends the signal `member` with `number` from the fake.
@@ -113,12 +108,31 @@ async fn a_burst_of_queue_size_signals_waits_while_the_stream_is_not_polled() {
 async fn a_rule_that_cannot_be_built_is_invalid_and_named() {
     let bus = PrivateBus::start();
     let client = bus.connect().await;
-    let rule = MatchRule::builder().msg_type(Type::Signal).path("no slash").map(Builder::build);
+    let rule = MatchRule::builder().msg_type(Type::Signal).path("no slash").build();
     let error = subscribe(&client, rule, WHAT).await.unwrap_err();
     assert!(
         matches!(error, DbusError::Invalid { what: WHAT, .. }),
         "the builder's error, named for what the subscription was for: {error:?}"
     );
+}
+
+#[test]
+fn a_stream_dropped_off_its_runtime_leaves_its_connection_working() {
+    let bus = PrivateBus::start();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let (service, client, ticks) = runtime.block_on(ticks(&bus));
+    // On the test's thread, outside the runtime's context: zbus queues the removal of the
+    // stream's match rule on the runtime its connection runs on.
+    drop(ticks);
+    runtime.block_on(async {
+        let mut again = subscribe(&client, rule("Tick"), WHAT).await.unwrap();
+        send(&service, "Tick", 7).await;
+        round_trip(&client, Some(NAME)).await;
+        let tick = ready_now(&mut again).expect("the connection still reads");
+        assert_eq!(number(&tick), 7, "a new subscription to the same rule brings its signal");
+        // The connections and the stream end inside the runtime's context.
+        drop((again, client, service));
+    });
 }
 
 #[tokio::test]

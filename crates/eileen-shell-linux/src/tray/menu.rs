@@ -15,16 +15,16 @@
 use std::collections::{BTreeMap, HashMap};
 
 use eileen_platform::TrayItem;
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 /// The root's id.
 pub(crate) const ROOT: i32 = 0;
 
 /// One node's properties, by name.
-pub(crate) type Properties = BTreeMap<String, Value<'static>>;
+pub(crate) type Properties = BTreeMap<String, Variant<'static>>;
 /// A node as `GetLayout` sends it, `(ia{sv}av)`: its id, its properties and its children, each a
 /// variant that holds a node.
-pub(crate) type Layout = (i32, Properties, Vec<Value<'static>>);
+pub(crate) type Layout = (i32, Properties, Vec<Variant<'static>>);
 
 /// The menu: what it shows and the ids it has given.
 #[derive(Debug)]
@@ -105,7 +105,7 @@ impl Menu {
             // A child is a variant, whose map becomes a `Dict`, which keeps its keys in order too.
             let node = |(id, item): &(i32, TrayItem)| {
                 let properties: HashMap<_, _> = item_properties(item, names).into_iter().collect();
-                Value::from((*id, properties, Vec::<Value<'static>>::new()))
+                Variant::from((*id, properties, Vec::<Variant<'static>>::new()))
             };
             self.items.iter().map(node).collect()
         };
@@ -124,27 +124,27 @@ impl Menu {
 
 /// The root's properties among `names`.
 fn root_properties(names: &[String]) -> Properties {
-    among(vec![("children-display", Value::from("submenu"))], names)
+    among(vec![("children-display", Variant::from("submenu"))], names)
 }
 
 /// `item`'s properties among `names`.
 fn item_properties(item: &TrayItem, names: &[String]) -> Properties {
     let label = item.label.replace('\0', "").replace('_', "__");
     let mut all = vec![
-        ("type", Value::from("standard")),
-        ("label", Value::from(label)),
-        ("enabled", Value::from(true)),
-        ("visible", Value::from(true)),
+        ("type", Variant::from("standard")),
+        ("label", Variant::from(label)),
+        ("enabled", Variant::from(true)),
+        ("visible", Variant::from(true)),
     ];
     if let Some(checked) = item.checked {
-        all.push(("toggle-type", Value::from("checkmark")));
-        all.push(("toggle-state", Value::from(i32::from(checked))));
+        all.push(("toggle-type", Variant::from("checkmark")));
+        all.push(("toggle-state", Variant::from(i32::from(checked))));
     }
     among(all, names)
 }
 
 /// Those of `all` that `names` lists, or all of them when it lists none.
-fn among(all: Vec<(&str, Value<'static>)>, names: &[String]) -> Properties {
+fn among(all: Vec<(&str, Variant<'static>)>, names: &[String]) -> Properties {
     all.into_iter()
         .filter(|(name, _)| names.is_empty() || names.iter().any(|listed| listed == name))
         .map(|(name, value)| (name.to_owned(), value))
@@ -154,7 +154,7 @@ fn among(all: Vec<(&str, Value<'static>)>, names: &[String]) -> Properties {
 #[cfg(test)]
 mod tests {
     use eileen_platform::TrayItem;
-    use zbus::zvariant::{Structure, Value};
+    use zbus::{Structure, Variant};
 
     use super::{Menu, Properties, ROOT};
 
@@ -166,16 +166,18 @@ mod tests {
     /// The text property `name` of `properties`.
     fn text<'a>(properties: &'a Properties, name: &str) -> Option<&'a str> {
         let value = properties.get(name)?;
-        let Value::Str(text) = value else { panic!("{name} is not text: {value:?}") };
+        let Variant::Str(text) = value else { panic!("{name} is not text: {value:?}") };
         Some(text.as_str())
     }
 
     /// The ids of the nodes in `children`, as a layout sends them, each in a variant.
-    fn ids_of(children: &[Value<'static>]) -> Vec<i32> {
-        let id = |child: &Value<'static>| -> i32 {
-            let Value::Structure(node) = child else { panic!("a node is a structure: {child:?}") };
+    fn ids_of(children: &[Variant<'static>]) -> Vec<i32> {
+        let id = |child: &Variant<'static>| -> i32 {
+            let Variant::Structure(node) = child else {
+                panic!("a node is a structure: {child:?}")
+            };
             let fields = Structure::fields(node);
-            let [Value::I32(id), Value::Dict(_), Value::Array(_)] = fields else {
+            let [Variant::I32(id), Variant::Dict(_), Variant::Array(_)] = fields else {
                 panic!("a node is (ia{{sv}}av): {fields:?}")
             };
             *id
@@ -227,14 +229,14 @@ mod tests {
         for (id, state) in [(1, 1), (2, 0)] {
             let properties = menu.properties(id, &[]).unwrap();
             assert_eq!(text(&properties, "toggle-type"), Some("checkmark"), "item {id}");
-            assert_eq!(properties.get("toggle-state"), Some(&Value::I32(state)), "item {id}");
+            assert_eq!(properties.get("toggle-state"), Some(&Variant::I32(state)), "item {id}");
         }
         let plain = menu.properties(3, &[]).unwrap();
         assert_eq!(text(&plain, "toggle-type"), None, "no toggle");
         assert_eq!(plain.get("toggle-state"), None, "no state");
         assert_eq!(text(&plain, "type"), Some("standard"), "a standard item");
-        assert_eq!(plain.get("enabled"), Some(&Value::Bool(true)), "enabled");
-        assert_eq!(plain.get("visible"), Some(&Value::Bool(true)), "visible");
+        assert_eq!(plain.get("enabled"), Some(&Variant::Bool(true)), "enabled");
+        assert_eq!(plain.get("visible"), Some(&Variant::Bool(true)), "visible");
         let names = |id: i32| menu.properties(id, &[]).unwrap().into_keys().collect::<Vec<_>>();
         let toggle = ["enabled", "label", "toggle-state", "toggle-type", "type", "visible"];
         assert_eq!(names(1), toggle, "every property, in their names' order");

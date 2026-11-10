@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use zbus::Connection;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 use super::{Callee, PowerDaemon, Reach};
 use crate::DbusError;
@@ -67,7 +67,7 @@ async fn read_profiles_of(
     let active: String = profiles.property(path, interface, "ActiveProfile").await?;
     // The holds only say who chose the profile; a daemon without a readable list (one older
     // than holds, or a malformed one) leaves battery saver to `ActiveProfile`.
-    let holds: Vec<HashMap<String, OwnedValue>> =
+    let holds: Vec<HashMap<String, OwnedVariant>> =
         profiles.property(path, interface, "ActiveProfileHolds").await.unwrap_or_default();
     let saver_held = holds.iter().any(|hold| {
         hold.get("Profile").and_then(|profile| profile.downcast_ref::<&str>().ok())

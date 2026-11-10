@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | this pull request | `wp10/zbus-6` | The `-linux` crates on zbus 6.1.0, superseding Dependabot's #167; BUILD.md section 4.1's pin and comment follow in an amendment stacked on it |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -175,8 +176,9 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   (any program on the session bus can send dbusmenu an `Event`), so they cannot meet BUILD.md
   sections 2.5 and 2.9's rule for approve, deny and unmute; and `ShellHost` has no way to return
   a press or a tray click to the core on any OS (section 3.4).
-- The AT-SPI2 client (#87): its connect is unbounded, since zbus 5.19 bounds no connect, so a
-  socket that accepts and never answers holds `accessibility_bus` until the caller's deadline;
+- The AT-SPI2 client (#87): its connect is unbounded, since zbus bounds no connect (5.19, and
+  6.1 still), so a socket that accepts and never answers holds `accessibility_bus` until the
+  caller's deadline;
   the first reads of a just-launched app get 800 ms where libatspi allows up to 15 s (the AT-SPI2
   record below); and whether its rule for an error name an app chose (`APPS_OWN_ERROR`) moves into
   `DbusError::from_error_name` for every service, MPRIS players being apps too, is
@@ -196,6 +198,12 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   Linux desktop (it is harmless on the owner's Windows PC, where that binary is empty).
 - `notifications.rs`'s own mapping of the server's error names (`already_gone`) moves into
   `DbusError`'s mappings.
+- zbus 6.1.0 (order 34): BUILD.md section 4.1's `zbus` pin and comment, and the
+  `zbus::Executor::spawn` ban in both `clippy.toml` files and section 4b.2, which names a type
+  zbus 6 no longer has (clippy warns that the path does not resolve), change in the amendment
+  stacked on it. The ban moves to `zbus::Connection::spawn`, public though `#[doc(hidden)]`,
+  which on the tokio backend is a bare `Handle::spawn` with the same reason. The drafts #94,
+  #111, #112 and #116 move to zbus 6 when they next merge `main`.
 - A read-only file system (`EROFS`) is `Io` in both `FileError` and `AutostartError`; if it should
   be `Refused`, both crates change together.
 - The blocking-pool spawn forms: #84's follow-up is an amendment that bans them too, once it
@@ -304,7 +312,17 @@ the spawn.
   method timeout, both against a socket that accepts and never answers and against a server that
   finishes the SASL handshake and never answers `Hello` (#62). So a hung bus holds a bridge job to
   its whole deadline, and the keep-awake holder bounds its connects itself (#85; the record "A
-  job may bound a bus connect" below).
+  job may bound a bus connect" below). zbus 6.1 still bounds none.
+- zbus 6.0 reads an error reply whose name its `fdo` module defines as `Error::FDO`, no longer
+  `Error::MethodError`, which changed three answers without a compile error, each caught by a
+  test: `name_owner`'s `NameHasNoOwner`, the notifier's closed notification and the AT-SPI2 walk's
+  `UnknownMethod` fallback (order 34). zbus 6 also puts its client and server APIs behind the
+  `proxy` and `service` features, connects a Unix socket on tokio's reactor rather than a blocking
+  thread, removes a dropped stream's match rule through its connection's own runtime handle, so a
+  stream dropped outside the runtime's context no longer panics, and builds no connection outside
+  a tokio runtime while its own, `default-rt`, is off. The Secret Service keyring store asks for
+  zbus 5, so beside 6.1.0 it would bring a second zbus with its own async-io runtime rather than
+  turn on the workspace's zbus's default features; `SecretStore` still waits.
 - GNOME's GlobalShortcuts portal is not a key's state: `Activated` repeats while a key is held,
   and no `Deactivated` comes for a key let go after one of its chord's modifiers (LINUX.md section
   3, from #93). Hold-to-talk on GNOME cannot rely on the release.
@@ -411,9 +429,11 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
 
 - Date: 2026-10-22
 - Status: proposed (by the assistant, for the owner to accept, change or strike)
-- Decision: The Linux crates reach the desktop's D-Bus services through `zbus` 5.19.0 (MIT) with
-  its default features off and only `tokio` on, so zbus spawns its tasks on Eileen's tokio
-  runtime. Every client takes its `zbus::Connection` from the caller and never connects by
+- Decision: The Linux crates reach the desktop's D-Bus services through `zbus` (MIT), 5.19.0 and
+  6.1.0 since order 34, with its default features off and only `tokio` on in the workspace's
+  entry, so zbus spawns its tasks on Eileen's tokio runtime; zbus 6's client and server APIs
+  (`proxy`, `service`) are on in the crates that use them, and its `tracing` in
+  `eileen-dbus-linux`. Every client takes its `zbus::Connection` from the caller and never connects by
   itself. Tests serve fake services on a private bus, one `dbus-daemon` per test with no service
   activation, so a fake never meets a real service and CI needs no desktop. One `DbusError`, in
   `eileen-dbus-linux`, has the variants of `eileen-platform`'s `PlatformError` and keeps D-Bus
@@ -567,8 +587,8 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   `src/bus.rs`), and the record "D-Bus through zbus on Eileen's tokio runtime" above, which bounds
   method calls and signal-answered waits only
 - Decision: A bridge job may bound a bus connect, the SASL handshake and the `Hello` call
-  included, by a budget of its own counted from the trait call's start, since zbus 5.19 bounds
-  neither. A connect not done by then is a bus that is there and has not answered:
+  included, by a budget of its own counted from the trait call's start, since zbus bounds
+  neither (5.19, and 6.1 still). A connect not done by then is a bus that is there and has not answered:
   `DbusError::DeadlineExceeded` naming the bus, never `Unavailable`, which stays for a bus that is
   not there. The keep-awake holder in `eileen-shell-linux` bounds its two connects by half the
   call's deadline, and gives the portal's answers half of what is left. Method calls keep their

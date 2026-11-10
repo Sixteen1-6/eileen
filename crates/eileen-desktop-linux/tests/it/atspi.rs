@@ -15,7 +15,7 @@ use eileen_desktop_linux::{
 };
 use eileen_platform::TreeLimits;
 use tokio::time::Instant;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 
 use crate::fake::{
     App, DEFUNCT, FOCUSED, MANAGES_DESCENDANTS, NO_REPLY, NULL, Node, READ_ONLY, ROOT, SHOWING,

@@ -64,7 +64,7 @@ mod profiles;
 
 use eileen_dbus_linux::name_owner;
 use zbus::Connection;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 use crate::DbusError;
 use crate::facts::PowerState;
@@ -332,7 +332,7 @@ impl<'a> Callee<'a> {
         name: &'static str,
     ) -> Result<T, DbusError>
     where
-        T: TryFrom<OwnedValue>,
+        T: TryFrom<OwnedVariant>,
     {
         let (what, to) = (self.daemon.what(), self.to.as_str());
         let reply = self
@@ -340,7 +340,7 @@ impl<'a> Callee<'a> {
             .call_method(Some(to), path, Some(PROPERTIES), "Get", &(interface, name))
             .await
             .map_err(|error| DbusError::from_zbus(what, &error))?;
-        let value: OwnedValue =
+        let value: OwnedVariant =
             reply.body().deserialize().map_err(|error| DbusError::from_zbus(what, &error))?;
         T::try_from(value)
             .map_err(|_| DbusError::Invalid { what, detail: format!("{name} has another type") })

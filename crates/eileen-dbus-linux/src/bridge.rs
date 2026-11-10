@@ -35,22 +35,27 @@ use reply::Outcome;
 /// The deadline of a trait method that takes none: [`METHOD_TIMEOUT`] plus half a second. A job
 /// that makes one call then fails on its connection's own timeout, whose error names the D-Bus
 /// call, before the bridge gives up on the job as a whole, provided connecting was quick.
-/// Connecting has no timeout: zbus 5.19 bounds neither the SASL handshake nor the `Hello` reply
-/// it reads within it, so a bus that accepts and never answers holds the job to this deadline.
+/// Connecting has no timeout: zbus 6.1, as 5.19 before it, bounds neither the SASL handshake nor
+/// the `Hello` reply it reads within it, so a bus that accepts and never answers holds the job to
+/// this deadline.
 pub const DEFAULT_DEADLINE: Deadline =
     Deadline::after(METHOD_TIMEOUT.saturating_add(Duration::from_millis(500)));
 
 /// The thread's name, as logs and dumps show it.
 const THREAD: &str = "eileen-dbus";
-/// The name of the runtime's blocking threads, on which zbus connects a Unix socket.
+/// The name of the runtime's blocking threads, which zbus runs its blocking lookups on.
 const BLOCKING_THREAD: &str = "eileen-dbus-blk";
-/// At most this many blocking threads: one per bus being connected. They are zbus's alone, as
-/// `Bridge::call` tells jobs.
+/// At most this many blocking threads. They are zbus's alone, as `Bridge::call` tells jobs. zbus
+/// 6 connects a Unix socket on tokio's reactor and takes one only for a lookup that may block:
+/// a TCP host's name, a nonce file, a peer's groups (`Connection::peer_creds`). No job asks for
+/// a peer's credentials, and a bus at a Unix socket's address, as a desktop session's and the
+/// system's are, makes no lookup; a session bus at a `tcp:` or `nonce-tcp:` address takes one
+/// to resolve its host or read its nonce file, and later zbus releases may move more here.
 const BLOCKING_THREADS: usize = 2;
 /// How many posted jobs wait for the thread, at most. The thread takes each at once, so the
 /// queue is full only when the thread is stuck.
 const QUEUE: usize = 64;
-/// How long the thread's end waits for a blocking thread still connecting, at most.
+/// How long the thread's end waits for a blocking thread still busy, at most.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 /// What errors name the bridge itself.
 const BRIDGE: &str = "the D-Bus bridge";
@@ -157,13 +162,13 @@ impl Bridge {
     /// needs until the deadline.
     ///
     /// A job answers plain data, never a zbus connection, proxy or stream, which are `Send` but
-    /// belong to the bridge's runtime: dropped by the caller, a stream or a proxy that subscribed
-    /// panics (zbus finds no reactor), and a connection stops working once the bridge has ended.
+    /// belong to the bridge's runtime: their I/O runs there, so each stops working once the
+    /// bridge has ended.
     ///
-    /// A job leaves the runtime's blocking threads to zbus, which connects a Unix socket on one:
-    /// no `tokio::fs` and no `spawn_blocking`. There are two, so two jobs stuck on a hung file
-    /// system would keep every later connect from finishing. A job that must touch files does so
-    /// on a thread of its own (`eileen_stdx::thread::spawn_named`) and awaits its answer.
+    /// A job leaves the runtime's blocking threads to zbus: no `tokio::fs` and no
+    /// `spawn_blocking`. There are two, so two jobs stuck on a hung file system would keep
+    /// whatever zbus runs there from finishing. A job that must touch files does so on a thread of
+    /// its own (`eileen_stdx::thread::spawn_named`) and awaits its answer.
     pub fn call<T, F, Fut>(
         &self,
         call: &'static str,
@@ -304,9 +309,9 @@ fn run(runtime: &Runtime, mut queue: mpsc::Receiver<Job>, session: Source, syste
         }
     }));
     // A watch whose subscription has just dropped may not have run since, so its stream drops
-    // with the set. zbus queues the removal of the stream's match rule on the runtime; outside
-    // its context it panics instead, and tokio, which drops a task's future under
-    // `catch_unwind`, would only print that panic: no test can see this line go missing.
+    // with the set, inside the runtime's context as every stream of the crate's does. zbus 6
+    // queues the removal of the stream's match rule through its connection's runtime handle from
+    // any thread, so this no longer guards a panic, as it did with zbus 5.
     let _context = runtime.enter();
     drop(jobs);
     drop(buses);
@@ -391,10 +396,8 @@ impl Source {
             Self::System => crate::system_bus().await,
             #[cfg(feature = "private-bus")]
             Self::Address(address) => {
-                const WHAT: &str = "the private bus";
-                let builder = zbus::connection::Builder::address(address.as_str())
-                    .map_err(|error| DbusError::from_zbus(WHAT, &error))?;
-                crate::bus::build_within(builder, WHAT, METHOD_TIMEOUT).await
+                let builder = zbus::connection::Builder::address(address.as_str());
+                crate::bus::build_within(builder, "the private bus", METHOD_TIMEOUT).await
             }
         }
     }

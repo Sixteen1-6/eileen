@@ -75,7 +75,9 @@ pub enum DbusError {
 impl DbusError {
     /// What a failed call to `what` means. Only error names and kinds are kept: a service's
     /// message can carry anything. A connection's method timeout, which zbus reports as an I/O
-    /// error of kind `TimedOut`, is [`DbusError::DeadlineExceeded`].
+    /// error of kind `TimedOut`, is [`DbusError::DeadlineExceeded`]. A value or a name that does
+    /// not decode, which zbus 6 reports in its own variants rather than wrapped, is
+    /// [`DbusError::Invalid`].
     #[must_use]
     pub fn from_zbus(what: &'static str, error: &zbus::Error) -> Self {
         match error {
@@ -83,6 +85,7 @@ impl DbusError {
             zbus::Error::FDO(fdo) => {
                 Self::from_error_name(what, zbus::DBusError::name(fdo.as_ref()).as_str())
             }
+            zbus::Error::DBus(dbus) => Self::from_error_name(what, dbus.name().as_str()),
             zbus::Error::InputOutput(io) if io.kind() == std::io::ErrorKind::TimedOut => {
                 Self::DeadlineExceeded { call: what }
             }
@@ -92,8 +95,18 @@ impl DbusError {
             zbus::Error::InterfaceNotFound
             | zbus::Error::InvalidField
             | zbus::Error::ExcessData
-            | zbus::Error::Variant(_)
-            | zbus::Error::Names(_)
+            | zbus::Error::IncorrectType
+            | zbus::Error::Utf8(_)
+            | zbus::Error::PaddingNot0(_)
+            | zbus::Error::UnknownFd
+            | zbus::Error::SignatureMismatch(..)
+            | zbus::Error::OutOfBounds
+            | zbus::Error::MaxDepthExceeded(_)
+            | zbus::Error::SignatureParse(_)
+            | zbus::Error::EmptyStructure
+            | zbus::Error::InvalidObjectPath
+            | zbus::Error::InvalidName(_)
+            | zbus::Error::InvalidNameConversion { .. }
             | zbus::Error::IncorrectEndian
             | zbus::Error::InvalidReply
             | zbus::Error::MissingField
@@ -293,9 +306,42 @@ mod tests {
         let error = zbus::Error::MethodError(
             "org.example.Custom.Failed".try_into().unwrap(),
             Some("/home/someone/secret".to_owned()),
-            zbus::Message::method_call("/", "Get").unwrap().build(&()).unwrap(),
+            zbus::Message::method_call("/", "Get").build(&()).unwrap(),
         );
         let mapped = DbusError::from_zbus("the call", &error);
         assert!(!mapped.to_string().contains("someone"), "no service text: {mapped}");
+    }
+
+    #[test]
+    fn an_error_zbus_knows_by_name_maps_by_that_name_and_drops_its_message() {
+        let secret = || "/home/someone/secret".to_owned();
+        let unknown = zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown(secret())));
+        assert_eq!(
+            DbusError::from_zbus("the call", &unknown),
+            DbusError::Unavailable { what: "the call" },
+            "a reply zbus 6 reads as one of its fdo errors, not as a MethodError"
+        );
+        let denied = zbus::Error::DBus(Arc::new(zbus::fdo::Error::AccessDenied(secret())));
+        assert_eq!(
+            DbusError::from_zbus("the call", &denied),
+            DbusError::Refused { what: "the call", reason: "not authorized" },
+            "a D-Bus error of any other type, by its name"
+        );
+    }
+
+    #[test]
+    fn a_value_or_name_that_does_not_decode_is_invalid() {
+        for error in [
+            zbus::Error::IncorrectType,
+            zbus::Error::InvalidObjectPath,
+            zbus::Error::InvalidName("a unique name"),
+            zbus::Error::OutOfBounds,
+        ] {
+            let mapped = DbusError::from_zbus("the call", &error);
+            assert!(
+                matches!(mapped, DbusError::Invalid { what: "the call", .. }),
+                "{error}: {mapped:?}"
+            );
+        }
     }
 }

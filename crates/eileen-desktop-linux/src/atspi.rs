@@ -28,7 +28,7 @@ use tokio::time::Instant;
 use zbus::Connection;
 use zbus::names::OwnedUniqueName;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+use zbus::{ObjectPath, OwnedObjectPath};
 
 pub use self::bus::{accessibility_bus, toolkit_accessibility};
 pub use self::kinds::{Interfaces, Role, State, StateSet};
@@ -51,8 +51,6 @@ const REGISTRY: &str = "org.a11y.atspi.Registry";
 const ROOT: &str = "/org/a11y/atspi/accessible/root";
 /// The null reference's path, which names no object.
 const NULL: &str = "/org/a11y/atspi/null";
-/// The error an object answers for a method it does not have.
-const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
 /// The most characters of a name kept.
 const NAME_CHARS: usize = 1_000;
 
@@ -136,8 +134,7 @@ impl Atspi {
         let failed = |error: zbus::Error| failure(REGISTRY_CALL, &error);
         let registry = AccessibleProxy::builder(&self.conn)
             .destination(REGISTRY)
-            .and_then(|builder| builder.path(ROOT))
-            .map_err(failed)?
+            .path(ROOT)
             .cache_properties(CacheProperties::No)
             .build()
             .await
@@ -256,9 +253,11 @@ fn references(children: &[Reference]) -> Vec<ObjectRef> {
     children.iter().filter_map(|(bus, path)| ObjectRef::new(bus, path)).collect()
 }
 
-/// Whether `error` is an object's answer for a method it does not have.
+/// Whether `error` is an object's answer for a method it does not have,
+/// `org.freedesktop.DBus.Error.UnknownMethod`. zbus reads a reply whose name its `fdo` module
+/// defines, as this one, as `Error::FDO`.
 fn unknown_method(error: &zbus::Error) -> bool {
-    matches!(error, zbus::Error::MethodError(name, ..) if name.as_str() == UNKNOWN_METHOD)
+    matches!(error, zbus::Error::FDO(fdo) if matches!(**fdo, zbus::fdo::Error::UnknownMethod(_)))
 }
 
 /// What a failed call on the accessibility bus means: [`DbusError::from_zbus`]'s answer, without
@@ -267,7 +266,9 @@ fn unknown_method(error: &zbus::Error) -> bool {
 /// process's own text; the detail says only where it came from.
 fn failure(what: &'static str, error: &zbus::Error) -> DbusError {
     let failure = DbusError::from_zbus(what, error);
-    let named_by_callee = matches!(error, zbus::Error::MethodError(..));
+    // An error reply: zbus reads one whose name its `fdo` module defines as `Error::FDO`, and
+    // any other as `Error::MethodError`.
+    let named_by_callee = matches!(error, zbus::Error::MethodError(..) | zbus::Error::FDO(_));
     if named_by_callee && matches!(failure, DbusError::Invalid { .. }) {
         return DbusError::Invalid { what, detail: APPS_OWN_ERROR.to_owned() };
     }

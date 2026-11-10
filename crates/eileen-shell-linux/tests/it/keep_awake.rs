@@ -17,7 +17,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use zbus::message::Header;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 /// The reason the tests give.
 const WHY: &str = "An armed test run is in progress";
@@ -80,7 +80,7 @@ impl FakeManager {
         who: &str,
         why: &str,
         mode: &str,
-    ) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
+    ) -> zbus::fdo::Result<zbus::OwnedFd> {
         let call = (what.to_owned(), who.to_owned(), why.to_owned(), mode.to_owned());
         self.calls.lock().unwrap().push(call);
         if self.refuse {
@@ -242,7 +242,7 @@ impl FakePortal {
         &self,
         window: &str,
         flags: u32,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
     ) -> Result<OwnedObjectPath, PortalError> {
@@ -361,7 +361,7 @@ async fn respond_to(
     request: &OwnedObjectPath,
     code: u32,
 ) {
-    let results: HashMap<String, OwnedValue> = HashMap::new();
+    let results: HashMap<String, OwnedVariant> = HashMap::new();
     connection
         .emit_signal(destination, request, REQUEST, "Response", &(code, results))
         .await

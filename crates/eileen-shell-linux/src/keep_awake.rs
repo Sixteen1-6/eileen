@@ -103,7 +103,7 @@ use std::time::Duration;
 
 use eileen_dbus_linux::{Request, close_request};
 use tokio::time::Instant;
-use zbus::zvariant::{self, OwnedObjectPath};
+use zbus::{OwnedObjectPath, Variant};
 
 use crate::DbusError;
 
@@ -142,13 +142,7 @@ const BACKEND_FAILED: DbusError = DbusError::Refused { what: PORTAL, reason: "it
 )]
 trait LoginManager {
     /// A lock on `what` that lasts while the returned descriptor is open.
-    fn inhibit(
-        &self,
-        what: &str,
-        who: &str,
-        why: &str,
-        mode: &str,
-    ) -> zbus::Result<zvariant::OwnedFd>;
+    fn inhibit(&self, what: &str, who: &str, why: &str, mode: &str) -> zbus::Result<zbus::OwnedFd>;
 }
 
 /// GNOME's session manager (`org.gnome.SessionManager`), for its inhibitors.
@@ -386,8 +380,8 @@ async fn portal_request(
     request.responses().await?;
     let reply = {
         let options = HashMap::from([
-            ("handle_token", zvariant::Value::from(request.token())),
-            ("reason", zvariant::Value::from(why)),
+            ("handle_token", Variant::from(request.token())),
+            ("reason", Variant::from(why)),
         ]);
         let body = ("", flags, options);
         session

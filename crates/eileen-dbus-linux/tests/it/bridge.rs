@@ -21,7 +21,6 @@ use eileen_platform::{Deadline, PlatformError, Subscription};
 use eileen_stdx::clock::{self, Clock};
 use tokio::sync::{mpsc, oneshot};
 use zbus::MatchRule;
-use zbus::match_rule::Builder;
 use zbus::message::Type;
 
 /// The fake service's name.
@@ -118,11 +117,8 @@ async fn bus_id(bus: &zbus::Connection) -> Result<String, PlatformError> {
 fn watch_ticks(bridge: &Bridge) -> (Subscription, mpsc::Receiver<u32>) {
     let (sink, ticks) = mpsc::channel(8);
     let open = |buses: Buses| async move {
-        let rule = MatchRule::builder()
-            .msg_type(Type::Signal)
-            .interface(INTERFACE)
-            .and_then(|rule| rule.member("Tick"))
-            .map(Builder::build);
+        let rule =
+            MatchRule::builder().msg_type(Type::Signal).interface(INTERFACE).member("Tick").build();
         let bus = buses.session().await?;
         Ok(subscribe(&bus, rule, "the ticks").await?)
     };
@@ -537,4 +533,36 @@ fn a_call_or_watch_made_on_the_bridge_thread_is_refused_at_once() {
         matches!(watch, Some(PlatformError::Refused { what: "the nested watch", .. })),
         "not waited out: {watch:?}"
     );
+}
+
+#[test]
+fn a_bus_connects_while_the_blocking_threads_are_taken() {
+    let bus = PrivateBus::start();
+    let bridge = Bridge::on_private_bus(&bus).unwrap();
+    let _taken = take_blocking_threads(&bridge);
+    let id = bridge.call("connect", DEFAULT_DEADLINE, |buses| async move {
+        bus_id(&buses.session().await?).await
+    });
+    assert!(id.is_ok(), "zbus connects a Unix socket on tokio's reactor, not a blocking thread");
+}
+
+/// Takes the bridge's two blocking threads (`BLOCKING_THREADS`), as two jobs stuck on a hung
+/// file system would, until the returned senders drop: each job starts a blocking task that
+/// holds its thread until released, and answers once it runs.
+fn take_blocking_threads(bridge: &Bridge) -> Vec<oneshot::Sender<()>> {
+    const TAKE: &str = "taking a blocking thread";
+    let take = |_n| {
+        let (release, released) = oneshot::channel::<()>();
+        let held = bridge.call(TAKE, DEFAULT_DEADLINE, move |_buses| async move {
+            let (running, runs) = oneshot::channel();
+            let _held = tokio::runtime::Handle::current().spawn_blocking(move || {
+                let _ignored = running.send(());
+                released.blocking_recv()
+            });
+            runs.await.map_err(|_ended| PlatformError::Io { what: TAKE, detail: String::new() })
+        });
+        assert_eq!(held, Ok(()), "a blocking thread taken");
+        release
+    };
+    (0..2).map(take).collect()
 }

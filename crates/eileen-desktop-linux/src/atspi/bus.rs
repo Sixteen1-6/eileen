@@ -4,7 +4,8 @@
 //! The launcher is a process on the session bus like any other, so its answer is checked before
 //! it is followed: `eileen_dbus_linux::bus_at_within` follows only a Unix socket's address, at a
 //! path or an abstract name, where zbus would also follow one that starts a program (`unixexec:`,
-//! or `ibus:`, which runs `ibus address`) or reaches the network (`tcp:`).
+//! or `ibus:`, which runs `ibus address`, once any crate in the build turns on zbus's feature of
+//! that name) or reaches the network (`tcp:`).
 
 use std::time::Duration;
 
