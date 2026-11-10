@@ -48,7 +48,7 @@
 //!   private bus, which serves its calls in order, checks the caller's `RLIMIT_RTTIME` and keeps
 //!   rtkit 0.14's record of each thread, and [`LinuxAudioEndpoints`] through
 //!   `Bridge::on_private_bus`, whose policy read a hidden seam sets. Live tests read this thread's
-//!   policy and an ended thread's (an error); WSL2 has no `RealtimeKit`: a desktop checks `chrt -p`.
+//!   policy and an ended thread's (an error). WSL2 has no `RealtimeKit`; desktops check `chrt -p`.
 //!
 //! # Traps
 //!
