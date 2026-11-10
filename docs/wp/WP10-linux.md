@@ -44,6 +44,18 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 
 ## Progress
 
+Each pull request records itself here (AGENTS.md, "Making a change", rule 9). The table holds
+what merged through 2026-10-27, in merge order, with each squash commit, and is closed: nothing
+is added to it. Since then a pull request adds one line of its own to the list under the table,
+at its end, and edits no other pull request's line. The line gives the branch, the number once
+the pull request has one, its type, and what it brings, written as what `main` holds once it
+merges, so the line stays true when it merges and no later edit is needed; the merge date and
+commit are git's (`git log --first-parent origin/main`). When two pull requests add their lines
+at once, the second to merge keeps both in the conflict. A pull request that narrows or closes a
+bullet under "Still open", or adds to Surprises, Findings for other packages or Decisions to
+record, edits only those lines. A record pull request, such as `wp10/record-wave-6`, brings the
+rest of this file up to date with `main`: the open pull requests, the plans, the measurements.
+
 | Order | Pull request | Branch | State |
 |---|---|---|---|
 | 1 | #26 | `Ubuntu-Compatible` | Merged on 2026-10-22 as e4aff64: `docs/LINUX.md`, `eileen-shell-linux` and `eileen-apps-linux` |
@@ -84,38 +96,72 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 35 | #118 | `wp10/supervisor-stderr-forwarding` | Merged on 2026-10-27 as 71b8dad: amendment to WP0's `eileen-supervisor` and `eileen-cli`, a child's stderr forwarded from `spawn` on every OS, with `ChildSpec::raw_stderr` for a caller that wants the raw pipe (SU5, Findings for other packages) |
 | 36 | #121 | `wp10/desktop-lane-apt` | Merged on 2026-10-27 as 56ea109: amendment of section 4.6, the desktop lane's packages from an Actions cache keyed by the runner image and the package list, and its install step within 10 minutes of its own |
 | 37 | #123, #122, #124 | `wp10/rtkit-fallback`, `wp10/tray-watcher-bounds`, `wp10/mpris-parallel-reads` | Merged on 2026-10-27 as 2fda2e9, fb82ae3 and 7f493bf: the RealtimeKit fallback never lowers a thread's nice level, and a request whose connection failed is reverted over a new one (#90's follow-ups); the tray answers within its deadline when the watcher stalls, and asks a watcher that refused again (#110's); MPRIS players are read concurrently in the watch, each within one bound (#65's and #68's) |
-| 38 | this pull request | `wp10/record-wave-6` | This file and LINUX.md brought up to date with `main` at 7f493bf |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
-Open on 2026-10-28, with what each waits for:
+Since 2026-10-28, one line per pull request, each added by the pull request itself:
 
-- #94 (`wp10/desktop-grounding`, draft, based on `main` since #87 merged): `Grounding` on the
-  AT-SPI2 client, as `LinuxDesktop`. It stays a draft for its own two `lint-repo` check 14
-  problems (its test starts a copy of the test binary with `Command::new`), which wait for the
-  owner's answer on #113.
+- `wp10/record-wave-6` (docs): this file and LINUX.md brought up to date with `main` at 18f71fd:
+  #91, #118 and #121 to #124 recorded, what decision D86 asks of WP10 planned, the open pull
+  requests' status, and this list in place of new table rows.
+
+Open on 2026-11-10, with what each waits for:
+
+- The owner's #144 (`amend/linux-desktop-toolchain`, draft, into `main`, which it now conflicts
+  with) amends WP10's `linux-desktop.yml`: the lane's `session` job gets the step
+  `ci.yml`'s `logic-linux` has, which keeps only the pinned toolchain before rust-cache so that
+  the cache key does not follow the runner image, and xtask's workflow tests lose their one
+  exception, `WITHOUT_THE_TOOLCHAIN_STEP` (the lane's `session` job, on `main`). It asks for
+  WP10's review, still pending. Meanwhile the lane's rust-cache step finds no cache in its
+  scheduled runs on `main` (42364908679 of 2026-11-07 to 42809906168 of 2026-11-10).
+- Dependabot's #167 (`dependabot/cargo/zbus-6.0.0`, into `main`) moves `zbus` from 5.19.0 to 6.x
+  in the root manifest. Its `logic-linux` fails to compile `eileen-dbus-linux` (run 42405365074:
+  `zbus::object_server` is not found from `testing.rs`, and `portal.rs` fails too). BUILD.md
+  section 4.1 pins 5.19.0, so a move to 6 needs that section's amendment and a port of the
+  `-linux` crates; whether and when is the owner's call.
+- The owner's #191 (`wp0/machine-contracts`, draft, into `main`): the `MachineProbe` trait
+  (`facts` with the caller's `Deadline`, `load` and `watch`), `FakeMachineProbe` and the
+  `machine` contracts, which WP10's Linux probe builds on ("Not started yet" below). It also
+  gives `AudioEndpoints` `endpoints` and `watch_endpoints` with default bodies that answer
+  `Unavailable`, so `eileen-audio-linux` needs no edit.
+- #94 (`wp10/desktop-grounding`, draft, into `main`): `Grounding` on the AT-SPI2 client, as
+  `LinuxDesktop`. It stays a draft for its own two `lint-repo` check 14 problems (its test starts
+  a copy of the test binary with `Command::new`), which wait for the owner's answer on #113.
 - #112 (`wp10/desktop-automation`, draft, on #94): `Automation` on the same client. It waits for
   #94.
-- #111 (`wp10/shell-secret-service`, draft): WP10's proposal for the owner, `SecretStore` over the
-  Secret Service with a client of Eileen's own, a `plain` session and no prompts. It waits for
-  the owner's answer.
-- #113 (`wp10/private-bus-spawn-route`, draft): WP10's proposal for the owner, an amendment of
-  section 3.1 that lets `eileen-dbus-linux` depend on `eileen-supervisor` under its
-  `private-bus` feature, so the private test bus starts `dbus-daemon` through
-  `eileen_supervisor::spawn`. It waits for the owner's answer; a WP10 pull request then clears
-  the two check 14 problems at `crates/eileen-dbus-linux/src/testing.rs`.
-- The owner's #77 (`wp0/platform-file-deadlines`) gives the file-reading trait methods the
-  caller's `Deadline`, as BUILD.md section 3.4 says since #76, and WP10's #116
-  (`wp10/platform-deadlines-linux`, ready, based on #77) moves `LinuxApps`, `LinuxRecent` and the
-  Windows stubs to its signatures, so #77 compiles once merged with `main`. When they merge is
-  the owner's call.
-- The owner's #119 (`wp11/gaze-proposal`, draft) proposes `docs/GAZE.md`, a work package WP11
-  for gaze through a hardware eye tracker, and WP10's #120 (`wp10/gaze-webcam`, ready, based on
-  #119) folds a webcam route into it, crediting Aaron's prototype. Both change only
+- #111 (`wp10/shell-secret-service`, draft, into `main`, which it now conflicts with): WP10's
+  proposal for the owner, `SecretStore` over the Secret Service with a client of Eileen's own, a
+  `plain` session and no prompts. It waits for the owner's answer.
+- #113 (`wp10/private-bus-spawn-route`, draft, into `main`, which it now conflicts with): WP10's
+  proposal for the owner, an amendment of section 3.1 that lets `eileen-dbus-linux` depend on
+  `eileen-supervisor` under its `private-bus` feature, so the private test bus starts
+  `dbus-daemon` through `eileen_supervisor::spawn`. It waits for the owner's answer; a WP10 pull
+  request then clears the two check 14 problems at `crates/eileen-dbus-linux/src/testing.rs`.
+- The owner's #77 (`wp0/platform-file-deadlines`, into `main`, which it now conflicts with) gives
+  the file-reading trait methods the caller's `Deadline`, as BUILD.md section 3.4 says since #76,
+  and WP10's #116 (`wp10/platform-deadlines-linux`, ready, into #77) moves `LinuxApps`,
+  `LinuxRecent` and the Windows stubs to its signatures, so #77 compiles once merged with `main`.
+  When they merge is the owner's call.
+- The owner's #119 (`wp11/gaze-proposal`, draft, into `main`) proposes `docs/GAZE.md`, a work
+  package WP11 for gaze through a hardware eye tracker, and WP10's #120 (`wp10/gaze-webcam`,
+  ready, into #119) folds a webcam route into it, crediting Aaron's prototype. Both change only
   `docs/GAZE.md`, and what becomes of them is the owner's call.
-- This pull request.
 
 Planned, not yet opened:
 
+- What decision D86 gives WP10, each after the WP2 pull request it builds on, in BUILD.md section
+  6.4's W1 order, none of which is on `main` yet:
+  - the Linux forms of `eileen-supervisor`'s `ipc` module, the pipes as Unix sockets and the
+    caller checks of LINUX.md section 5, after `wp2/supervisor-pipes` and
+    `wp2/supervisor-callers` (items 3 and 4) give the module its types. Until then every `ipc`
+    call on Linux answers `Unsupported`, so no Linux build accepts a caller it could not check
+    (BUILD.md section 2.12), and `wp2/dispatcher`'s tests through a real pipe are Windows-only
+    (item 10). The plan for them is a pull request of its own;
+  - `PathProbe` in `eileen-shell-linux` (BUILD.md section 3.4), after `wp2/path-probe-trait`
+    (item 5) adds the trait and its fake. Until then a path that needs a probe is `Unknown` on
+    Linux (D86);
+  - `LocalTime` from `/etc/localtime`, after `wp2/shell-local-time` (item 6) wires Windows' zone
+    reader into `CoreConfig.local_time`. Until then Linux logs a warning at start and uses UTC
+    (BUILD.md section 3.3.3).
 - After the owner's answer on #113: `PrivateBus` starting its `dbus-daemon` through
   `eileen_supervisor::spawn`, with tests that the daemon dies on drop and on panic.
 - The rest of PL7, an amendment to WP0's `eileen-stdx`: `spawn_named` states Linux's 15-byte
@@ -206,7 +252,9 @@ and #122, #123 and #124 fixed what this list named for the tray, RealtimeKit and
   Linux desktop (it is harmless on the owner's Windows PC, where that binary is empty). Since
   #121 the first run on a new runner image misses the package cache and downloads from the
   mirror, so on a slow mirror that run fails at the install step's 10-minute limit, and the next
-  run tries again.
+  run tries again: so it went on 2026-11-06 (run 42210445439, the first on image
+  20261101.186.1), and the next night's run saved the key. Its rust-cache step finds no cache on
+  `main` (the open #144 above amends that step's key).
 - `notifications.rs`'s own mapping of the server's error names (`already_gone`) moves into
   `DbusError`'s mappings.
 - A read-only file system (`EROFS`) is `Io` in both `FileError` and `AutostartError`; if it should
@@ -231,8 +279,10 @@ and #122, #123 and #124 fixed what this list named for the tray, RealtimeKit and
 
 Not started yet:
 
-- `MachineProbe` on Linux, which waits for WP0 phase B's `wp0/machine-contracts`; until then
-  `LinuxMachineProbe`'s readers mirror the contract shapes;
+- `MachineProbe` on Linux, which waits for WP0 phase B's `wp0/machine-contracts`, the owner's
+  draft #191; until then `LinuxMachineProbe`'s readers mirror the contract shapes;
+- the Linux forms of the `ipc` module, `PathProbe` and `LocalTime` from `/etc/localtime`, which
+  wait for WP2's pull requests (Planned above);
 - launching apps without D-Bus activation, which waits for WP0's `eileen_supervisor::user_launch`,
   phase B, which is not on `main` (the Linux process model it starts children with is, #106;
   LINUX.md sections 5 and 7);
@@ -389,8 +439,11 @@ the spawn.
 ## Decisions to record
 
 Thirteen proposed decision records for the owner, in the shape of [DECISIONS.md](../DECISIONS.md),
-whose last record is D80, from WP10's #114 and accepted on `main` under the owner's standing rule,
-so the next free number is D81. They have no numbers, because the owner assigns them when they join that log.
+whose last record on `main` is D86 (WP10's own D80 came from #114, accepted under the owner's
+standing rule); the owner's open #169 adds two more, numbered D86 and D87 on its branch, which
+conflicts with `main`. They have no numbers here: a record of these takes the next number that
+neither `main` nor an open pull request's record holds when the pull request that adds it to
+that log is published.
 The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
 `docs/PLAYBOOK.md` or says why not (BUILD.md section 4b.3, check 30).
 
@@ -741,6 +794,11 @@ Measured so far, each where it is recorded:
 - `main` at 7f493bf, after #124: every job of CI run 40564307456 passes (2026-10-27),
   `logic-linux` with 1078 of 1078 tests and the 9 `linux_session` tests skipped, on the
   `ubuntu-24.04` image, version 20261012.334.1.
+- `main` at 18f71fd, after WP0 to WP4's 57 commits: CI run 42405160476 (2026-11-07) ran
+  `logic-linux` on the `ubuntu-26.04` image, version 20261101.186.1, where `main`'s run of
+  2026-11-02 (41375489424) still ran on `ubuntu-24.04`: 1807 of 1807 tests passed, and the ci
+  profile skipped 10, the 9 `linux_session` tests among them. Its `windows-test` failed one test,
+  WP1's `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model`.
 - #83's `session` job, on the hosted `ubuntu-26.04` runner: its four session tests pass against
   the real services in the headless session, at e24cb4a and at its last head 8aca526 (run
   40404308881 of 2026-10-26, on the `ubuntu-26.04` image, version 20261012.163.1: Ubuntu 26.04.1
@@ -755,7 +813,13 @@ Measured so far, each where it is recorded:
   cancelled at the job's 30 minutes while apt downloaded the session's packages at 45 to
   50 kB/s (#121). Run 40668602200 at 7f493bf (2026-10-28), the first to pass, missed the package
   cache, installed from the mirror, saved the key, and passed 520 of 520 integration tests and
-  9 of 9 `linux_session` tests in about 2.5 minutes.
+  9 of 9 `linux_session` tests in about 2.5 minutes. Every scheduled run since has passed but
+  one: run 42210445439 at 7209390 (2026-11-06), the first on image 20261101.186.1, missed the
+  cache and ended at the install step's 10 minutes, and run 42364908679 (2026-11-07) installed
+  from the mirror and saved that image's key. At 18f71fd, runs 42472734272 (2026-11-08),
+  42614231101 (2026-11-09) and 42809906168 (2026-11-10) restored the packages from the cache
+  and passed 520 of 520 integration tests and 9 of 9 `linux_session` tests; the last took 4.5
+  minutes, with no build cache found.
 - #121's runs on `wp10/desktop-lane-apt` at 3ca7c67: a cold install from the mirror took 59 s
   and 63 s, and a warm one from the cache, with no download, 42 s (run 40526956903); one manual
   run on a slow mirror ended at the install step's 10 minutes (40524629042).
@@ -788,18 +852,19 @@ Measured so far, each where it is recorded:
 
 Not yet verified:
 
-- **A real Ubuntu desktop.** WSL2 has no GNOME, no portals and no PipeWire by default, and WSLg's
+- A real Ubuntu desktop. WSL2 has no GNOME, no portals and no PipeWire by default, and WSLg's
   compositor and audio are no measure of GNOME (LINUX.md section 6). L0's 200 ms budget has to
   hold on a real Ubuntu desktop, and L1's backends have to pass against the real services.
-- **Ubuntu 26.04**, the reference desktop. Only the desktop lane's `session` job (#83, on
-  `main`) has run there, on a headless session rather than GNOME, and L0's acceptance needs the
-  pull request lanes green on `ubuntu-26.04` as well as `ubuntu-24.04`.
-- **The hosted runner's move to 26.04.** GitHub moves `ubuntu-latest` to 26.04 between 2026-10-19
-  and 2026-11-19 (LINUX.md section 3). Pull request #26 ran on 24.04, and so did `main`'s runs of
-  2026-10-25 (40238334151), 2026-10-26 (40414356056) and 2026-10-27 (40564307456), so no run of
-  the pull request lanes on 26.04 has been seen yet. LINUX.md section 6 suggests pinning
-  `ubuntu-24.04`, or running both, until the move settles; `ci.yml` is WP0's.
-- **The L2 pieces on a real desktop.** To verify on Ubuntu 26.04, attended: that GNOME's
+- Ubuntu 26.04, the reference desktop. The desktop lane's `session` job (#83, on `main`)
+  runs there on a headless session rather than GNOME, and since `ubuntu-latest` moved, so does
+  `logic-linux` (below).
+- The hosted runner's move to 26.04. GitHub moves `ubuntu-latest` to 26.04 between 2026-10-19
+  and 2026-11-19 (LINUX.md section 3). Pull request #26 ran on 24.04, and so did `main`'s runs
+  through 2026-11-02 (41375489424); run 42405160476 at 18f71fd (2026-11-07) ran `logic-linux` on
+  26.04 and passed. L0's acceptance needs the pull request lanes green on both images: each has
+  passed on `main`, at different heads, and `ci.yml`, WP0's, has no job pinned to
+  `ubuntu-24.04`, so 24.04 is no longer checked on each pull request.
+- The L2 pieces on a real desktop. To verify on Ubuntu 26.04, attended: that GNOME's
   `AppIndicator` extension is on by default and honours `ItemIsMenu`, and that Breeze names the
   muted microphone icon as Adwaita does (#110); the shortcuts holder against GNOME 50's portal
   (#107); the AT-SPI2 client against real apps on a real accessibility bus (#87); and a thread
