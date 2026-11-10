@@ -162,6 +162,22 @@ fn week_five_is_the_last_such_weekday_of_the_month() {
 }
 
 #[test]
+fn a_change_its_time_moves_across_new_year_falls_in_the_next_or_previous_year() {
+    let (from, until) = (midnight(2026, 1, 1), midnight(2027, 1, 1));
+    // 2025's start, 167 hours after December 31 begins, is 23:00 on January 6, 2026.
+    let late = parse("AAA0BBB,J365/167,J180").unwrap();
+    let changes = late.changes(from, until);
+    let start = midnight(2026, 1, 6) + 23 * 3_600;
+    assert_eq!(changes, [(start, HOUR), (midnight(2026, 6, 29) + 3_600, 0)], "from 2025");
+    // 2027's start, 167 hours before January 1 begins, is 01:00 on December 25, 2026.
+    let early = parse("AAA0BBB,J1/-167,J180").unwrap();
+    let changes = early.changes(from, until);
+    let start = midnight(2026, 12, 25) + 3_600;
+    assert_eq!(changes, [(midnight(2026, 6, 29) + 3_600, 0), (start, HOUR)], "from 2027");
+    assert_eq!(early.offset_at(from), HOUR, "2026's start fell in 2025");
+}
+
+#[test]
 fn changes_that_coincide_leave_standard_time_all_year() {
     // The start at 02:00 standard time and the end at 03:00 daylight time are one instant:
     // glibc 2.39 keeps standard time all year.
