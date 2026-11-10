@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | this pull request | `wp10/idle-io-priority` | Open: amendment to WP0's `eileen-supervisor` and BUILD.md section 4.1, a Claude session in the idle I/O class on Linux through `ioprio_set`, with `libc` 0.2.190 as a workspace dependency |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -185,9 +186,10 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   connection, which fails with it; and when rtkit refuses real-time, the fallback asks for the
   policy's nice level even for a thread that already runs higher, which can lower it (nice -16
   becomes -11).
-- The supervisor (#106, #115): the cgroup scope (Planned above); idle I/O priority for Claude
-  sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5); and the rest of
-  SU5.
+- The supervisor (#106, #115): the cgroup scope (Planned above) and the rest of SU5. A Claude
+  session runs in the idle I/O class (`wp10/idle-io-priority`), but builds under `cargo xtask`
+  do not: WP0's build guard (#108) could run cargo through `ionice -c 3` beside `nice -n 10`,
+  skipped where `ionice` is absent, with a test in xtask's style (LINUX.md section 5).
 - The three Linux fuzz targets (#109) have never been built: no workflow runs `cargo fuzz build`
   yet. Until WP0 phase B's fuzz job, the owner or CI builds them from `fuzz/` on Linux after
   copying the root `Cargo.lock` there.
