@@ -1,21 +1,24 @@
-//! `MachineProbe` on Linux through `LinuxMachineProbe`: the facts within the caller's deadline,
-//! with a FIFO that no one writes standing in for a read a hung mount or device holds; and the
-//! changes `watch` reports, from the fake power daemons of the `upower` module, first as the
-//! stream `MachineChanges` in tokio's paused time, then through a bridge on the private bus,
-//! called from the test's thread as the core calls it.
+//! `MachineProbe` on Linux through `LinuxMachineProbe`: the facts and the load's power read
+//! within a deadline, with a FIFO that no one writes standing in for a read a hung mount or
+//! device holds; and the changes `watch` reports, from the fake power daemons of the `upower`
+//! module, first as the stream `MachineChanges`, then through a bridge on the private bus, called
+//! from the test's thread as the core calls it. Every wait for a change is bounded by [`WAIT`],
+//! so a change that never comes fails its assertion. Real time, not tokio's paused time: the
+//! signals pass through the private bus's `dbus-daemon`, another process, and paused time would
+//! move on to the bound while one is on its way.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use eileen_contracts::connectors::Platform;
 use eileen_contracts::ids::WallTime;
-use eileen_contracts::machine::{AudioFacts, MachineFacts};
+use eileen_contracts::machine::{AudioFacts, MachineFacts, PowerState};
 use eileen_dbus_linux::Bridge;
 use eileen_dbus_linux::testing::{PrivateBus, round_trip};
 use eileen_platform::{Deadline, MachineChange, MachineProbe, PlatformError};
 use eileen_shell_linux::{LinuxMachineProbe, MachineChanges, SysRoot, read_volume};
 use rustix::fs::{CWD, Mode, mkfifoat};
-use tokio::sync::mpsc;
 
 use crate::tree;
 use crate::upower::{
@@ -27,6 +30,8 @@ const LONG: Deadline = Deadline::after(Duration::from_secs(30));
 /// The deadline of a read that never returns: it passes whatever its length, and a short one
 /// keeps the test short.
 const SHORT: Deadline = Deadline::after(Duration::from_millis(100));
+/// How long a test waits for a change it expects, far longer than one takes.
+const WAIT: Duration = Duration::from_secs(10);
 
 /// A data folder of the test's own that does not exist yet, on the volume the tests run on.
 fn data_dir(test: &str) -> PathBuf {
@@ -59,25 +64,53 @@ fn facts_within_the_deadline_measure_the_data_folders_volume_and_leave_the_rest_
     );
 }
 
+/// Replaces the file at `path` with a FIFO that no one writes, and answers the file's text.
+fn hold(path: &Path) -> String {
+    let text = std::fs::read_to_string(path).unwrap();
+    // Opening a FIFO to read waits for a writer, as a read of a hung device waits for it.
+    std::fs::remove_file(path).unwrap();
+    mkfifoat(CWD, path, Mode::RUSR | Mode::WUSR).unwrap();
+    text
+}
+
+/// Releases the read waiting on the FIFO at `path`, then puts the file's `text` back.
+fn release(path: &Path, text: &str) {
+    std::fs::write(path, text).unwrap();
+    std::fs::remove_file(path).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
 #[test]
 fn a_read_that_never_returns_passes_the_deadline_and_is_left_to_its_thread() {
     let root = tree::build("intel-hybrid-laptop", "probe_held_read");
     let meminfo = root.join("proc/meminfo");
-    let text = std::fs::read_to_string(&meminfo).unwrap();
-    // Opening a FIFO to read waits for a writer, as a read of a hung mount waits for its server.
-    std::fs::remove_file(&meminfo).unwrap();
-    mkfifoat(CWD, &meminfo, Mode::RUSR | Mode::WUSR).unwrap();
+    let text = hold(&meminfo);
     let probe = LinuxMachineProbe::new(SysRoot::at(&root), data_dir("held_read"));
-    assert_eq!(
-        probe.facts(SHORT),
-        Err(PlatformError::DeadlineExceeded { call: "MachineProbe::facts" }),
-        "the call answers at its deadline"
-    );
+    let held = Err(PlatformError::DeadlineExceeded { call: "MachineProbe::facts" });
+    assert_eq!(probe.facts(SHORT), held, "the call answers at its deadline");
+    assert_eq!(probe.facts(SHORT), held, "and the next, which waits for the same read");
     // The writer meets the read that waits, which then goes on and ends.
-    std::fs::write(&meminfo, &text).unwrap();
-    std::fs::remove_file(&meminfo).unwrap();
-    std::fs::write(&meminfo, &text).unwrap();
+    release(&meminfo, &text);
     assert!(probe.facts(LONG).is_ok(), "the next call reads again, on a thread of its own");
+}
+
+#[test]
+fn a_power_file_that_never_answers_holds_the_load_only_to_its_deadline() {
+    let root = tree::build("intel-hybrid-laptop", "probe_held_load");
+    // A battery's `status` runs the embedded controller's ACPI methods, which a hang holds.
+    let status = root.join("sys/class/power_supply/BAT0/status");
+    let text = hold(&status);
+    let probe = LinuxMachineProbe::new(SysRoot::at(&root), data_dir("held_load"));
+    let held = Err(PlatformError::DeadlineExceeded { call: "MachineProbe::load" });
+    assert_eq!(probe.load_within(SHORT), held, "the call answers at its deadline");
+    assert_eq!(probe.load_within(SHORT), held, "and the next, which waits for the same read");
+    release(&status, &text);
+    let on_battery_saver = PowerState { has_battery: true, on_battery: true, battery_saver: true };
+    assert_eq!(
+        probe.load_within(LONG),
+        Ok((60, on_battery_saver)),
+        "a read anew, and the share since boot, which the held calls left"
+    );
 }
 
 #[test]
@@ -102,7 +135,12 @@ fn watch_without_a_bridge_is_unavailable() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+/// The next change `changes` yields, waiting at most [`WAIT`].
+async fn next(changes: &mut MachineChanges) -> Option<MachineChange> {
+    tokio::time::timeout(WAIT, changes.next()).await.expect("a change within the wait")
+}
+
+#[tokio::test]
 async fn the_power_states_changes_are_the_power_source_and_battery_saver() {
     let bus = PrivateBus::start();
     let (upower, _) = laptop(&bus, false).await;
@@ -111,20 +149,35 @@ async fn the_power_states_changes_are_the_power_source_and_battery_saver() {
     let mut changes = MachineChanges::new(follow(&client).await);
 
     set_on_battery(&upower, true).await;
-    assert_eq!(changes.next().await, Some(MachineChange::PowerSource), "unplugged");
+    assert_eq!(next(&mut changes).await, Some(MachineChange::PowerSource), "unplugged");
     set_profile(&profiles, "power-saver").await;
-    assert_eq!(changes.next().await, Some(MachineChange::BatterySaver), "the saver profile");
+    assert_eq!(next(&mut changes).await, Some(MachineChange::BatterySaver), "the saver profile");
 
     // Both signals wait together, so one reading of both daemons changes both facts.
     set_on_battery(&upower, false).await;
     set_profile(&profiles, "balanced").await;
     round_trip(&client, Some(UPOWER_NAME)).await;
     round_trip(&client, Some(PROFILES_NAME)).await;
-    assert_eq!(changes.next().await, Some(MachineChange::PowerSource), "plugged in, first");
-    assert_eq!(changes.next().await, Some(MachineChange::BatterySaver), "and the saver off");
+    assert_eq!(next(&mut changes).await, Some(MachineChange::PowerSource), "plugged in, first");
+    assert_eq!(next(&mut changes).await, Some(MachineChange::BatterySaver), "and the saver off");
 
     client.close().await.unwrap();
-    assert_eq!(changes.next().await, None, "the changes end with the connection");
+    assert_eq!(next(&mut changes).await, None, "the changes end with the connection");
+}
+
+#[tokio::test]
+async fn the_changes_start_from_the_power_streams_first_reading() {
+    let bus = PrivateBus::start();
+    let (upower, _) = laptop(&bus, false).await;
+    // Battery saver on from the start: from any other state, a change would also name it.
+    let _profiles = current(&bus, Profiles::active("power-saver")).await;
+    let client = bus.connect().await;
+    let mut changes = MachineChanges::new(follow(&client).await);
+
+    set_on_battery(&upower, true).await;
+    assert_eq!(next(&mut changes).await, Some(MachineChange::PowerSource), "unplugged");
+    set_on_battery(&upower, false).await;
+    assert_eq!(next(&mut changes).await, Some(MachineChange::PowerSource), "only the source");
 }
 
 /// The fake daemons, on a runtime of their own whose workers serve them while the test's thread
@@ -172,7 +225,7 @@ fn watch_reports_each_change_through_the_bridge_until_its_subscription_drops() {
     let daemons = Daemons::start(&bus);
     let bridge = Bridge::on_private_bus(&bus).unwrap();
     let probe = LinuxMachineProbe::new(SysRoot::system(), data_dir("watch")).with_bridge(bridge);
-    let (heard, mut hear) = mpsc::channel(8);
+    let (heard, hear) = mpsc::sync_channel(8);
     let watch = probe
         .watch(Box::new(move |change| {
             let _ignored = heard.try_send(change);
@@ -180,10 +233,14 @@ fn watch_reports_each_change_through_the_bridge_until_its_subscription_drops() {
         .unwrap();
 
     daemons.set_on_battery(true);
-    assert_eq!(hear.blocking_recv(), Some(MachineChange::PowerSource), "unplugged");
+    assert_eq!(hear.recv_timeout(WAIT), Ok(MachineChange::PowerSource), "unplugged");
     daemons.set_profile("power-saver");
-    assert_eq!(hear.blocking_recv(), Some(MachineChange::BatterySaver), "the saver profile");
+    assert_eq!(hear.recv_timeout(WAIT), Ok(MachineChange::BatterySaver), "the saver profile");
 
     drop(watch);
-    assert_eq!(hear.blocking_recv(), None, "the bridge dropped the sink with the subscription");
+    assert_eq!(
+        hear.recv_timeout(WAIT),
+        Err(mpsc::RecvTimeoutError::Disconnected),
+        "the bridge dropped the sink with the subscription"
+    );
 }

@@ -12,16 +12,18 @@
 //!   and a device that has hung holds the read. The audio endpoints and the execution providers
 //!   are left empty, and `read_at` and `probe_ms` 0: their own components report the first two,
 //!   and the caller stamps the others from its clock around the call.
-//! - `load` is [`LinuxMachineProbe::read_load`] on the caller's thread: `/proc/stat` and the power
-//!   files, which no other process serves, and the trait gives it no deadline.
+//! - `load` is [`LinuxMachineProbe::load_within`] at `eileen-dbus-linux`'s [`DEFAULT_DEADLINE`],
+//!   since the trait gives it none: `/proc/stat` on the caller's thread, and the power files,
+//!   which the battery's `status` among them can hold, on a named thread within the deadline.
 //! - `watch` follows the power daemons on the system bus of the bridge
 //!   [`LinuxMachineProbe::with_bridge`] gave, through [`MachineChanges`](crate::MachineChanges),
 //!   whose module says which changes Linux reports. Without a bridge it is `Unavailable`.
 //!
 //! # Traps
 //!
-//! - A pass held past its deadline keeps its thread until the read returns, if ever, and each
-//!   such call leaves one more; the runtime reads the facts at start and on a change only.
+//! - A read held past its deadline keeps its thread until it returns, if ever. The facts' pass
+//!   and the power read each run one at a time, so a hang keeps at most one thread of each; a
+//!   call meanwhile waits for the held one within its own deadline.
 //! - `facts` and `load` read the power state from sysfs (the `power` module), which does not see
 //!   a program's hold on power-profiles-daemon's `power-saver`, while `watch` reports the hold's
 //!   `BatterySaver`: until the facts read the daemons over D-Bus, the facts read after that change
@@ -40,6 +42,7 @@ use eileen_dbus_linux::{Bridge, Buses, DEFAULT_DEADLINE};
 use eileen_platform::{Deadline, MachineChange, MachineProbe, PlatformError, Subscription};
 
 use crate::adapters::read_adapters;
+use crate::bounded::OneRead;
 use crate::cpu::read_cpu;
 use crate::disk::{Volume, read_media, read_volume};
 use crate::load::{CpuTimes, busy_pct, parse_proc_stat};
@@ -47,10 +50,12 @@ use crate::memory::{kb_to_mb, parse_meminfo};
 use crate::monitors::read_monitors;
 use crate::os::{Guest, guest, read_os};
 use crate::power::read_power;
-use crate::{LinuxPower, MachineChanges, ReadError, SysRoot, bounded};
+use crate::{LinuxPower, MachineChanges, ReadError, SysRoot};
 
 /// What `facts` past its deadline names, as the fake probe names it.
 const FACTS: &str = "MachineProbe::facts";
+/// What `load` past its deadline names.
+const LOAD: &str = "MachineProbe::load";
 /// What `watch`'s errors name.
 const WATCH: &str = "machine-change watch";
 
@@ -60,8 +65,13 @@ const WATCH: &str = "machine-change watch";
 pub struct LinuxMachineProbe {
     root: SysRoot,
     data_dir: PathBuf,
-    /// The CPU times at the previous [`read_load`](Self::read_load), and the share it reported.
+    /// The CPU times at the previous [`load_within`](Self::load_within), and the share it
+    /// reported.
     cpu: Mutex<Option<(CpuTimes, u8)>>,
+    /// The facts' passes, one at a time.
+    passes: OneRead<Result<MachineFacts, ReadError>>,
+    /// The load's power reads, one at a time.
+    power: OneRead<PowerState>,
     /// The bridge `watch` follows the power daemons on.
     bridge: Option<Bridge>,
 }
@@ -71,7 +81,14 @@ impl LinuxMachineProbe {
     /// `Unavailable` until [`Self::with_bridge`] gives it a bridge.
     #[must_use]
     pub fn new(root: SysRoot, data_dir: impl Into<PathBuf>) -> Self {
-        Self { root, data_dir: data_dir.into(), cpu: Mutex::new(None), bridge: None }
+        Self {
+            root,
+            data_dir: data_dir.into(),
+            cpu: Mutex::new(None),
+            passes: OneRead::new("eileen-facts"),
+            power: OneRead::new("eileen-power"),
+            bridge: None,
+        }
     }
 
     /// A probe of the real machine, measuring the volume of `data_dir`.
@@ -88,10 +105,16 @@ impl LinuxMachineProbe {
     }
 
     /// The CPU's busy share since the previous call, in percent, and the power state: what
-    /// `MachineProbe::load` gives every 30 s. The first call's share covers the time since boot;
-    /// a call before another clock tick has passed repeats the previous share. Unreadable power
-    /// facts are not reported here: the facts' `degraded` list names them.
-    pub fn read_load(&self) -> Result<(u8, PowerState), ReadError> {
+    /// `MachineProbe::load` gives every 30 s, at [`DEFAULT_DEADLINE`]. The power files are read
+    /// first, on a named thread within `deadline` (past it, `DeadlineExceeded` naming
+    /// `MachineProbe::load`, and the share is left for the next call); then `/proc/stat` on the
+    /// caller's thread. The first share covers the time since boot; a call before another clock
+    /// tick has passed repeats the previous share. Unreadable power facts are not reported here:
+    /// the facts' `degraded` list names them.
+    pub fn load_within(&self, deadline: Deadline) -> Result<(u8, PowerState), PlatformError> {
+        let root = self.root.clone();
+        let power =
+            self.power.within(LOAD, deadline, move || read_power(&root, false, &mut Vec::new()))?;
         let text = self.root.read("proc/stat").map_err(ReadError::io("/proc/stat"))?;
         let now = parse_proc_stat(&text)
             .ok_or(ReadError::Missing { what: "/proc/stat", field: "cpu" })?;
@@ -106,7 +129,7 @@ impl LinuxMachineProbe {
                 None => last_pct,
             }
         };
-        Ok((pct, read_power(&self.root, false, &mut Vec::new())))
+        Ok((pct, power))
     }
 
     /// Reads every fact under the root on the caller's thread, with the data folder's volume as
@@ -123,12 +146,15 @@ impl MachineProbe for LinuxMachineProbe {
     /// `PlatformError::Io`, naming it; past the deadline, `DeadlineExceeded`.
     fn facts(&self, deadline: Deadline) -> Result<MachineFacts, PlatformError> {
         let (root, data_dir) = (self.root.clone(), self.data_dir.clone());
-        Ok(bounded::within(FACTS, deadline, move || read_facts(&root, read_volume(&data_dir)))??)
+        Ok(self
+            .passes
+            .within(FACTS, deadline, move || read_facts(&root, read_volume(&data_dir)))??)
     }
 
-    /// [`LinuxMachineProbe::read_load`].
+    /// [`LinuxMachineProbe::load_within`] at [`DEFAULT_DEADLINE`], since the trait gives `load`
+    /// no deadline.
     fn load(&self) -> Result<(u8, PowerState), PlatformError> {
-        Ok(self.read_load()?)
+        self.load_within(DEFAULT_DEADLINE)
     }
 
     /// The power source's and battery saver's changes, from the power daemons on the bridge's
