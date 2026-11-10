@@ -1,0 +1,1 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"tool_call":{"caller":"internal","origin":"core","tool":"apps_open_path","args":{"path":{"$lit":{"$blob":"b3:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}},"note":{"$lit":{"$lit":{"a":1}}}},"paths":[],"urls":[],"traceparent":null}}}}

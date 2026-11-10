@@ -112,6 +112,14 @@ jobs:
         run: cargo deny --locked check
       - name: Unused dependencies (cargo-machete)
         run: cargo machete
+      - name: No pending snapshot committed
+        # The test jobs write insta's pending files under target/, so one in the tree came from
+        # a hand copy, and no test would notice it (xtask test `ci_keeps_pending_snapshots`).
+        run: |
+          if git ls-files -- '*.snap.new' '*.pending-snap' | grep .; then
+            echo "::error::Remove the pending snapshot files listed above: move a .snap.new over its .snap, or write a .pending-snap's new value into its inline literal (AGENTS.md, Testing)."
+            exit 1
+          fi
 
   logic-linux:
     name: logic-linux
@@ -119,12 +127,43 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # insta writes no pending snapshot when it detects CI. With `new` it writes a failing or new
+      # snapshot as a .snap.new (an inline one as .<file>.pending-snap), under the pending folder
+      # at the path it would take in the repository, so none lands in the tree. Set for the whole
+      # job, so every step that runs tests has them, however it runs them. The upload after the
+      # tests keeps the folder, and a lane takes a changed snapshot from the run instead of
+      # building on the owner's PC (xtask test `ci_keeps_pending_snapshots`). The folder is
+      # absolute because nextest runs each test binary from its crate's folder.
+      INSTA_UPDATE: new
+      INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: linux
@@ -135,6 +174,8 @@ jobs:
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
+        # The ci profile runs every test after a failure (fail-fast = false in
+        # .config/nextest.toml), so one failed run writes every changed snapshot.
         run: cargo nextest run --workspace --locked --profile ci
       - name: Simulator pull request seeds, twice each (WP0 acceptance 7)
         # What `cargo xtask sim --doublecheck` runs; CI runners are not build-guarded.
@@ -147,13 +188,39 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --locked
-      - name: Keep the test report
+      - name: Keep the test report and the pending snapshots
+        # Downloaded, the artifact holds nextest/ci/junit.xml and, when a snapshot failed,
+        # insta-pending/<repository path>. upload-artifact leaves out hidden files unless told
+        # otherwise, and an inline snapshot's pending file is one.
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logic-linux-junit
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/insta-pending/
+          include-hidden-files: true
           if-no-files-found: ignore
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          stamp="$(date +%s)"
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
+            fi
+          done
 
   windows-clippy:
     name: windows-clippy
@@ -167,6 +234,27 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: win-clippy
@@ -177,6 +265,26 @@ jobs:
         run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
       - name: Clippy, warnings denied
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          stamp="$(date +%s)"
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
+            fi
+          done
 
   windows-test:
     name: windows-test
@@ -184,12 +292,37 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      # Pending snapshots, as in logic-linux.
+      INSTA_UPDATE: new
+      INSTA_PENDING_DIR: ${{ github.workspace }}/target/insta-pending
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
+      - name: Keep only the pinned toolchain, so the cache key does not follow the runner image
+        # rust-cache hashes `rustc -vV` of every installed toolchain into its key (config.ts,
+        # getRustVersions). The image's own stable toolchain changed the Linux key when an image
+        # update moved it, and the next run found no cache at all. Every run of this job does this,
+        # pull requests included, so they compute the key that main saved.
+        shell: bash
+        run: |
+          pinned="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$pinned" ]; then
+            echo "::error file=rust-toolchain.toml::no channel line to read the pinned version from"
+            exit 1
+          fi
+          rustup default "$pinned"
+          installed="$(rustup toolchain list --quiet)"
+          for toolchain in $installed; do
+            case "$toolchain" in
+              "$pinned"-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: win-test
@@ -205,13 +338,81 @@ jobs:
         run: cargo nextest run --workspace --locked --profile ci
       - name: Doc tests
         run: cargo test --workspace --doc --locked
-      - name: Keep the test report
+      - name: Keep the test report and the pending snapshots
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-test-junit
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/insta-pending/
+          include-hidden-files: true
           if-no-files-found: ignore
+      - name: Date the cached dependency artifacts to this save
+        # On a restore that is not a full match, rust-cache deletes the entries of these folders
+        # whose date is more than a week old (restore.ts, then cleanup.ts rmExcept with
+        # checkTimestamp). Artifacts carried from key to key keep their first build's date, so a
+        # Cargo.toml or Cargo.lock change a week later rebuilt 107 to 245 crates. Every file and
+        # folder below them gets one and the same date: cargo rebuilds a unit whose dependency's
+        # output is newer than its own (fingerprint/mod.rs, StaleDependency) and counts equal
+        # dates as fresh, so dating only some entries, or each at its own moment, would make
+        # restored build scripts and their dependents rebuild. Only main's runs save, and
+        # rust-cache saves after the last step, so this is the last step and runs only there.
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          stamp="$(date +%s)"
+          for dir in target/debug/build target/debug/.fingerprint target/debug/deps; do
+            if [ -d "$dir" ]; then
+              find "$dir" -exec touch -c -d "@$stamp" -- {} +
+              echo "$dir: dated $(find "$dir" | wc -l) files and folders to @$stamp"
+            fi
+          done
+
+  prune-caches:
+    name: prune-caches
+    # Each lockfile change leaves a superseded generation of the three rust-cache entries (1.0
+    # to 1.25 GB) until it goes seven days unread, which kept the repository over its 10 GB
+    # cache limit, where GitHub evicts. After main's three jobs have saved, keep the newest
+    # entry of each shared key and delete the rest. The Linux desktop lane restores the `linux`
+    # entry, so the older entry it matched while it kept the image's stable toolchain goes too;
+    # it matches again once it keeps only the pinned one (FIXME(#144), tracked by
+    # xtask::workflows::tests). Other caches, such as that lane's packages, are never touched.
+    # Not an all-green need: it is upkeep, and only runs where nothing waits for it.
+    needs: [logic-linux, windows-clippy, windows-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # gh cache list and gh cache delete; nothing else
+    steps:
+      - name: Keep the newest rust-cache entry of each shared key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for shared in linux win-clippy win-test; do
+            # The key prefix alone would also match a later key such as `linux-fuzz`, so only
+            # entries whose next part is rust-cache's OS name count, newest first, and the first
+            # of those is kept.
+            superseded="$(gh cache list --ref refs/heads/main --key "v0-rust-$shared-" \
+              --sort created_at --order desc --limit 1000 --json id,key \
+              --jq '.[] | "\(.id) \(.key)"' |
+              { grep -E "^[0-9]+ v0-rust-$shared-(Linux|Windows_NT)-" || true; } |
+              tail -n +2)"
+            if [ -z "$superseded" ]; then
+              echo "$shared: nothing superseded"
+              continue
+            fi
+            while read -r id key; do
+              # A concurrent push to main may have deleted it first.
+              if gh cache delete "$id"; then
+                echo "$shared: deleted $key"
+              else
+                echo "::warning::$shared: could not delete $key"
+              fi
+            done <<< "$superseded"
+          done
 
   all-green:
     name: all-green

@@ -23,7 +23,6 @@ arbitrary.workspace = true
 eileen-contracts.workspace = true
 eileen-core.workspace = true
 eileen-dictation.workspace = true
-eileen-intent.workspace = true
 eileen-skills.workspace = true
 eileen-stdx.workspace = true
 eileen-trace.workspace = true

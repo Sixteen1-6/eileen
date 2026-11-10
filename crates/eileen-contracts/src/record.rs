@@ -412,7 +412,9 @@ pub enum StubScriptLine {
         /// The bytes, as text.
         bytes: String,
     },
-    /// Ask for permission, as the CLI's hook would.
+    /// Played the way the CLI behaves under `dontAsk`: a tool use posted to the `PreToolUse`
+    /// guard, with an `ask` routed to the permission-prompt tool. It is not the
+    /// `PermissionRequest` hook, which never fires on that path.
     PermissionRequest {
         /// The tool.
         tool_name: String,

@@ -31,7 +31,7 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-apps.exe` | SMTC, Office and Explorer COM, the Resolve bridge, recent work and media history, face finding, tracking and sharpness | MCP over stdio |
 | `eileen-hud.exe` | The overlay, the clickable strip, the live thumbnail | JSON lines over stdio |
 | `claude -p` | The brain (warm, plus a hot spare), a small warm pool of worker sessions, each worker job, the librarian, the dictation scribe | stream-json over stdio, HTTP hooks to the loopback endpoint |
-| `eileen-shim.exe` | One per Claude session: the `eileen` MCP server, forwarding to the dispatcher | named pipe with a per-session token; the dispatcher checks the caller's process and Job Object |
+| `eileen-shim.exe` | One per Claude session: the `eileen` MCP server, forwarding to the dispatcher | named pipe with a per-session token; the shim checks the server's process, the dispatcher the caller's process and Job Object |
 | `eileen-guard.exe` | Crash and hang minidumps, the core watchdog; outside the Job Object | local socket |
 
 ## Code map
@@ -42,8 +42,8 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-stdx` | lib | neutral | Clock and ID ports, named threads and sleep, the seeded RNG, assertions, fault points, checked casts |
 | `eileen-trace` | lib | neutral | Tracing setup, span names and their parent table, redaction and the scenario privacy rules, the flight recorder ring |
 | `eileen-rt` | lib | neutral | The named task wrappers, bounded channels |
-| `eileen-platform` | lib | neutral | The traits each operating system implements, including app hooks, secrets and system volume |
-| `eileen-supervisor` | lib | neutral, Windows module | Spawning children in kill-on-close Job Objects; process QoS |
+| `eileen-platform` | lib | neutral | The traits each operating system implements, including app hooks, secrets, system volume and path probes |
+| `eileen-supervisor` | lib | neutral, Windows module | Spawning children in kill-on-close Job Objects it makes itself; process QoS; the pipes, caller checks, Job Object registry and user-only token files (`ipc`) |
 | `eileen-buildguard` | lib | neutral, Windows module | Build slots admitted by free memory, shared by `cargo xtask` and build-heavy coding jobs |
 | `eileen-core` | lib | neutral | The sans-IO state machine that makes every decision |
 | `eileen-record` | lib | neutral | Recordings, checkpoints, the blob store, trimming |
@@ -52,10 +52,10 @@ One core process owns the microphone loop, the tray and hotkeys, the event bus, 
 | `eileen-runtime` | lib | neutral | Drivers that carry out the core's effects: store, bus, loopback endpoint, dispatcher, sidecars, incidents |
 | `eileen-mcp` | lib | neutral | rmcp glue, the shim protocol, the core-side tool handlers |
 | `eileen-crash` | lib | neutral, Windows module | Panic hook and crash handler client |
-| `eileen-shell-win` | lib | Windows | Tray, global hotkeys with the physical-key check, Raw Input, toasts, the Start menu and sign-in entries, the credential store |
+| `eileen-shell-win` | lib | Windows | Tray, global hotkeys with the physical-key check, Raw Input, toasts, the Start menu and sign-in entries, the credential store, path probes and the time zone reader |
 | `eileen-scenarios` | lib | neutral | Saving, sharing and submitting scenarios; the real-desktop runner |
 | `eileen-cli` | bin | neutral | The `eileen` binary and composition root |
-| `eileen-shim` | bin | neutral | Per-session stdio MCP server forwarding to the dispatcher |
+| `eileen-shim` | bin | neutral | Per-session stdio MCP server forwarding to the dispatcher, once it has checked that the pipe's server is the core |
 | `eileen-guard` | bin | neutral, Windows module | Minidump server and core watchdog |
 | `eileen-harness` | lib | neutral | Claude stream-json driver, sessions and the warm pool, the brain backends and their benchmark, model aliases, worktrees; slots for Codex, DeepSeek, ACP and a local model |
 | `eileen-stub-harness` | bin, dev | neutral | A fake `claude -p` that plays recorded scripts with faults |
@@ -92,7 +92,7 @@ Every serialized type: IDs, `TraceCtx` and `Envelope`, `Input`, `Effect`, `BusEv
 
 `Core::step(now, rng, input, effects)`: turns, the addressee gate, intent dispatch, the brain turn and its authority, jobs and sessions, memory admission, routing, the permission gate, taint and approvals, announcements, barge-in and what the user heard, the input lock and leases, the journal, the settings flow, the first run, plan-usage policy, supervisor policy, and the learning loop's decisions through the `SkillEngine` port.
 **Architecture invariant:** sans-IO. No clock, no OS randomness, no IO, no threads; every queue bounded; ordered maps wherever order can reach an effect.
-**Architecture invariant:** depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`. The resolver, dictation cleaner, settings validator and skill engine arrive through ports.
+**Architecture invariant:** of Eileen's crates, depends only on `eileen-contracts`, `eileen-stdx` and `eileen-trace`, and of third-party crates only on `tracing` and `serde_json` (dev-dependencies aside); no build dependencies. The resolver, dictation cleaner, settings validator and skill engine arrive through ports.
 **Architecture invariant:** an action above tier 1 needs an approval built from the user's own input: a physical click, an approval hotkey pressed on a real keyboard, or speech in the approval window that contains the action word (and matches the enrolled voice once the speaker check exists). That type cannot be made from screen text, model output, tool results, a command line or a learned skill.
 
 ### `eileen-runtime`, `eileen-mcp`, `eileen-cli`, `eileen-shell-win`

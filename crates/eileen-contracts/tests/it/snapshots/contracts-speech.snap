@@ -22,7 +22,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "description": "The fixed header of every speech-pipe frame: 32 bytes, little-endian on the wire.",
       "properties": {
         "flags": {
-          "description": "Reserved flags, zero today.",
+          "description": "On an audio frame, its flags (decision D81, [`AudioFlags`]), each one true of its frame:\nbit 0 replayed (written more than 250 ms after capture: from the ring after a new\nconnection, or after the speech process stopped reading); bit 1 break (frames are\nmissing before it, because capture stopped or the ring dropped some, so voice activity\nand recognition start fresh); bit 2 playback (Eileen's own playback was sounding at\ncapture); bit 3 other audio (other audio was playing at capture). The other bits are\nzero, and every other kind carries zero.",
           "format": "uint8",
           "maximum": 255,
           "minimum": 0,
@@ -42,7 +42,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "integer"
         },
         "seq": {
-          "description": "The sender's frame counter.",
+          "description": "On an audio frame, its number among the frames captured since the core started, from 1\n(decision D81). It never restarts with a connection, so a replayed frame keeps the number\nit was captured with, and a gap in the numbers is frames the ring dropped. On every frame\nthe speech process sends, the number of the newest audio frame it has read, or 0 before\nthe first. Zero on the core's other frames.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -55,7 +55,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "type": "integer"
         },
         "turn": {
-          "description": "The turn's ULID bytes, or zeros.",
+          "description": "On a `Pong` from the speech process, the ULID bytes of the turn open at the audio frame\nits `seq` names, or zeros when none is open (decision D81). Zeros on every other frame.",
           "items": {
             "format": "uint8",
             "maximum": 255,
@@ -87,27 +87,32 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         {
           "const": "command",
-          "description": "2, core to speech: JSON [`SpeechCommandFrame`].",
+          "description": "2, core to speech: JSON [`SpeechCommandFrame`], at most 256 KiB.",
           "type": "string"
         },
         {
           "const": "event",
-          "description": "3, speech to core: JSON [`SpeechEventFrame`].",
+          "description": "3, speech to core: JSON [`SpeechEventFrame`], at most 256 KiB.",
           "type": "string"
         },
         {
           "const": "pcm",
-          "description": "4, speech to core: JSON [`PcmHeader`], then `i16` samples; at most 1 MiB.",
+          "description": "4, speech to core: JSON [`PcmHeader`], a newline, then `i16` samples; at most 1 MiB.",
           "type": "string"
         },
         {
           "const": "ping",
-          "description": "5, a heartbeat every second.",
+          "description": "5, a heartbeat every second, sent by each end; no body.",
           "type": "string"
         },
         {
           "const": "pong",
-          "description": "6, the heartbeat's answer.",
+          "description": "6, the heartbeat's answer; no body. The speech process's carries the open turn.",
+          "type": "string"
+        },
+        {
+          "const": "hello",
+          "description": "7, speech to core: JSON [`SpeechHelloFrame`], at most 256 bytes, the first frame on every\nconnection (decision D81).",
           "type": "string"
         }
       ]
@@ -771,6 +776,19 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       ],
       "type": "object"
     },
+    "SpeechHelloFrame": {
+      "description": "The body of a hello frame: the per-session token the core put in the speech process's\nenvironment. The speech process sends it only after checking that the pipe's server is the\ncore's process, and the transport compares it (section 3.3.7). The token is a\n[`SessionToken`], like the dispatcher pipe's, so `Debug` hides it, `==` compares every byte,\nand recordings replace it.",
+      "properties": {
+        "token": {
+          "$ref": "#/$defs/SessionToken",
+          "description": "The token."
+        }
+      },
+      "required": [
+        "token"
+      ],
+      "type": "object"
+    },
     "TurnEndReason": {
       "description": "Why a turn ended.",
       "oneOf": [
@@ -843,6 +861,10 @@ source: crates/eileen-contracts/tests/it/schemas.rs
           "properties": {
             "speech_started": {
               "properties": {
+                "replayed": {
+                  "description": "The speech began in a replayed audio frame ([`AudioFlags::REPLAYED`]): heard late,\nso the turn is addressed only by the name and never answers an approval, a question\nor a confirm step (BUILD.md section 2.8).",
+                  "type": "boolean"
+                },
                 "source": {
                   "description": "The audio source.",
                   "format": "uint16",
@@ -857,7 +879,8 @@ source: crates/eileen-contracts/tests/it/schemas.rs
               },
               "required": [
                 "turn",
-                "source"
+                "source",
+                "replayed"
               ],
               "type": "object"
             }

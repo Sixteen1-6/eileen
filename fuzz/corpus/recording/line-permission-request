@@ -1,0 +1,2 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"hook":["ws_01K8ZQ3V2X4Y5Z6A7B8C9D0E1F",{"permission_request":{"request":9,"tool_name":"Bash","tool_input":{"command":"cargo xtask test -p eileen-record"},"tool_use_id":null}}]}}}
+{"hook_answer":{"input":1,"mono":1700000,"reply":{"permission_request":{"request":9,"decision":{"deny":{"reason":"not now"}}}}}}

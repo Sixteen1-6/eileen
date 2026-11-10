@@ -16,7 +16,25 @@ unsafe = "forbid"
 [dependencies]
 clap.workspace = true
 eileen-contracts.workspace = true
+# The runtime `eileen doctor claude` runs its probes on.
+eileen-rt.workspace = true
+# Every probe the doctor starts (`claude auth status`, `claude --version`, vswhere).
+eileen-supervisor.workspace = true
+# The Redactor, which every tool input passes through before it leaves the stream parser.
+eileen-trace.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+# The doctor's deadlines and its read of a probe's output.
+tokio.workspace = true
+# The worker driver's `worker.refused` and `worker.fault` logs.
+tracing.workspace = true
+
+[dev-dependencies]
+# Captures the driver's logs in its unit tests.
+eileen-trace = { workspace = true, features = ["testing"] }
+insta.workspace = true
+# The worker's readiness exchange runs on a paused clock in its unit tests (`start_paused`).
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

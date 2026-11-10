@@ -1,0 +1,34 @@
+---
+source: crates/eileen-harness/src/session/tests.rs
+expression: portable_json(&files.mcp_config)
+---
+{
+  "mcpServers": {
+    "eileen": {
+      "args": [
+        "--pipe",
+        "\\\\.\\pipe\\eileen-dispatch-ws_01M3250V000000000000000002",
+        "--role",
+        "worker",
+        "--session",
+        "ws_01M3250V000000000000000002"
+      ],
+      "command": "/opt/eileen/eileen-shim",
+      "env": {
+        "EILEEN_SHIM_TOKEN": "${EILEEN_SHIM_TOKEN}"
+      },
+      "type": "stdio"
+    },
+    "playwright": {
+      "args": [
+        "--headless"
+      ],
+      "command": "/data/eileen/mcp/browser/node_modules/.bin/mcp-server",
+      "env": {
+        "EILEEN_HOOK_TOKEN": "",
+        "EILEEN_SHIM_TOKEN": ""
+      },
+      "type": "stdio"
+    }
+  }
+}

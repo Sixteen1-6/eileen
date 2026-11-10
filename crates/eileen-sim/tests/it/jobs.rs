@@ -1,0 +1,268 @@
+//! Many jobs in the simulator (BUILD.md section 6.3), the basis of `scenarios/jobs/`'s three
+//! parallel jobs and reroute: three jobs dispatched in three turns run side by side, a steer
+//! reaches the bound session of one, a spoken "cancel" names another, a fan-out of three
+//! agents ends once after one of them moved to a stronger model, and each job ends in exactly
+//! one terminal state, with every invariant the world checks holding at each step.
+
+use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause};
+use eileen_contracts::core_io::{Effect, Input, UserInput};
+use eileen_contracts::harness::WorkerCmd;
+use eileen_contracts::ids::{JobId, Personal, TurnId, WorkerSessionId};
+use eileen_contracts::speech::{TurnEndReason, VoiceEvent};
+use eileen_sim::parts::{LOAD_MS, Process};
+use eileen_sim::{BrainReply, Profile, World};
+use serde_json::json;
+
+/// How long each worker turn's work takes, so the three jobs overlap.
+const WORK_MS: u64 = 30_000;
+
+/// A world whose core took its first step and whose speech process is ready.
+fn world() -> World {
+    let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    step(&mut world, Input::User(UserInput::SetMute(false)));
+    settle(&mut world, LOAD_MS);
+    assert_eq!(world.speech().process(), Process::Up, "speech is ready");
+    world
+}
+
+fn step(world: &mut World, input: Input) {
+    let outcome = world.step(input);
+    assert_eq!(outcome.violation, None, "{}", outcome.line);
+}
+
+/// Lets `ms` of virtual time pass, delivering what the parts answer.
+fn settle(world: &mut World, ms: u64) {
+    for outcome in world.settle(ms) {
+        assert_eq!(outcome.violation, None, "{}", outcome.line);
+    }
+}
+
+/// The user speaks `text` as turn `n`: speech starts, 400 ms later the turn ends.
+fn say(world: &mut World, n: u64, text: &str) {
+    let turn = TurnId::from_parts(world.now_ms(), u128::from(n));
+    step(world, Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
+    settle(world, 400);
+    step(
+        world,
+        Input::Voice(VoiceEvent::EndOfTurn {
+            turn,
+            text: Personal::new(text.to_owned()),
+            smart_turn_pct: 92,
+            silence_ms: 250,
+            asr_confidence_pct: 96,
+            reason: TurnEndReason::SmartTurn,
+            source: 0,
+            level_db: -28,
+        }),
+    );
+}
+
+fn events(world: &World) -> Vec<BusEvent> {
+    world.published().iter().map(|event| event.body.clone()).collect()
+}
+
+/// The worker session started for `job`.
+fn session_of(world: &World, job: JobId) -> Option<WorkerSessionId> {
+    world.effects().iter().find_map(|effect| {
+        if let Effect::Worker(session, WorkerCmd::Start(spec)) = &effect.body
+            && spec.trace.job == Some(job)
+        {
+            Some(*session)
+        } else {
+            None
+        }
+    })
+}
+
+/// How many terminal events `job` had.
+fn ends(events: &[BusEvent], job: JobId) -> usize {
+    let ended = |event: &&BusEvent| {
+        matches!(
+            event,
+            BusEvent::JobCompleted { job: j, .. }
+                | BusEvent::JobFailed { job: j, .. }
+                | BusEvent::JobCancelled { job: j, .. }
+                | BusEvent::JobInterrupted { job: j } if *j == job
+        )
+    };
+    events.iter().filter(ended).count()
+}
+
+/// The jobs accepted so far, with their names, in accept order.
+fn accepted_jobs(all: &[BusEvent]) -> Vec<(JobId, String)> {
+    all.iter()
+        .filter_map(|event| {
+            if let BusEvent::JobAccepted { job, name, .. } = event {
+                Some((*job, name.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Three jobs dispatched in three turns, each running when the next starts; returns them,
+/// with their names, in accept order.
+fn start_three(world: &mut World) -> Vec<(JobId, String)> {
+    let titles =
+        [("general", "the report"), ("research", "the price check"), ("coding", "the parser fix")];
+    for (n, (kind, title)) in [1_u64, 2, 3].into_iter().zip(titles) {
+        let args = json!({ "kind": kind, "task": format!("do {title}"), "title_hint": title });
+        world.script_brain(BrainReply::text(&["Starting it now. "]).dispatching_args(args));
+        say(world, n, &format!("Eileen, start {title}"));
+        settle(world, 3_000);
+    }
+    let all = events(world);
+    let accepted = accepted_jobs(&all);
+    let names: Vec<&str> = accepted.iter().map(|(_, name)| name.as_str()).collect();
+    assert_eq!(names, ["the report", "the price check", "the parser fix"], "three jobs");
+    let started = all.iter().filter(|e| matches!(e, BusEvent::JobStarted { .. })).count();
+    assert_eq!(started, 3, "all three run at once");
+    assert_eq!(world.eileen_use().workers, 3, "three live worker sessions");
+    for (job, name) in &accepted {
+        assert_eq!(ends(&all, *job), 0, "{name} still runs");
+    }
+    accepted
+}
+
+/// The brain steers `job` through `jobs_control`; returns what its session was sent.
+fn steer(world: &mut World, job: JobId) -> Vec<WorkerCmd> {
+    let session = session_of(world, job).expect("the job's session");
+    world.script_brain(BrainReply::text(&["I will tell it. "]).controlling(json!({
+        "job": { "name": "the parser fix" },
+        "action": { "steer": { "text": "only look at the parser" } }
+    })));
+    let from = world.effects().len();
+    say(world, 4, "Eileen, tell the parser fix to only look at the parser");
+    settle(world, 3_000);
+    world.effects()[from..]
+        .iter()
+        .filter_map(|effect| {
+            if let Effect::Worker(to, cmd) = &effect.body
+                && *to == session
+            {
+                Some(cmd.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// What Eileen announced so far.
+fn announced(all: &[BusEvent]) -> Vec<String> {
+    all.iter()
+        .filter_map(|event| {
+            if let BusEvent::Speaking { cause: SpeakCause::Announcement, text, .. } = event {
+                Some(text.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn three_parallel_jobs_run_side_by_side_and_each_ends_in_one_state() {
+    let mut world = world();
+    world.set_worker_ms(WORK_MS);
+    let accepted = start_three(&mut world);
+    let (report, price, parser) = (accepted[0].0, accepted[1].0, accepted[2].0);
+    assert_eq!(
+        steer(&mut world, parser),
+        [WorkerCmd::Interrupt, WorkerCmd::Prompt { text: "only look at the parser".to_owned() }],
+        "the steer reached the parser fix's bound session"
+    );
+
+    say(&mut world, 5, "Eileen, cancel the price check");
+    settle(&mut world, 1_000);
+    let all = events(&world);
+    assert!(
+        all.iter().any(|e| matches!(
+            e,
+            BusEvent::JobCancelled { job, by: CancelSource::Voice } if *job == price
+        )),
+        "the price check, by its name"
+    );
+    assert_eq!(ends(&all, report) + ends(&all, parser), 0, "the other two run on");
+
+    settle(&mut world, WORK_MS + 15_000);
+    let all = events(&world);
+    for (job, name) in &accepted {
+        assert_eq!(ends(&all, *job), 1, "{name} ends in exactly one terminal state");
+    }
+    for job in [report, parser] {
+        let completed =
+            all.iter().any(|e| matches!(e, BusEvent::JobCompleted { job: j, .. } if *j == job));
+        assert!(completed, "{job} completed");
+    }
+    let announced = announced(&all);
+    assert_eq!(announced.len(), 2, "two completions, each once: {announced:?}");
+    assert!(announced.iter().any(|t| t.starts_with("The report is done.")), "{announced:?}");
+    assert!(
+        announced.iter().any(|t| t.starts_with("The parser fix is done.")),
+        "the steered job, after its steered turn: {announced:?}"
+    );
+    assert_eq!(world.eileen_use().workers, 0, "no worker session is left");
+}
+
+#[test]
+fn a_fan_out_with_a_rerouted_agent_ends_once_after_its_last_agent() {
+    let mut world = world();
+    world.set_worker_ms(WORK_MS);
+    let fan_out = json!({
+        "kind": "coding",
+        "task": "fix the flaky login tests",
+        "title_hint": "flaky login tests",
+        "fanout": 3
+    });
+    world.script_brain(BrainReply::text(&["Starting three agents. "]).dispatching_args(fan_out));
+    say(&mut world, 1, "Eileen, launch three agents to fix the flaky login tests");
+    settle(&mut world, 3_000);
+    let names: Vec<String> = accepted_jobs(&events(&world)).into_iter().map(|(_, n)| n).collect();
+    let wanted = ["flaky login tests", "agent one", "agent two", "agent three"];
+    assert_eq!(names, wanted, "the parent, then its agents in accept order");
+    assert_eq!(world.eileen_use().workers, 3, "a session per agent, none for the parent");
+
+    world.script_brain(BrainReply::text(&["Moving it. "]).controlling(json!({
+        "job": { "name": "agent two" },
+        "action": { "reroute": { "depth": "deep" } }
+    })));
+    say(&mut world, 2, "Eileen, send agent two to a stronger model");
+    settle(&mut world, 3_000);
+    let jobs = accepted_jobs(&events(&world));
+    assert_eq!(jobs.len(), 5, "one new job: {jobs:?}");
+    let (parent, old_two, new_two) = (jobs[0].0, jobs[2].0, jobs[4].0);
+    assert_eq!(jobs[4].1, "agent two", "the rerouted agent keeps the name the user knows");
+    let cancelled = events(&world).into_iter().any(
+        |e| matches!(e, BusEvent::JobCancelled { job, by: CancelSource::Voice } if job == old_two),
+    );
+    assert!(cancelled, "the old agent two is cancelled");
+    assert_eq!(world.eileen_use().workers, 3, "its session ended as the new one started");
+
+    settle(&mut world, WORK_MS + 15_000);
+    let all = events(&world);
+    for (job, name) in &jobs {
+        assert_eq!(ends(&all, *job), 1, "{name} ends in exactly one terminal state");
+    }
+    let completed = |id: JobId| {
+        all.iter().find_map(|e| {
+            if let BusEvent::JobCompleted { job, summary, .. } = e
+                && *job == id
+            {
+                Some(summary.get().clone())
+            } else {
+                None
+            }
+        })
+    };
+    assert!(completed(new_two).is_some(), "the new agent two completed");
+    let gathered = completed(parent);
+    assert_eq!(gathered.as_deref(), Some("3 of 3 agents finished."), "counting the new agent");
+    assert_eq!(
+        announced(&all),
+        ["Flaky login tests is done: 3 of 3 agents finished."],
+        "one announcement for the whole fan-out"
+    );
+    assert_eq!(world.eileen_use().workers, 0, "no worker session is left");
+}
