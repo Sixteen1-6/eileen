@@ -16,10 +16,11 @@
 //!   as glibc reads it. One whose daylight saving time lasts a whole year or more keeps it all
 //!   year, as section 3.3.1 and tzcode say; glibc 2.39 shows standard time in the hours of
 //!   January 1 before the year's start, which no zone of tzdata 2026c's has.
-//! - Otherwise a year starts in the offset the year before ended in. glibc 2.39 starts a year
-//!   whose end comes before its start in daylight saving time whatever the year before ended in;
-//!   the two differ only for a rule whose changes swap order from one year to another, which no
-//!   zone of tzdata 2026c's has.
+//! - Otherwise a year starts in the offset the year before ended in, as tzcode reads it. glibc
+//!   2.39 reads each UTC year's changes alone: it starts a year whose end comes before its start
+//!   in daylight saving time, and any other year in standard time, whatever the year before did.
+//!   The two differ for a rule whose changes swap order from one year to another, and for one
+//!   whose change time carries a change across New Year; no zone of tzdata 2026c's has either.
 
 /// Seconds in a day.
 const DAY: i64 = 86_400;
