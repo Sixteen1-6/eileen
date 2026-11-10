@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use eileen_desktop_linux::ObjectRef;
+use zbus::OwnedObjectPath;
 use zbus::fdo;
-use zbus::zvariant::OwnedObjectPath;
 
 /// The launcher's object on the session bus.
 const LAUNCHER: &str = "/org/a11y/bus";
@@ -52,7 +52,7 @@ struct Failure(&'static str);
 
 impl zbus::DBusError for Failure {
     fn create_reply(&self, msg: &zbus::message::Header<'_>) -> zbus::Result<zbus::Message> {
-        zbus::Message::error(msg, self.0)?.build(&())
+        zbus::Message::error(msg, self.0).build(&())
     }
 
     fn name(&self) -> zbus::names::ErrorName<'_> {
@@ -141,7 +141,9 @@ impl Session {
         let launcher = serve(&bus, "org.a11y.Bus", LAUNCHER, launcher).await;
         let (enabled, writes) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)));
         let status = Status { enabled: Arc::clone(&enabled), writes: Arc::clone(&writes) };
-        assert!(launcher.object_server().at(LAUNCHER, status).await.unwrap(), "Status is served");
+        let added = launcher.object_server().at(LAUNCHER, status).await.unwrap();
+        // zbus hands an interface back when the path already has one of its name.
+        assert!(added.is_none(), "Status is served");
         let conn = bus.connect().await;
         Self { conn, address, enabled, writes, launcher, _bus: bus }
     }
@@ -343,9 +345,9 @@ impl App {
         let server = self.conn.object_server();
         if let Some(text) = node.text.clone() {
             let text = Text { text, reads: Arc::clone(&calls.text_reads) };
-            assert!(server.at(path, text).await.unwrap(), "Text is served at {path}");
+            assert!(server.at(path, text).await.unwrap().is_none(), "Text is served at {path}");
         }
-        assert!(server.at(path, Object(node)).await.unwrap(), "{path} is served");
+        assert!(server.at(path, Object(node)).await.unwrap().is_none(), "{path} is served");
         calls
     }
 

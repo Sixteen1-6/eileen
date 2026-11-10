@@ -63,7 +63,7 @@
 //!   for, is read child by child by index, and only as far as the room goes.
 //! - libatspi waits up to 15 s on an app it first saw less than 15 s ago, and 800 ms only after;
 //!   [`CALL_TIMEOUT`] is 800 ms from the start, so a read just after an app starts can time out.
-//! - The connect is not bounded: zbus 5.19 times no handshake, so a socket that accepts and never
+//! - The connect is not bounded: zbus 6.1 times no handshake, so a socket that accepts and never
 //!   answers holds [`accessibility_bus`] until its caller's deadline (the bridge's, in a trait).
 //! - A second at-spi-bus-launcher started with the session's `XDG_RUNTIME_DIR` and `DISPLAY`
 //!   takes over the live bus's socket path and display property, which cuts the desktop's apps
