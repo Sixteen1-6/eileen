@@ -104,11 +104,15 @@ fn a_power_file_that_never_answers_holds_the_load_only_to_its_deadline() {
     let held = Err(PlatformError::DeadlineExceeded { call: "MachineProbe::load" });
     assert_eq!(probe.load_within(SHORT), held, "the call answers at its deadline");
     assert_eq!(probe.load_within(SHORT), held, "and the next, which waits for the same read");
+    // As many idle ticks again: 30% busy since boot, and none since the fixture's 60%.
+    let stat = root.join("proc/stat");
+    let busy_since_boot = std::fs::read_to_string(&stat).unwrap().replacen(" 3699 ", " 13089 ", 1);
+    std::fs::write(&stat, busy_since_boot).unwrap();
     release(&status, &text);
     let on_battery_saver = PowerState { has_battery: true, on_battery: true, battery_saver: true };
     assert_eq!(
         probe.load_within(LONG),
-        Ok((60, on_battery_saver)),
+        Ok((30, on_battery_saver)),
         "a read anew, and the share since boot, which the held calls left"
     );
 }
