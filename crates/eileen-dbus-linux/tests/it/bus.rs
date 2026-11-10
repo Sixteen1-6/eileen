@@ -1,6 +1,8 @@
 //! The private bus, the silent bus, the method timeout (a private bus's, and a bus's at an
 //! address), the addresses a bus at an address refuses, and the round-trip barrier.
 
+use std::future::Future;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use eileen_dbus_linux::testing::{
@@ -36,8 +38,8 @@ async fn signals(conn: &zbus::Connection) -> zbus::MessageStream {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface(INTERFACE)
-        .unwrap()
-        .build();
+        .build()
+        .unwrap();
     zbus::MessageStream::for_match_rule(rule, conn, None).await.unwrap()
 }
 
@@ -155,12 +157,25 @@ fn a_silent_bus_removes_its_folder_when_it_drops() {
 #[tokio::test(start_paused = true)]
 async fn a_connect_to_a_silent_bus_never_finishes() {
     let silent = SilentBus::start();
-    let builder = zbus::connection::Builder::address(silent.address()).unwrap();
-    // Paused time stands still while zbus connects the socket on a blocking thread. The
+    let builder = zbus::connection::Builder::address(silent.address());
+    // zbus connects the socket on tokio's reactor, and the kernel completes the connect. The
     // handshake then waits for an answer that never comes, and with nothing else to run, tokio
     // fires the timer at once.
     let connect = tokio::time::timeout(Duration::from_secs(60), builder.build()).await;
     assert!(connect.is_err(), "the handshake is still waiting a minute on: {connect:?}");
+}
+
+#[test]
+fn a_connection_built_outside_a_tokio_runtime_is_unsupported() {
+    let bus = PrivateBus::start();
+    let connect = std::pin::pin!(zbus::connection::Builder::address(bus.address()).build());
+    let built = connect.poll(&mut Context::from_waker(Waker::noop()));
+    // zbus would run the connection on its own runtime, zruntime, with its `default-rt`
+    // feature, which the workspace leaves off: only tokio's runtime serves a connection.
+    assert!(
+        matches!(built, Poll::Ready(Err(zbus::Error::Unsupported))),
+        "refused at once, with no runtime to run on: {built:?}"
+    );
 }
 
 #[tokio::test]

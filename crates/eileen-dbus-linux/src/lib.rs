@@ -47,8 +47,8 @@
 //! # Boundaries
 //!
 //! - May depend on `eileen-platform` (the error, `Deadline`, `Subscription`), `eileen-stdx`
-//!   (the named thread), `zbus` (tokio only, no async-io), `tokio` (the bridge's runtime, the
-//!   timer of a signal-answered wait) and `thiserror`. The Linux crates depend on it.
+//!   (the named thread), `zbus` (on tokio only: its `default-rt` stays off), `tokio` (the bridge's
+//!   runtime, the timer of a signal-answered wait) and `thiserror`. The Linux crates depend on it.
 //! - Product code never turns on `private-bus`: only dev-dependencies do.
 //!
 //! # Testing
@@ -63,8 +63,8 @@
 //! # Traps
 //!
 //! - Every signal stream, the ones zbus's proxies make included, has the same traps: one
-//!   that is not polled stalls its whole connection, and one dropped outside the tokio runtime's
-//!   context panics. They are written once, in the doc of `src/stream.rs`.
+//!   that is not polled stalls its whole connection, and a signal sent before it exists never
+//!   reaches it. They are written once, in the doc of `src/stream.rs`.
 //! - The bus delivers a signal addressed to a connection whatever its match rules say: check
 //!   the sender of every signal that must come from a service.
 //! - A bridge job and a watch's sink run on the bridge's one thread: one that blocks it stalls

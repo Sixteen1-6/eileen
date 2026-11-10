@@ -8,7 +8,7 @@ use std::time::Duration;
 use eileen_dbus_linux::testing::{PrivateBus, next_message, serve};
 use eileen_dbus_linux::{DbusError, Request, close_request};
 use zbus::message::Header;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 /// The portal's bus name.
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -68,7 +68,7 @@ impl FakePortal {
         &self,
         handle: &str,
         code: u32,
-        results: HashMap<String, OwnedValue>,
+        results: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
     ) {
@@ -84,7 +84,7 @@ async fn respond(conn: &zbus::Connection, to: &str, handle: &str, code: u32, mal
     if malformed {
         conn.emit_signal(Some(to), path, interface, "Response", &("not a code",)).await.unwrap();
     } else {
-        let body = (code, HashMap::<&str, Value<'_>>::new());
+        let body = (code, HashMap::<&str, Variant<'_>>::new());
         conn.emit_signal(Some(to), path, interface, "Response", &body).await.unwrap();
     }
 }
@@ -124,7 +124,7 @@ async fn setup(bus: &PrivateBus) -> (zbus::Connection, zbus::Connection, Request
 /// Calls the fake's `member` with `body` from `client`.
 async fn call<B>(client: &zbus::Connection, member: &str, body: &B) -> zbus::Message
 where
-    B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
+    B: zbus::export::serde::Serialize + zbus::DynamicType,
 {
     client.call_method(Some(PORTAL), PORTAL_PATH, Some(FAKE), member, body).await.unwrap()
 }
@@ -148,7 +148,8 @@ async fn a_response_carries_its_results() {
     let sender = request.follow(&reply).await.unwrap();
     let handle = request.path().to_string();
     let path = ObjectPath::try_from("/org/freedesktop/portal/desktop/session/1_7/s").unwrap();
-    let results = HashMap::from([("count", Value::from(3_u32)), ("session", Value::from(path))]);
+    let results =
+        HashMap::from([("count", Variant::from(3_u32)), ("session", Variant::from(path))]);
     call(&client, "RespondWith", &(handle.as_str(), 0_u32, results)).await;
     let response = request.answer(&sender, DEADLINE).await.unwrap();
     assert_eq!(response.code, 0, "the code");
