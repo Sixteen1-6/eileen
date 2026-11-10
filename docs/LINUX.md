@@ -174,7 +174,7 @@ The Windows design's safety rests on Job Objects, named-pipe caller checks and p
 
   `EILEEN_DATA_DIR` redirects everything exactly as on Windows. The machine-wide files keep their rule of ignoring it (BUILD.md 2.5 and 6.1).
 - **Path classes.** The classes of BUILD.md 2.12 need a Linux list.
-  - The classification reads the OS only through the `PathProbe` trait (decision D86), which `eileen-shell-linux` implements on Linux (BUILD.md 3.4) once WP2's `wp2/path-probe-trait` adds it; until then a path that needs a probe is `Unknown` on Linux.
+  - The classification reads the OS only through the `PathProbe` trait (decision D86), which `eileen-shell-linux` is to implement on Linux (BUILD.md 3.4) once WP2's `wp2/path-probe-trait` adds it; until then a path that needs a probe is `Unknown` on Linux.
   - `Credential`: `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, `~/.gnupg`, `~/.password-store`, `~/.local/share/keyrings`, `~/.docker/config.json`, `~/.kube`, and the vendor CLI credential files. It is kept as data, as check 14 already expects.
   - `BrowserProfile`: `~/.mozilla`, `~/.config/google-chrome`, `~/.config/chromium`, `~/.config/BraveSoftware`, `~/snap/firefox/common/.mozilla`, `~/.var/app/*`.
   - `Toolchain`: `~/.cargo`, `~/.rustup`, `/usr`, `/opt`.
