@@ -13,6 +13,7 @@ use eileen_dbus_linux::testing::{PrivateBus, nothing_ready, round_trip, serve};
 use eileen_shell_linux::{BoundShortcut, DbusError, Shortcut, ShortcutEvent, ShortcutsSession};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::message::Header;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
@@ -229,6 +230,22 @@ impl FakeSession {
 pub(super) async fn serve_portal(bus: &PrivateBus, fake: FakeShortcuts) -> zbus::Connection {
     let portal = serve(bus, PORTAL, PORTAL_PATH, fake.clone()).await;
     portal.object_server().at(PORTAL_PATH, FakeRegistry(fake)).await.unwrap();
+    portal
+}
+
+/// Serves `fake` as [`serve_portal`] does, and then asks the bus for the portal's name with
+/// `flag`: `AllowReplacement`, as xdg-desktop-portal asks, lets a portal that asks with
+/// `ReplaceExisting`, as `xdg-desktop-portal --replace` does, take the name straight from it.
+pub(super) async fn serve_portal_with(
+    bus: &PrivateBus,
+    fake: FakeShortcuts,
+    flag: RequestNameFlags,
+) -> zbus::Connection {
+    let portal = bus.connect().await;
+    portal.object_server().at(PORTAL_PATH, fake.clone()).await.unwrap();
+    portal.object_server().at(PORTAL_PATH, FakeRegistry(fake)).await.unwrap();
+    let reply = portal.request_name_with_flags(PORTAL, flag.into()).await.unwrap();
+    assert_eq!(reply, RequestNameReply::PrimaryOwner, "the fake owns the portal's name");
     portal
 }
 

@@ -13,6 +13,7 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, owner_changes};
 use eileen_platform::{PlatformError, ShellHost, ShellInputEvent, VirtualKey};
 use eileen_shell_linux::{BoundHotkey, DbusError, LinuxShell, LinuxShellEvent, ShortcutId};
 use tokio::sync::mpsc;
+use zbus::fdo::RequestNameFlags;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::keep_awake::left;
@@ -381,6 +382,57 @@ fn a_portal_that_restarts_gets_the_set_bound_again_and_its_keys_reach_the_sink()
         "a press from the new one"
     );
     send(&fakes, &second_portal, &again, "Activated", "dictation");
+    assert_eq!(input.blocking_recv(), down, "and the dictation key, to the same watch");
+}
+
+#[test]
+fn a_portal_replaced_in_place_gets_the_set_bound_again_without_the_shortcuts_going_off() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let first_portal = fakes.shortcuts_with(&bus, fake, RequestNameFlags::AllowReplacement);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let first = bind_of(&mut reports, 2);
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound");
+    fakes.runtime.block_on(press(
+        &first_portal,
+        &first.caller,
+        "Activated",
+        &first.session,
+        "dictation",
+    ));
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the dictation key is held");
+    // `xdg-desktop-portal --replace`: the name goes straight from the first portal to the second,
+    // in one owner change, and never has no owner.
+    let (fake, mut new_reports) = FakeShortcuts::new(Modes::GRANT);
+    let second_portal = fakes.shortcuts_with(&bus, fake, RequestNameFlags::ReplaceExisting);
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "the held key is released as its portal goes");
+    let again = bind_of(&mut new_reports, 2);
+    assert_eq!(again.shortcuts, first.shortcuts, "the new portal is asked for the same set");
+    assert_eq!(again.caller, first.caller, "by the same holder");
+    assert!(
+        matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)),
+        "bound again, with no refusal before it: the shortcuts were never off"
+    );
+    let send = |member: &str, id: &str| {
+        fakes.runtime.block_on(press(&second_portal, &again.caller, member, &again.session, id));
+    };
+    send("Activated", "hotkey-1");
+    assert_eq!(
+        events.blocking_recv(),
+        Some(LinuxShellEvent::Hotkey(1)),
+        "a press from the new one"
+    );
+    send("Activated", "dictation");
     assert_eq!(input.blocking_recv(), down, "and the dictation key, to the same watch");
 }
 
