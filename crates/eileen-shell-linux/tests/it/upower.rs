@@ -16,8 +16,8 @@ use eileen_shell_linux::facts::PowerState;
 use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};
 use zbus::message::{Flags, Type as MessageType};
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Str};
 use zbus::{Message, MessageStream};
+use zbus::{OwnedObjectPath, OwnedVariant, Str};
 
 const ROOT: &str = "/org/freedesktop/UPower";
 const AC: &str = "/org/freedesktop/UPower/devices/line_power_AC";
@@ -136,8 +136,8 @@ impl Profiles {
         Self { active, holds: Vec::new() }
     }
 
-    fn holds(&self) -> Vec<HashMap<String, OwnedValue>> {
-        let text = |text: &str| OwnedValue::from(Str::from(text.to_owned()));
+    fn holds(&self) -> Vec<HashMap<String, OwnedVariant>> {
+        let text = |text: &str| OwnedVariant::from(Str::from(text.to_owned()));
         self.holds
             .iter()
             .map(|(profile, program)| {
@@ -162,7 +162,7 @@ impl CurrentProfiles {
     }
 
     #[zbus(property)]
-    fn active_profile_holds(&self) -> Vec<HashMap<String, OwnedValue>> {
+    fn active_profile_holds(&self) -> Vec<HashMap<String, OwnedVariant>> {
         self.0.holds()
     }
 }
@@ -178,7 +178,7 @@ impl LegacyProfiles {
     }
 
     #[zbus(property)]
-    fn active_profile_holds(&self) -> Vec<HashMap<String, OwnedValue>> {
+    fn active_profile_holds(&self) -> Vec<HashMap<String, OwnedVariant>> {
         self.0.holds()
     }
 }
@@ -607,7 +607,6 @@ impl Unstartable {
         while let Some(message) = eileen_dbus_linux::next(&mut self.calls).await {
             if message.message_type() == MessageType::MethodCall {
                 let reply = Message::error(&message.header(), self.error)
-                    .unwrap()
                     .build(&("the unit or program, in the bus's own words",))
                     .unwrap();
                 self.connection.send(&reply).await.unwrap();
@@ -618,13 +617,7 @@ impl Unstartable {
 
 /// A connection on `bus` that owns `name` and serves nothing, so it answers no call.
 async fn owner(bus: &PrivateBus, name: &'static str) -> zbus::Connection {
-    zbus::connection::Builder::address(bus.address())
-        .unwrap()
-        .name(name)
-        .unwrap()
-        .build()
-        .await
-        .unwrap()
+    zbus::connection::Builder::address(bus.address()).name(name).build().await.unwrap()
 }
 
 // What the bus answers when it could not start a daemon: systemd's errors for a masked unit and
@@ -999,7 +992,7 @@ fn made(seen: &[Message]) -> Vec<String> {
 fn may_start_a_daemon(call: &Message) -> bool {
     let header = call.header();
     let to = header.destination().map(|name| name.as_str().to_owned()).unwrap_or_default();
-    let flagged = header.primary().flags().contains(Flags::NoAutoStart);
+    let flagged = header.primary().flags().contains(Flags::NO_AUTO_START);
     !flagged && !to.starts_with(':') && to != "org.freedesktop.DBus"
 }
 

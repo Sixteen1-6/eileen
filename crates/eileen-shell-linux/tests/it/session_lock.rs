@@ -150,7 +150,7 @@ async fn a_caller_outside_every_session_finds_none() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&raw, zbus::Error::MethodError(name, _, _) if name.as_str() == UNKNOWN_OBJECT),
+        matches!(&raw, zbus::Error::FDO(error) if zbus::DBusError::name(error.as_ref()) == UNKNOWN_OBJECT),
         "the fake answers as logind does: {raw}"
     );
     let lock = SessionLock::new(&caller);

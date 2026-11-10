@@ -34,8 +34,8 @@ use std::task::{Context, Poll};
 
 use eileen_dbus_linux::{Names, OwnerChange, OwnerChanges, Signals, Stream, drain, subscribe};
 use zbus::message::Type as MessageType;
-use zbus::zvariant::{OwnedObjectPath, Value};
 use zbus::{Connection, MatchRule, Message};
+use zbus::{OwnedObjectPath, Variant};
 
 use super::profiles::{ProfilesAnswer, read_profiles};
 use super::{DEVICE, LEGACY_PROFILES, PROFILES, PROPERTIES, UPOWER, UPOWER_PATH};
@@ -328,7 +328,7 @@ fn changes_any(message: &Message, interface: &str, names: &[&str]) -> bool {
         return false;
     }
     let body = message.body();
-    match body.deserialize::<(&str, HashMap<&str, Value<'_>>, Vec<&str>)>() {
+    match body.deserialize::<(&str, HashMap<&str, Variant<'_>>, Vec<&str>)>() {
         Ok((changed_interface, changed, invalidated)) => {
             changed_interface == interface
                 && names.iter().any(|name| changed.contains_key(name) || invalidated.contains(name))
@@ -339,11 +339,7 @@ fn changes_any(message: &Message, interface: &str, names: &[&str]) -> bool {
 
 /// Every signal of `UPower`'s root object: `PropertiesChanged`, `DeviceAdded`, `DeviceRemoved`.
 fn root_rule() -> zbus::Result<MatchRule<'static>> {
-    Ok(MatchRule::builder()
-        .msg_type(MessageType::Signal)
-        .sender(UPOWER)?
-        .path(UPOWER_PATH)?
-        .build())
+    MatchRule::builder().msg_type(MessageType::Signal).sender(UPOWER).path(UPOWER_PATH).build()
 }
 
 /// `PropertiesChanged` of `interface` at `path`, from the owner of `sender`.
@@ -352,14 +348,14 @@ fn properties_rule<'p>(
     path: &'p str,
     interface: &'static str,
 ) -> zbus::Result<MatchRule<'p>> {
-    Ok(MatchRule::builder()
+    MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .sender(sender)?
-        .path(path)?
-        .interface(PROPERTIES)?
-        .member("PropertiesChanged")?
-        .arg(0, interface)?
-        .build())
+        .sender(sender)
+        .path(path)
+        .interface(PROPERTIES)
+        .member("PropertiesChanged")
+        .arg(0, interface)
+        .build()
 }
 
 #[cfg(test)]
@@ -368,16 +364,15 @@ mod tests {
 
     use eileen_dbus_linux::OwnerChange;
     use zbus::Message;
-    use zbus::zvariant::{ObjectPath, Value};
+    use zbus::{ObjectPath, Variant};
 
     use super::{DEVICE, Outdated, PowerDaemon, Source, outdated_by, started};
 
     /// A `PropertiesChanged` signal at `path`.
     fn changed(path: &str, interface: &str, changed: &[&str], invalidated: &[&str]) -> Message {
-        let values: HashMap<&str, Value<'_>> =
-            changed.iter().map(|name| (*name, Value::from(true))).collect();
+        let values: HashMap<&str, Variant<'_>> =
+            changed.iter().map(|name| (*name, Variant::from(true))).collect();
         Message::signal(path, "org.freedesktop.DBus.Properties", "PropertiesChanged")
-            .unwrap()
             .build(&(interface, values, invalidated.to_vec()))
             .unwrap()
     }
@@ -394,12 +389,10 @@ mod tests {
             |names: &[&str], gone: &[&str]| changed(root, "org.freedesktop.UPower", names, gone);
         let on_bat0 = |interface: &str, names: &[&str]| changed(bat0, interface, names, &[]);
         let added = Message::signal(root, "org.freedesktop.UPower", "DeviceAdded")
-            .unwrap()
             .build(&(ObjectPath::try_from(bat0).unwrap(),))
             .unwrap();
         let unparsed =
             Message::signal(bat0, "org.freedesktop.DBus.Properties", "PropertiesChanged")
-                .unwrap()
                 .build(&("not the properties' shape",))
                 .unwrap();
         let cases = [
@@ -452,7 +445,7 @@ mod tests {
         ];
         let bus = ("/org/freedesktop/DBus", "org.freedesktop.DBus");
         for (name, old_owner, new_owner, expected, case) in cases {
-            let signal = Message::signal(bus.0, bus.1, "NameOwnerChanged").unwrap();
+            let signal = Message::signal(bus.0, bus.1, "NameOwnerChanged");
             let change = OwnerChange::of(&signal.build(&(name, old_owner, new_owner)).unwrap());
             assert_eq!(change.map(|change| started(&change)), Some(expected), "{case}");
         }

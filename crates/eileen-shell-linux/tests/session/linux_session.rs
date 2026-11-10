@@ -25,7 +25,7 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, system_bus};
 use eileen_shell_linux::{
     LinuxShell, LinuxShellSettings, NotifierSettings, ShortcutNames, TraySettings,
 };
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{OwnedVariant, Variant};
 
 mod keep_awake;
 mod lock;
@@ -88,7 +88,7 @@ impl Drop for Session {
 /// `allow_active`: polkit allows it to a caller in an active local session, as the tests in the
 /// lane's are (the power tests' doc says which session polkit gives a process in none).
 async fn set_profile(system: &zbus::Connection, profile: &str) -> zbus::Result<()> {
-    let property = (PROFILES, "ActiveProfile", Value::from(profile));
+    let property = (PROFILES, "ActiveProfile", Variant::from(profile));
     let reply =
         system.call_method(Some(PROFILES), PROFILES_PATH, Some(PROPERTIES), "Set", &property);
     reply.await.map(|_reply| ())
@@ -99,8 +99,8 @@ async fn active_profile(system: &zbus::Connection) -> zbus::Result<String> {
     let property = (PROFILES, "ActiveProfile");
     let reply =
         system.call_method(Some(PROFILES), PROFILES_PATH, Some(PROPERTIES), "Get", &property);
-    let value: OwnedValue = reply.await?.body().deserialize()?;
-    Ok(String::try_from(value)?)
+    let value: OwnedVariant = reply.await?.body().deserialize()?;
+    String::try_from(value)
 }
 
 /// Sets the power profile back to the one a test found if it drops while armed, a panicking

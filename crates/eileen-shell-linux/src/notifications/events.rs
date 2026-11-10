@@ -25,7 +25,7 @@
 //! Traps:
 //!
 //! - Every signal stream's traps hold (`eileen-dbus-linux`'s crate doc, Traps): poll the stream
-//!   steadily or drop it, and drop it inside the tokio runtime's context.
+//!   steadily or drop it.
 //! - Many servers broadcast the signals for every app's notifications, so the stream carries
 //!   ids this client never made: the caller matches the ids `notify` returned, server included.
 //! - Once the name changes owner, no event names the previous server's notifications again: on
@@ -42,7 +42,6 @@ use eileen_dbus_linux::{
     subscribe,
 };
 use zbus::MatchRule;
-use zbus::match_rule::Builder;
 use zbus::names::OwnedUniqueName;
 
 use super::{INTERFACE, NAME, NotificationId, NotificationServer, Notifier, PATH};
@@ -108,7 +107,7 @@ pub enum NotificationEvent {
 impl Notifier {
     /// The server's events from now on. It succeeds with no server running: the stream
     /// follows the name to whichever program owns it, now or later, and says when that
-    /// changes. Call it, and drop the stream, in the tokio runtime's context, as in a task.
+    /// changes. Call it in the tokio runtime's context, as in a task.
     pub async fn events(&self) -> Result<NotificationEvents, DbusError> {
         // The owner changes first, then the signals, then the owner itself: no change after the
         // first subscription goes unseen, and no signal is judged by the wrong owner.
@@ -116,9 +115,9 @@ impl Notifier {
         let rule = MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
             .sender(NAME)
-            .and_then(|rule| rule.path(PATH))
-            .and_then(|rule| rule.interface(INTERFACE))
-            .map(Builder::build);
+            .path(PATH)
+            .interface(INTERFACE)
+            .build();
         let signals = subscribe(&self.connection, rule, SIGNALS).await?;
         let answer = name_owner(&self.connection, NAME).await?;
         let (owner, change) = start(answer, &mut owners).await;
@@ -153,7 +152,7 @@ where
 /// server changed, as a stream the caller drives with [`next`](Self::next) or as a [`Stream`];
 /// nothing runs on its own. The `events` module's doc gives its rules and traps: only the name's
 /// owner speaks for the server, other apps' notifications come too, and the stream must be
-/// polled steadily and dropped inside the tokio runtime's context.
+/// polled steadily or dropped.
 #[derive(Debug)]
 #[must_use = "a stream does nothing unless polled"]
 pub struct NotificationEvents {

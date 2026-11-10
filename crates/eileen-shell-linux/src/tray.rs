@@ -47,7 +47,7 @@ use tokio::sync::mpsc;
 use zbus::Connection;
 use zbus::fdo;
 use zbus::object_server::{InterfaceRef, SignalEmitter};
-use zbus::zvariant::{ObjectPath, OwnedValue, Value};
+use zbus::{ObjectPath, OwnedVariant, Variant};
 
 use crate::DbusError;
 use menu::{Layout, Menu, Properties, ROOT};
@@ -399,7 +399,7 @@ impl MenuServer {
     }
 
     /// One property of the node `id`.
-    fn get_property(&self, id: i32, name: String) -> fdo::Result<Value<'static>> {
+    fn get_property(&self, id: i32, name: String) -> fdo::Result<Variant<'static>> {
         let mut properties = self.menu.properties(id, &[]).ok_or_else(|| unknown(id))?;
         properties
             .remove(&name)
@@ -407,13 +407,19 @@ impl MenuServer {
     }
 
     /// An event of the host's, such as a click.
-    fn event(&self, id: i32, event_id: &str, data: OwnedValue, timestamp: u32) -> fdo::Result<()> {
+    fn event(
+        &self,
+        id: i32,
+        event_id: &str,
+        data: OwnedVariant,
+        timestamp: u32,
+    ) -> fdo::Result<()> {
         if self.take(id, event_id) { Ok(()) } else { Err(unknown(id)) }
     }
 
     /// Several events: the ids the menu does not know, or `InvalidArgs` when it knows none.
-    fn event_group(&self, events: Vec<(i32, String, OwnedValue, u32)>) -> fdo::Result<Vec<i32>> {
-        let taken = |(id, event, _, _): &(i32, String, OwnedValue, u32)| self.take(*id, event);
+    fn event_group(&self, events: Vec<(i32, String, OwnedVariant, u32)>) -> fdo::Result<Vec<i32>> {
+        let taken = |(id, event, _, _): &(i32, String, OwnedVariant, u32)| self.take(*id, event);
         let errors = events.iter().filter(|event| !taken(event)).map(|e| e.0).collect();
         id_errors(events.len(), errors)
     }

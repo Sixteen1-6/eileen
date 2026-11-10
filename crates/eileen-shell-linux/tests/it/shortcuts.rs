@@ -14,7 +14,7 @@ use eileen_shell_linux::{BoundShortcut, DbusError, Shortcut, ShortcutEvent, Shor
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use zbus::message::Header;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{OwnedObjectPath, OwnedVariant, Variant};
 
 /// The portal's service and object, and the interfaces the fake serves or signals on.
 pub(super) const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -124,7 +124,7 @@ impl FakeShortcuts {
 impl FakeShortcuts {
     async fn create_session(
         &self,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
@@ -136,7 +136,7 @@ impl FakeShortcuts {
         conn.object_server().at(&session, FakeSession(closer)).await?;
         let _ignored = self.reports.send(Report::Created(session.clone())).await;
         // A string, as xdg-desktop-portal sends it: the documented erratum.
-        let results = HashMap::from([("session_handle", Value::from(session.to_string()))]);
+        let results = HashMap::from([("session_handle", Variant::from(session.to_string()))]);
         answer(conn, &caller, &request, self.modes.create, results).await;
         Ok(request)
     }
@@ -148,9 +148,9 @@ impl FakeShortcuts {
     async fn bind_shortcuts(
         &self,
         session_handle: OwnedObjectPath,
-        shortcuts: Vec<(String, HashMap<String, OwnedValue>)>,
+        shortcuts: Vec<(String, HashMap<String, OwnedVariant>)>,
         parent_window: &str,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
@@ -188,7 +188,7 @@ impl FakeRegistry {
     async fn register(
         &self,
         app_id: &str,
-        options: HashMap<String, OwnedValue>,
+        options: HashMap<String, OwnedVariant>,
         #[zbus(header)] header: Header<'_>,
     ) {
         let (_caller, first) = self.0.caller(&header);
@@ -239,25 +239,27 @@ fn handle(kind: &str, caller: &str, token: &str) -> OwnedObjectPath {
 }
 
 /// The text option `key` of `options`.
-fn text(options: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
+fn text(options: &HashMap<String, OwnedVariant>, key: &str) -> Option<String> {
     options.get(key).map(|value| <&str>::try_from(value).unwrap().to_owned())
 }
 
 /// The desktop's answer to a bind of `listed`: each shortcut with its description and, for one
 /// offered with a trigger, a description of the trigger that names it.
-pub(super) fn triggers(listed: &[Listed]) -> Value<'static> {
+pub(super) fn triggers(listed: &[Listed]) -> Variant<'static> {
     let described = |(id, description, trigger): &Listed| {
-        let mut details: HashMap<String, Value<'static>> = HashMap::new();
+        let mut details: HashMap<String, Variant<'static>> = HashMap::new();
         if let Some(description) = description {
-            details.insert("description".to_owned(), Value::from(description.clone()));
+            details.insert("description".to_owned(), Variant::from(description.clone()));
         }
         if let Some(trigger) = trigger {
-            details
-                .insert("trigger_description".to_owned(), Value::from(format!("Press {trigger}")));
+            details.insert(
+                "trigger_description".to_owned(),
+                Variant::from(format!("Press {trigger}")),
+            );
         }
         (id.clone(), details)
     };
-    Value::from(listed.iter().map(described).collect::<Vec<_>>())
+    Variant::from(listed.iter().map(described).collect::<Vec<_>>())
 }
 
 /// Answers `request` from `conn` to `caller` as `mode` says, with `results` when it grants.
@@ -266,7 +268,7 @@ async fn answer(
     caller: &str,
     request: &OwnedObjectPath,
     mode: Mode,
-    results: HashMap<&str, Value<'_>>,
+    results: HashMap<&str, Variant<'_>>,
 ) {
     match mode {
         Mode::Grant => respond(conn, caller, request, 0, results).await,
@@ -281,7 +283,7 @@ pub(super) async fn respond(
     caller: &str,
     request: &OwnedObjectPath,
     code: u32,
-    results: HashMap<&str, Value<'_>>,
+    results: HashMap<&str, Variant<'_>>,
 ) {
     conn.emit_signal(Some(caller), request, REQUEST, "Response", &(code, results)).await.unwrap();
 }
@@ -295,13 +297,13 @@ pub(super) async fn press(
     session: &OwnedObjectPath,
     id: &str,
 ) {
-    let body = (session, id, 7_u64, HashMap::<&str, Value<'_>>::new());
+    let body = (session, id, 7_u64, HashMap::<&str, Variant<'_>>::new());
     conn.emit_signal(Some(caller), PORTAL_PATH, SHORTCUTS, member, &body).await.unwrap();
 }
 
 /// Emits the session's `Closed` for `session` from `conn` to `caller`, as the portal ends one.
 pub(super) async fn end_session(conn: &zbus::Connection, caller: &str, session: &OwnedObjectPath) {
-    let no_details = (HashMap::<&str, Value<'_>>::new(),);
+    let no_details = (HashMap::<&str, Variant<'_>>::new(),);
     conn.emit_signal(Some(caller), session, SESSION, "Closed", &no_details).await.unwrap();
 }
 
@@ -421,7 +423,7 @@ async fn a_bind_whose_shortcuts_are_malformed_is_invalid() {
                 break bind;
             }
         };
-        let odd = HashMap::from([("shortcuts", Value::from("odd"))]);
+        let odd = HashMap::from([("shortcuts", Variant::from("odd"))]);
         respond(&portal, &bind.caller, &bind.request, 0, odd).await;
     });
     let detail = "the bound shortcuts are not a(sa{sv})".to_owned();
@@ -490,7 +492,7 @@ async fn the_sessions_close_ends_its_events() {
     let mut events = session.events().await.unwrap();
     let to = client.unique_name().unwrap().to_string();
     let ours = OwnedObjectPath::from(session.handle().to_owned());
-    let no_details = (HashMap::<&str, Value<'_>>::new(),);
+    let no_details = (HashMap::<&str, Variant<'_>>::new(),);
     let theirs = handle("session", ":1.999", "other");
     portal.emit_signal(Some(&*to), &theirs, SESSION, "Closed", &no_details).await.unwrap();
     press(&portal, &to, "Activated", &ours, "hotkey-1").await;

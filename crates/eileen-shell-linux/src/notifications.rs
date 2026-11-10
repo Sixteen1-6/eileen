@@ -65,8 +65,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use eileen_contracts::core_io::Toast;
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{DbusError, name_owner};
+use zbus::Variant;
 use zbus::names::{OwnedUniqueName, UniqueName};
-use zbus::zvariant::{DynamicDeserialize, Value};
+use zbus::wire::DynamicDeserialize;
 
 mod events;
 
@@ -271,8 +272,8 @@ impl Notifier {
         let body = body_text(&toast.body, capabilities.body_markup());
         let actions: &[&str] = &[];
         let hints = BTreeMap::from([
-            ("desktop-entry", Value::from(self.desktop_entry.as_str())),
-            ("urgency", Value::U8(NORMAL_URGENCY)),
+            ("desktop-entry", Variant::from(self.desktop_entry.as_str())),
+            ("urgency", Variant::U8(NORMAL_URGENCY)),
         ]);
         let arguments = (
             APP_NAME,
@@ -384,10 +385,16 @@ where
 /// one of the bus's own, which is the server's answer, or the bus's answer that the server
 /// itself is gone.
 fn already_gone(error: &zbus::Error) -> bool {
-    let zbus::Error::MethodError(name, _, _) = error else {
-        return false;
-    };
-    NO_SUCH_NAME.contains(&name.as_str()) || !name.as_str().starts_with(BUS_ERRORS)
+    let gone = |name: &str| NO_SUCH_NAME.contains(&name) || !name.starts_with(BUS_ERRORS);
+    if let zbus::Error::MethodError(name, _, _) = error {
+        return gone(name.as_str());
+    }
+    // zbus reads an error reply whose name its `fdo` module defines, as it does both of the
+    // bus's here, as `Error::FDO`.
+    if let zbus::Error::FDO(fdo) = error {
+        return gone(zbus::DBusError::name(fdo.as_ref()).as_str());
+    }
+    false
 }
 
 /// `text` as a D-Bus string can carry it: without U+0000.

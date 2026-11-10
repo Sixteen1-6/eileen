@@ -8,8 +8,8 @@
 
 use eileen_dbus_linux::testing::{ready_now, round_trip};
 use eileen_platform::ShellHost;
+use zbus::OwnedObjectPath;
 use zbus::message::Type;
-use zbus::zvariant::OwnedObjectPath;
 use zbus::{MatchRule, MessageStream};
 
 use super::{LOGIND, MANAGER, MANAGER_PATH, Session, shell};
@@ -41,14 +41,11 @@ fn a_lock_request_reaches_logind_for_this_session() {
         let rule = MatchRule::builder()
             .msg_type(Type::Signal)
             .sender(LOGIND)
-            .unwrap()
             .path(path.as_str())
-            .unwrap()
             .interface(SESSION)
-            .unwrap()
             .member("Lock")
-            .unwrap()
-            .build();
+            .build()
+            .unwrap();
         let mut locks = MessageStream::for_match_rule(rule, system, None).await.unwrap();
         // This blocks the test's thread, not the workers, which queue the signal meanwhile.
         shell.lock_workstation().unwrap();

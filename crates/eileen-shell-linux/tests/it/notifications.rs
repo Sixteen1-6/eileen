@@ -17,7 +17,7 @@ use eileen_shell_linux::{
 };
 use zbus::MessageStream;
 use zbus::object_server::{Interface, SignalEmitter};
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{OwnedVariant, Variant};
 
 /// The server's well-known name.
 pub(super) const NAME: &str = "org.freedesktop.Notifications";
@@ -54,11 +54,11 @@ pub(super) enum Hint {
 }
 
 impl Hint {
-    fn of(value: &Value<'_>) -> Self {
-        if let Value::U8(byte) = value {
+    fn of(value: &Variant<'_>) -> Self {
+        if let Variant::U8(byte) = value {
             return Self::Byte(*byte);
         }
-        if let Value::Str(text) = value {
+        if let Variant::Str(text) = value {
             return Self::Text(text.as_str().to_owned());
         }
         Self::Other(value.value_signature().to_string())
@@ -162,7 +162,7 @@ impl FakeServer {
         summary: String,
         body: String,
         actions: Vec<String>,
-        hints: HashMap<String, OwnedValue>,
+        hints: HashMap<String, OwnedVariant>,
         expire_timeout: i32,
     ) -> Result<u32, FakeError> {
         if self.refuse {
@@ -265,11 +265,9 @@ async fn serve_with(
     server: impl Interface,
     flags: impl FnOnce(zbus::connection::Builder<'static>) -> zbus::connection::Builder<'static>,
 ) -> zbus::Connection {
-    flags(zbus::connection::Builder::address(bus.address()).unwrap())
+    flags(zbus::connection::Builder::address(bus.address()))
         .name(NAME)
-        .unwrap()
         .serve_at(PATH, server)
-        .unwrap()
         .build()
         .await
         .unwrap()
