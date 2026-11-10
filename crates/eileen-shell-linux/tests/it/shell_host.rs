@@ -22,6 +22,7 @@ use eileen_shell_linux::{
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::time::Instant;
+use zbus::fdo::RequestNameFlags;
 
 use crate::autostart::Scratch;
 use crate::keep_awake::{
@@ -30,7 +31,7 @@ use crate::keep_awake::{
 };
 use crate::notifications::{FakeServer, Hint, NAME, PATH};
 use crate::session_lock::{FakeSession, SESSION_PATH};
-use crate::shortcuts::{FakeShortcuts, serve_portal};
+use crate::shortcuts::{FakeShortcuts, serve_portal, serve_portal_with};
 use crate::tray::{ITEM, ITEM_PATH, Registration, Rig, state, tray_item};
 
 /// The deadline of a call that cannot answer in time, its fake being silent: it passes whatever
@@ -98,6 +99,19 @@ impl Fakes {
     /// and answers the portal's connection.
     pub(super) fn shortcuts(&mut self, bus: &PrivateBus, fake: FakeShortcuts) -> zbus::Connection {
         let service = self.runtime.block_on(serve_portal(bus, fake));
+        self.services.push(service.clone());
+        service
+    }
+
+    /// Serves `fake` as [`Self::shortcuts`] does, asking for the portal's name with `flag`
+    /// ([`serve_portal_with`]).
+    pub(super) fn shortcuts_with(
+        &mut self,
+        bus: &PrivateBus,
+        fake: FakeShortcuts,
+        flag: RequestNameFlags,
+    ) -> zbus::Connection {
+        let service = self.runtime.block_on(serve_portal_with(bus, fake, flag));
         self.services.push(service.clone());
         service
     }

@@ -13,12 +13,15 @@ use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE, Names, owner_changes};
 use eileen_platform::{PlatformError, ShellHost, ShellInputEvent, VirtualKey};
 use eileen_shell_linux::{BoundHotkey, DbusError, LinuxShell, LinuxShellEvent, ShortcutId};
 use tokio::sync::mpsc;
+use zbus::fdo::RequestNameFlags;
+use zbus::zvariant::OwnedObjectPath;
 
 use crate::keep_awake::left;
 use crate::shell_host::{DESKTOP_ENTRY, Fakes, settings, shell_on};
 use crate::shortcuts::{
     Bind, FakeRegistry, FakeShortcuts, Mode, Modes, PORTAL as SHORTCUTS_PORTAL,
-    PORTAL_PATH as SHORTCUTS_PATH, Report, end_session, listed, press, respond as answer, triggers,
+    PORTAL_PATH as SHORTCUTS_PATH, Report, change, end_session, listed, press, respond as answer,
+    triggers,
 };
 
 /// A sink for the shell's events, and what it receives.
@@ -318,6 +321,147 @@ fn the_holder_closes_its_session_once_the_shell_drops() {
     drop(bridge);
 }
 
+/// The next answer `events` reports, passing over presses: the shortcuts the desktop bound, or
+/// its refusal.
+fn answer_of(events: &mut mpsc::Receiver<LinuxShellEvent>) -> LinuxShellEvent {
+    loop {
+        let event = events.blocking_recv().unwrap();
+        if matches!(
+            event,
+            LinuxShellEvent::ShortcutsBound(_) | LinuxShellEvent::ShortcutsRefused(_)
+        ) {
+            return event;
+        }
+    }
+}
+
+/// The refusal the sink hears once no portal owns the portal's name.
+fn portal_gone() -> LinuxShellEvent {
+    LinuxShellEvent::ShortcutsRefused(DbusError::Unavailable { what: "GlobalShortcuts session" })
+}
+
+#[test]
+fn a_portal_that_restarts_gets_the_set_bound_again_and_its_keys_reach_the_sink() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let first_portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let first = bind_of(&mut reports, 2);
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound");
+    let send = |fakes: &Fakes, portal: &zbus::Connection, bind: &Bind, member: &str, id: &str| {
+        fakes.runtime.block_on(press(portal, &bind.caller, member, &bind.session, id));
+    };
+    send(&fakes, &first_portal, &first, "Activated", "dictation");
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the dictation key is held");
+    // The portal restarts: the first leaves the bus, without closing the session, and a new
+    // process takes the name.
+    let released = fakes.runtime.block_on(first_portal.release_name(SHORTCUTS_PORTAL)).unwrap();
+    assert!(released, "the first portal has left the name");
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "the held key is released as its portal goes");
+    assert_eq!(answer_of(&mut events), portal_gone(), "and the sink hears the shortcuts are off");
+    let (fake, mut new_reports) = FakeShortcuts::new(Modes::GRANT);
+    let second_portal = fakes.shortcuts(&bus, fake);
+    let again = bind_of(&mut new_reports, 2);
+    assert_eq!(again.shortcuts, first.shortcuts, "the new portal is asked for the same set");
+    assert_eq!(again.caller, first.caller, "by the same holder");
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound again");
+    send(&fakes, &second_portal, &again, "Activated", "hotkey-1");
+    assert_eq!(
+        events.blocking_recv(),
+        Some(LinuxShellEvent::Hotkey(1)),
+        "a press from the new one"
+    );
+    send(&fakes, &second_portal, &again, "Activated", "dictation");
+    assert_eq!(input.blocking_recv(), down, "and the dictation key, to the same watch");
+}
+
+#[test]
+fn a_portal_replaced_in_place_gets_the_set_bound_again_without_the_shortcuts_going_off() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let first_portal = fakes.shortcuts_with(&bus, fake, RequestNameFlags::AllowReplacement);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let (edges, mut input) = mpsc::channel(8);
+    let edge = move |event| {
+        let _ignored = edges.try_send(event);
+    };
+    let _watch = shell.watch_input(VirtualKey(0x14), Box::new(edge)).unwrap();
+    let first = bind_of(&mut reports, 2);
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound");
+    fakes.runtime.block_on(press(
+        &first_portal,
+        &first.caller,
+        "Activated",
+        &first.session,
+        "dictation",
+    ));
+    let down = Some(ShellInputEvent::DictationKey(KeyEdge::Down));
+    assert_eq!(input.blocking_recv(), down, "the dictation key is held");
+    // `xdg-desktop-portal --replace`: the name goes straight from the first portal to the second,
+    // in one owner change, and never has no owner.
+    let (fake, mut new_reports) = FakeShortcuts::new(Modes::GRANT);
+    let second_portal = fakes.shortcuts_with(&bus, fake, RequestNameFlags::ReplaceExisting);
+    let up = Some(ShellInputEvent::DictationKey(KeyEdge::Up));
+    assert_eq!(input.blocking_recv(), up, "the held key is released as its portal goes");
+    let again = bind_of(&mut new_reports, 2);
+    assert_eq!(again.shortcuts, first.shortcuts, "the new portal is asked for the same set");
+    assert_eq!(again.caller, first.caller, "by the same holder");
+    assert!(
+        matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)),
+        "bound again, with no refusal before it: the shortcuts were never off"
+    );
+    let send = |member: &str, id: &str| {
+        fakes.runtime.block_on(press(&second_portal, &again.caller, member, &again.session, id));
+    };
+    send("Activated", "hotkey-1");
+    assert_eq!(
+        events.blocking_recv(),
+        Some(LinuxShellEvent::Hotkey(1)),
+        "a press from the new one"
+    );
+    send("Activated", "dictation");
+    assert_eq!(input.blocking_recv(), down, "and the dictation key, to the same watch");
+}
+
+#[test]
+fn a_call_while_no_portal_owns_the_name_is_unavailable_and_the_next_owner_binds_the_set_before() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes::GRANT);
+    let portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
+    let _first = bind_of(&mut reports, 1);
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound");
+    let released = fakes.runtime.block_on(portal.release_name(SHORTCUTS_PORTAL)).unwrap();
+    assert!(released, "the portal has left the bus");
+    // The barrier: the holder has seen the name go.
+    assert_eq!(answer_of(&mut events), portal_gone(), "the sink hears the shortcuts are off");
+    assert_eq!(
+        shell.register_hotkey("ctrl+alt+shift+b", 2),
+        Err(PlatformError::Unavailable { what: "global hotkey" }),
+        "a call finds no portal, and nothing on this bus can start one"
+    );
+    let (fake, mut new_reports) = FakeShortcuts::new(Modes::GRANT);
+    let _second = fakes.shortcuts(&bus, fake);
+    let again = bind_of(&mut new_reports, 1);
+    assert_eq!(ids(&again), ["hotkey-1"], "the next owner binds the set before, without hotkey 2");
+}
+
 #[test]
 fn a_rebind_whose_session_cannot_open_reaches_the_sink_as_a_refusal() {
     let bus = PrivateBus::start();
@@ -328,16 +472,69 @@ fn a_rebind_whose_session_cannot_open_reaches_the_sink_as_a_refusal() {
     let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
     shell.register_hotkey("ctrl+alt+m", 1).unwrap();
     let _first = bind_of(&mut reports, 1);
-    let answered = events.blocking_recv();
-    assert!(matches!(answered, Some(LinuxShellEvent::ShortcutsBound(_))), "{answered:?}");
+    assert!(matches!(answer_of(&mut events), LinuxShellEvent::ShortcutsBound(_)), "bound");
     let released = fakes.runtime.block_on(portal.release_name(SHORTCUTS_PORTAL)).unwrap();
-    assert!(released, "the portal has left the bus, so no new session can open");
+    assert!(released, "the portal has left the bus");
+    assert_eq!(answer_of(&mut events), portal_gone(), "the shortcuts are off");
+    // The name's next owner refuses a session.
+    let (fake, _new_reports) = FakeShortcuts::new(Modes { create: Mode::Code(2), ..Modes::GRANT });
+    let _second = fakes.shortcuts(&bus, fake);
+    let refused =
+        DbusError::Refused { what: "GlobalShortcuts session", reason: "refused or cancelled" };
+    assert_eq!(
+        answer_of(&mut events),
+        LinuxShellEvent::ShortcutsRefused(refused),
+        "the set is bound nowhere, and the sink hears why"
+    );
+}
+
+#[test]
+fn a_trigger_the_user_changes_reaches_the_sink_and_another_sessions_change_is_passed_over() {
+    let bus = PrivateBus::start();
+    let mut fakes = Fakes::new();
+    let (fake, mut reports) = FakeShortcuts::new(Modes { bind: Mode::Later, ..Modes::GRANT });
+    let portal = fakes.shortcuts(&bus, fake);
+    let (sink, mut events) = events_sink();
+    let shell = shell_on(&bus, DEFAULT_DEADLINE).with_events(sink);
+    shell.register_hotkey("ctrl+alt+m", 1).unwrap();
     shell.register_hotkey("ctrl+alt+shift+b", 2).unwrap();
-    let unavailable = DbusError::Unavailable { what: "GlobalShortcuts session" };
+    let bind = bind_of(&mut reports, 2);
+    let (caller, session) = (bind.caller.as_str(), &bind.session);
+    let rebound = listed(&[
+        ("hotkey-1", Some("Eileen shortcut 1"), Some("Ctrl+Alt+K")),
+        ("hotkey-2", Some("Eileen shortcut 2"), Some("CTRL+ALT+SHIFT+b")),
+    ]);
+    // GNOME sends one just before its answer, which the answer says again.
+    fakes.runtime.block_on(change(&portal, caller, session, &rebound));
+    let granted = HashMap::from([("shortcuts", triggers(&bind.shortcuts))]);
+    fakes.runtime.block_on(answer(&portal, caller, &bind.request, 0, granted));
+    let trigger = |id: u32, words: &str| BoundHotkey {
+        id: ShortcutId::Hotkey(id),
+        trigger: Untrusted::new(words.to_owned()),
+    };
+    let answered = vec![trigger(1, "Press CTRL+ALT+m"), trigger(2, "Press CTRL+ALT+SHIFT+b")];
+    let bound = Some(LinuxShellEvent::ShortcutsBound(answered));
+    assert_eq!(events.blocking_recv(), bound, "a change before the answer is passed over");
+    let theirs =
+        OwnedObjectPath::try_from(format!("{SHORTCUTS_PATH}/session/1_999/other")).unwrap();
+    let other = listed(&[("hotkey-1", None, Some("Ctrl+Q"))]);
+    fakes.runtime.block_on(async {
+        change(&portal, caller, &theirs, &other).await;
+        change(&portal, caller, session, &rebound).await;
+        // The same again, as GNOME would send for a change to another app's shortcut.
+        change(&portal, caller, session, &rebound).await;
+        press(&portal, caller, "Activated", session, "hotkey-1").await;
+    });
+    let changed = vec![trigger(1, "Press Ctrl+Alt+K"), trigger(2, "Press CTRL+ALT+SHIFT+b")];
     assert_eq!(
         events.blocking_recv(),
-        Some(LinuxShellEvent::ShortcutsRefused(unavailable)),
-        "the changed set is bound nowhere, and the sink hears it"
+        Some(LinuxShellEvent::ShortcutsBound(changed)),
+        "another session's change is passed over, and this one's reaches the sink, whole"
+    );
+    assert_eq!(
+        events.blocking_recv(),
+        Some(LinuxShellEvent::Hotkey(1)),
+        "a change that says what the sink heard already is not reported again"
     );
 }
 

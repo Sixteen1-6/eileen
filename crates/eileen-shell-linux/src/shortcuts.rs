@@ -35,7 +35,9 @@
 //! - Only the connection that answered `CreateSession` speaks for the portal, and only a signal
 //!   that names the session's handle is the session's: any other, and a malformed one, is
 //!   passed over. The stream ends after the session's `Closed`. The bindings' later changes
-//!   (`ShortcutsChanged`) are not followed yet.
+//!   (`ShortcutsChanged`) come as [`ShortcutEvent::Changed`] with the list the signal carries,
+//!   all of the session's shortcuts as the documentation's argument and GNOME send it. GNOME
+//!   sends one just before a bind's answer, and again when the user changes a trigger.
 //! - A trigger's description is the desktop's text, so it is `Untrusted`. No D-Bus string may
 //!   hold U+0000, and the bus drops a connection that sends one, so the app ID and each
 //!   description lose any first.
@@ -52,7 +54,10 @@
 //!   sends `Activated` each time. A key's release is looked up with the modifiers held as it is
 //!   let go, so a key let go after one of its chord's modifiers matches no shortcut and brings
 //!   no `Deactivated`.
-//! - A portal that restarts loses the session without a word: the stream sees no `Closed`.
+//! - A portal that restarts loses the session without a word: the stream sees no `Closed`, and
+//!   no more signals. A caller follows the portal's name, `org.freedesktop.portal.Desktop`,
+//!   with `eileen-dbus-linux`'s `owner_changes`, as `host`'s holder does, and tells its
+//!   session's portal by [`ShortcutsSession::portal`].
 
 mod trigger;
 
@@ -64,7 +69,7 @@ use std::time::Duration;
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::{Request, Signals, Stream, drain, subscribe};
 use zbus::match_rule::Builder;
-use zbus::names::OwnedUniqueName;
+use zbus::names::{OwnedUniqueName, UniqueName};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, Message};
 
@@ -72,8 +77,9 @@ use crate::DbusError;
 
 pub use trigger::{trigger_of_chord, trigger_of_key};
 
-/// The portal's service and object, and the interfaces this client calls there.
-const PORTAL: &str = "org.freedesktop.portal.Desktop";
+/// The portal's service, whose owner a caller follows, and its object, and the interfaces this
+/// client calls there.
+pub(crate) const PORTAL: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const SHORTCUTS: &str = "org.freedesktop.portal.GlobalShortcuts";
 const SESSION: &str = "org.freedesktop.portal.Session";
@@ -117,6 +123,9 @@ pub enum ShortcutEvent {
     /// It was let go (`Deactivated`). GNOME sends it only when the key is let go while the
     /// chord's modifiers are still held: when a modifier is let go first, none comes.
     Deactivated(String),
+    /// The desktop's shortcuts for the session changed (`ShortcutsChanged`): each with its
+    /// trigger, as a bind's answer gives them. GNOME sends one just before that answer too.
+    Changed(Vec<BoundShortcut>),
     /// The portal closed the session (the session's `Closed`), and the stream ends.
     Closed,
 }
@@ -182,6 +191,13 @@ impl ShortcutsSession {
     #[must_use]
     pub fn handle(&self) -> &ObjectPath<'_> {
         &self.handle
+    }
+
+    /// The unique name of the portal's connection that serves the session: once another owns
+    /// the portal's name, the session is gone.
+    #[must_use]
+    pub fn portal(&self) -> &UniqueName<'_> {
+        &self.portal
     }
 
     /// The session's events from now on. Call it before [`Self::bind`], and poll and drop the
@@ -295,7 +311,8 @@ impl Stream for ShortcutEvents {
 }
 
 /// The event `signal` reports: one the session's portal, `portal`, sent for `session`, with the
-/// arguments the documentation gives.
+/// arguments the documentation gives. `ShortcutsChanged` names the session as its first
+/// argument, as `Activated` does.
 fn event_of(
     signal: &Message,
     portal: &OwnedUniqueName,
@@ -309,14 +326,18 @@ fn event_of(
     if interface.as_str() == SESSION && member.as_str() == "Closed" {
         return (path.as_str() == session.as_str()).then_some(ShortcutEvent::Closed);
     }
-    let edge: fn(String) -> ShortcutEvent = match member.as_str() {
-        "Activated" => ShortcutEvent::Activated,
-        "Deactivated" => ShortcutEvent::Deactivated,
-        _ => return None,
-    };
     if interface.as_str() != SHORTCUTS || path.as_str() != PORTAL_PATH {
         return None;
     }
+    let edge: fn(String) -> ShortcutEvent = match member.as_str() {
+        "Activated" => ShortcutEvent::Activated,
+        "Deactivated" => ShortcutEvent::Deactivated,
+        "ShortcutsChanged" => {
+            let (handle, list) = signal.body().deserialize::<Changed>().ok()?;
+            return (handle == *session).then(|| ShortcutEvent::Changed(bound(list)));
+        }
+        _ => return None,
+    };
     let (handle, id, _time, _options) = signal.body().deserialize::<Edge>().ok()?;
     (handle == *session).then(|| edge(id))
 }
@@ -327,6 +348,9 @@ type Edge = (OwnedObjectPath, String, u64, HashMap<String, OwnedValue>);
 
 /// A shortcut as the portal describes it: its ID and its details.
 type Described = (String, HashMap<String, OwnedValue>);
+
+/// A `ShortcutsChanged` signal's arguments: the session's handle and its shortcuts.
+type Changed = (OwnedObjectPath, Vec<Described>);
 
 /// The shortcuts in `list` with the trigger each one's details describe.
 fn bound(list: Vec<Described>) -> Vec<BoundShortcut> {
