@@ -14,8 +14,18 @@ owns = "WP1"
 unsafe = "forbid"
 
 [dependencies]
+# BLAKE3 with its pure feature names each blob; zstd, vendored C, compresses it inside `blob` only
+# (BUILD.md sections 3.1 and 4.1, check 24).
+blake3.workspace = true
 clap.workspace = true
+eileen-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

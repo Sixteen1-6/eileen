@@ -1,5 +1,7 @@
 //! `modules.toml` lists exactly the crate's contract modules, and each provisional module says
-//! so in its own doc (BUILD.md section 3.3).
+//! so in its own doc (BUILD.md section 3.3). WP0 pinned the modules on slice S1's path; every
+//! other module names the package that pins it in its first pull request, and keeps that name
+//! once pinned.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -7,8 +9,9 @@ use std::path::PathBuf;
 use eileen_contracts::schema::module_names;
 use serde::Deserialize;
 
-/// The pinned modules: slice S1's path (BUILD.md section 6.2).
-const PINNED: &[&str] = &["ids", "jobs", "core_io", "bus", "speech", "harness", "ports", "record"];
+/// The modules WP0 pinned: slice S1's path (BUILD.md section 6.2).
+const PINNED_BY_WP0: &[&str] =
+    &["ids", "jobs", "core_io", "bus", "speech", "harness", "ports", "record"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,23 +53,24 @@ fn modules_toml_matches_the_crate() {
                     format!("Provisional: {owner} pins this module in its first pull request");
                 assert!(doc.contains(&line), "{name}: the doc names {owner}: {line:?}");
             }
-            (None, false) => {}
-            (pinned_by, provisional) => {
-                panic!("{name}: provisional = {provisional} with pinned_by = {pinned_by:?}")
-            }
+            // Pinned by WP0, or by the package named, in its first pull request.
+            (_, false) => {}
+            (None, true) => panic!("{name}: provisional, with no package named to pin it"),
         }
     }
 }
 
+/// The modules with no package named are exactly slice S1's, which WP0 pinned; a package that
+/// pins its module keeps its name in `pinned_by`, so it never joins this list.
 #[test]
-fn exactly_the_slice_modules_are_pinned() {
-    let pinned: Vec<_> = modules_toml()
+fn wp0_pinned_exactly_the_slice_modules() {
+    let by_wp0: Vec<_> = modules_toml()
         .modules
         .into_iter()
-        .filter(|(_, entry)| !entry.provisional)
+        .filter(|(_, entry)| entry.pinned_by.is_none())
         .map(|(name, _)| name)
         .collect();
-    let mut expected: Vec<_> = PINNED.iter().map(|name| (*name).to_owned()).collect();
+    let mut expected: Vec<_> = PINNED_BY_WP0.iter().map(|name| (*name).to_owned()).collect();
     expected.sort();
-    assert_eq!(pinned, expected, "the modules on slice S1's path");
+    assert_eq!(by_wp0, expected, "the modules on slice S1's path");
 }

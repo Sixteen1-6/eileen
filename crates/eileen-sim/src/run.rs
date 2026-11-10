@@ -5,10 +5,11 @@ use std::fmt;
 use std::io;
 
 use arbitrary::Unstructured;
-use eileen_contracts::core_io::{Input, TimerId};
-use eileen_contracts::record::{InputRecord, SimRegression};
+use eileen_contracts::core_io::{Input, PlaybackEvent};
+use eileen_contracts::record::{FaultRecord, InputRecord, SimRegression};
 use eileen_stdx::rng::CoreRng;
 
+use crate::faults::{FaultError, Faults};
 use crate::inputs::Generator;
 use crate::invariants::Violation;
 use crate::profile::{Profile, ProfileError};
@@ -54,6 +55,9 @@ pub struct RunReport {
     pub log: String,
     /// The decoded inputs, as a `SimRegression` records them.
     pub inputs: Vec<InputRecord>,
+    /// Every fault that fired, each with the step it fired in, as a `SimRegression` records
+    /// them.
+    pub faults: Vec<FaultRecord>,
     /// The first broken invariant and the step it broke at.
     pub failure: Option<(u32, Violation)>,
 }
@@ -89,8 +93,8 @@ pub enum RunError {
     Io(io::Error),
     /// The simulator thread panicked.
     Panicked(String),
-    /// A regression names something this build cannot replay.
-    Unreplayable(String),
+    /// A regression names a fault the world cannot fire.
+    Fault(FaultError),
 }
 
 impl fmt::Display for RunError {
@@ -99,12 +103,18 @@ impl fmt::Display for RunError {
             Self::Profile(e) => write!(f, "{e}"),
             Self::Io(e) => write!(f, "{e}"),
             Self::Panicked(message) => write!(f, "the simulator thread panicked: {message}"),
-            Self::Unreplayable(why) => write!(f, "cannot replay: {why}"),
+            Self::Fault(e) => write!(f, "cannot replay: {e}"),
         }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl From<FaultError> for RunError {
+    fn from(error: FaultError) -> Self {
+        Self::Fault(error)
+    }
+}
 
 impl From<ProfileError> for RunError {
     fn from(error: ProfileError) -> Self {
@@ -157,27 +167,22 @@ pub fn run_seed(profile: &Profile, seed: u64, steps: Option<u32>) -> Result<RunR
     on_sim_thread(move || run_seed_here(&profile, seed, steps))
 }
 
-/// Runs `steps` steps of `profile` with inputs drawn from `data`, the world seeded from
-/// `seed`. When `data` runs out, the draws fall back to their smallest values, so the run
-/// still takes every step.
+/// Runs `steps` steps of `profile` with inputs drawn from `data`, the world and its fault
+/// points seeded from `seed`. When `data` runs out, the draws fall back to their smallest
+/// values, so the run still takes every step.
 #[must_use]
 pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunReport {
     let mut world = World::new(profile.clone(), seed);
+    world.set_faults(Faults::live(seed, profile.faults));
     let mut bytes = Unstructured::new(data);
-    let mut generator = Generator::default();
+    let mut generator = Generator::new(profile.barge_in_pct, profile.media_at_start);
     let max_step_ms = u64::from(profile.max_step_ms);
     let mut failure = None;
     while world.steps() < steps {
         let elapsed = bytes.int_in_range(1..=max_step_ms).unwrap_or(1);
-        let input = if let Some(timer) = world.advance(elapsed) {
-            Input::Timer(timer)
-        } else {
-            let now_ms = world.now_ms();
-            let speaking = world.speaking().to_vec();
-            generator
-                .next(&mut bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking)
-                .map_or(Input::Timer(TimerId(0)), |(_, input)| input)
-        };
+        let input = world
+            .advance(elapsed)
+            .unwrap_or_else(|| draw(&mut world, &mut generator, &mut bytes, profile));
         let outcome = world.step(input);
         if let Some(violation) = outcome.violation {
             failure = Some((world.steps(), violation));
@@ -187,17 +192,36 @@ pub fn run_bytes(profile: &Profile, seed: u64, data: &[u8], steps: u32) -> RunRe
     report_of(&world, None, failure)
 }
 
-/// Replays a stored regression: its inputs at their recorded times, against the current core.
-/// The skeleton has no fault sites yet, so a regression that records faults cannot replay.
+/// The generator's next input. A draw of time passing goes to the core's next timer, or to
+/// whatever the world's parts answer before it; with no timer set, or when the bytes cannot
+/// draw, the device reports a change, which the core ignores.
+fn draw(
+    world: &mut World,
+    generator: &mut Generator,
+    bytes: &mut Unstructured<'_>,
+    profile: &Profile,
+) -> Input {
+    let now_ms = world.now_ms();
+    let speaking = world.speaking().to_vec();
+    let drawn = generator.next(bytes, &profile.input_mix, now_ms, world.id_rng(), &speaking);
+    match drawn {
+        Ok((_, Some(input))) => input,
+        Ok((_, None)) => world
+            .until_next_timer()
+            .and_then(|wait| world.advance(wait.max(1)))
+            .unwrap_or(Input::Playback(PlaybackEvent::DeviceChanged)),
+        Err(_) => Input::Playback(PlaybackEvent::DeviceChanged),
+    }
+}
+
+/// Replays a stored regression: its inputs at their recorded times, against the current core,
+/// with exactly the faults it records fired at their steps. A regression that names a fault
+/// site the world cannot fire does not replay.
 pub fn replay_here(regression: &SimRegression) -> Result<RunReport, RunError> {
     let profile = Profile::load(&regression.profile)?;
-    if let Some(fault) = regression.faults.first() {
-        return Err(RunError::Unreplayable(format!(
-            "fault site `{}` at seq {}: the skeleton has no fault sites yet (WP1 adds them)",
-            fault.site, fault.seq
-        )));
-    }
+    let faults = Faults::scripted(&regression.faults)?;
     let mut world = World::new(profile, regression.seed.unwrap_or(0));
+    world.set_faults(faults);
     let mut failure = None;
     for record in &regression.inputs {
         world.set_time(record.mono);
@@ -236,6 +260,7 @@ fn report_of(world: &World, seed: Option<u64>, failure: Option<(u32, Violation)>
         hash: world.hash(),
         log: world.log().to_owned(),
         inputs: world.inputs().to_vec(),
+        faults: world.faults().to_vec(),
         failure,
     }
 }
@@ -244,7 +269,8 @@ fn report_of(world: &World, seed: Option<u64>, failure: Option<(u32, Violation)>
 mod tests {
     use eileen_contracts::record::{FaultRecord, SimRegression};
 
-    use super::{doublecheck, replay, run_bytes, run_seed};
+    use super::{RunError, RunReport, doublecheck, replay, run_bytes, run_seed};
+    use crate::faults::FaultError;
     use crate::profile::Profile;
 
     fn profile() -> Profile {
@@ -252,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_runs_every_step_and_passes_against_the_stub_core() {
+    fn a_seed_runs_every_step_and_keeps_every_invariant() {
         let report = run_seed(&profile(), 5, Some(300)).unwrap();
         assert!(report.passed(), "{:?}", report.failure);
         assert_eq!(report.steps, 300, "every step taken");
@@ -269,24 +295,48 @@ mod tests {
         assert_ne!(a, b, "another seed, another trace");
     }
 
-    #[test]
-    fn a_seeded_runs_inputs_replay_to_the_same_trace() {
-        let report = run_seed(&profile(), 11, Some(150)).unwrap();
-        let regression = SimRegression {
+    /// The `SimRegression` a run's report would be stored as.
+    fn regression_of(report: &RunReport) -> SimRegression {
+        SimRegression {
             profile: report.profile.clone(),
             seed: report.seed,
             found_at_commit: "0000000".to_owned(),
             inputs: report.inputs.clone(),
-            faults: vec![],
+            faults: report.faults.clone(),
             invariant: "none".to_owned(),
-        };
-        let replayed = replay(&regression).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_seeded_runs_inputs_replay_to_the_same_trace() {
+        let report = run_seed(&profile(), 11, Some(150)).unwrap();
+        let replayed = replay(&regression_of(&report)).unwrap();
         assert!(replayed.passed(), "{:?}", replayed.failure);
         assert_eq!(replayed.log, report.log, "the replay takes the same steps");
     }
 
     #[test]
-    fn a_regression_with_faults_cannot_replay_on_the_skeleton() {
+    fn a_run_with_faults_replays_with_exactly_its_fault_records() {
+        // Every site is on in flaky-sidecars, so a few hundred steps fire some.
+        let flaky = Profile::load("flaky-sidecars").unwrap();
+        let report = (1..=8)
+            .map(|seed| run_seed(&flaky, seed, Some(800)).unwrap())
+            .find(|report| !report.faults.is_empty())
+            .expect("a seed whose run fired a fault");
+        assert!(report.passed(), "{}\n{:?}", report.log, report.failure);
+        let steps = report.inputs.iter().map(|input| input.seq).collect::<Vec<_>>();
+        for fault in &report.faults {
+            assert!(steps.contains(&fault.seq), "each fault names a step of the run: {fault:?}");
+            assert!(crate::faults::is_world_site(&fault.site), "a world site: {fault:?}");
+        }
+        let replayed = replay(&regression_of(&report)).unwrap();
+        assert!(replayed.passed(), "{:?}", replayed.failure);
+        assert_eq!(replayed.log, report.log, "the replay takes the same steps");
+        assert_eq!(replayed.faults, report.faults, "and fires exactly the recorded faults");
+    }
+
+    #[test]
+    fn a_regression_naming_a_site_the_world_cannot_fire_does_not_replay() {
         let regression = SimRegression {
             profile: "default".to_owned(),
             seed: Some(1),
@@ -300,7 +350,23 @@ mod tests {
             invariant: "6".to_owned(),
         };
         let error = replay(&regression).unwrap_err();
+        let site = |error: &RunError| match error {
+            RunError::Fault(FaultError::UnknownSite { site, seq }) => Some((site.clone(), *seq)),
+            RunError::Profile(_) | RunError::Io(_) | RunError::Panicked(_) => None,
+        };
+        assert_eq!(
+            site(&error),
+            Some(("store.write".to_owned(), Some(1))),
+            "a typed fault error naming the site and its step: {error:?}"
+        );
         assert!(error.to_string().contains("store.write"), "{error}");
+    }
+
+    #[test]
+    fn a_seeded_runs_fault_points_end_with_the_run() {
+        let report = run_bytes(&Profile::load("flaky-sidecars").unwrap(), 3, &[0x5a; 4_000], 400);
+        assert!(report.passed(), "{:?}", report.failure);
+        assert!(!eileen_stdx::buggify::is_enabled(), "the run's fault points end with it");
     }
 
     #[test]

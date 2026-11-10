@@ -16,6 +16,13 @@ unsafe = "forbid"
 [dependencies]
 eileen-contracts.workspace = true
 eileen-stdx.workspace = true
+eileen-trace.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+proptest-state-machine.workspace = true
 
 [lints]
 workspace = true

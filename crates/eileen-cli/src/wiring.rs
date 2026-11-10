@@ -13,10 +13,13 @@ use eileen_runtime::cli::RunArgs;
 pub fn components(args: &RunArgs) -> Vec<Box<dyn Component>> {
     let models = match &args.replay_models {
         Some(dir) => eileen_replay::responder(dir),
-        None => eileen_harness::component(&HarnessConfig),
+        None => eileen_harness::component(&HarnessConfig::default()),
     };
-    let mut components =
-        vec![models, eileen_audio::component(&AudioConfig), eileen_learn::component(&LearnConfig)];
+    let mut components = vec![
+        models,
+        eileen_audio::component(&AudioConfig::default()),
+        eileen_learn::component(&LearnConfig),
+    ];
     components.extend(platform_components());
     components
 }

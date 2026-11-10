@@ -15,8 +15,10 @@
 //! # Does not own
 //!
 //! - Behaviour. The few functions here are pure helpers over the types (ID text forms, dates,
-//!   the scenario expiry rule, `sanitize`), plus [`ports::IdleComponent`], the component that
-//!   does nothing; every decision lives in `eileen-core` and the crates behind the ports.
+//!   the scenario expiry rule, `sanitize`, the `approve` reply's text, its match rule, the
+//!   pending ask an allow is built from, and the speech pipe's frame codec), plus
+//!   [`ports::IdleComponent`], the component that does nothing; every decision lives in
+//!   `eileen-core` and the crates behind the ports.
 //! - Types that appear only in another crate's own signatures (driver errors, harness and
 //!   platform handles, the platform traits of section 3.4): those crates define them.
 //!
@@ -33,19 +35,24 @@
 //!   or listed in `text-allowlist.toml` with a reason (test
 //!   `it::text::free_text_is_wrapped_or_allowlisted`).
 //! - `modules.toml` lists exactly the modules here, and a provisional module says so in its doc
-//!   (test `it::modules::modules_toml_matches_the_crate`).
+//!   (test `it::modules::modules_toml_matches_the_crate`); WP0 pinned exactly the modules on
+//!   slice S1's path, and every other module names the package that pins it (test
+//!   `it::modules::wp0_pinned_exactly_the_slice_modules`).
 //!
 //! # Boundaries
 //!
 //! - Called by every Eileen crate. May depend on `serde`, `serde_json`, `schemars` and `ulid`
 //!   only: no async runtime, no IO, no other Eileen crate.
-//! - Wire types: all of them. The speech pipe's frame header is a `#[repr(C)]` layout.
+//! - Wire types: all of them. The speech pipe's frame header is a `#[repr(C)]` layout, and its
+//!   codec ([`speech::Frame`], [`speech::FrameReader`]) is here so both ends share it.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-contracts`.
-//! - Layers: unit tests beside the helpers, property tests for the text forms, one snapshot per
-//!   module and per toolset, the text walk, and the scenario example parsed from TOML.
+//! - Layers: unit tests beside the helpers (the speech frame codec's round trips and refusals
+//!   among them), property tests for the text forms and for the speech frame reader (any frames
+//!   read back however the stream is cut; any bytes keep it bounded), one snapshot per module
+//!   and per toolset, the text walk, and the scenario example parsed from TOML.
 //! - A bug here starts as a failing round trip or a snapshot diff that nobody meant.
 //!
 //! # Traps
@@ -63,8 +70,9 @@
 //!
 //! # Do not change without a decision record
 //!
-//! - The text forms of the IDs, `Date` and `MachineHash`; the speech frame header; the
-//!   `x-eileen-text`, `x-eileen-path` and `x-eileen-match` schema extensions.
+//! - The text forms of the IDs, `Date` and `MachineHash`; the speech frame header and the
+//!   meanings decision D81 gave its fields; the `x-eileen-text`, `x-eileen-path` and
+//!   `x-eileen-match` schema extensions.
 //! - A new top-level `Input`, `Effect` or `BusEvent` variant (an amendment to BUILD.md).
 
 #![forbid(unsafe_code)]

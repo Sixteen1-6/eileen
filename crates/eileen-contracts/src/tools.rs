@@ -239,10 +239,10 @@ fn input<T: JsonSchema>(
     out.insert(name, ToolInput { module, schema: schema.to_value() });
 }
 
-/// The tools of a toolset (the table of section 3.3.9). `approve` is in the worker toolset
-/// only if WP3's contract test picks the permission-prompt-tool route, and `session_skills` in
-/// the session toolset only with `claude_plugin.share_skills` on; the dispatcher applies both
-/// conditions.
+/// The tools of a toolset (the table of section 3.3.9). `approve`, in the worker toolset, is the
+/// permission-prompt tool WP3's contract test picked, which the CLI keeps out of the model's tool
+/// list; `session_skills` is in the session toolset only with `claude_plugin.share_skills` on,
+/// a condition the dispatcher applies.
 #[must_use]
 pub const fn toolset_members(toolset: Toolset) -> &'static [&'static str] {
     match toolset {

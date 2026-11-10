@@ -1,0 +1,1 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"70bd7443-478d-4b77-8d60-d5c6ed0c44fe","response":{"behavior":"allow","updatedInput":{"command":"touch tier2-asked.txt","description":"Create empty file tier2-asked.txt"}}}}
