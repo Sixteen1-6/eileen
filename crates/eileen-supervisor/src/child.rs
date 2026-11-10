@@ -22,15 +22,15 @@
 //! its builds still get an equal share against the core's. That share is the cgroup scope's to
 //! set too. The idle I/O class counts only on a disk whose block-layer scheduler is BFQ or
 //! mq-deadline; `none`, the kernel's default for a drive with several hardware queues, as most
-//! NVMe drives have, unless the scheduler is changed, and kyber ignore it. mq-deadline has kept
-//! a queue per class since Linux 5.14, but the class reaches it only for direct I/O and io_uring
-//! before Linux 6.0, and for all I/O a task submits from 6.0, so on 5.14 to 5.19 a session's
-//! buffered reads go to it as best effort. Where it counts, the session's own reads and direct
-//! writes, and the writeback an fsync or sync does from the session, wait while another class
-//! has requests queued (mq-deadline serves one that has waited 10 s, its `prio_aging_expire`,
-//! from Linux 5.16; BFQ keeps the idle class a very thin share); buffered writes left to the
-//! kernel's writeback threads go out at their priority. On other Unix systems the child leads
-//! its own process group.
+//! NVM Express drives have, unless the scheduler is changed, and kyber ignore it. mq-deadline
+//! has kept a queue per class since Linux 5.14, but the class reaches it only for direct I/O
+//! and `io_uring` before Linux 6.0, and for all I/O a task submits from 6.0, so on 5.14 to 5.19
+//! a session's buffered reads go to it as best effort. Where it counts, the session's own reads
+//! and direct writes, and the writeback an fsync or sync does from the session, wait while
+//! another class has requests queued (mq-deadline serves one that has waited 10 s, its
+//! `prio_aging_expire`, from Linux 5.16; BFQ keeps the idle class a very thin share); buffered
+//! writes left to the kernel's writeback threads go out at their priority. On other Unix
+//! systems the child leads its own process group.
 //!
 //! Stdout carries the protocol; stderr carries logs, which [`spawn`] forwards into
 //! `child.stderr` events from the start, on every OS, so no caller can leave the pipe
