@@ -2,9 +2,8 @@
 //! it is dropped, when it exits and when the process that spawned it dies, `try_wait` reaps
 //! through tokio, children are forked on the supervisor's own thread, a Claude session runs
 //! nicer than a sidecar and in the idle I/O class, and the detached spawn is reaped once it
-//! exits. Processes the test did
-//! not start itself are watched through pidfds, which name one process for good, and killed by
-//! a guard when the test ends, however it ends.
+//! exits. Processes the test did not start itself are watched through pidfds, which name one
+//! process for good, and killed by a guard when the test ends, however it ends.
 
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::path::Path;
