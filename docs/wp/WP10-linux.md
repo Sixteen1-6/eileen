@@ -201,7 +201,9 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
 - zbus 6.1.0 (order 34): BUILD.md section 4.1's `zbus` pin and comment, and the
   `zbus::Executor::spawn` ban in both `clippy.toml` files and section 4b.2, which names a type
   zbus 6 no longer has (clippy warns that the path does not resolve), change in the amendment
-  stacked on it. The drafts #94, #111, #112 and #116 move to zbus 6 when they next merge `main`.
+  stacked on it. The ban moves to `zbus::Connection::spawn`, public though `#[doc(hidden)]`,
+  which on the tokio backend is a bare `Handle::spawn` with the same reason. The drafts #94,
+  #111, #112 and #116 move to zbus 6 when they next merge `main`.
 - A read-only file system (`EROFS`) is `Io` in both `FileError` and `AutostartError`; if it should
   be `Refused`, both crates change together.
 - The blocking-pool spawn forms: #84's follow-up is an amendment that bans them too, once it
