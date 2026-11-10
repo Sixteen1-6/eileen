@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | this pull request | `wp10/rtkit-realtime-threads` | `register_audio_thread` reads the thread's policy from procfs and leaves a thread already real-time as it is, asking RealtimeKit nothing |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -185,6 +186,10 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   connection, which fails with it; and when rtkit refuses real-time, the fallback asks for the
   policy's nice level even for a thread that already runs higher, which can lower it (nice -16
   becomes -11).
+- RealtimeKit (`wp10/rtkit-realtime-threads`): a thread made real-time after it registered still
+  leaves it when its ticket reverts, since its policy is read once, before the request; and
+  `LinuxAudioEndpoints` reads the live policy, so only `RealtimeKit::promote`'s tests, through
+  its `scheduling` argument, see a thread already real-time.
 - The supervisor (#106, #115): the cgroup scope (Planned above); idle I/O priority for Claude
   sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5); and the rest of
   SU5.
@@ -331,6 +336,10 @@ the spawn.
   record of each thread's priority, which `MakeThreadHighPriority` leaves, and makes recorded
   threads real-time again after a suspend; rtkit 0.13 answers `Get` but not `GetAll`, so zbus's
   property cache cannot be used (#80, #90).
+- Neither std nor rustix 1.1.5 has `sched_getscheduler` or `sched_getparam`, so a crate with no
+  unsafe code reads a thread's policy from procfs: fields 40 (`rt_priority`) and 41 (`policy`) of
+  `/proc/self/task/<tid>/stat`, counted after the last `)`, since a thread's name may hold spaces
+  and parentheses (`wp10/rtkit-realtime-threads`).
 - notification-daemon crashes on Wayland, so the desktop lane runs it on an Xvfb display of its
   own; WirePlumber exits if it starts before PipeWire's sockets; logind refuses a VT number on a
   seat without VTs and one another session holds; and xdg-desktop-portal exports `Inhibit`
@@ -652,7 +661,9 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   at rtkit's minimum, when rtkit refuses. The ticket reverts the thread to the nice level it had,
   floored at rtkit's minimum, and then makes one more call, so that rtkit 0.14 forgets the
   thread's priority. A request whose answer never came, which rtkit may still grant, is reverted
-  the same way at once.
+  the same way at once. A thread already under a real-time policy (`SCHED_FIFO`, `SCHED_RR` or
+  `SCHED_DEADLINE`, read from procfs) is left as it is, whatever its priority, since rtkit has no
+  call that puts a real-time policy back; one whose policy cannot be read is asked for as before.
 - Why: rtkit grants real-time only to a process whose hard `RLIMIT_RTTIME` is at most its maximum,
   and Linux's default is unlimited; it needs no privilege and no group, and polkit lets the active
   local session use it. Priority 10 leaves PipeWire's threads, which get rtkit's maximum, 20,
@@ -749,7 +760,8 @@ Not yet verified:
   `AppIndicator` extension is on by default and honours `ItemIsMenu`, and that Breeze names the
   muted microphone icon as Adwaita does (#110); the shortcuts holder against GNOME 50's portal
   (#107); the AT-SPI2 client against real apps on a real accessibility bus (#87); and a thread
-  registered with RealtimeKit, with `chrt -p` (#90).
+  registered with RealtimeKit, with `chrt -p` (#90), and one made `SCHED_FIFO` before it
+  registers, which keeps its policy and priority (`wp10/rtkit-realtime-threads`).
 
 ## Outcome
 
