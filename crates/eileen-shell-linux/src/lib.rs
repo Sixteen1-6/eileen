@@ -1,14 +1,14 @@
 //! The core process's platform implementations on Linux, as `eileen-shell-win`'s on Windows
-//! (BUILD.md section 3.4; docs/LINUX.md section 4): the machine profile's facts (section 2.16), the
-//! memory sample (2.5), `ShellHost`'s toasts, session calls, shortcuts and tray, and power facts.
+//! (BUILD.md sections 2.5, 2.16, 3.3.3 and 3.4; docs/LINUX.md section 4).
 //!
 //! # Owns
 //!
 //! - The machine's facts and load on Linux: the processor and its core classes, memory totals, GPUs
 //!   and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors, read
-//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; and
-//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a
-//!   stream of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet.
+//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; the
+//!   power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a stream
+//!   of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet; and the
+//!   local time zone's offsets from UTC, from the `TZif` file `/etc/localtime` ([`zone`]).
 //! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
 //!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
 //!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
@@ -40,30 +40,30 @@
 //!   and never needs elevation.
 //! - An unreadable fact is named in `degraded`, left at its unknown value, never a real zero. No
 //!   entry or error holds a user's or a fixture's path, only the fixed system file it names.
-//! - It never reads a serial-number file, the machine's name, user names or accounts, and never
-//!   keeps a unit's id: of NVIDIA's information file only the `Model` line is kept, and PCI ids
-//!   are used to look names up, not kept. Over D-Bus each property is read alone, never with
-//!   `GetAll`, so no device's serial number is fetched.
+//! - It never reads a serial-number file, the machine's name, user names or accounts, and keeps no
+//!   unit's id: only NVIDIA's `Model` line, and PCI ids only to look names up. Over D-Bus each
+//!   property is read alone, never with `GetAll`, so no device's serial number is fetched.
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
+//! - May depend on `eileen-platform`, `eileen-contracts` (text wrappers, `Toast`, `WallTime`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
-//!   `tokio` (the portal's deadline, the holder tasks), `rustix` (`statvfs`) and `thiserror`.
-//!   Only the composition root on Linux may depend on it. Wire types: none of its own.
+//!   `tokio` (the portal's deadline, the holder tasks), `rustix` (`statvfs`, open flags) and
+//!   `thiserror`. Only Linux's composition root and the fuzz workspace may use it. No wire types.
 //!
 //! # Testing
 //!
 //! - Fast command: `cargo nextest run -p eileen-shell-linux`.
-//! - Layers: unit tests for each parser over the kernel's text formats, and property tests for the
-//!   CPU lists, the busy share, the MB conversion, the `os-release` quotes and the hotkey chords;
+//! - Layers: unit tests of each parser over the kernel's text formats and tzdata's zone files
+//!   (`tests/fixtures/zoneinfo/`, as glibc reads them), and property tests of the CPU lists, the
+//!   busy share, the MB conversion, the `os-release` quotes, the hotkey chords and the zone files;
 //!   the fuzz targets of `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in
-//!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
-//!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (feature
-//!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] on them
-//!   over `Bridge::on_private_bus`, and both on the desktop lane's real buses (`tests/session/`).
-//! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
-//!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
+//!   `tests/fixtures/`, live tests of this machine, and files in folders a guard removes. D-Bus
+//!   clients run against fakes on `eileen-dbus-linux`'s private bus (feature `private-bus`, tests
+//!   only), their deadlines in tokio's paused time, and [`LinuxShell`] on them over
+//!   `Bridge::on_private_bus`, and both on the desktop lane's real buses (`tests/session/`).
+//! - A bug here starts as a machine panel line or a spoken hour that does not match the PC, a plan
+//!   class its memory does not explain, or a call the desktop does not honour.
 //!
 //! # Traps
 //!
@@ -106,6 +106,7 @@ mod session_lock;
 mod shortcuts;
 mod tray;
 mod upower;
+pub mod zone;
 
 pub use autostart::{default_autostart_dir, set_run_at_sign_in};
 pub use disk::{Volume, read_volume};

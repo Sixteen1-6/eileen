@@ -20,9 +20,9 @@ it.
 
 Most targets start as stubs that accept every input: WP0 declared them so each owning package
 fills in its parser, its invariants and its corpus. `uia_text` and `desktop_state`
-(`eileen-contracts`) are real from the start, and so are the three WP10 added with its `-linux`
-crates: `linux_mountinfo` and `linux_proc_status` (`eileen-shell-linux`) and `desktop_entry`
-(`eileen-apps-linux`).
+(`eileen-contracts`) are real from the start, and so are the four WP10 added with its `-linux`
+crates: `linux_mountinfo`, `linux_proc_status` and `linux_tzif` (`eileen-shell-linux`) and
+`desktop_entry` (`eileen-apps-linux`).
 
 ## Running
 
