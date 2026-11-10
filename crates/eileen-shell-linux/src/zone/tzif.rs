@@ -30,7 +30,8 @@ const TRUNCATED: &str = "the file is shorter than its header says";
 /// The local time a `TZif` file describes, its offsets in seconds east of UTC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Zone {
-    /// Each transition, in order: its Unix time and the offset from then on.
+    /// Each transition, in order: its Unix time and the offset from then on. Two may share an
+    /// instant, where a leap correction brought them together; the later one holds.
     transitions: Vec<(i64, i32)>,
     /// The offset before the first transition: local time type 0's.
     first: i32,
@@ -180,16 +181,22 @@ fn block(bytes: &[u8], counts: Counts, time_size: usize) -> Result<Block<'_>, &'
     }
     let leaps = leaps(read.take(counts.leaps * (time_size + 4))?, time_size)?;
     let mut transitions = Vec::with_capacity(counts.times);
-    let mut previous = None;
+    let mut previous: Option<(i64, i64)> = None;
     for (time, index) in times.chunks_exact(time_size).zip(indexes) {
         let at = Reader(time).time(time_size)?;
-        if previous.is_some_and(|previous| at <= previous) {
+        let unix = at.saturating_sub(correction(&leaps, at));
+        if previous.is_some_and(|(before, _)| at <= before) {
             return Err("the file's transitions are out of order");
         }
-        previous = Some(at);
+        // A first leap record's correction can be any, so it alone could move a transition
+        // before the one before it; corrections a second apart can only bring two together.
+        if previous.is_some_and(|(_, before)| unix < before) {
+            return Err("a leap correction moves the file's transitions out of order");
+        }
+        previous = Some((at, unix));
         let offset =
             *offsets.get(usize::from(*index)).ok_or("a transition names a type the file lacks")?;
-        transitions.push((at.saturating_sub(correction(&leaps, at)), offset));
+        transitions.push((unix, offset));
     }
     let first = offsets.first().copied().ok_or("the file has no local time type")?;
     Ok((transitions, first, rest))
@@ -214,15 +221,22 @@ fn types(records: &[u8], chars: usize) -> Result<Vec<i32>, &'static str> {
         .collect()
 }
 
-/// The leap-second records, as (occurrence, correction), in strictly ascending order.
+/// The leap-second records, as (occurrence, correction), in strictly ascending order, each
+/// correction after the first one more or one less than the one before (section 3.2). The first
+/// may be any: a version 4 file can start its table after earlier leap seconds.
 fn leaps(records: &[u8], time_size: usize) -> Result<Vec<(i64, i64)>, &'static str> {
     let mut leaps: Vec<(i64, i64)> = Vec::with_capacity(records.len() / (time_size + 4));
     for record in records.chunks_exact(time_size + 4) {
         let mut read = Reader(record);
         let at = read.time(time_size)?;
         let correction = i64::from(read.i32()?);
-        if leaps.last().is_some_and(|(previous, _)| at <= *previous) {
-            return Err("the file's leap seconds are out of order");
+        if let Some(&(previous, before)) = leaps.last() {
+            if at <= previous {
+                return Err("the file's leap seconds are out of order");
+            }
+            if (correction - before).abs() != 1 {
+                return Err("a leap second's correction is not one more or less than the last");
+            }
         }
         leaps.push((at, correction));
     }

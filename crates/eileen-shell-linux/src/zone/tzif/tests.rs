@@ -67,26 +67,25 @@ fn a_later_file_reads_from_its_second_block_whatever_its_first_says() {
     }
 }
 
-#[test]
-fn leap_seconds_move_transitions_back_to_unix_time() {
-    // Two leap records (1972-07-01 and 1973-01-01, in leap time) and transitions before, at and
-    // after them, written by hand: `write` writes no leap records.
-    let leaps: [(i64, i32); 2] = [(78_796_800, 1), (94_694_401, 2)];
-    let times: [i64; 3] = [1_000, 78_796_801, 94_694_500];
+/// A version 2 file with leap-second records, the same in both blocks, written by hand: `write`
+/// writes none. `transitions` as (leap time, type), `types` as seconds east of UTC, `leaps` as
+/// (occurrence, correction).
+fn with_leaps(transitions: &[(i64, u8)], types: &[i32], leaps: &[(i64, i32)]) -> Vec<u8> {
     let mut file = Vec::new();
-    for (time_size, version) in [(4_usize, b'2'), (8, b'2')] {
-        file.extend_from_slice(b"TZif");
-        file.push(version);
+    for time_size in [4_usize, 8] {
+        file.extend_from_slice(b"TZif2");
         file.extend_from_slice(&[0; 15]);
-        for count in [0_u32, 0, 2, 3, 1, 4] {
-            file.extend_from_slice(&count.to_be_bytes());
+        for count in [0, 0, leaps.len(), transitions.len(), types.len(), 4] {
+            file.extend_from_slice(&u32::try_from(count).unwrap().to_be_bytes());
         }
-        for time in times {
+        for (time, _) in transitions {
             file.extend_from_slice(time.to_be_bytes().get(8 - time_size..).unwrap());
         }
-        file.extend_from_slice(&[0, 0, 0]);
-        file.extend_from_slice(&3_600_i32.to_be_bytes());
-        file.extend_from_slice(&[0, 0]);
+        file.extend(transitions.iter().map(|(_, index)| *index));
+        for offset in types {
+            file.extend_from_slice(&offset.to_be_bytes());
+            file.extend_from_slice(&[0, 0]);
+        }
         file.extend_from_slice(b"ZZZ\0");
         for (at, correction) in leaps {
             file.extend_from_slice(at.to_be_bytes().get(8 - time_size..).unwrap());
@@ -94,9 +93,23 @@ fn leap_seconds_move_transitions_back_to_unix_time() {
         }
     }
     file.extend_from_slice(b"\n\n");
-    let zone = Zone::parse(&file).unwrap();
+    file
+}
+
+#[test]
+fn leap_seconds_move_transitions_back_to_unix_time() {
+    // Two leap records (1972-07-01 and 1973-01-01, in leap time) and transitions before, at and
+    // after them.
+    let leaps = [(78_796_800, 1), (94_694_401, 2)];
+    let transitions = [(1_000, 0), (78_796_801, 0), (94_694_500, 0)];
+    let zone = Zone::parse(&with_leaps(&transitions, &[3_600], &leaps)).unwrap();
     let unix: Vec<i64> = zone.transitions.iter().map(|(at, _)| *at).collect();
     assert_eq!(unix, [1_000, 78_796_800, 94_694_498], "each less the correction in force");
+    // A leap second between two transitions a second apart brings them to one instant.
+    let together = [(78_796_799, 0), (78_796_800, 0)];
+    let zone = Zone::parse(&with_leaps(&together, &[3_600], &leaps)).unwrap();
+    let unix: Vec<i64> = zone.transitions.iter().map(|(at, _)| *at).collect();
+    assert_eq!(unix, [78_796_799, 78_796_799], "one instant");
 }
 
 /// A valid file to break: two types, three transitions and a footer.
@@ -142,10 +155,18 @@ fn a_malformed_file_is_refused() {
     cases.push(("an unclosed footer", unclosed));
     cases.push(("empty", Vec::new()));
     cases.push(("a header alone", sound()[..44].to_vec()));
+    let (transitions, types) = ([(50, 1), (150, 0)], [3_600, 7_200]);
+    // A first correction may be any (a version 4 file can start its table late), but one that
+    // takes 1000 s off the second transition moves it before the first.
+    cases.push(("a correction that reorders", with_leaps(&transitions, &types, &[(100, 1_000)])));
+    let apart = [(100, 1), (200, 3)];
+    cases.push(("corrections two apart", with_leaps(&transitions, &types, &apart)));
     for (name, file) in cases {
         assert!(Zone::parse(&file).is_err(), "{name}: {:?}", Zone::parse(&file));
     }
     assert!(Zone::parse(&sound()).is_ok(), "the file the cases break reads");
+    let late = with_leaps(&transitions, &types, &[(10, 27), (100, 28), (200, 27)]);
+    assert!(Zone::parse(&late).is_ok(), "a table that starts late, with a negative leap second");
 }
 
 #[test]
