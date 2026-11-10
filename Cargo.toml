@@ -69,15 +69,19 @@ tokio-util = { version = "0.7.20", default-features = false }
 
 # Data and contracts
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+# float_roundtrip parses a float exactly, so a recorded line reads back to the number that was
+# written (eileen-record's exact inverse); the default parser can be a unit in the last place
+# off. Features unify across a build, so it is turned on here, for every crate, at about twice
+# the cost of parsing a float.
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 schemars = "1.2.3"
 ulid = { version = "3.0.0", default-features = false, features = ["std", "serde"] }
 toml = "1.1.8"
-# toml 1.1.8 does not depend on toml_edit. 0.25.15 (2026-09-11) is the newest release at least
-# 14 days old on 2026-10-21, and its toml_datetime, toml_parser, toml_writer, serde_spanned and
-# winnow requirements accept the versions toml 1.1.8 locks, so the tree holds one copy of each.
-# Exact, so the first lock cannot take 0.25.16 or 0.25.17, both inside the cooling-off period.
-toml_edit = "=0.25.15"
+# toml 1.1.8 does not depend on toml_edit. 0.25.17 (2026-10-09) is the newest release, 22 days
+# old on 2026-10-31 and past the cooling-off period, and its toml_datetime, toml_parser,
+# toml_writer, serde_spanned and winnow requirements accept the versions toml 1.1.8 locks, so the
+# tree still holds one copy of each. Exact, so a lock never takes a release newer than this one.
+toml_edit = "=0.25.17"
 
 # Errors, tracing, secrets
 thiserror = "2.0.21"
@@ -88,6 +92,10 @@ tracing-appender = "0.2.5"
 tracing-error = "0.2.1"
 secrecy = "0.10.3"
 await-tree = { version = "0.3.1", features = ["tokio"] }
+# getrandom 0.4.3 (2026-06-17, MIT OR Apache-2.0, the newest release) mints eileen-runtime's tokens
+# (BUILD.md section 2.12) from the OS's generator. Every binary already links it through ulid's
+# rand, so the lock does not change; it has no default features (decision D86).
+getrandom = "0.4.3"
 
 # Storage and recording
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -107,7 +115,9 @@ windows = { version = "0.62.2", default-features = false, features = [   # take 
   "Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant",
   "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Power", "Win32_System_Registry",
-  "Win32_System_Performance", "Win32_System_IO", "std",   # Win32_System_IO from process-wrap's job-object feature, std from its windows dependency, which keeps windows' default features; listed so every build has one set
+  "Win32_System_Performance", "Win32_System_IO", "std",   # Win32_System_IO from process-wrap's job-object feature until decision D86's spawn replaces it, then for the supervisor's own Job Object completion ports and PathProbe's link reads; std from process-wrap's windows dependency, which keeps windows' default features; listed so every build has one set
+  "Win32_System_Time", "Win32_NetworkManagement_NetManagement",   # the zone reader of BUILD.md 3.3.3, and NetApiBufferFree for PathProbe's shares (decision D86)
+  "Win32_System_SystemServices", "Win32_System_Ioctl",   # the Job Object messages and reparse tags, and FSCTL_GET_REPARSE_POINT for PathProbe's link walk (decision D86)
   "Win32_System_DataExchange", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_NetworkManagement_IpHelper",
   "Win32_Storage_FileSystem", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input",
   "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem",
@@ -139,7 +149,7 @@ rustix = { version = "1.1.5", default-features = false, features = ["std", "fs"]
 # executor; 6.0.0 (2026-10-16) is inside the cooling-off period. Cargo's first lock would take
 # releases from 2026-10-09 to 2026-10-16 for five crates of its tree, so the pull request whose
 # member first uses zbus locks them with `cargo update --precise` at zbus_names 4.3.4, zvariant and
-# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.15, the workspace's own pin.
+# zvariant_derive 5.15.0, uuid 1.27.0 and toml_edit 0.25.17, the workspace's own pin.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 # quick-xml 0.42.0 (2026-08-22, MIT) reads GTK's recently-used.xbel; it has no default features.
 quick-xml = "0.42.0"
@@ -156,6 +166,17 @@ realfft = "3.5.0"
 # rtrb: the newest non-yanked release crates.io listed on 2026-10-21 (0.4.0, released 2026-08-17;
 # 0.3.5 is a later backport on the 0.3 line)
 rtrb = "0.4.0"
+# sha2 checks each model download against the full SHA256 in models.toml. 0.11.1 (2026-10-12, MIT
+# OR Apache-2.0) is the newest release, 19 days old on 2026-10-31. Its default features (alloc, oid)
+# stay off: hashing a file in chunks needs neither. The crates its first lock adds (digest 0.11.3,
+# block-buffer 0.12.1, crypto-common 0.2.2, hybrid-array 0.4.15) are past the cooling-off period on
+# 2026-10-31; cfg-if, cpufeatures 0.3.1 and typenum are already in the lock.
+sha2 = { version = "0.11.1", default-features = false }
+# Not pinned: rubato. At the 48 kHz endpoint rate of BUILD.md section 2.8 both resampling ratios
+# are integers (capture to 16 kHz is 3:1, 24 kHz synthesis to 48 kHz is 1:2), so WP4 measures its
+# own polyphase filter first, against the bar section 6.6 sets (passband, alias and image rejection,
+# cost per 10 ms buffer). If the own filter misses it, an amendment pins rubato here so that it can
+# be measured against the same bar.
 
 # Images
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -181,6 +202,14 @@ loom = "0.7.2"
 # shuttle is exact, so the first lock cannot take 0.9.8; Dependabot still proposes exact bumps.
 shuttle = "=0.9.5"
 shuttle-tokio = "1.0.0"
+# allocation-counter 0.8.1 (2023-09-21, the newest release; MIT/Apache-2.0; no dependencies and no
+# features) checks that the audio callbacks neither allocate nor free (BUILD.md section 6.6,
+# decision D82). A test runs the callback's code inside allocation_counter::measure, which counts
+# that thread's allocations and frees in every build profile, and asserts that the AllocationInfo
+# it returns is the default, all zeros. The crate declares its own #[global_allocator], so members
+# take it only under [dev-dependencies]: rustc links it only into the test binaries whose code
+# names it, never into a shipped binary. deny.toml lets only eileen-audio take it.
+allocation-counter = "0.8.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

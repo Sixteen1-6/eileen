@@ -27,6 +27,8 @@ records when they exist.
 | 4 | `wp0/stubs` | Pull request #96, merged on 2026-10-25 as 990ea42; its amendment, pull request #95 (decision D78), merged first |
 | 5 | `wp0/xtask` | Pull request #98, merged on 2026-10-25 as d18359b, after the three reviews' fixes |
 | 6 | `wp0/guidance` | Pull request #99, merged on 2026-10-25 as c6bc172, after the three reviews' fixes |
+| 7 | `wp0/ci-pending-snapshots` | Pull request #133, merged on 2026-11-07 as f56604e, after a rebase that day onto `main` with #139 that moved its tests into `xtask::workflows::tests`; alone on that `main`, they failed in run 42386485533 and passed with the workflow change in run 42386891065. Throwaway probes, both reverted: runs 41268772719 and 41269051828 showed both test jobs keeping a new `.snap.new` and an inline `.pending-snap`; run 41270636534 showed both writing them under `target/insta-pending` and uploading them, the unreferenced-snapshot check passing, and `hygiene` failing on two pending files committed to the tree. It merged before `wp0/machine-contracts`, which takes its pinned snapshots from CI by this route. Its review's fixes follow in pull request #176, from the same branch, and its amendment of sections 4.6, 4.7, 4b.3 and 6.1 in pull request #177 |
+| 8 | `wp0/ci-cache-fresh` | Pull request #139, merged on 2026-11-01 as 833ab4c, from the CI measurements of that day: cached dependency artifacts kept fresh across key misses, and superseded caches pruned. Throwaway probes, reverted, ran the steps that only run on `main` in runs 41310530260 and 41314107974. Its amendment, pull request #143, merged on 2026-11-07 as 499c945, and its follow-up amendment, pull request #170, merged on 2026-11-07 as c05fa14 |
 
 `wp0/ci-bootstrap` holds the workspace root with the pins of section 4.1, the configuration of
 section 4b, `ci.yml` (`plan`, `hygiene`, `logic-linux`, `windows-clippy`, `windows-test`,
@@ -120,6 +122,96 @@ vendor credential files; `.claude/rules/ffi.md` loads for `ffi` modules. `CONTRI
 third-party work and models with the licences still to confirm, WP1 to WP9 get their living files,
 and `ARCHITECTURE.md` moves to the root with its links updated and a code-map row for every crate
 in the workspace.
+
+`wp0/ci-pending-snapshots` lets a lane take a changed snapshot from CI instead of building on the
+owner's PC. insta writes no pending snapshot when it detects CI, so `logic-linux` and `windows-test`
+set `INSTA_UPDATE=new`, and `INSTA_PENDING_DIR` to `target/insta-pending` under the workspace (an
+absolute path, because nextest runs each test binary from its crate's folder), in their job-level
+`env:`, which every step inherits: #133 set them on the nextest and doc-test steps, and #176 moved
+them up, so a test step added later has them however it runs its tests. insta then writes each
+pending file in that folder at the path it would take in the repository, so none lands in the tree,
+and each job's on-failure artifact (`logic-linux-junit`, `windows-test-junit`) keeps the folder
+beside the JUnit report, hidden files included, because insta names an inline snapshot's pending
+file `.<file>.pending-snap`. The `hygiene` job, which runs on every pull request, fails on a
+`*.snap.new` or `*.pending-snap` committed to the tree. nextest's `ci` profile keeps
+`fail-fast = false`, so one failed run writes every changed snapshot. `pending_snapshot_problems`
+names each rule a workflow breaks, `ci_keeps_pending_snapshots` holds `ci.yml` to all of them,
+`each_broken_rule_is_named` shows each rule failing alone on a fixture workflow, and
+`one_failed_run_writes_every_changed_snapshot` holds the `ci` profile, all in
+`xtask::workflows::tests::pending`, a child of `wp0/ci-cache-fresh`'s test module on the same `job`
+and `steps` parsers, so every assertion about the workflows lives in one module. To take a snapshot
+from a failed run, `gh run download <run-id> -n logic-linux-junit -D <scratch folder>` gives
+`nextest/ci/junit.xml` and `insta-pending/<repository path>`; move the `.snap.new` over the `.snap`
+it names and remove its `assertion_line:` header line, which insta writes only in pending files and
+`cargo insta accept` drops. An inline snapshot's `.pending-snap` holds the new value as JSON, for
+the literal in the test. Read the diff before committing it. AGENTS.md's Testing section gives the
+same route, which counts as regenerating the snapshot. Pending files kept beside the snapshots would
+also fail the contracts' `no_snapshot_file_is_unreferenced` whenever it ran after a failing snapshot
+test (a probe run showed it failing on Linux and passing on Windows, by test order alone); under
+`target/` they leave that check strict.
+
+`wp0/ci-cache-fresh` keeps the dependency artifacts in the rust-cache entries usable when the key
+misses. On a restore that is not a full match, rust-cache v2.9.3 deletes every entry of
+`target/debug/build`, `.fingerprint` and `deps` dated more than a week ago, and artifacts carried
+from key to key keep their first build's date, so any `Cargo.toml` or `Cargo.lock` change a week
+after a dependency was first built rebuilt it. `logic-linux`, `windows-clippy` and `windows-test`
+now end with a step that runs only where they save (`main`) and gives every file and folder below
+those three folders one and the same date before rust-cache's save. One date, not each entry's own
+moment, because cargo rebuilds a unit whose dependency's output is newer than its own and counts
+equal dates as fresh: dating only the top-level entries would leave each build script's compiled
+program older than the libraries it was built from, so every restore would rerun those scripts and
+rebuild what depends on them. A temporary probe in run 41314107974, after `logic-linux`'s own
+builds, dated only the top-level entries and ran clippy and `cargo nextest run --no-run` again:
+cargo rebuilt 222 units. After the one-date step it rebuilt none, and none in `windows-clippy`
+either. The three jobs also keep only the toolchain `rust-toolchain.toml` pins before rust-cache
+runs, on every event, because rust-cache hashes `rustc -vV` of every installed toolchain into the
+key and the runner images carry their own stable. A `prune-caches` job, on pushes to `main` only and
+after those three jobs, keeps the newest entry of each shared key (`linux`, `win-clippy`,
+`win-test`) and deletes the older ones with `gh cache delete`, holding `actions: write` and nothing
+else; it is upkeep, so `all-green` does not need it. The tests in `xtask::workflows::tests` hold
+`ci.yml` to all of it, and hold every job in any workflow that restores one of those keys to the
+same toolchain step.
+
+The Linux desktop lane (`linux-desktop.yml`, WP10's) restores the `linux` key without saving, and
+until #139 matched `main`'s entry in full, because both kept the image's stable 1.99.1 beside the
+pinned 1.99.0 (`a820fa96`). With #139 merged, `main` saves under the pinned-only hash
+(`df0daf48`) and `prune-caches` deleted the `a820fa96` entries (on 2026-11-07 the only `linux`
+entry left was `df0daf48`), so the lane lost its only matching Rust cache and builds from a partial
+restore each night until it keeps only the pinned toolchain too. That change is pull request #144,
+an amendment to WP10's file, still held for the owner; until it merges, the workflow tests list the
+lane's `session` job as the one known exception and fail once it gains the step. BUILD.md's
+sections 4.6 and 4b.3 gained `prune-caches` and this cache policy in amendments #143 and #170.
+
+Section 4.1's `serde_json` line and the root manifest agree since #157 (merged on 2026-11-07 as
+e64fed4, from `amend/serde-json-float-roundtrip`), which turns serde_json's `float_roundtrip`
+feature on in the root `[workspace.dependencies]` as `{ version = "1.0.154", features =
+["float_roundtrip"] }`, the line #181 (merged on 2026-11-07 as e8ec56e) wrote into section 4.1 ahead
+of it. Before it the feature reached the workspace only through `eileen-record`'s own manifest
+(#155). #182 (merged on 2026-11-07 as 03d429b, also from `amend/serde-json-pin`) added `serde_json`
+to the dependencies members never add features to (sections 3.1 and 4.1, check 15). The owner's
+review of #157 is pending: AGENTS.md rule 8 gives a change to the root manifest's feature lists to
+the owner, and #157 merged with no review by the owner, as did #181 and #182, which amend sections
+3.1, 4.1 and 4b.3. On 2026-11-07 the owner was asked for a yes or no on the three after the fact. If
+the owner declines #157, e64fed4 is reverted and an amendment puts section 4.1's line back to
+`serde_json = "1.0.154"` and amends sections 3.1 and 4.1 and check 15 to match. Since #182 no member
+may turn the feature on in its own manifest, so `eileen-record` may no longer keep it there, and
+that amendment also says how `eileen-record` keeps its exact inverse.
+
+Two follow-ups come after #157, in this order, and neither is WP0's. First, issue #185, closed by
+#194, an amendment from WP3's lane because the file is WP1's: `crates/eileen-record/Cargo.toml`
+reads `serde_json.workspace = true`, which is now required, and its comment that the line changes
+once #157 merges is gone, so phase B's check 15 no longer waits on that crate. Then issue #186: WP3
+makes the `stub_script` fuzz target's round trip exact. `round_trips` in
+`crates/eileen-stub-harness/src/fuzz_entry.rs` compares with `before == after`, and `same`, which
+lets two floats differ by up to `8 * f64::EPSILON` relative because serde_json ran without the
+feature, goes with its doc comment. #157's test,
+`eileen-contracts::it::wire::a_written_float_reads_back_exactly`, passed in CI with or without
+#157's root entry while `eileen-record` kept its own feature, because CI builds the whole workspace
+and that feature was unified into every crate. Built alone, it shows the change: throwaway probe
+run 42395695216 ran `cargo test -p eileen-contracts --test it` on `main` with #157's test added,
+which failed on its second case (`-6.481044486608049e-108` read back one unit in the last place
+off), passed with `-p eileen-record` added to the same command, and passed alone with #157's root
+entry. Since #194, the test's pass in CI depends on the root entry alone.
 
 ## Acceptance records
 
@@ -251,6 +343,14 @@ Python job, held on `wp0/contracts`: pull request #15's first run (run 395805536
   versions are the root ones that cargo-deny and the cooling-off rule check; its one extra
   package is `libfuzzer-sys` 0.4.13 (2026-06-04, `(MIT OR Apache-2.0) AND NCSA`), a development
   tool never shipped. Phase B's fuzz job copies the lock before `cargo fuzz build`.
+- `fuzz/Cargo.toml`'s header comment said each target calls a `fuzz_entry` function "of the
+  crate that owns the parser". Since `amend/wp4-audio-settled` (#180), `fuzz/AGENTS.md` and
+  `fuzz/README.md` put the entry in a crate that builds on Linux owned by the package BUILD.md
+  section 4.7's table names (`speech_frame`'s in `eileen-speech`, its parser in
+  `eileen-contracts`). The next pull request that changes `fuzz/Cargo.toml`, phase B's fuzz job
+  or a new target, brings the comment into line; #180 left it, since a change to any
+  `Cargo.toml` selects every CI class for a comment. (Done in pull request #189. #156 changed
+  the comment first and kept the clause.)
 
 - `wp0/xtask` wires the build guard `wp0/base-crates` built: `acquire` with
   `SystemMemory::new(&RealClock)`, `Store::machine()`, `disk::free_disk_gb` of the worktree and
@@ -736,6 +836,23 @@ the whole workspace) holds 5.9 GB in `target/debug`, and 9.5 GB with the Windows
 `logic-linux` 190 s (tests 55 s, the simulator's seed set 61 s with its build), `windows-clippy`
 120 s (clippy 50 s, `fetch-native` 15 s), `windows-test` 165 s (tests 93 s), `all-green` 3 s;
 `pr-meta` 21 s. Against `wp0/stubs`' cold run each Windows job took about 69 percent less time.
+
+The cache, measured on 2026-11-01 over the week's runs (131 pull request runs with the Rust lanes,
+27 `windows-test` logs read in full): a run whose cache key matched in full took a median of 3.0
+minutes, and `windows-test` compiled only the 47 workspace crates; the 6 runs whose partial restore
+purged week-old artifacts compiled 152 to 245 crates and took 5.7 to 10 minutes. One of them, after
+`d19fbe6` added no crates.io package at all, still rebuilt 107. The cache held 11.1 GB in 28
+entries, over GitHub's 10 GB limit. `wp0/ci-cache-fresh` answers both. Its own run 41310530260 found
+no Windows cache, as expected once: the Windows images carry stable 1.99.1 beside the pinned 1.99.0,
+so dropping it moved the Windows key from `d502fb97` to `d199978c`, and `main`'s first run after the
+merge saves the new entries. On Linux, `main`'s current key (`a820fa96`) also hashes the image's
+1.99.1; the pull request restored an older `df0daf48` entry, saved before the image moved, as a
+partial match. To confirm the fix, read the `windows-test` log of a pull request that edits a
+`Cargo.toml` or the lockfile and restores an entry `main` saved less than a week before, while that
+entry holds dependencies first built more than a week earlier: rust-cache logs `full match: false`,
+yet the tests step compiles only the workspace crates and the changed dependencies, not the 107 to
+245 crates of before. The step that dates the artifacts prints how many files and folders it dated
+in each folder in `main`'s logs, and `prune-caches` names each entry it deletes.
 
 The build guard's baseline (acceptance 4, section 6.1 rule 1): `cargo xtask slots --baseline` on
 the owner's PC writes its percentiles between these markers and its thresholds to

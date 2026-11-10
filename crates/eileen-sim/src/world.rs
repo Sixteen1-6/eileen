@@ -2,34 +2,55 @@
 //!
 //! Each step takes one input, wraps it in an [`Envelope`] with the next `seq` and the virtual
 //! time, calls `Core::step`, applies the effects to the simulated parts, checks every
-//! invariant, writes one line of the step log and feeds the trace hash. The parts are small
-//! now and grow with WP1: timers the core set, a speech process that queues utterances, the
-//! bus with one slow subscriber, and the flight recorder's ring, which captures every span and
-//! log line the core produces on the simulator's thread.
+//! invariant, writes one line of the step log and feeds the trace hash. The parts: timers the
+//! core set, the speech process with its life and the playback device, a scripted brain and
+//! scripted worker sessions ([`crate::parts`]), the PC with its memory, paging, CPU load and
+//! power and a heavy app that grows and closes ([`crate::pc`]), read into `Input::Memory`
+//! every 5 s, the bus with one slow subscriber, the HUD's last state, the supervised
+//! children's lives (invariant 8), and the span collector ([`crate::collect`]), which keeps
+//! every span and log line the core produces on the simulator's thread for invariant 13.
+//! What the parts answer is scheduled at virtual times, and [`World::advance`] delivers it,
+//! the timers and the memory readings, in time order, running the device's 10 ms callbacks as
+//! time passes.
+//!
+//! A world a test builds is fault-free; a seeded run switches the fault points of
+//! [`crate::faults`] on ([`World::set_faults`]), and every fault that fires is recorded with its
+//! step. The brain's pace comes from the profile, drawn from the world's own random stream,
+//! apart from the core's and the generator's.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Write as _};
-use std::sync::Arc;
-use std::time::Duration;
 
 use eileen_contracts::bus::BusEvent;
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
-use eileen_contracts::core_io::{Effect, Input, PlaybackEvent, TimerId};
-use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime};
+use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
+use eileen_contracts::core_io::{ActivityEvent, Effect, Input, PlaybackEvent, TimerId};
+use eileen_contracts::harness::{BrainCmd, WorkerCmd, WorkerEvent};
+use eileen_contracts::hud::HudState;
+use eileen_contracts::ids::{Envelope, MonoTime, SpeakId, TraceCtx, WallTime, WorkerSessionId};
+use eileen_contracts::jobs::MemoryPressure;
 use eileen_contracts::ports::SettingsValidator;
-use eileen_contracts::record::InputRecord;
+use eileen_contracts::record::{FaultRecord, InputRecord};
 use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 use eileen_core::{Core, CoreConfig, CorePorts};
 use eileen_stdx::rng::CoreRng;
-use eileen_trace::redact::Redactor;
-use eileen_trace::ring::{Ring, RingLayer};
 use serde_json::Value;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
+use crate::collect::Collector;
+use crate::faults::Faults;
 use crate::hash::TraceHash;
-use crate::invariants::{self, Delivery, Violation};
+use crate::invariants::{
+    self, AudioEvent, AudioRecord, ChildEvent, ChildRecord, Delivery, Violation,
+};
+use crate::parts::Brain as BrainPart;
+use crate::parts::{
+    BrainReply, BrainTurn, CALLBACK_MS, Device, Due, Process, Speech, WorkerFault, Workers,
+};
+use crate::pc::{EileenUse, Load, MEMORY_SAMPLE_MS, Pc};
 use crate::profile::Profile;
+use crate::resolver::SimResolver;
 
 /// The wall clock the world starts at: 2026-01-01T00:00:00Z, in microseconds. Wall time only
 /// stamps envelopes; nothing in a run depends on today's date.
@@ -38,11 +59,15 @@ const EPOCH_US: i64 = 1_767_225_600_000_000;
 const NS_PER_MS: u64 = 1_000_000;
 /// The width of the step log's input column.
 const INPUT_COLUMN: usize = 32;
-/// The process the ring records as, the core's.
-const PROCESS: &str = "eileen";
-/// The ring's bounds: far above what a run of the skeleton produces.
-const RING_BYTES: usize = 64 * 1024 * 1024;
-const RING_WINDOW: Duration = Duration::from_hours(24);
+
+/// Whether the world's fault point `$site` fires in the step `$world` is taking: `buggify!`
+/// draws in a seeded run, a replay fires what its records name, and a world a test drives by
+/// hand fires nothing ([`Faults`]). Every site is listed in [`crate::faults::SITES`].
+macro_rules! fault {
+    ($world:ident, $site:literal) => {
+        $world.faults.hit($world.seq, $site, eileen_stdx::buggify!($site))
+    };
+}
 
 /// The settings validator the simulated core uses. `eileen-sim` may not depend on
 /// `eileen-config` (BUILD.md section 3.1), so it carries its own; like the stub, it refuses
@@ -130,14 +155,37 @@ pub struct World {
     core_rng: CoreRng,
     id_rng: CoreRng,
     timers: BTreeMap<u64, MonoTime>,
+    due: Due,
+    speech: Speech,
+    device: Device,
+    brain: BrainPart,
+    workers: Workers,
+    /// The PC: memory, paging, CPU load, power and the heavy app.
+    pc: Pc,
+    /// When the next memory reading is due, ms.
+    next_reading_ms: u64,
+    /// Worker sessions started and not yet exited, which hold memory.
+    sessions: BTreeSet<WorkerSessionId>,
+    /// The fault points and every fault that fired.
+    faults: Faults,
+    /// The random numbers the parts draw their pace from (the brain's delays and dispatches).
+    parts_rng: CoreRng,
+    /// The utterances the speech process holds, which playback events may name (invariant 10).
     speech_queue: Vec<SpeakId>,
+    /// The supervised children's lives (invariant 8).
+    children: Vec<ChildRecord>,
+    /// The HUD state the core sent last.
+    hud: Option<HudState>,
+    effects: Vec<Envelope<Effect>>,
     published: Vec<Envelope<BusEvent>>,
+    /// The inputs, effects and playback callbacks in time order (invariants 2, 3 and 9), kept
+    /// only once a test asks for them ([`World::record_audio`], which says which callbacks).
+    audio: Option<Vec<AudioRecord>>,
     bus: Bus,
     inputs: Vec<InputRecord>,
     log: String,
     hash: TraceHash,
-    ring: Arc<Ring>,
-    redactor: Redactor,
+    collector: Collector,
     _trace: DefaultGuard,
 }
 
@@ -153,24 +201,41 @@ impl fmt::Debug for World {
 }
 
 impl World {
-    /// A world around a fresh stub core, its random numbers seeded from `seed`. Spans and log
-    /// lines on this thread go to the world's ring until it is dropped.
+    /// A world around a fresh core with the default [`SimResolver`], its random numbers seeded
+    /// from `seed`. Spans and log lines on this thread go to the world's collector until it is
+    /// dropped.
     #[must_use]
     pub fn new(profile: Profile, seed: u64) -> Self {
+        Self::with_resolver(profile, seed, SimResolver::default())
+    }
+
+    /// A world whose core resolves intents with `resolver`.
+    #[must_use]
+    pub fn with_resolver(profile: Profile, seed: u64, resolver: SimResolver) -> Self {
         let ports = CorePorts {
-            resolver: Box::new(eileen_intent::Resolver),
+            resolver: Box::new(resolver),
             cleaner: Box::new(eileen_dictation::Cleaner),
             settings: Box::new(SimSettings),
             skills: Box::new(eileen_skills::Engine),
         };
         let core = Core::new(CoreConfig::default(), ports, None);
-        let ring = Arc::new(Ring::new(PROCESS, RING_BYTES, RING_WINDOW));
-        let subscriber = tracing_subscriber::registry().with(RingLayer::new(Arc::clone(&ring)));
+        let collector = Collector::default();
+        let subscriber = tracing_subscriber::registry().with(collector.layer());
         let trace = tracing::subscriber::set_default(subscriber);
         // Two streams from the seed: the core's, and the one the generator mints IDs from, so a
         // replay, which mints none, hands the core the same numbers the run did.
         let mut core_rng = CoreRng::from_seed(seed);
         let id_rng = core_rng.fork();
+        // The input buffer of a seeded run takes the third stream, so the parts take the fourth.
+        let mut parts_rng = CoreRng::from_seed(seed);
+        for _ in 0..3 {
+            parts_rng.jump();
+        }
+        let mut due = Due::default();
+        if profile.media_at_start {
+            due.schedule(0, Input::Activity(ActivityEvent::OtherAudio { playing: true }));
+        }
+        let pc = Pc::new(&profile.pc, profile.eileen);
         let bus = Bus::new(
             usize::try_from(profile.bus_subscriber_capacity).unwrap_or(usize::MAX),
             usize::try_from(profile.bus_subscriber_drain).unwrap_or(usize::MAX),
@@ -184,14 +249,27 @@ impl World {
             core_rng,
             id_rng,
             timers: BTreeMap::new(),
+            due,
+            speech: Speech::default(),
+            device: Device::new(),
+            brain: BrainPart::default(),
+            workers: Workers::default(),
+            pc,
+            next_reading_ms: MEMORY_SAMPLE_MS,
+            sessions: BTreeSet::new(),
+            faults: Faults::off(),
+            parts_rng,
             speech_queue: Vec::new(),
+            children: Vec::new(),
+            hud: None,
+            effects: Vec::new(),
             published: Vec::new(),
+            audio: None,
             bus,
             inputs: Vec::new(),
             log: String::new(),
             hash: TraceHash::default(),
-            ring,
-            redactor: Redactor::new(),
+            collector,
             _trace: trace,
         }
     }
@@ -226,6 +304,144 @@ impl World {
         &self.published
     }
 
+    /// Every effect the core emitted so far, in order.
+    #[must_use]
+    pub fn effects(&self) -> &[Envelope<Effect>] {
+        &self.effects
+    }
+
+    /// Keeps the audio trace from now on. Runs do not keep it by default: it holds a record
+    /// for every input and effect and for most 10 ms callbacks, and the per-step check does
+    /// not read it.
+    pub fn record_audio(&mut self) {
+        self.audio.get_or_insert_with(Vec::new);
+    }
+
+    /// Every input and effect since [`World::record_audio`], with each playback callback while
+    /// the device holds an utterance and the first one after it holds none, in time order, as
+    /// invariants 2, 3 and 9 read them; empty when the trace is not kept.
+    #[must_use]
+    pub fn audio(&self) -> &[AudioRecord] {
+        self.audio.as_deref().unwrap_or_default()
+    }
+
+    fn note(&mut self, event: AudioEvent) {
+        if let Some(audio) = self.audio.as_mut() {
+            audio.push(AudioRecord { at_ms: self.now_ms, event });
+        }
+    }
+
+    /// The simulated playback device.
+    #[must_use]
+    pub const fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// The simulated speech process.
+    #[must_use]
+    pub const fn speech(&self) -> &Speech {
+        &self.speech
+    }
+
+    /// The HUD state the core sent last.
+    #[must_use]
+    pub const fn hud(&self) -> Option<&HudState> {
+        self.hud.as_ref()
+    }
+
+    /// The simulated PC.
+    #[must_use]
+    pub const fn pc(&self) -> &Pc {
+        &self.pc
+    }
+
+    /// Which of Eileen's processes hold memory now.
+    #[must_use]
+    pub fn eileen_use(&self) -> EileenUse {
+        EileenUse {
+            speech: matches!(self.speech.process(), Process::Loading | Process::Up | Process::Hung),
+            workers: u32::try_from(self.sessions.len()).unwrap_or(u32::MAX),
+            brains: self.brain.running(),
+        }
+    }
+
+    /// The memory reading the runtime would send now.
+    #[must_use]
+    pub fn memory(&self) -> MemoryPressure {
+        self.pc.reading(self.now_ms, self.eileen_use())
+    }
+
+    /// The CPU load and power now.
+    #[must_use]
+    pub fn load(&self) -> Load {
+        self.pc.load(self.now_ms)
+    }
+
+    /// Switches the fault points to `faults`: [`Faults::live`] for a seeded run,
+    /// [`Faults::scripted`] for a replay, [`Faults::every`] for a test that breaks one part.
+    pub fn set_faults(&mut self, faults: Faults) {
+        self.faults = faults;
+    }
+
+    /// Every fault that fired so far, each with the step it fired in.
+    #[must_use]
+    pub fn faults(&self) -> &[FaultRecord] {
+        self.faults.records()
+    }
+
+    /// The supervised children's lives so far.
+    #[must_use]
+    pub fn children(&self) -> &[ChildRecord] {
+        &self.children
+    }
+
+    /// The speech process hangs: it sends nothing more until the core has it killed.
+    pub fn hang_speech(&mut self) {
+        let event = match self.speech.process() {
+            Process::Up => ChildEvent::Hung,
+            Process::Loading => ChildEvent::Stuck,
+            Process::Off | Process::Hung | Process::Dead => return,
+        };
+        self.speech.hang(&mut self.due);
+        self.child(SidecarId::Speech, event);
+    }
+
+    /// The speech process crashes: the supervisor reports its exit now, and the utterances it
+    /// held that never reached the device are gone with it.
+    pub fn crash_speech(&mut self) {
+        self.speech.crash(self.now_ms, &mut self.due);
+        self.speech_gone();
+    }
+
+    /// Makes every later load of the speech process never send `Ready` (`true`), or finish
+    /// again (`false`).
+    pub const fn stick_speech_loads(&mut self, stuck: bool) {
+        self.speech.stick_loads(stuck);
+    }
+
+    /// Makes the supervisor report each later kill of the speech process `ms` after it, as a
+    /// slow hang dump would.
+    pub const fn slow_speech_exits(&mut self, ms: u64) {
+        self.speech.slow_exits(ms);
+    }
+
+    /// The speech process ended: it holds no utterance now, and the device plays on only what
+    /// it was given.
+    fn speech_gone(&mut self) {
+        let playing = self.device.speaking();
+        self.speech_queue.retain(|queued| playing.contains(queued));
+    }
+
+    /// Makes every worker turn's work from now on take `ms`, so jobs run side by side.
+    pub const fn set_worker_ms(&mut self, ms: u64) {
+        self.workers.set_work_ms(ms);
+    }
+
+    /// Queues the scripted brain's reply to the next turn it is sent.
+    pub fn script_brain(&mut self, reply: BrainReply) {
+        self.brain.script(reply);
+    }
+
     /// The decoded inputs so far, as a `SimRegression` records them.
     #[must_use]
     pub fn inputs(&self) -> &[InputRecord] {
@@ -249,14 +465,88 @@ impl World {
         &mut self.id_rng
     }
 
-    /// Moves virtual time forward by `ms` and returns the first timer that is now due, which
-    /// the next step should deliver.
-    pub fn advance(&mut self, ms: u64) -> Option<TimerId> {
-        self.now_ms = self.now_ms.saturating_add(ms);
+    /// Moves virtual time forward by up to `ms`, running the device's 10 ms callbacks, and
+    /// returns the first input due on the way: a part's answer or a timer, which the next step
+    /// should deliver. Time stops where that input is due; with nothing due it moves the whole
+    /// way and returns `None`.
+    pub fn advance(&mut self, ms: u64) -> Option<Input> {
+        if let Some(input) = self.take_due() {
+            return Some(input);
+        }
+        let target = self.now_ms.saturating_add(ms);
+        while self.now_ms < target {
+            let next_tick =
+                (self.now_ms / CALLBACK_MS).saturating_add(1).saturating_mul(CALLBACK_MS);
+            self.now_ms = next_tick.min(target);
+            if self.now_ms == next_tick {
+                // While the device holds nothing, which is most of a run, the trace keeps only
+                // the first callback: the one after a stop or a mute, which invariants 2 and 9
+                // judge. A paused utterance's empty callbacks all stay, being the silence
+                // invariant 2 checks.
+                let idle = self.audio.is_some() && self.device.speaking().is_empty();
+                let handed = self.device.callback(self.now_ms, &mut self.due);
+                let idle_again = idle && self.audio().last().is_some_and(
+                    |record| matches!(&record.event, AudioEvent::Callback(last) if last.is_empty()),
+                );
+                if !idle_again {
+                    self.note(AudioEvent::Callback(handed));
+                }
+            }
+            if let Some(input) = self.take_due() {
+                return Some(input);
+            }
+        }
+        None
+    }
+
+    /// How long until the earliest timer the core set, ms (0 when one is due).
+    #[must_use]
+    pub fn until_next_timer(&self) -> Option<u64> {
+        let at = self.timers.values().min()?;
+        Some((at.0 / NS_PER_MS).saturating_sub(self.now_ms))
+    }
+
+    /// Delivers everything due within `ms` of virtual time, one step each, and returns the
+    /// steps' outcomes.
+    pub fn settle(&mut self, ms: u64) -> Vec<StepOutcome> {
+        let target = self.now_ms.saturating_add(ms);
+        let mut outcomes = Vec::new();
+        while let Some(input) = self.advance(target.saturating_sub(self.now_ms)) {
+            outcomes.push(self.step(input));
+        }
+        outcomes
+    }
+
+    /// The earliest timer or part's answer due now; a timer goes first only when it is due
+    /// strictly earlier.
+    fn take_due(&mut self) -> Option<Input> {
         let now = self.mono();
-        let due = self.timers.iter().find(|(_, at)| **at <= now).map(|(id, _)| *id)?;
-        self.timers.remove(&due);
-        Some(TimerId(due))
+        let timer = self
+            .timers
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .min_by_key(|(id, at)| (**at, **id))
+            .map(|(id, at)| (*id, *at));
+        let item = self.due.next_at().filter(|at| *at <= self.now_ms);
+        let reading = Some(self.next_reading_ms).filter(|at| *at <= self.now_ms);
+        // A memory reading goes first only when it is due strictly before the rest.
+        if let Some(at) = reading
+            && timer.is_none_or(|(_, timer_at)| at.saturating_mul(NS_PER_MS) < timer_at.0)
+            && item.is_none_or(|item| at < item)
+        {
+            self.next_reading_ms = at.saturating_add(MEMORY_SAMPLE_MS);
+            return Some(Input::Memory(self.memory()));
+        }
+        let timer_first = match (timer, item) {
+            (Some((_, at)), Some(item)) => at.0 < item.saturating_mul(NS_PER_MS),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if timer_first && let Some((id, _)) = timer {
+            self.timers.remove(&id);
+            return Some(Input::Timer(TimerId(id)));
+        }
+        self.due.pop(self.now_ms)
     }
 
     /// Sets virtual time to `mono` (a replayed input's time), never backwards.
@@ -278,6 +568,9 @@ impl World {
         let record = InputRecord { seq: self.seq, mono, at, ctx, input: input.clone() };
         self.hash.record(&serde_json::to_vec(&record).unwrap_or_default());
         self.apply_input(&input);
+        if self.audio.is_some() {
+            self.note(AudioEvent::Input(input.clone()));
+        }
         self.inputs.push(record);
         let envelope = Envelope { seq: self.seq, at, mono, ctx, body: input };
         let mut effects = Vec::new();
@@ -287,7 +580,10 @@ impl World {
             self.hash.record(&serde_json::to_vec(&effect).unwrap_or_default());
             self.apply_effect(effect);
         }
-        self.bus.take();
+        if !fault!(self, "sim.bus.stall") {
+            self.bus.take();
+        }
+        self.faults.sync(self.seq);
         let violation = self.check();
         let status =
             violation.as_ref().map_or_else(|| "ok".to_owned(), |v| format!("FAIL {}", v.number));
@@ -302,53 +598,201 @@ impl World {
         MonoTime(self.now_ms.saturating_mul(NS_PER_MS))
     }
 
+    /// What an input does to the parts before the core sees it: a clause's samples reach the
+    /// device, a drained utterance (or one done with no clause) leaves the speech process and
+    /// the device, a child's exit is noted, and the speech process hears of its own `Ready` and
+    /// heartbeats.
     fn apply_input(&mut self, input: &Input) {
-        if let Input::Playback(PlaybackEvent::Drained { speak }) = input {
-            self.speech_queue.retain(|queued| queued != speak);
+        match input {
+            Input::Playback(PlaybackEvent::Drained { speak }) => {
+                self.speech_queue.retain(|queued| queued != speak);
+                self.device.forget(*speak);
+            }
+            Input::Voice(VoiceEvent::ClauseReady { speak, clause, samples, .. }) => {
+                self.device.clause_ready(*speak, *clause, *samples);
+            }
+            Input::Voice(VoiceEvent::SpeakDone { speak })
+                if !self.device.speaking().contains(speak) =>
+            {
+                // Done with no clause on the device: nothing of it will ever play.
+                self.speech_queue.retain(|queued| queued != speak);
+            }
+            Input::Sidecar(child, SidecarEvent::Exited { .. }) => {
+                self.child(*child, ChildEvent::Down);
+            }
+            Input::Sidecar(SidecarId::Speech, event) => {
+                self.speech.delivered(self.now_ms, input, &mut self.due);
+                if matches!(event, SidecarEvent::Heartbeat) && self.speech.process() == Process::Up
+                {
+                    if fault!(self, "sim.speech.crash") {
+                        self.crash_speech();
+                    } else if fault!(self, "sim.speech.hang") {
+                        self.hang_speech();
+                    }
+                }
+            }
+            Input::Worker(session, WorkerEvent::Exited { .. }) => {
+                self.sessions.remove(session);
+            }
+            Input::Playback(_)
+            | Input::Voice(_)
+            | Input::Sidecar(..)
+            | Input::Brain(_)
+            | Input::Worker(..)
+            | Input::Hook(..)
+            | Input::ToolCall(_)
+            | Input::ToolResult(..)
+            | Input::Learn(_)
+            | Input::User(_)
+            | Input::Activity(_)
+            | Input::Memory(_)
+            | Input::Settings(_)
+            | Input::Store(_)
+            | Input::Timer(_) => {}
         }
     }
 
+    /// Notes an event in a child's life.
+    fn child(&mut self, child: SidecarId, event: ChildEvent) {
+        self.children.push(ChildRecord { at_ms: self.now_ms, child, event });
+    }
+
     fn apply_effect(&mut self, effect: Envelope<Effect>) {
-        let Envelope { seq, at, mono, ctx, body } = effect;
-        match body {
+        let now = self.now_ms;
+        if self.audio.is_some() {
+            self.note(AudioEvent::Effect(effect.body.clone()));
+        }
+        match &effect.body {
             Effect::Emit(event) => {
-                self.bus.publish(seq);
-                self.published.push(Envelope { seq, at, mono, ctx, body: event });
+                self.bus.publish(effect.seq);
+                let published = Envelope {
+                    seq: effect.seq,
+                    at: effect.at,
+                    mono: effect.mono,
+                    ctx: effect.ctx,
+                    body: event.clone(),
+                };
+                self.published.push(published);
             }
-            Effect::Speech(SpeechCmd::Speak { speak, .. }) => self.speech_queue.push(speak),
-            Effect::Speech(SpeechCmd::Cancel { speak }) => {
-                self.speech_queue.retain(|queued| *queued != speak);
+            Effect::Speech(cmd) => {
+                if let SpeechCmd::Speak { speak, .. } = cmd
+                    && !self.speech_queue.contains(speak)
+                {
+                    self.speech_queue.push(*speak);
+                }
+                if let SpeechCmd::Cancel { speak } = cmd {
+                    self.speech_queue.retain(|queued| queued != speak);
+                }
+                self.speech.command(now, cmd, &mut self.due);
             }
+            Effect::Audio(cmd) => self.device.command(now, cmd, &mut self.due),
+            Effect::Brain(cmd) => {
+                let pace = match cmd {
+                    BrainCmd::Turn { .. } => self.brain_turn(),
+                    BrainCmd::Interrupt { .. }
+                    | BrainCmd::Recycle { .. }
+                    | BrainCmd::Promote { .. }
+                    | BrainCmd::Start { .. }
+                    | BrainCmd::Stop { .. } => BrainTurn::default(),
+                };
+                self.brain.command(now, cmd, pace, &mut self.due);
+            }
+            Effect::Worker(session, cmd) => self.worker_command(*session, cmd),
+            Effect::Sidecar(child, cmd) => self.sidecar_command(*child, *cmd),
+            Effect::Hud(state) => self.hud = Some((**state).clone()),
             Effect::SetTimer { id, at } => {
-                self.timers.insert(id.0, at);
+                self.timers.insert(id.0, *at);
             }
             Effect::CancelTimer(id) => {
                 self.timers.remove(&id.0);
             }
-            // The parts that answer the rest (audio, the brain, workers, sidecars, the store,
-            // the HUD) arrive with WP1; until then their effects are counted and hashed only.
-            Effect::Speech(_)
-            | Effect::Audio(_)
-            | Effect::Brain(_)
-            | Effect::Worker(..)
-            | Effect::Hook(..)
+            // The parts that answer the rest (the other sidecars, the store, the learning store)
+            // arrive with the full core; their effects are recorded and hashed only.
+            Effect::Hook(..)
             | Effect::ToolForward { .. }
             | Effect::ToolReply { .. }
-            | Effect::Sidecar(..)
-            | Effect::Hud(_)
             | Effect::Learn(_)
             | Effect::Settings(_)
             | Effect::Persist(_)
             | Effect::Incident(_)
             | Effect::Notify(_) => {}
         }
+        self.effects.push(effect);
     }
 
-    /// Every invariant the skeleton checks, in number order; the first broken one.
+    /// A worker command reaches the session: a `Start` holds memory until the session exits,
+    /// and a `Bind` may crash or slow the session.
+    fn worker_command(&mut self, session: WorkerSessionId, cmd: &WorkerCmd) {
+        let fault = match cmd {
+            WorkerCmd::Start(_) => {
+                self.sessions.insert(session);
+                WorkerFault::None
+            }
+            WorkerCmd::Bind(_) if fault!(self, "sim.worker.crash") => WorkerFault::Crash,
+            WorkerCmd::Bind(_) if fault!(self, "sim.worker.slow") => WorkerFault::Slow,
+            WorkerCmd::Bind(_)
+            | WorkerCmd::Prompt { .. }
+            | WorkerCmd::Interrupt
+            | WorkerCmd::Cancel
+            | WorkerCmd::Recycle
+            | WorkerCmd::RemoveWorktree
+            | WorkerCmd::RestoreSnapshot { .. } => WorkerFault::None,
+        };
+        self.workers.command(self.now_ms, session, cmd, fault, &mut self.due);
+    }
+
+    /// The supervisor carries out a command for a child: the child's life is noted, and the
+    /// speech process starts (slowly, when the fault fires), restarts or is killed.
+    fn sidecar_command(&mut self, child: SidecarId, cmd: SidecarCmd) {
+        let event = match cmd {
+            SidecarCmd::Start => ChildEvent::Started,
+            SidecarCmd::Restart => ChildEvent::Restarted,
+            SidecarCmd::HangDumpThenKill => ChildEvent::Down,
+        };
+        self.child(child, event);
+        if child != SidecarId::Speech {
+            return;
+        }
+        if cmd != SidecarCmd::HangDumpThenKill {
+            if self.speech.loads_stuck() {
+                self.child(child, ChildEvent::Stuck);
+            }
+            if fault!(self, "sim.speech.slow_load") {
+                self.speech.slow_next_load();
+            }
+        }
+        self.speech.sidecar(self.now_ms, cmd, &mut self.due);
+        if cmd == SidecarCmd::HangDumpThenKill {
+            self.speech_gone();
+        }
+    }
+
+    /// How the brain answers the turn being sent: its pace drawn from the profile, and the
+    /// faults that fire for it.
+    fn brain_turn(&mut self) -> BrainTurn {
+        let brain = self.profile.brain;
+        let most = u64::from(brain.first_jitter_ms);
+        let jitter = if most == 0 { 0 } else { self.parts_rng.below(most.saturating_add(1)) };
+        let dispatch =
+            brain.dispatch_pct > 0 && self.parts_rng.chance(u32::from(brain.dispatch_pct), 100);
+        let stall = fault!(self, "sim.brain.stall").then_some(u64::from(brain.stall_ms));
+        let fail = fault!(self, "sim.brain.fail");
+        BrainTurn {
+            first_ms: u64::from(brain.first_ms).saturating_add(jitter),
+            delta_ms: u64::from(brain.delta_ms),
+            dispatch,
+            stall_ms: stall,
+            fail,
+        }
+    }
+
+    /// Every invariant the world checks, in number order; the first broken one.
     fn check(&self) -> Option<Violation> {
         let queue_max = usize::try_from(self.profile.speech_queue_max).unwrap_or(usize::MAX);
-        let records = self.ring.records(&self.redactor);
         invariants::bus_events_are_attributed(&self.published, &self.bus.delivered)
+            .and_then(|()| {
+                invariants::children_restart_with_bounded_backoff(&self.children, self.now_ms)
+            })
             .and_then(|()| {
                 invariants::utterances_do_not_overlap(
                     &self.published,
@@ -356,7 +800,7 @@ impl World {
                     queue_max,
                 )
             })
-            .and_then(|()| invariants::spans_follow_the_table(&records.spans, &records.events))
+            .and_then(|()| self.collector.check().map_or(Ok(()), Err))
             .err()
     }
 }
@@ -479,12 +923,27 @@ mod tests {
         let mut world = World::new(Profile::default_profile().unwrap(), 1);
         world.timers.insert(9, eileen_contracts::ids::MonoTime(50_000_000));
         assert_eq!(world.advance(10), None, "10 ms: not yet");
-        assert_eq!(world.advance(40), Some(TimerId(9)), "50 ms: due");
+        assert_eq!(world.advance(40), Some(Input::Timer(TimerId(9))), "50 ms: due");
         assert_eq!(world.advance(100), None, "fired once");
     }
 
     #[test]
-    fn a_step_against_the_stub_core_keeps_every_invariant() {
+    fn the_fault_points_written_here_are_exactly_the_known_sites() {
+        // `buggify!` needs a literal, so each site is spelled at its `fault!` call; a typo there
+        // would fire in a run and leave a regression that cannot replay.
+        let written: std::collections::BTreeSet<&str> = include_str!("world.rs")
+            .split("fault!(self, \"")
+            .skip(1)
+            .filter_map(|after| after.split('"').next())
+            .collect();
+        assert!(!written.is_empty(), "the world has fault points");
+        let known: std::collections::BTreeSet<&str> =
+            crate::faults::SITES.iter().map(|(site, _)| *site).collect();
+        assert_eq!(written, known, "every fault! call names a site in faults::SITES, and back");
+    }
+
+    #[test]
+    fn a_step_keeps_every_invariant() {
         let mut world = World::new(Profile::default_profile().unwrap(), 1);
         let outcome = world.step(Input::User(UserInput::ToggleMute));
         assert_eq!(outcome.violation, None, "{outcome:?}");

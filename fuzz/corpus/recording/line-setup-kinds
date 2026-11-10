@@ -1,0 +1,5 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"settings":{"file_changed":{"valid":true,"error_line":null}}}}}
+{"input":{"seq":2,"mono":2000000,"at":1792627199002000,"ctx":{"turn":null,"job":null,"call":null},"input":{"voice":{"calibration":null}}}}
+{"input":{"seq":3,"mono":3000000,"at":1792627199003000,"ctx":{"turn":null,"job":null,"call":null},"input":{"activity":{"mic_in_use_elsewhere":true}}}}
+{"input":{"seq":4,"mono":4000000,"at":1792627199004000,"ctx":{"turn":null,"job":null,"call":null},"input":{"activity":"physical_input"}}}
+{"input":{"seq":5,"mono":5000000,"at":1792627199005000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"pause"}}}}}

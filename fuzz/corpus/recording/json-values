@@ -1,0 +1,4 @@
+[1,2.5,-0.0,1e-7,{"$blob":"x"},{"$lit":"y"},{"$blob":1,"a":2}]
+"just a string"
+null
+{"a":{"b":{"c":[{"$lit":{"$blob":"b3:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"}}]}}}

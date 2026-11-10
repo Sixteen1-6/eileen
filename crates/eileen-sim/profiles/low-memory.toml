@@ -1,0 +1,67 @@
+# Low memory (BUILD.md section 4.7): the owner's shape, a 16 GB PC with about 2 GB available
+# once Eileen runs. A heavy app opens 20 s in, grows to 2 GB, pushes available memory under
+# the paging floor and commit headroom toward 1 GB, and closes at 120 s. Jobs add a worker
+# session's memory each. Schema: profile.schema.json beside it.
+name = "low-memory"
+steps = 2000
+seeds = 64
+max_step_ms = 200
+speech_queue_max = 8
+bus_subscriber_capacity = 64
+bus_subscriber_drain = 2
+barge_in_pct = 33
+
+[input_mix]
+voice = 5
+user = 2
+playback = 2
+timer = 2
+activity = 1
+
+[pc]
+physical_mb = 16384
+commit_limit_mb = 20480
+others_mb = 12600
+others_commit_mb = 15000
+largest = "browser"
+largest_mb = 3000
+paging_floor_mb = 1000
+paging_kb_s_per_mb = 40
+paging_limit_kb_s = 4000
+cpu_busy_pct = 30
+
+[pc.power]
+has_battery = false
+on_battery = false
+battery_saver = false
+
+# A build holds one of the PC's build slots while the heavy app is at its peak.
+[pc.build_slot]
+held_at_s = 60
+released_at_s = 100
+
+[pc.heavy_app]
+name = "video-editor"
+opens_at_s = 20
+grows_mb_s = 50
+peak_mb = 2000
+closes_at_s = 120
+cpu_pct = 60
+
+[eileen]
+core = 60
+speech = 1250
+brain = 400
+worker = 400
+
+# Answers come slower on a PC that pages.
+[brain]
+first_ms = 1200
+first_jitter_ms = 1500
+delta_ms = 200
+dispatch_pct = 30
+stall_ms = 30000
+
+[faults]
+activate_per_mille = 250
+fire_per_mille = 10

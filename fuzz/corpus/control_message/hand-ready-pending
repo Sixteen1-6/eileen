@@ -1,0 +1,1 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"eileen_ready_1","response":{"mcpServers":[{"name":"eileen","status":"pending"}]}}}

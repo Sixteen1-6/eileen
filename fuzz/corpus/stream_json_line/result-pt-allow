@@ -1,0 +1,1 @@
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"duration_ms":16622,"duration_api_ms":2621,"permission_denials":[],"terminal_reason":"completed","stop_reason":"end_turn","result":"1. `touch tier2-asked.txt` - ran (completed with no output)."}

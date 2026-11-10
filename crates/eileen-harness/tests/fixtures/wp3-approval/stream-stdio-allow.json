@@ -1,0 +1,429 @@
+[
+  {
+    "t_ms": 0.0,
+    "event": {
+      "type": "system",
+      "subtype": "init",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055",
+      "tools": [
+        "Bash",
+        "mcp__eileen__approve"
+      ],
+      "mcp_servers": [
+        {
+          "name": "eileen",
+          "status": "connected",
+          "source": "dynamic"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "permissionMode": "dontAsk",
+      "apiKeySource": "none",
+      "claude_code_version": "2.1.304",
+      "capabilities": [
+        "interrupt_receipt_v1",
+        "interrupt_cancel_queued_v1",
+        "interrupt_send_now_v1",
+        "msg_lifecycle_v1",
+        "request_marker_lists_v1",
+        "sdk_mcp_tools_list_changed",
+        "sdk_mcp_manifests",
+        "mcp_read_resource_v1",
+        "mcp_tool_ui_meta_v1",
+        "ui_surface_v1",
+        "mcp_call_result_not_for_model_v1"
+      ],
+      "agents": [
+        "claude",
+        "Explore",
+        "general-purpose",
+        "Plan",
+        "statusline-setup"
+      ],
+      "uuid": "0e1820ee-afc3-4589-9dc7-4708bb85c8a7",
+      "$omitted": [
+        "additional_directories",
+        "analytics_disabled",
+        "cwd",
+        "fast_mode_disabled_reason",
+        "fast_mode_state",
+        "messaging_socket_path",
+        "original_cwd",
+        "output_style",
+        "per_turn_effort_active",
+        "plugins",
+        "powershell_path",
+        "product_feedback_disabled",
+        "skills",
+        "slash_commands",
+        "terminal_slash_commands",
+        "view_mode"
+      ]
+    }
+  },
+  {
+    "t_ms": 2711.2,
+    "event": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgFFncbRNNw1hiFrrfbjY",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_01YSZyCZJoHiAaZxpR6zJzNG",
+            "name": "Bash",
+            "input": {
+              "command": "touch tier2-asked.txt",
+              "description": "Create empty file tier2-asked.txt"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 449,
+          "cache_read_input_tokens": 4714,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 449
+          },
+          "output_tokens": 16,
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055",
+      "uuid": "820e08d2-151d-4a02-942c-502cdc35c1c0",
+      "timestamp": "2026-10-21T10:52:08.858Z",
+      "request_id": "req_011CgFFncNHf2JeL4yCAqn8x",
+      "wire_tool_inputs": {
+        "toolu_01YSZyCZJoHiAaZxpR6zJzNG": {
+          "command": "touch tier2-asked.txt",
+          "description": "Create empty file tier2-asked.txt"
+        }
+      }
+    }
+  },
+  {
+    "t_ms": 2722.5,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "4bd36ac7-86b8-410b-ab37-a35eebcd78a3",
+      "hook_name": "PreToolUse:Bash",
+      "hook_event": "PreToolUse",
+      "uuid": "878fe0cb-604d-4590-922e-25976df31df7",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 2746.9,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "4bd36ac7-86b8-410b-ab37-a35eebcd78a3",
+      "hook_name": "PreToolUse:Bash",
+      "hook_event": "PreToolUse",
+      "output": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+      "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"Eileen: tier 2, asking the user (appr_01TEST)\"}}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "6a442c9d-0597-4baf-a9a6-a97f9cd12603",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 2806.6,
+    "event": {
+      "type": "control_request",
+      "request_id": "70bd7443-478d-4b77-8d60-d5c6ed0c44fe",
+      "request": {
+        "subtype": "can_use_tool",
+        "tool_name": "Bash",
+        "display_name": "Bash",
+        "input": {
+          "command": "touch tier2-asked.txt",
+          "description": "Create empty file tier2-asked.txt"
+        },
+        "description": "Create empty file tier2-asked.txt",
+        "decision_reason": "Eileen: tier 2, asking the user (appr_01TEST)",
+        "decision_reason_type": "hook",
+        "decision_reason_hook_event": "PreToolUse",
+        "decision_reason_hook_source": "settings",
+        "tool_use_id": "toolu_01YSZyCZJoHiAaZxpR6zJzNG"
+      }
+    }
+  },
+  {
+    "t_ms": 2807.0,
+    "sent_to_cli": {
+      "type": "control_response",
+      "response": {
+        "subtype": "success",
+        "request_id": "70bd7443-478d-4b77-8d60-d5c6ed0c44fe",
+        "response": {
+          "behavior": "allow",
+          "updatedInput": {
+            "command": "touch tier2-asked.txt",
+            "description": "Create empty file tier2-asked.txt"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t_ms": 4729.5,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "5cbdf979-60ca-401f-83e8-b1e95979d3a1",
+      "hook_name": "PostToolUse:Bash",
+      "hook_event": "PostToolUse",
+      "uuid": "65154447-94f7-483f-9db9-e69232d0ac56",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 4733.5,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "5cbdf979-60ca-401f-83e8-b1e95979d3a1",
+      "hook_name": "PostToolUse:Bash",
+      "hook_event": "PostToolUse",
+      "output": "{}",
+      "stdout": "{}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "461485c1-b2b7-4556-859a-15c80ca52441",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 4738.9,
+    "event": {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "toolu_01YSZyCZJoHiAaZxpR6zJzNG",
+            "type": "tool_result",
+            "content": "(Bash completed with no output)",
+            "is_error": false
+          }
+        ]
+      },
+      "parent_tool_use_id": null,
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055",
+      "uuid": "8c064876-23dd-4b80-a4f4-7b62ddab36cd",
+      "timestamp": "2026-10-21T10:52:10.890Z",
+      "tool_use_result": {
+        "stdout": "",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": true
+      },
+      "tool_result_meta": [
+        {
+          "id": "toolu_01YSZyCZJoHiAaZxpR6zJzNG",
+          "permission_decision": {
+            "decision": "accept",
+            "source": "user_temporary"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "t_ms": 5727.8,
+    "event": {
+      "type": "assistant",
+      "message": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011CgFFnxu4VANuWGCyXko4p",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "1. `touch tier2-asked.txt` - ran (completed with no output)."
+          }
+        ],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 130,
+          "cache_read_input_tokens": 5163,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 130
+          },
+          "output_tokens": 3,
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "input_transformations": [],
+        "diagnostics": null,
+        "context_management": null
+      },
+      "parent_tool_use_id": null,
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055",
+      "uuid": "acb7045d-9126-4a59-9547-c3a7754df87e",
+      "timestamp": "2026-10-21T10:52:11.879Z",
+      "request_id": "req_011CgFFnxZTd3hu7cRGXZgE2"
+    }
+  },
+  {
+    "t_ms": 5745.8,
+    "event": {
+      "type": "system",
+      "subtype": "hook_started",
+      "hook_id": "2af60891-052a-4a43-8ca8-118482b97c33",
+      "hook_name": "Stop",
+      "hook_event": "Stop",
+      "uuid": "e0eb05a4-9fc0-4b05-beb5-80f4f47ca012",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 5749.1,
+    "event": {
+      "type": "system",
+      "subtype": "hook_response",
+      "hook_id": "2af60891-052a-4a43-8ca8-118482b97c33",
+      "hook_name": "Stop",
+      "hook_event": "Stop",
+      "output": "{}",
+      "stdout": "{}",
+      "stderr": "",
+      "exit_code": 200,
+      "outcome": "success",
+      "uuid": "7e598c30-9809-4621-919f-be72d7638ca8",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055"
+    }
+  },
+  {
+    "t_ms": 5756.6,
+    "event": {
+      "duration_api_ms": 3659,
+      "stop_reason": "end_turn",
+      "session_id": "c78eff51-a409-4a0a-8fc1-36375610b055",
+      "total_cost_usd": 0.00027397,
+      "usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 579,
+        "cache_read_input_tokens": 9877,
+        "output_tokens": 118,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 579,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 27,
+            "cache_read_input_tokens": 5163,
+            "cache_creation_input_tokens": 130,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 130
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 4,
+          "outputTokens": 118,
+          "cacheReadInputTokens": 9877,
+          "cacheCreationInputTokens": 579,
+          "webSearchRequests": 0,
+          "costUSD": 0.00027397,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 0,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "permission_denials": [],
+      "terminal_reason": "completed",
+      "fast_mode_state": "off",
+      "fast_mode_disabled_reason": "sdk_opt_in_required",
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "safety_stops": 0,
+      "is_error": false,
+      "num_turns": 2,
+      "subtype": "success",
+      "api_error_status": null,
+      "result": "1. `touch tier2-asked.txt` - ran (completed with no output).",
+      "ttft_ms": 2783,
+      "type": "result",
+      "duration_ms": 5834,
+      "uuid": "1ced90f8-6738-496a-8599-de28b8d5b620",
+      "ttft_stream_ms": 2545,
+      "time_to_request_ms": 142,
+      "first_content_frame_ms": 2545,
+      "queued_turn_count": 0,
+      "result_index": 0
+    }
+  }
+]
