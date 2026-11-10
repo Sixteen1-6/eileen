@@ -417,10 +417,19 @@ their interfaces, which can stay neutral and still take the Linux forms behind t
    as Windows writes them, and the classifier's grammar (drives, UNC, `\\?\`) is Windows'; on
    Linux a fully qualified path starts with `/`. `full_path` can apply `..` only where the OS
    reads it lexically: POSIX resolves it after the link before it, so the Linux probe leaves it
-   to `final_path`. `FinalPath`'s missing parts never hold `.` or `..` on either OS (Windows'
-   `GetFullPathNameW` removed them; Linux's `final_path` applies them within the missing parts),
-   which `FakePathProbe` can keep as an invariant, so the classifier's tests never meet a
-   missing part that climbs out of the folder it was found under.
+   to `final_path`. The claude CLI's file tools, Node code, may still read `..` by string
+   (`path.resolve`), so the Linux probe answers `Refused` for a path in which a `..`, read by
+   string, removes a component that is a symbolic link, where the two readings name different
+   files; `FakePathProbe` can answer so for such a row. `FinalPath`'s missing parts never hold
+   `.` or `..` on either OS (Windows' `GetFullPathNameW` removed them; Linux's `final_path`
+   applies them within the missing parts), which `FakePathProbe` can keep as an invariant, so
+   the classifier's tests never meet a missing part that climbs out of the folder it was found
+   under. But on Linux the missing parts are not always missing: a path in a process's folder of
+   `/proc` (`/proc/<pid>/`, `self`, `thread-self`) comes back unopened as existing `/` with its
+   components as the missing parts, which may exist, so that the classifier sees the path and
+   applies `Credential`. The classifier classes such an answer by the path alone and never
+   takes missing parts to mean "does not exist yet" (to allow a create or skip the link and
+   shortcut checks), and the fake keeps a row of that shape.
 8. **`link_names` with the count.** Linux cannot list a file's other names, so its probe
    answers `Refused` for a file that is not a folder and has more than one link, and needs
    nothing from WP2 for that. If `link_names` answered the link count beside the names found,
@@ -430,10 +439,24 @@ their interfaces, which can stay neutral and still take the Linux forms behind t
    type, which GIO may take from the file's first bytes, so `runs_code` cannot rest on the
    extension's handler alone there; the trait's doc can say the answer is the extension's
    default.
-10. **`share` needs no change.** No Linux path has a host and a share. A mount that shows this
-    machine's files under another name (found by device, so WSLg's `/mnt/wslg/distro` among
-    them), or reaches another host, is `final_path`'s `Refused` on Linux, which the classifier
-    already takes as `Unknown`.
+10. **`share` needs no change, but `link_names` covers folders.** No Linux path has a host and
+    a share. A network mount whose source names this machine, and a FUSE mount a user made, are
+    `final_path`'s `Refused` on Linux, which the classifier already takes as `Unknown`; another
+    host's network mount is read within the deadline. A second mount of a local file system
+    (a bind mount, WSLg's `/mnt/wslg/distro`, an ostree `/sysroot`) gives a folder second names
+    as well as a file, and no one name is the one the path classes are written against, so the
+    Linux `link_names` answers every name, a folder's included. Two things follow for the
+    classifier: it asks `link_names` about the existing part of every final path, folder or
+    not, and joins the missing parts to each name; and its rule for combining names decides
+    what WSLg and ostree cost. There every file under the home has a second name that is
+    `Elsewhere` (tier 2), so the highest tier across names would ask about every job-folder call.
+    A rule that keeps the protection without that cost: a name takes another name's class only
+    when that class is tried before `JobFolder` in section 2.12's order or is `EileenData`
+    (`Credential`, `BrowserProfile`, `GitInternals`, `SkillSnapshot`, `Notes`, `EileenData`), and
+    another name's `Toolchain` or `Elsewhere` changes nothing. It also changes Windows' hard
+    links: a job-folder link to a file that is only `Elsewhere` would be read at tier 0 without
+    `private_read`, which WP2 weighs; if WP2 keeps the highest tier, the Linux probe still answers
+    every name, and WSLg and ostree pay the questions.
 
 ## Surprises
 
@@ -997,10 +1020,16 @@ Not yet verified:
   (#107); the AT-SPI2 client against real apps on a real accessibility bus (#87); and a thread
   registered with RealtimeKit, with `chrt -p` (#90).
 - The points of LINUX.md section 5's `ipc` and `PathProbe` plan marked [inferred], which their
-  pull requests test first: that a `/proc/<pid>` descriptor fails once its process is gone; that
-  the claude CLI keeps the shim and its hooks' connections in its own session; the cost of the
-  `/proc` walk behind `tcp_client_pid`; the owner of a user scope's files; the kernel of Ubuntu
-  26.04; and that the walk of `final_path` mounts nothing.
+  pull requests test first, among them: that the kernel frees a PID number only when no task
+  holds it as a PID, a process group or a session, on which the jobs-by-session check rests;
+  that a `/proc/<pid>` descriptor fails once its process is gone; binding a socket through
+  `/proc/self/fd/<n>/<name>`; that the claude CLI keeps the shim and its hooks' connections in
+  its own session; whether the CLI's Read, Write and Edit tools read `..` by string; that
+  `fusermount3` sets a mount's `user_id` to its caller's; the cost of the `/proc` walk behind
+  `tcp_client_pid`; the owner of a user scope's files; how often cargo and git make files with
+  more than one link; logind's 10% size limit on the runtime folder; whether a vfat or `9p`
+  8.3 alias still opens a file; the kernel of Ubuntu 26.04; and that the walk of `final_path`
+  mounts nothing.
 
 ## Outcome
 
