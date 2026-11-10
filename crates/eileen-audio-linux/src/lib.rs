@@ -47,8 +47,8 @@
 //!   integration tests in `tests/it/` against a fake `RealtimeKit` on `eileen-dbus-linux`'s
 //!   private bus, which serves its calls in order, checks the caller's `RLIMIT_RTTIME` and keeps
 //!   rtkit 0.14's record of each thread, and [`LinuxAudioEndpoints`] through
-//!   `Bridge::on_private_bus`. The one live test reads the test thread's own policy; WSL2 has no
-//!   `RealtimeKit`, so a real Ubuntu desktop checks a registered thread with `chrt -p`.
+//!   `Bridge::on_private_bus`, whose policy read a hidden seam sets. The one live test reads the
+//!   test thread's own policy; WSL2 has no `RealtimeKit`, so a real desktop checks `chrt -p`.
 //!
 //! # Traps
 //!

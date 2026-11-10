@@ -80,7 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
-| 34 | this pull request | `wp10/rtkit-realtime-threads` | `register_audio_thread` reads the thread's policy from procfs and leaves a thread already real-time as it is, asking RealtimeKit nothing |
+| 34 | this pull request | `wp10/rtkit-realtime-threads` | `register_audio_thread` reads the thread's policy from procfs and leaves a thread already real-time as it is, with no bus call at all |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -187,9 +187,7 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   policy's nice level even for a thread that already runs higher, which can lower it (nice -16
   becomes -11).
 - RealtimeKit (`wp10/rtkit-realtime-threads`): a thread made real-time after it registered still
-  leaves it when its ticket reverts, since its policy is read once, before the request; and
-  `LinuxAudioEndpoints` reads the live policy, so only `RealtimeKit::promote`'s tests, through
-  its `scheduling` argument, see a thread already real-time.
+  leaves it when its ticket reverts, since its policy is read once, before the request.
 - The supervisor (#106, #115): the cgroup scope (Planned above); idle I/O priority for Claude
   sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5); and the rest of
   SU5.
