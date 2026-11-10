@@ -3,11 +3,11 @@
 //! and 7, phase L1). It is the D-Bus counterpart of the file reads in the `power` module and,
 //! unlike the daemon's state file, it sees a program's profile hold.
 //!
-//! [`LinuxPower::read`] serves the power state of `MachineProbe::facts` (the `power` field, with
-//! its `degraded` entries) and of `MachineProbe::load`, once `eileen-platform` has the trait
-//! (BUILD.md section 3.4; [`PowerState`] mirrors its contract type until then).
 //! [`LinuxPower::changes`] serves `MachineProbe::watch`'s `MachineChange::PowerSource` and
-//! `MachineChange::BatterySaver`; module `changes` gives the stream's own rules.
+//! `MachineChange::BatterySaver` for [`LinuxMachineProbe`](crate::LinuxMachineProbe); module
+//! `changes` gives the stream's own rules. [`LinuxPower::read`] is not used by the probe yet:
+//! `MachineProbe::facts` and `load` read the power state from sysfs (the `power` module), which
+//! does not see a program's hold.
 //!
 //! # Sources
 //!
@@ -62,12 +62,12 @@
 mod changes;
 mod profiles;
 
+use eileen_contracts::machine::PowerState;
 use eileen_dbus_linux::name_owner;
 use zbus::Connection;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use crate::DbusError;
-use crate::facts::PowerState;
 pub use changes::PowerChanges;
 use profiles::{ProfilesAnswer, read_profiles};
 
@@ -177,7 +177,7 @@ pub struct PowerReading {
     /// daemon's hold list cannot be read, which leaves `battery_saver` as it is.
     pub saver_held: bool,
     /// Each daemon that did not answer and why, worded as
-    /// [`MachineFacts::degraded`](crate::facts::MachineFacts::degraded) entries.
+    /// [`MachineFacts::degraded`](eileen_contracts::machine::MachineFacts::degraded) entries.
     pub degraded: Vec<String>,
 }
 

@@ -12,8 +12,9 @@
 //! reaches the platform profile. Phase L1 reads the active profile over D-Bus instead
 //! (`org.freedesktop.UPower.PowerProfiles`, which tuned-ppd serves too).
 
+use eileen_contracts::machine::PowerState;
+
 use crate::SysRoot;
-use crate::facts::PowerState;
 
 /// power-profiles-daemon's saved state, readable by every user.
 const PPD_STATE: &str = "var/lib/power-profiles-daemon/state.ini";

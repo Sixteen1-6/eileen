@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use eileen_contracts::machine::PowerState;
 use eileen_dbus_linux::testing::{PrivateBus, next_message, nothing_ready, round_trip, serve};
 use eileen_dbus_linux::{Names, owner_changes};
-use eileen_shell_linux::facts::PowerState;
 use eileen_shell_linux::{LinuxPower, PowerChanges, PowerDaemon, PowerReading};
 use zbus::message::{Flags, Type as MessageType};
 use zbus::object_server::SignalEmitter;
@@ -28,8 +28,8 @@ const PROFILES: &str = "/org/freedesktop/UPower/PowerProfiles";
 const LEGACY: &str = "/net/hadess/PowerProfiles";
 
 // The daemons' bus names.
-const UPOWER_NAME: &str = "org.freedesktop.UPower";
-const PROFILES_NAME: &str = "org.freedesktop.UPower.PowerProfiles";
+pub(super) const UPOWER_NAME: &str = "org.freedesktop.UPower";
+pub(super) const PROFILES_NAME: &str = "org.freedesktop.UPower.PowerProfiles";
 const LEGACY_NAME: &str = "net.hadess.PowerProfiles";
 
 // UPower's device types and states, as its documentation numbers them.
@@ -126,13 +126,13 @@ fn device(kind: u32, power_supply: bool, is_present: bool, serials: &Arc<AtomicU
 
 /// A profiles daemon's object: the active profile and each hold's profile and program.
 #[derive(Clone)]
-struct Profiles {
+pub(super) struct Profiles {
     active: &'static str,
     holds: Vec<(&'static str, &'static str)>,
 }
 
 impl Profiles {
-    fn active(active: &'static str) -> Self {
+    pub(super) fn active(active: &'static str) -> Self {
         Self { active, holds: Vec::new() }
     }
 
@@ -210,7 +210,10 @@ async fn upower(
 
 /// A laptop's `UPower`: line power, its battery and a wireless mouse's battery, which `UPower`
 /// types as a battery but not a power supply. The counter counts reads of any `Serial`.
-async fn laptop(bus: &PrivateBus, on_battery: bool) -> (zbus::Connection, Arc<AtomicU32>) {
+pub(super) async fn laptop(
+    bus: &PrivateBus,
+    on_battery: bool,
+) -> (zbus::Connection, Arc<AtomicU32>) {
     let serials = Arc::new(AtomicU32::new(0));
     let mut battery = device(BATTERY, true, true, &serials);
     if !on_battery {
@@ -225,13 +228,27 @@ async fn laptop(bus: &PrivateBus, on_battery: bool) -> (zbus::Connection, Arc<At
 }
 
 /// The profiles daemon under its current name.
-async fn current(bus: &PrivateBus, profiles: Profiles) -> zbus::Connection {
+pub(super) async fn current(bus: &PrivateBus, profiles: Profiles) -> zbus::Connection {
     serve(bus, PROFILES_NAME, PROFILES, CurrentProfiles(profiles)).await
 }
 
 /// The profiles daemon under its legacy name only, as before power-profiles-daemon 0.20.
 async fn legacy(bus: &PrivateBus, profiles: Profiles) -> zbus::Connection {
     serve(bus, LEGACY_NAME, LEGACY, LegacyProfiles(profiles)).await
+}
+
+/// Sets `OnBattery` on `service`, a fake `UPower` from [`laptop`], and signals the change.
+pub(super) async fn set_on_battery(service: &zbus::Connection, on_battery: bool) {
+    let root = service.object_server().interface::<_, FakeUPower>(ROOT).await.unwrap();
+    root.get_mut().await.on_battery = on_battery;
+    root.get().await.on_battery_changed(root.signal_emitter()).await.unwrap();
+}
+
+/// Sets the active profile of `service`, a fake from [`current`], and signals the change.
+pub(super) async fn set_profile(service: &zbus::Connection, active: &'static str) {
+    let object = service.object_server().interface::<_, CurrentProfiles>(PROFILES).await.unwrap();
+    object.get_mut().await.0.active = active;
+    object.get().await.active_profile_changed(object.signal_emitter()).await.unwrap();
 }
 
 /// A reading of `bus` through a new connection.
@@ -727,7 +744,7 @@ async fn a_daemon_that_does_not_answer_in_time_is_named_so() {
 }
 
 /// The stream of the power facts on `client`'s bus.
-async fn follow(client: &zbus::Connection) -> PowerChanges {
+pub(super) async fn follow(client: &zbus::Connection) -> PowerChanges {
     LinuxPower::new(client).changes().await.unwrap()
 }
 

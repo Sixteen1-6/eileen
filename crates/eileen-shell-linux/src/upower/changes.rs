@@ -32,6 +32,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use eileen_contracts::machine::PowerState;
 use eileen_dbus_linux::{Names, OwnerChange, OwnerChanges, Signals, Stream, drain, subscribe};
 use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, Value};
@@ -41,7 +42,6 @@ use super::profiles::{ProfilesAnswer, read_profiles};
 use super::{DEVICE, LEGACY_PROFILES, PROFILES, PROPERTIES, UPOWER, UPOWER_PATH};
 use super::{PowerDaemon, Reach, UPowerAnswer, read_upower, state_of};
 use crate::DbusError;
-use crate::facts::PowerState;
 
 /// The device properties whose change can change `has_battery`, and `State`, which changes with
 /// the power source.

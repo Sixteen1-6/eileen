@@ -4,11 +4,11 @@
 //!
 //! # Owns
 //!
-//! - The machine's facts and load on Linux: the processor and its core classes, memory totals, GPUs
-//!   and NPUs, the data folder's volume ([`default_data_dir`]), the OS, power and monitors, read
-//!   under a [`SysRoot`] in the shapes of [`facts`] until `eileen-contracts::machine` exists; and
-//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]) with a
-//!   stream of their changes ([`PowerChanges`]), which [`LinuxMachineProbe`] does not use yet.
+//! - `eileen-platform`'s `MachineProbe` for [`LinuxMachineProbe`]: the processor and its core
+//!   classes, memory totals, GPUs and NPUs, the data folder's volume ([`default_data_dir`]), the
+//!   OS, power and monitors, read under a [`SysRoot`] within the caller's deadline; the load; and
+//!   the power facts over D-Bus from `UPower` and power-profiles-daemon ([`LinuxPower`]), whose
+//!   changes ([`PowerChanges`]) `watch` reports as [`MachineChanges`].
 //! - `eileen-platform`'s `SystemMemory` for [`LinuxSystemMemory`], sampling memory into
 //!   `eileen_contracts::jobs::MemoryPressure`: available memory, commit headroom under Linux's
 //!   overcommit policy, the major-fault paging rate and the largest process outside Eileen's tree.
@@ -21,8 +21,7 @@
 //!
 //! # Does not own
 //!
-//! - The traits (`eileen-platform`, WP0) and the facts' final home, `eileen-contracts::machine`,
-//!   for which `MachineProbe`'s implementation waits and which [`facts`] will then re-export.
+//! - The traits (`eileen-platform`, WP0) and the facts' shapes (`eileen-contracts::machine`).
 //! - The plan that reads the facts (`eileen_core::fit`, WP1); the runtime's sampler (WP2); the
 //!   build guard's own memory readings (WP0); the audio endpoints and execution providers.
 //! - D-Bus plumbing: [`DbusError`] (re-exported), the buses and the bridge, name owners, the
@@ -47,7 +46,7 @@
 //!
 //! # Boundaries
 //!
-//! - May depend on `eileen-platform` (the traits), `eileen-contracts` (text wrappers, `Toast`),
+//! - May depend on `eileen-platform` (the traits), `eileen-contracts` (the facts, `Toast`),
 //!   `eileen-dbus-linux` (the D-Bus helpers, the bridge), `eileen-stdx` (the clock), `zbus`,
 //!   `tokio` (the portal's deadline, the holder tasks), `rustix` (`statvfs`) and `thiserror`.
 //!   Only the composition root on Linux may depend on it. Wire types: none of its own.
@@ -60,8 +59,9 @@
 //!   the fuzz targets of `fuzz_entry`, whose seed corpora replay as tests; six fixture machines in
 //!   `tests/fixtures/`, one live test of this machine, and the autostart entry in folders a guard
 //!   removes. D-Bus clients run against fakes on `eileen-dbus-linux`'s private bus (feature
-//!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] on them
-//!   over `Bridge::on_private_bus`, and both on the desktop lane's real buses (`tests/session/`).
+//!   `private-bus`, tests only), their deadlines in tokio's paused time, and [`LinuxShell`] and
+//!   the probe's `watch` on them over `Bridge::on_private_bus`; the clients and the shell also on
+//!   the desktop lane's real buses (`tests/session/`).
 //! - A bug here starts as a machine panel line that does not match the PC, a plan class (`Tight`,
 //!   `Standard`, `Roomy`) the PC's memory does not explain, or a call the desktop does not honour.
 //!
@@ -84,15 +84,16 @@
 
 mod adapters;
 mod autostart;
+mod bounded;
 mod cpu;
 mod disk;
 mod error;
-pub mod facts;
 #[doc(hidden)]
 pub mod fuzz_entry;
 mod host;
 mod keep_awake;
 mod load;
+mod machine_changes;
 mod memory;
 mod monitors;
 mod notifications;
@@ -116,6 +117,7 @@ pub use host::{
     SETTLE, ShortcutId, ShortcutNames,
 };
 pub use keep_awake::{DesktopHolder, LinuxPowerRequest};
+pub use machine_changes::MachineChanges;
 pub use notifications::{
     NotificationCapabilities, NotificationCloseReason, NotificationEvent, NotificationEvents,
     NotificationId, NotificationServer, NotificationServerInfo, Notifier, NotifierSettings,

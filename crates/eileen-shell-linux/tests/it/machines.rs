@@ -5,11 +5,12 @@ use std::io;
 use std::path::PathBuf;
 
 use eileen_contracts::connectors::Platform;
-use eileen_contracts::ids::{Personal, Untrusted};
-use eileen_shell_linux::facts::{
-    AdapterFacts, AdapterKind, CoreClass, CpuFacts, CpuFeature, CpuVendor, DiskFacts, DiskMedia,
-    MachineFacts, PowerState,
+use eileen_contracts::ids::{Personal, Untrusted, WallTime};
+use eileen_contracts::machine::{
+    AdapterFacts, AdapterKind, AudioFacts, CoreClass, CpuFacts, CpuFeature, CpuVendor, DiskFacts,
+    DiskMedia, MachineFacts, PowerState,
 };
+use eileen_platform::MachineProbe;
 use eileen_shell_linux::{LinuxMachineProbe, ReadError, SysRoot, Volume};
 
 use crate::tree;
@@ -69,6 +70,11 @@ fn disk(media: DiskMedia) -> DiskFacts {
 fn wsl_reads_the_cpu_and_memory_and_names_what_the_host_keeps() {
     let facts = facts("wsl-ryzen-5600x", "wsl", volume(DATA, 8, 48));
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: "ubuntu 24.04, kernel 6.18.33.2-microsoft-standard-WSL2".to_owned(),
         memory_total_mb: 15_954,
@@ -97,6 +103,11 @@ fn the_owners_laptop_shape_reads_six_performance_cores_its_npu_and_battery_saver
     let facts = facts("intel-hybrid-laptop", "intel_hybrid", volume(DATA, 259, 2));
     let kernel = "kernel 7.0.0-14-generic";
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: format!("ubuntu 26.04, {kernel}"),
         memory_total_mb: 15_737,
@@ -140,6 +151,11 @@ fn an_amd_desktop_tells_its_apu_from_its_discrete_gpu_and_finds_btrfs_on_nvme() 
     let facts = facts("amd-desktop-btrfs", "amd_btrfs", volume(DATA, 0, 41));
     let driver = "amdgpu, kernel 6.17.4-300.fc43.x86_64";
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: "fedora 43, kernel 6.17.4-300.fc43.x86_64".to_owned(),
         memory_total_mb: 62_481,
@@ -194,6 +210,11 @@ fn a_data_folder_on_the_hard_disk_or_on_tmpfs_is_told_apart() {
 fn an_nvidia_desktop_reads_the_proprietary_driver_and_lvm_on_a_hard_disk() {
     let facts = facts("nvidia-desktop-lvm", "nvidia_lvm", volume(DATA, 252, 0));
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: "ubuntu 24.04, kernel 6.8.0-87-generic".to_owned(),
         memory_total_mb: 31_999,
@@ -235,6 +256,11 @@ fn an_arm_board_reads_its_big_and_little_cores_and_its_soc_gpu_and_npu() {
     let facts = facts("arm-rk3588-board", "arm", volume(DATA, 179, 2));
     let kernel = "kernel 6.18.0-1004-rockchip";
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: format!("ubuntu 24.04, {kernel}"),
         memory_total_mb: 15_742,
@@ -276,6 +302,11 @@ fn an_arm_board_reads_its_big_and_little_cores_and_its_soc_gpu_and_npu() {
 fn a_virtual_machine_lists_no_gpu_and_does_not_call_its_disk_a_hard_disk() {
     let facts = facts("ubuntu-vm-qemu", "vm", volume(DATA, 252, 0));
     let expected = MachineFacts {
+        // The caller stamps these, and other components report the audio and the providers.
+        read_at: WallTime(0),
+        probe_ms: 0,
+        execution_providers: vec![],
+        audio: AudioFacts::default(),
         os: Platform::Linux,
         os_build: "ubuntu 26.04, kernel 7.0.0-14-generic".to_owned(),
         memory_total_mb: 7_939,

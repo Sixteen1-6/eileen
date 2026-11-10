@@ -24,9 +24,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use eileen_contracts::ids::Personal;
+use eileen_contracts::machine::DiskMedia;
 
 use crate::SysRoot;
-use crate::facts::DiskMedia;
 use crate::os::Guest;
 
 /// Bytes in a MB.

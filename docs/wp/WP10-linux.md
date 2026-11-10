@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | (this pull request) | `wp10/machine-probe-linux` | Draft, stacked on the owner's #191 (`wp0/machine-contracts`), to retarget to `main` once #191 merges: `MachineProbe` for `LinuxMachineProbe` on the contract types, the facts within the caller's deadline, and `watch`'s power changes |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -157,8 +158,20 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   adapters to the caller's deadline; once both merge, which is the owner's call,
   `set_run_at_sign_in` takes the deadline and still writes on the caller's thread, and moves to
   a named helper thread, abandoned past the deadline. `open_url` and `open_uri` take no deadline
-  in the trait and keep `DEFAULT_DEADLINE`. `bounded::within` could move to `eileen-dbus-linux`
-  and serve both crates.
+  in the trait and keep `DEFAULT_DEADLINE`. `eileen-shell-linux` now has its own form,
+  `bounded::OneRead`, for the machine's facts and the load's power read, which runs one read of
+  a kind at a time in place of the pool; moved to `eileen-dbus-linux`, one would serve both
+  crates.
+- `MachineProbe` (order 34): `watch` reports no `Displays` yet, which needs the DRM connectors'
+  uevents (a netlink reader) or GNOME's `MonitorsChanged` on `org.gnome.Mutter.DisplayConfig`;
+  `facts` and `load` read the power state from sysfs, which does not see a program's hold on
+  `power-saver`, though `watch` reports that hold as `BatterySaver` (the facts could take
+  `LinuxPower::read`, and the load the changes stream's state, since `read` would restart a
+  daemon the user stopped every 30 s); `watch`'s stream ends with its system-bus connection and
+  nothing starts it again; a read past its deadline keeps its thread until it returns, at most
+  one for the facts and one for the load's power files, however the calls overlap; `load` reads
+  within `DEFAULT_DEADLINE`, since the trait gives it none; and the composition root on Linux
+  must give the probe a bridge, or `watch` is `Unavailable`.
 - `SecretStore`, which waits for the owner's answer on #111 (the SecretStore record below).
 - `lint-repo` check 14 for tests that start a process: the private bus's `dbus-daemon` in
   `crates/eileen-dbus-linux/src/testing.rs` (the 2 problems `main` reports) and #94's copy of its
@@ -216,8 +229,6 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
 
 Not started yet:
 
-- `MachineProbe` on Linux, which waits for WP0 phase B's `wp0/machine-contracts`; until then
-  `LinuxMachineProbe`'s readers mirror the contract shapes;
 - launching apps without D-Bus activation, which waits for WP0's `eileen_supervisor::user_launch`,
   phase B, which is not on `main` (the Linux process model it starts children with is, #106;
   LINUX.md sections 5 and 7);
@@ -297,6 +308,13 @@ The guard's fix, #108, leaves three limits, documented in the guard: a process t
 (cargo nextest runs each test so) leaves cargo's group and runs to its end; the build is not in
 the terminal's foreground group; and a program `nice` cannot start exits 127 instead of failing
 the spawn.
+
+On 2026-11-10 WP10 built `MachineProbe` on Linux against the owner's draft #191 (order 34). Its
+description gives #191 review input on what the contracts say only for Windows: the sources of
+`load` and `watch`, what the facts' deadline bounds, the adapters' driver field, how core classes
+are numbered, the OS build's form and what battery saver is. Two points concern WP1's plan: on
+Linux `commit_limit_mb` binds only under strict overcommit (the overcommit record below), and
+none of the three fixture machines runs Linux.
 
 ## Surprises
 
@@ -525,7 +543,12 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   reads of `LinuxApps::index` and `LinuxRecent::recent` run on a named thread within
   `DEFAULT_DEADLINE` (#66), and `set_run_at_sign_in` still writes unbounded; the list under
   Progress has the rest. The L1 critic's finding 7 is closed when the adapters take the caller's
-  deadline and `set_run_at_sign_in` writes within it.
+  deadline and `set_run_at_sign_in` writes within it. `MachineProbe::facts` takes the caller's
+  deadline and reads every fact on a named thread within it (order 34): the data folder's volume
+  is the reason, and the `/proc` and `/sys` reads come along, since some sysfs files ask a
+  driver or the firmware (a battery's `status` runs ACPI methods) and a hung device holds them.
+  `MachineProbe::load`, which takes no deadline, reads the same power files within
+  `DEFAULT_DEADLINE`.
 - Source: the L1 critic of 2026-10-22, finding 7; `within` in `crates/eileen-apps-linux/src/open.rs`
   on `wp10/open-portal`; BUILD.md section 2.1.
 

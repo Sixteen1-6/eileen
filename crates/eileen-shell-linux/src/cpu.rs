@@ -21,9 +21,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use eileen_contracts::ids::Untrusted;
+use eileen_contracts::machine::{CoreClass, CpuFacts, CpuFeature, CpuVendor};
 
 use crate::SysRoot;
-use crate::facts::{CoreClass, CpuFacts, CpuFeature, CpuVendor};
 
 /// The most CPUs a list may name: a list that names a CPU numbered this or higher is malformed.
 const MAX_CPUS: u32 = 8192;
