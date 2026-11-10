@@ -47,9 +47,10 @@ const THREAD: &str = "eileen-dbus";
 const BLOCKING_THREAD: &str = "eileen-dbus-blk";
 /// At most this many blocking threads. They are zbus's alone, as `Bridge::call` tells jobs. zbus
 /// 6 connects a Unix socket on tokio's reactor and takes one only for a lookup that may block:
-/// a TCP host's name, a nonce file, a peer's groups (`Connection::peer_creds`). None of the
-/// bridge's buses makes one, since each is at a Unix socket's address and no job asks for a
-/// peer's credentials, so the two are spare, kept for a lookup a later zbus moves here.
+/// a TCP host's name, a nonce file, a peer's groups (`Connection::peer_creds`). No job asks for
+/// a peer's credentials, and a bus at a Unix socket's address, as a desktop session's and the
+/// system's are, makes no lookup; a session bus at a `tcp:` or `nonce-tcp:` address takes one
+/// to resolve its host or read its nonce file, and later zbus releases may move more here.
 const BLOCKING_THREADS: usize = 2;
 /// How many posted jobs wait for the thread, at most. The thread takes each at once, so the
 /// queue is full only when the thread is stuck.
