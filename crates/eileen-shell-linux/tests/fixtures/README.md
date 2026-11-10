@@ -28,3 +28,23 @@ user name or a path from the recording machine.
   file per number, and `$n` in the value becomes that number:
   `sys/block/loop{0-7}/dev = 7:$n`.
 - `<<< path` starts a file of several lines, kept as written, up to a line holding only `>>>`.
+
+# Time zone files
+
+`zoneinfo/` holds TZif files for the `zone` reader's tests. Under each zone's name is the file
+Ubuntu 24.04's tzdata 2026c installs in `/usr/share/zoneinfo`, which is fat: every transition to
+2037 is written out. Under `slim/` is the same zone as `zic -b slim` writes it from that package's
+`tzdata.zi`, with the footer's rule alone after its last irregular change. The tz database and
+the files built from it are in the public domain. `src/zone/tests.rs` holds what glibc 2.39 reads
+from them for chosen years.
+
+| Zone | Why |
+|---|---|
+| `Etc/UTC` | No transitions, `UTC0` |
+| `America/New_York` | Version 2; local mean time, -4:56:02, until 1883 |
+| `Europe/London` | British Standard Time, +1 all year from 1968 to 1971 |
+| `Australia/Lord_Howe` | A half-hour change, south of the equator |
+| `Asia/Kolkata` | +5:30 with no changes since 1945, and Madras time, +5:21:10, before |
+| `Pacific/Chatham` | +12:45, a 45-minute offset, south of the equator |
+| `America/Santiago` | Version 3: changes at 24:00, south of the equator |
+| `America/Nuuk` | Version 3: changes at -1:00 and 0:00 |

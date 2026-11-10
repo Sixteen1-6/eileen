@@ -44,3 +44,8 @@ fn linux_mountinfo_corpus_replays() {
 fn linux_proc_status_corpus_replays() {
     replay("linux_proc_status", fuzz_entry::linux_proc_status);
 }
+
+#[test]
+fn linux_tzif_corpus_replays() {
+    replay("linux_tzif", fuzz_entry::linux_tzif);
+}

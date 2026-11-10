@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | this pull request | `wp10/linux-local-time` | Open: `zone::local_offsets` in `eileen-shell-linux`, the local time zone's offsets from `/etc/localtime` for `CoreConfig.local_time` (BUILD.md section 3.3.3, decision D86), and the `linux_tzif` fuzz target |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -188,9 +189,14 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
 - The supervisor (#106, #115): the cgroup scope (Planned above); idle I/O priority for Claude
   sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5); and the rest of
   SU5.
-- The three Linux fuzz targets (#109) have never been built: no workflow runs `cargo fuzz build`
-  yet. Until WP0 phase B's fuzz job, the owner or CI builds them from `fuzz/` on Linux after
-  copying the root `Cargo.lock` there.
+- The Linux fuzz targets (#109, and `linux_tzif`) have never been built: no workflow runs
+  `cargo fuzz build` yet. Until WP0 phase B's fuzz job, the owner or CI builds them from `fuzz/`
+  on Linux after copying the root `Cargo.lock` there. BUILD.md section 4.7's table lists
+  `linux_tzif` once its amendment, stacked on `wp10/linux-local-time`, merges.
+- The local time zone (`wp10/linux-local-time`): `eileen-cli` does not call
+  `zone::local_offsets` yet, so Linux keeps UTC with the start-up warning. WP2's
+  `wp2/shell-local-time` wires the Windows reader into `CoreConfig.local_time` and settles its
+  signature, which the Linux reader then follows; on Linux the same wiring calls it.
 - The desktop lane (#83): tests that need input or a clipboard need a compositor with a seat; and
   the owner profile's `all()` filter takes the `linux_session` tests, so it must not run on a
   Linux desktop (it is harmless on the owner's Windows PC, where that binary is empty).
@@ -348,6 +354,11 @@ the spawn.
   (`repo_root` in `xtask/src/lib.rs`). With a `CARGO_TARGET_DIR` shared between worktrees,
   `cargo xtask pr-meta` ran a binary that another worktree had built, and checked that worktree's
   head. Each worktree keeps its own target folder, as BUILD.md section 6.1 rule 6 asks.
+- Ubuntu's tzdata (2026c on 24.04) ships fat zone files, each transition written out to 2037
+  (New York's is 3552 bytes, the slim one 1744, and the last of its 64-bit block is in November
+  2037), so its footer rules matter only after 2037. glibc 2.39 reads RFC 9636 section 3.3.1's all-year daylight saving
+  rule (`XXX3EDT4,0/0,J365/23`) as standard time for the first hours of each year; no zone of
+  2026c has such a rule, and `zone` keeps daylight saving time all year, as tzcode does.
 
 ## Decisions to record
 
