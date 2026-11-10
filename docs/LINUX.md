@@ -200,7 +200,7 @@ What the desktop lane has shown so far:
 
 - weston's headless backend offers no seat (no keyboard or pointer), so tests that need input or a clipboard (a Wayland data device needs a seat) need another compositor setup, and no app window is ever active there.
 - A second at-spi-bus-launcher started with the session's `XDG_RUNTIME_DIR` and `DISPLAY` takes over the live bus's socket path and, on X11, the root window's `AT_SPI_BUS`, which cuts the desktop's apps off from the live bus. A test that starts its own launcher gives it a runtime folder and a display of its own (#87).
-- `eileen-audio-linux`'s tests run against a fake RealtimeKit on the private bus; the one live test reads the calling thread's own policy from procfs, since WSL2 has no RealtimeKit. A real Ubuntu desktop checks a registered thread with `chrt -p` once WP4 registers its threads.
+- `eileen-audio-linux`'s tests run against a fake RealtimeKit on the private bus; the two live tests read the calling thread's own policy from procfs, and a thread that has ended as an error, since WSL2 has no RealtimeKit. A real Ubuntu desktop checks a registered thread with `chrt -p` once WP4 registers its threads.
 
 The three Linux fuzz targets, `linux_mountinfo`, `linux_proc_status` and `desktop_entry`, are declared in `fuzz/` since #109, beside the other packages' targets, and their corpora replay in `logic-linux` through the crates' `fuzz_corpus` tests. No workflow builds a fuzz target yet: the pull-request lane's `cargo fuzz build` and the nightly fuzzing of BUILD.md section 4.6 come with WP0 phase B's jobs.
 

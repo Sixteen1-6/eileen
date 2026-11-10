@@ -337,7 +337,9 @@ the spawn.
 - Neither std nor rustix 1.1.5 has `sched_getscheduler` or `sched_getparam`, so a crate with no
   unsafe code reads a thread's policy from procfs: fields 40 (`rt_priority`) and 41 (`policy`) of
   `/proc/self/task/<tid>/stat`, counted after the last `)`, since a thread's name may hold spaces
-  and parentheses (`wp10/rtkit-realtime-threads`).
+  and parentheses. A join returns once the kernel clears the thread's id, a little before procfs
+  unlists the thread, so the test that an ended thread reads as an error tries again within a bound
+  (`wp10/rtkit-realtime-threads`).
 - notification-daemon crashes on Wayland, so the desktop lane runs it on an Xvfb display of its
   own; WirePlumber exits if it starts before PipeWire's sockets; logind refuses a VT number on a
   seat without VTs and one another session holds; and xdg-desktop-portal exports `Inhibit`
