@@ -175,6 +175,8 @@ fn a_change_its_time_moves_across_new_year_falls_in_the_next_or_previous_year() 
     let start = midnight(2026, 12, 25) + 3_600;
     assert_eq!(changes, [(midnight(2026, 6, 29) + 3_600, 0), (start, HOUR)], "from 2027");
     assert_eq!(early.offset_at(from), HOUR, "2026's start fell in 2025");
+    assert_eq!(early.offset_at(start), HOUR, "and 2027's in 2026");
+    assert_eq!(late.offset_at(from), 0, "2025's start had not come");
 }
 
 #[test]
