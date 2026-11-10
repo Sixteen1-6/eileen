@@ -80,6 +80,7 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | open | `wp10/shortcuts-portal-restart` | Open: the GlobalShortcuts holder follows the portal's name, binding the set again in a new owner's session, and reports the user's later changes (`ShortcutsChanged`) as `ShortcutsBound` |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
 Open on 2026-10-26, with what each waits for:
@@ -164,10 +165,11 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   `crates/eileen-dbus-linux/src/testing.rs` (the 2 problems `main` reports) and #94's copy of its
   test binary wait for the owner's answer on #113.
 - The GlobalShortcuts holder (#107): section 3's fallback on Ubuntu 24.04 (GNOME custom shortcuts
-  that run `eileen ctl`); following a portal that restarts, which loses the session without a
-  word, so the shortcuts stay dead until a changed set is bound and `watch_input` hears nothing
-  more; a change the user makes later in the desktop's settings, which does not reach the sink;
-  and `PhysicalActivity`, which `watch_input` never sends, since no source of it is chosen yet.
+  that run `eileen ctl`); a restart of the desktop's portal backend alone
+  (`xdg-desktop-portal-gnome`), which the holder does not see, since it follows only
+  `org.freedesktop.portal.Desktop` (`wp10/shortcuts-portal-restart` follows that name and
+  `ShortcutsChanged`); and `PhysicalActivity`, which `watch_input` never sends, since no source
+  of it is chosen yet.
 - The tray (#110): a watcher that never answers holds the tray holder for its connection's
   method timeout, so a `set_tray` meanwhile can pass its deadline, and a watcher that answers
   an error leaves the item unregistered.
@@ -547,8 +549,10 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   client of Eileen's own keeps the deadlines, the sender checks and the error rules of the other
   clients, on the zbus build the workspace has, tokio only.
 - Consequences: The clients are Eileen's to keep current with the specifications. For
-  GlobalShortcuts, following a portal that restarts (the host registry asks an app to register
-  again on `NameOwnerChanged`) and the user's later changes (`ShortcutsChanged`) are follow-ups.
+  GlobalShortcuts, `wp10/shortcuts-portal-restart` follows a portal that restarts (the owner of
+  `org.freedesktop.portal.Desktop`, whose new owner gets a new session, the app registered
+  again and the set bound again) and the user's later changes (`ShortcutsChanged`, reported as
+  `ShortcutsBound`).
   The client passes GNOME's signals on as they come, repeats and missing releases included, and
   its caller decides what they count as: #107's holder counts a press only when the shortcut was
   up. The holder's session lives on a connection of its own, whose registry call is its first; a
@@ -557,7 +561,10 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
 - Source: #93's description; the GlobalShortcuts and host Registry documentation;
   xdg-desktop-portal's `global-shortcuts.c` and `registry.c` and its NEWS for 1.19.4 and 1.21.0,
   xdg-desktop-portal-gnome's `globalshortcuts.c`, GNOME Settings' global shortcuts provider and
-  mutter's `src/core/keybindings.c`, read on 2026-10-25; BUILD.md section 4.1; LINUX.md section 4.
+  mutter's `src/core/keybindings.c`, read on 2026-10-25; GNOME Settings'
+  `global-shortcuts-provider/cc-global-shortcut-dialog.c` (no dialog when every ID asked for is
+  stored, and a stored trigger kept over the one offered), read on 2026-11-10; BUILD.md section
+  4.1; LINUX.md section 4.
 
 ### A job may bound a bus connect
 

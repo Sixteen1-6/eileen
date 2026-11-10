@@ -1,9 +1,8 @@
 //! The `GlobalShortcuts` client against a fake portal on a private bus: the host registry's call
 //! before the session, the bind's shortcuts and the desktop's triggers, the U+0000 rule,
 //! refusals and odd answers, the session's signals, its shortcuts' changes and its close, a
-//! session or a bind left
-//! unanswered, and portals without the interface. The fake's items are `pub(super)` for the
-//! shell's tests.
+//! session or a bind left unanswered, and portals without the interface. The fake's items are
+//! `pub(super)` for the shell's tests.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};

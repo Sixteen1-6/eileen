@@ -91,6 +91,8 @@
 //!   call opens a session at once, which lets the bus start the portal where it can, to bind
 //!   the whole set with the call's shortcut. A call that still finds no portal is
 //!   `Unavailable`, its shortcut not taken, and the holder waits on for the name's next owner.
+//!   Each new session registers the app again, the new portal's first call from the holder's
+//!   connection, since the registry lives in the portal's process.
 //! - The holder ends when the [`LinuxShell`] drops, which closes the session and the
 //!   connection and ends each `watch_input`'s events, or when the portal closes the session;
 //!   the next call then starts a new holder.
@@ -142,8 +144,11 @@
 //!   [`LinuxShellEvent::Hotkey`] says what a root must not map it to, until the owner decides.
 //! - A portal that closes the session ends the holder, and the next call starts one that binds
 //!   that call's shortcut alone; `watch_input` hears nothing more, which nothing reports yet.
-//!   A portal that restarts while a bind's dialog is up takes the dialog with it, and the new
-//!   session's bind shows it again for the shortcuts the desktop has not stored.
+//!   A portal that restarts while a bind's dialog is up leaves that dialog to GNOME Settings,
+//!   which stores an accept there, and the new session's bind shows a dialog again for the
+//!   shortcuts not stored yet.
+//! - Only the portal's own name is followed: a restart of the desktop's backend alone
+//!   (`xdg-desktop-portal-gnome`), which keeps that name where it was, is not seen here.
 //! - A tray choice may not come from a person, as [`LinuxShellEvent::TrayChoice`] says.
 //! - A watcher that never answers keeps its registration under way for the holder connection's
 //!   method timeout, and each `set_tray` meanwhile spends half its deadline before it answers

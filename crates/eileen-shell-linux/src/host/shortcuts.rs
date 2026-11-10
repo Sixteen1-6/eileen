@@ -553,10 +553,10 @@ impl Wanted {
     }
 
     /// Hands `event`, the session's next, on: a hotkey's press and a change of what the desktop
-    /// binds to `report`, and the dictation key's edges to each listener. Only a change is an edge: GNOME repeats `Activated` while a
-    /// key is held, so one that is down already says nothing, nor does a hotkey's release. `Err`
-    /// once the session has ended, the portal having closed it or its signals having stopped,
-    /// which the asks still waiting are answered with.
+    /// binds to `report`, and the dictation key's edges to each listener. Only a change is an
+    /// edge: GNOME repeats `Activated` while a key is held, so one that is down already says
+    /// nothing, nor does a hotkey's release. `Err` once the session has ended, the portal having
+    /// closed it or its signals having stopped, which the asks still waiting are answered with.
     fn hand_on(
         &mut self,
         event: Option<ShortcutEvent>,
