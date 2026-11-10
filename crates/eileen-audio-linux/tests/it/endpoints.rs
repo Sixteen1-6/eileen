@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use eileen_audio_linux::{LinuxAudioEndpoints, LinuxAudioSettings, RealtimePolicy};
+use eileen_audio_linux::{
+    LinuxAudioEndpoints, LinuxAudioSettings, RealtimePolicy, Scheduling, ThreadId,
+};
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use eileen_dbus_linux::{Bridge, DEFAULT_DEADLINE};
 use eileen_platform::{AudioEndpoints, Deadline, PlatformError, StreamCategory};
@@ -124,6 +126,56 @@ fn a_refused_registration_leaves_a_thread_that_already_runs_higher_alone() {
         Err(TryRecvError::Empty),
         "neither the fallback, which would lower the thread, nor a revert, with nothing to revert"
     );
+}
+
+/// The policy read of a thread under `SCHED_FIFO` at 5, which a test cannot give its thread
+/// without privilege.
+#[expect(clippy::unnecessary_wraps, reason = "the read's signature, which can fail")]
+fn fifo(_thread: ThreadId) -> Result<Scheduling, PlatformError> {
+    Ok(Scheduling::Fifo { priority: 5 })
+}
+
+#[test]
+fn a_thread_already_real_time_registers_unchanged_and_its_ticket_reverts_nothing() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    // What the old registration asked first, and how it fell back to SCHED_OTHER.
+    fake.refuse_realtime.store(true, Ordering::SeqCst);
+    fake.report_reads.store(true, Ordering::SeqCst);
+    let _fakes = Fakes::serve(&bus, fake);
+    let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE).reading_scheduling_with(fifo);
+    let ticket = endpoints.register_audio_thread().unwrap();
+    assert_eq!(ticket.task(), "RealtimeKit unchanged", "the policy read is passed on");
+    assert_eq!(calls.try_recv(), Err(TryRecvError::Empty), "no call, a limit's read included");
+    drop(ticket);
+    assert_eq!(calls.try_recv(), Err(TryRecvError::Empty), "and no revert");
+}
+
+#[test]
+fn a_thread_already_real_time_registers_with_no_system_bus() {
+    let bus = PrivateBus::start();
+    let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE).reading_scheduling_with(fifo);
+    // The bridge connects on its first call, and there is no bus left to connect to.
+    drop(bus);
+    let ticket = endpoints.register_audio_thread();
+    assert_eq!(
+        ticket.as_ref().map(eileen_platform::ThreadTicket::task),
+        Ok("RealtimeKit unchanged"),
+        "a thread left as it is needs no bus, so a missing one is no error"
+    );
+}
+
+#[test]
+fn a_thread_whose_policy_cannot_be_read_registers_as_before() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    let _fakes = Fakes::serve(&bus, fake);
+    let unreadable = |_thread| Err(PlatformError::Unavailable { what: "a policy" });
+    let endpoints = endpoints_on(&bus, DEFAULT_DEADLINE).reading_scheduling_with(unreadable);
+    let thread = this_thread();
+    let ticket = endpoints.register_audio_thread().unwrap();
+    assert_eq!(ticket.task(), "RealtimeKit real-time", "asked for as a thread not real-time");
+    assert_eq!(calls.try_recv(), Ok(Call::Realtime(thread, 10)), "the request");
 }
 
 #[test]

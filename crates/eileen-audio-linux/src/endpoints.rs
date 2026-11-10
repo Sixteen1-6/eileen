@@ -11,20 +11,23 @@
 //!
 //! # The registration
 //!
-//! The thread's id and nice level are read on the caller's thread. Its one bridge call starts a
-//! promoter task on the bridge's thread and waits for its answer within the settings' deadline;
-//! past it, the bridge cancels only that wait, never the task, since a promotion cut short could
-//! leave a thread real-time with no ticket to revert it. Once promoted, the task answers with a
-//! channel and waits. When the ticket drops, or at once when no ask can come (the call had given
-//! up, its answer arrived too late, or the ticket's ask was dropped unsent), the task reverts the
-//! thread with [`RealtimeKit::revert`], to the nice level read before, floored at `MinNiceLevel`
-//! ([`Promoted::restore`]), unless the promotion changed nothing ([`Promotion::reverts`]). A
-//! request whose system-bus connection failed is reverted over the bridge's next one: the
-//! promoter waits for zbus to mark the failed connection closed, which the socket's reader does
-//! only once it has failed the calls pending on it and handed the error to the connection's
-//! streams, so that `Buses::system` connects again. On the bridge's one thread the promoter runs
-//! between the two when a stream on the connection is full: the socket's reader then waits for
-//! that stream's consumer.
+//! The thread's id, nice level and policy are read on the caller's thread, and a policy that cannot
+//! be read goes on as unknown ([`RealtimeKit::promote`]). A thread already real-time gets its
+//! ticket there and then, [`Promotion::Unchanged`], as `promote` would answer it, with no bridge
+//! call: it needs no system bus, and its ticket reverts nothing. Otherwise the registration's one
+//! bridge call starts a promoter task on the bridge's thread and waits for its answer within the
+//! settings' deadline; past it, the bridge cancels only that wait, never the task, since a
+//! promotion cut short could leave a thread real-time with no ticket to revert it. Once promoted,
+//! the task answers with a channel and waits. When the ticket drops, or at once when no ask can
+//! come (the call had given up, its answer arrived too late, or the ticket's ask was dropped
+//! unsent), the task reverts the thread with [`RealtimeKit::revert`], to the nice level read
+//! before, floored at `MinNiceLevel` ([`Promoted::restore`]), unless the promotion changed nothing
+//! ([`Promotion::reverts`]). A request whose system-bus connection failed is reverted over the
+//! bridge's next one: the promoter waits for zbus to mark the failed connection closed, which the
+//! socket's reader does only once it has failed the calls pending on it and handed the error to the
+//! connection's streams, so that `Buses::system` connects again. On the bridge's one thread the
+//! promoter runs between the two when a stream on the connection is full: the socket's reader then
+//! waits for that stream's consumer.
 //!
 //! Dropping the ticket asks the task to revert and waits at most [`REVERT_WAIT`] for it; past
 //! that, the task finishes on its own. The ticket keeps a handle to the bridge, so a registration
@@ -32,8 +35,8 @@
 //! reverted, so no drop of the bridge's last other handle (the endpoints before a late promotion
 //! answers, or a ticket whose wait ended first) ends the bridge's thread under it. The task's
 //! handle, when it is the last, drops on the bridge's own thread, which then ends on its own. A
-//! ticket is not `Send`, and registering on the bridge's own thread is refused, so no ticket is
-//! ever dropped there.
+//! ticket is not `Send`, and registering a thread that rtkit would be asked about is refused on the
+//! bridge's own thread, so no ticket that reverts is ever dropped there.
 
 use std::time::Duration;
 
@@ -43,7 +46,7 @@ use eileen_platform::{
 };
 use tokio::sync::oneshot;
 
-use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use crate::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, Scheduling, ThreadId};
 
 /// How long dropping a ticket waits for the revert, at most. rtkit answers in milliseconds, and
 /// a drop should not stall the audio thread for a call's whole deadline; past it, the promoter
@@ -67,6 +70,9 @@ type Reverted = oneshot::Sender<Result<(), DbusError>>;
 type Revert = oneshot::Sender<Reverted>;
 /// What the promoter task answers the registration.
 type Answer = Result<(Promotion, Revert), PlatformError>;
+/// How a registration reads its thread's policy: [`ThreadId::scheduling`], unless a test sets
+/// another ([`LinuxAudioEndpoints::reading_scheduling_with`]).
+type ReadScheduling = fn(ThreadId) -> Result<Scheduling, PlatformError>;
 
 /// What a [`LinuxAudioEndpoints`] needs besides its bridge, given by the composition root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +95,7 @@ impl Default for LinuxAudioSettings {
 pub struct LinuxAudioEndpoints {
     bridge: Bridge,
     settings: LinuxAudioSettings,
+    scheduling: ReadScheduling,
 }
 
 impl LinuxAudioEndpoints {
@@ -96,7 +103,17 @@ impl LinuxAudioEndpoints {
     /// nothing yet.
     #[must_use]
     pub const fn new(bridge: Bridge, settings: LinuxAudioSettings) -> Self {
-        Self { bridge, settings }
+        Self { bridge, settings, scheduling: ThreadId::scheduling }
+    }
+
+    /// These endpoints, with each registration reading its thread's policy through `read`
+    /// instead of [`ThreadId::scheduling`]. For tests only: without privilege, a test cannot
+    /// make its thread real-time for the live read to see.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn reading_scheduling_with(mut self, read: ReadScheduling) -> Self {
+        self.scheduling = read;
+        self
     }
 }
 
@@ -122,16 +139,22 @@ impl AudioEndpoints for LinuxAudioEndpoints {
         if opt_out { Ok(()) } else { Err(PlatformError::Unavailable { what: DUCKING }) }
     }
 
-    /// [`RealtimeKit::promote`] for the calling thread, reverted when the ticket drops; the
-    /// module's doc says how. The ticket's task says which the thread got.
+    /// [`RealtimeKit::promote`] for the calling thread, reverted when the ticket drops, and
+    /// nothing at all for a thread already real-time; the module's doc says how. The ticket's
+    /// task says which the thread got.
     fn register_audio_thread(&self) -> Result<ThreadTicket, PlatformError> {
         let thread = ThreadId::current();
         let nice = thread.nice()?;
+        let scheduling = (self.scheduling)(thread).ok();
+        if scheduling.is_some_and(Scheduling::is_realtime) {
+            return Ok(ThreadTicket::new(Promotion::Unchanged { nice }.task(), || {}));
+        }
         let policy = self.settings.policy;
         let bridge = self.bridge.clone();
         let job = move |buses| async move {
             let (answer, answered) = oneshot::channel();
-            drop(tokio::task::spawn_local(promoter(bridge, buses, thread, nice, policy, answer)));
+            let now = (thread, nice, scheduling);
+            drop(tokio::task::spawn_local(promoter(bridge, buses, now, policy, answer)));
             // Cancelled, the job drops `answered`, which makes the promoter revert what it got.
             answered.await.unwrap_or_else(|_gone| {
                 Err(PlatformError::Io { what: REGISTER, detail: PROMOTER_GONE.to_owned() })
@@ -142,22 +165,22 @@ impl AudioEndpoints for LinuxAudioEndpoints {
     }
 }
 
-/// The promoter task: promotes `thread`, whose nice level is `nice`, as `policy` asks, hands the
-/// promotion over ([`hand_over`]), then reverts `thread`, unless nothing changed, and answers the
-/// ask, if one came. It keeps `bridge` until it has reverted, so the bridge's thread, which runs
-/// it, lives as long.
+/// The promoter task: promotes the thread of `now`, with its nice level and policy, as `policy`
+/// asks, hands the promotion over ([`hand_over`]), then reverts the thread, unless nothing
+/// changed, and answers the ask, if one came. It keeps `bridge` until it has reverted, so the
+/// bridge's thread, which runs it, lives as long.
 async fn promoter(
     bridge: Bridge,
     buses: Buses,
-    thread: ThreadId,
-    nice: i32,
+    now: (ThreadId, i32, Option<Scheduling>),
     policy: RealtimePolicy,
     answer: oneshot::Sender<Answer>,
 ) {
+    let (thread, nice, scheduling) = now;
     let promoted = match buses.system().await {
         Ok(system) => {
             let fresh = || reconnect(&buses, &system);
-            RealtimeKit::new(&system).promote(thread, nice, policy, fresh).await
+            RealtimeKit::new(&system).promote(thread, nice, scheduling, policy, fresh).await
         }
         Err(error) => Err(error),
     };

@@ -14,7 +14,9 @@ use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use eileen_audio_linux::{DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, ThreadId};
+use eileen_audio_linux::{
+    DbusError, Promoted, Promotion, RealtimeKit, RealtimePolicy, Scheduling, ThreadId,
+};
 use eileen_dbus_linux::METHOD_TIMEOUT;
 use eileen_dbus_linux::testing::{PrivateBus, serve};
 use rustix::process::{Resource, getrlimit};
@@ -33,6 +35,10 @@ pub(super) const DEFAULTS: Limits =
 /// The nice level the client's tests say their thread has: not 0, so that a revert to nice 0
 /// cannot pass for one to it.
 const NICE: i32 = 3;
+
+/// The policy the client's tests say their thread has, as a read of it gives: the default,
+/// `SCHED_OTHER`, which the test's thread has too.
+const OTHER: Option<Scheduling> = Some(Scheduling::Other);
 
 /// A call the fake reports, refused or not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +70,7 @@ pub(super) struct Limits {
 
 /// How the fake has scheduled a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scheduling {
+enum Scheduled {
     Realtime(u32),
     Nice(i32),
 }
@@ -74,7 +80,7 @@ enum Scheduling {
 #[derive(Debug, Clone, Copy)]
 struct Record {
     priority: Option<u32>,
-    now: Scheduling,
+    now: Scheduled,
 }
 
 /// A fake rtkit that reports each `MakeThread` call, and each property read once asked to. It
@@ -126,7 +132,7 @@ impl FakeRtkit {
         let mut records = self.records.lock().unwrap();
         let resumed = records.iter_mut().filter_map(|(&thread, record)| {
             let priority = record.priority?;
-            record.now = Scheduling::Realtime(priority);
+            record.now = Scheduled::Realtime(priority);
             Some((thread, priority))
         });
         let resumed = resumed.collect();
@@ -134,12 +140,23 @@ impl FakeRtkit {
         resumed
     }
 
+    /// Records `thread` as real-time at `priority`, as rtkit records a thread it made so: one that
+    /// registered before, or one that another library made real-time through rtkit.
+    pub(super) fn grant(&self, thread: u64, priority: u32) {
+        let record = Record { priority: Some(priority), now: Scheduled::Realtime(priority) };
+        self.records.lock().unwrap().insert(thread, record);
+    }
+
+    /// How the fake has scheduled `thread`, if it records it.
+    fn now(&self, thread: u64) -> Option<Scheduled> {
+        self.records.lock().unwrap().get(&thread).map(|record| record.now)
+    }
+
     /// rtkit 0.14's garbage collection, at the start of each call to its object: it forgets the
     /// threads that are neither real-time nor at a negative nice level.
     fn collect(&self) {
         let mut records = self.records.lock().unwrap();
-        records
-            .retain(|_thread, record| !matches!(record.now, Scheduling::Nice(nice) if nice >= 0));
+        records.retain(|_thread, record| !matches!(record.now, Scheduled::Nice(nice) if nice >= 0));
     }
 
     /// How many property reads came through `GetAll`.
@@ -197,7 +214,7 @@ impl FakeRtkit {
         {
             return Err(refused());
         }
-        let record = Record { priority: Some(priority), now: Scheduling::Realtime(priority) };
+        let record = Record { priority: Some(priority), now: Scheduled::Realtime(priority) };
         self.records.lock().unwrap().insert(thread, record);
         Ok(())
     }
@@ -218,9 +235,9 @@ impl FakeRtkit {
         {
             return Err(refused());
         }
-        let fresh = Record { priority: None, now: Scheduling::Nice(0) };
+        let fresh = Record { priority: None, now: Scheduled::Nice(0) };
         self.records.lock().unwrap().entry(thread).or_insert(fresh).now =
-            Scheduling::Nice(nice_level);
+            Scheduled::Nice(nice_level);
         Ok(())
     }
 
@@ -283,8 +300,10 @@ async fn every_property_is_read_alone_since_rtkit_0_13_answers_no_get_all() {
     let client = client(&bus).await;
     let thread = ThreadId::current();
     client.limits().await.unwrap();
-    let promoted =
-        client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await.unwrap();
+    let promoted = client
+        .promote(thread, NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await
+        .unwrap();
     client.revert(thread, promoted.restore).await.unwrap();
     assert_eq!(
         fake.get_alls(),
@@ -331,8 +350,9 @@ async fn a_thread_is_made_real_time_within_the_maximum_after_the_rttime_bound() 
     let (fake, mut calls) = FakeRtkit::new(limits, None);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted =
-        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted = client
+        .promote(ThreadId::current(), NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::Realtime { priority: 8 }, restore: NICE }),
@@ -356,8 +376,9 @@ async fn a_refused_real_time_request_falls_back_to_high_priority() {
     fake.refuse_realtime.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted =
-        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted = client
+        .promote(ThreadId::current(), NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::HighPriority { nice: -8 }, restore: NICE }),
@@ -379,7 +400,8 @@ async fn a_refused_request_never_lowers_a_thread_that_already_runs_higher() {
     // Below rtkit's minimum, -15; between it and the fallback, -11; and the fallback itself.
     for (nice, restore) in [(-16, -15), (-13, -13), (-11, -11)] {
         let policy = RealtimePolicy::default();
-        let promoted = client.promote(ThreadId::current(), nice, policy, || fresh(&bus)).await;
+        let promoted =
+            client.promote(ThreadId::current(), nice, OTHER, policy, || fresh(&bus)).await;
         assert_eq!(
             promoted,
             Ok(Promoted { promotion: Promotion::Unchanged { nice }, restore }),
@@ -394,6 +416,88 @@ async fn a_refused_request_never_lowers_a_thread_that_already_runs_higher() {
     }
 }
 
+/// The real-time policies a read can report, at priorities below, at and above the default
+/// policy's 10, which a test cannot give its thread without privilege.
+const REALTIME: [Scheduling; 4] = [
+    Scheduling::Fifo { priority: 5 },
+    Scheduling::RoundRobin { priority: 10 },
+    Scheduling::RoundRobin { priority: 20 },
+    Scheduling::Deadline,
+];
+
+#[tokio::test]
+async fn a_thread_already_real_time_is_asked_nothing_and_keeps_its_policy_when_rtkit_refuses() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    fake.refuse_realtime.store(true, Ordering::SeqCst);
+    fake.report_reads.store(true, Ordering::SeqCst);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
+    let client = client(&bus).await;
+    let thread = this_thread();
+    // rtkit's record of a thread that registered before; whatever policy the read reports, rtkit
+    // hears nothing, so the record stays.
+    fake.grant(thread, 10);
+    for scheduling in REALTIME {
+        let policy = RealtimePolicy::default();
+        let promoted =
+            client.promote(ThreadId::current(), NICE, Some(scheduling), policy, || fresh(&bus));
+        assert_eq!(
+            promoted.await,
+            Ok(Promoted { promotion: Promotion::Unchanged { nice: NICE }, restore: NICE }),
+            "{scheduling:?} is left as it is, with nothing to revert"
+        );
+        assert_eq!(
+            calls.try_recv(),
+            Err(TryRecvError::Empty),
+            "no call at all, a limit's read included, so no fallback to SCHED_OTHER: \
+             {scheduling:?}"
+        );
+        assert_eq!(fake.now(thread), Some(Scheduled::Realtime(10)), "still real-time");
+    }
+}
+
+#[tokio::test]
+async fn a_thread_already_real_time_below_the_asked_priority_is_not_raised() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
+    let client = client(&bus).await;
+    let scheduling = Some(Scheduling::Fifo { priority: 5 });
+    let promoted = client
+        .promote(ThreadId::current(), NICE, scheduling, RealtimePolicy::default(), || fresh(&bus))
+        .await;
+    assert_eq!(
+        promoted.map(|promoted| promoted.promotion),
+        Ok(Promotion::Unchanged { nice: NICE }),
+        "a grant of 10 would make it SCHED_RR, and its revert SCHED_OTHER, not SCHED_FIFO at 5"
+    );
+    assert_eq!(calls.try_recv(), Err(TryRecvError::Empty), "nothing asked");
+}
+
+#[tokio::test]
+async fn a_thread_not_real_time_or_of_unknown_policy_is_promoted_as_before() {
+    let bus = PrivateBus::start();
+    let (fake, mut calls) = FakeRtkit::new(DEFAULTS, None);
+    let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
+    let client = client(&bus).await;
+    let thread = ThreadId::current();
+    let batch = Scheduling::Another { policy: 3 };
+    let idle = Scheduling::Another { policy: 5 };
+    // None: a read that failed, which asks as for any thread that is not real-time.
+    for scheduling in [Some(Scheduling::Other), Some(batch), Some(idle), None] {
+        let policy = RealtimePolicy::default();
+        let promoted = client.promote(thread, NICE, scheduling, policy, || fresh(&bus)).await;
+        assert_eq!(
+            promoted,
+            Ok(Promoted { promotion: Promotion::Realtime { priority: 10 }, restore: NICE }),
+            "{scheduling:?}"
+        );
+        assert_eq!(calls.try_recv(), Ok(Call::Realtime(this_thread(), 10)), "{scheduling:?}");
+        client.revert(thread, NICE).await.unwrap();
+        assert_eq!(calls.try_recv(), Ok(Call::HighPriority(this_thread(), NICE)), "reverted");
+    }
+}
+
 #[tokio::test]
 async fn a_real_time_request_that_fails_otherwise_answers_its_error_with_no_fallback() {
     let bus = PrivateBus::start();
@@ -401,8 +505,9 @@ async fn a_real_time_request_that_fails_otherwise_answers_its_error_with_no_fall
     fake.fail_realtime.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted =
-        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted = client
+        .promote(ThreadId::current(), NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await;
     assert_eq!(
         promoted,
         Err(DbusError::Invalid {
@@ -427,8 +532,9 @@ async fn refusing_both_is_refused_not_authorized() {
     fake.refuse_high_priority.store(true, Ordering::SeqCst);
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake).await;
     let client = client(&bus).await;
-    let promoted =
-        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted = client
+        .promote(ThreadId::current(), NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await;
     assert_eq!(
         promoted,
         Err(DbusError::Refused {
@@ -443,8 +549,9 @@ async fn refusing_both_is_refused_not_authorized() {
 async fn no_realtimekit_on_the_bus_is_unavailable() {
     let bus = PrivateBus::start();
     let client = client(&bus).await;
-    let promoted =
-        client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted = client
+        .promote(ThreadId::current(), NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await;
     assert_eq!(
         promoted,
         Err(DbusError::Unavailable { what: "org.freedesktop.RealtimeKit1.RTTimeUSecMax" }),
@@ -459,8 +566,10 @@ async fn a_reverted_thread_is_forgotten_so_a_resume_leaves_it_alone() {
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = client(&bus).await;
     let thread = ThreadId::current();
-    let promoted =
-        client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await.unwrap();
+    let promoted = client
+        .promote(thread, NICE, OTHER, RealtimePolicy::default(), || fresh(&bus))
+        .await
+        .unwrap();
     assert_eq!(
         fake.resume(),
         [(this_thread(), 10)],
@@ -479,7 +588,8 @@ async fn the_revert_asks_for_the_nice_level_the_thread_had_floored_at_the_minimu
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = client(&bus).await;
     let thread = ThreadId::current();
-    let promoted = client.promote(thread, NICE, RealtimePolicy::default(), || fresh(&bus)).await;
+    let promoted =
+        client.promote(thread, NICE, OTHER, RealtimePolicy::default(), || fresh(&bus)).await;
     assert_eq!(
         promoted,
         Ok(Promoted { promotion: Promotion::Realtime { priority: 10 }, restore: NICE + 2 }),
@@ -501,8 +611,13 @@ async fn a_request_answered_after_its_method_timeout_is_reverted_behind_it() {
     let (fake, mut calls) = FakeRtkit::new(limits, Some(Gate::Realtime(Arc::clone(&gate))));
     let _rtkit = serve(&bus, RTKIT, RTKIT_PATH, fake.clone()).await;
     let client = RealtimeKit::new(&bus.connect_within(METHOD_TIMEOUT).await);
-    let mut promoted =
-        pin!(client.promote(ThreadId::current(), NICE, RealtimePolicy::default(), || fresh(&bus)));
+    let mut promoted = pin!(client.promote(
+        ThreadId::current(),
+        NICE,
+        OTHER,
+        RealtimePolicy::default(),
+        || fresh(&bus)
+    ));
     // In real time until the fake holds the request, so the three limit reads before it have the
     // default 5 s method timeout, not a short one they must beat. From then on the fake answers
     // nothing until its gate opens, so only method timeouts are left to fire (the request's, the
@@ -546,7 +661,8 @@ async fn a_request_whose_connection_failed_is_reverted_over_a_fresh_one() {
     let connection = bus.connect().await;
     let rtkit = RealtimeKit::new(&connection);
     let policy = RealtimePolicy::default();
-    let mut promoted = pin!(rtkit.promote(ThreadId::current(), NICE, policy, || fresh(&bus)));
+    let mut promoted =
+        pin!(rtkit.promote(ThreadId::current(), NICE, OTHER, policy, || fresh(&bus)));
     tokio::select! {
         held = calls.recv() => {
             assert_eq!(held, Some(Call::Realtime(this_thread(), 10)), "the request it holds");
