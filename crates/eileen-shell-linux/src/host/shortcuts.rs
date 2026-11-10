@@ -500,9 +500,11 @@ impl Turn {
     }
 
     /// What follows `change` of the portal's owner for a session that `portal` serves: `None`
-    /// while that portal keeps the name, as for a change from before the session opened. What
-    /// the next session binds is what this one would have: its `first` set, the whole set when
-    /// a change waits, or else what its bind sent, unless the desktop refused it.
+    /// unless the change takes the name from that portal. The session opened on the name's
+    /// owner of the time, and a unique name is never given twice, so every change after it
+    /// starts from `portal`, and one that does not is from before the session opened. What the
+    /// next session binds is what this one would have: its `first` set, the whole set when a
+    /// change waits, or else what its bind sent, unless the desktop refused it.
     fn after(&self, portal: &UniqueName<'_>, change: &OwnerChange) -> Option<Next> {
         let rebind = || {
             let waiting = self.bind_at.map(|_at| Rebind::Whole);
@@ -510,9 +512,10 @@ impl Turn {
             first.or_else(|| self.held.clone().map(Rebind::These))
         };
         match (&change.old, &change.new) {
-            (_, Some(new)) if new.as_str() != portal.as_str() => Some(Next::Moved(rebind())),
-            (Some(old), None) if old.as_str() == portal.as_str() => Some(Next::Lost(rebind())),
-            _ => None,
+            (Some(old), _) if old.as_str() != portal.as_str() => None,
+            (Some(_), Some(_)) => Some(Next::Moved(rebind())),
+            (Some(_), None) => Some(Next::Lost(rebind())),
+            (None, _) => None,
         }
     }
 }
@@ -635,9 +638,47 @@ fn refuse(mut asks: mpsc::Receiver<Ask>, error: &DbusError) {
 
 #[cfg(test)]
 mod tests {
+    use eileen_dbus_linux::OwnerChange;
     use eileen_platform::PlatformError;
+    use zbus::message::Sequence;
+    use zbus::names::{OwnedBusName, OwnedUniqueName, UniqueName};
 
-    use super::{ShortcutEvent, Wanted};
+    use super::{Next, PORTAL, Rebind, ShortcutEvent, Turn, Wanted};
+
+    /// The bus's word that the portal's name went from `old` to `new`.
+    fn change(old: Option<&str>, new: Option<&str>) -> OwnerChange {
+        let owner = |name: &str| OwnedUniqueName::try_from(name).unwrap();
+        OwnerChange {
+            name: OwnedBusName::try_from(PORTAL).unwrap(),
+            old: old.map(owner),
+            new: new.map(owner),
+            received: Sequence::default(),
+        }
+    }
+
+    #[test]
+    fn only_a_change_from_the_sessions_portal_moves_or_loses_it() {
+        let portal = UniqueName::try_from(":1.30").unwrap();
+        let turn = Turn { first: Some(Rebind::Whole), ..Turn::default() };
+        // Changes queued from before the session opened on `:1.30`, as when the name went from
+        // `:1.10` to `:1.20` to `:1.30` before the holder read the first change.
+        for (old, new) in [
+            (None, Some(":1.20")),
+            (Some(":1.10"), Some(":1.20")),
+            (Some(":1.20"), Some(":1.30")),
+            (Some(":1.20"), None),
+        ] {
+            let next = turn.after(&portal, &change(old, new));
+            assert!(
+                next.is_none(),
+                "a change from {old:?} to {new:?} ended a session on :1.30 as {next:?}"
+            );
+        }
+        let moved = turn.after(&portal, &change(Some(":1.30"), Some(":1.40")));
+        assert!(matches!(moved, Some(Next::Moved(Some(Rebind::Whole)))), "{moved:?}");
+        let lost = turn.after(&portal, &change(Some(":1.30"), None));
+        assert!(matches!(lost, Some(Next::Lost(Some(Rebind::Whole)))), "{lost:?}");
+    }
 
     #[test]
     fn a_session_that_ends_reaches_a_waiting_call_as_no_missing_portal() {
