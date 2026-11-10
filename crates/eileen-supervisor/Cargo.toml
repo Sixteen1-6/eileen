@@ -33,6 +33,9 @@ windows.workspace = true
 # rustix's process feature gives setsid, the parent-death signal, pidfds, waitid and killpg as
 # safe calls.
 rustix = { workspace = true, features = ["process"] }
+# libc: the ioprio_set system call, which neither std nor rustix wraps, for a Claude session's
+# idle I/O class.
+libc.workspace = true
 
 [dev-dependencies]
 eileen-trace = { workspace = true, features = ["testing"] }

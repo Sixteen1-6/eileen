@@ -15,12 +15,22 @@
 //! parent-death signal, so a crash of Eileen kills every child. Their descendants are not
 //! reached: one that outlives its child in a crash, or leaves the group (`setsid`, `setpgid`),
 //! is for the cgroup scope of LINUX.md section 5, which this crate does not have yet. A Claude
-//! session runs ten nice steps below the thread that forks it, which its builds inherit. A nice
-//! value orders tasks only within one CPU cgroup, or, where the kernel's autogroup applies (it
-//! is on by default on Ubuntu, and only for tasks in the root CPU cgroup), within one session's
-//! autogroup; the child's `setsid` starts a new one, so there its builds still get an equal
-//! share against the core's. That share is the cgroup scope's to set too. On other Unix systems
-//! the child leads its own process group.
+//! session runs ten nice steps below the thread that forks it, and in the idle I/O class, both
+//! of which its builds inherit. A nice value orders tasks only within one CPU cgroup, or, where
+//! the kernel's autogroup applies (it is on by default on Ubuntu, and only for tasks in the root
+//! CPU cgroup), within one session's autogroup; the child's `setsid` starts a new one, so there
+//! its builds still get an equal share against the core's. That share is the cgroup scope's to
+//! set too. The idle I/O class counts only on a disk whose block-layer scheduler is BFQ or
+//! mq-deadline; `none`, the kernel's default for a drive with several hardware queues, as most
+//! NVM Express drives have, unless the scheduler is changed, and kyber ignore it. mq-deadline
+//! has kept a queue per class since Linux 5.14, but the class reaches it only for direct I/O
+//! and `io_uring` before Linux 6.0, and for all I/O a task submits from 6.0, so on 5.14 to 5.19
+//! a session's buffered reads go to it as best effort. Where it counts, the session's own reads
+//! and direct writes, and the writeback an fsync or sync does from the session, wait while
+//! another class has requests queued (mq-deadline serves one that has waited 10 s, its
+//! `prio_aging_expire`, from Linux 5.16; BFQ keeps the idle class a very thin share); buffered
+//! writes left to the kernel's writeback threads go out at their priority. On other Unix
+//! systems the child leads its own process group.
 //!
 //! Stdout carries the protocol; stderr carries logs, which [`spawn`] forwards into
 //! `child.stderr` events from the start, on every OS, so no caller can leave the pipe
@@ -55,8 +65,9 @@ pub enum ChildClass {
     /// A sidecar (`eileen-speech`, `eileen-desktop`, `eileen-apps`, `eileen-hud`): normal priority.
     Sidecar,
     /// A Claude session (brain, spare, pooled or job worker, librarian): below normal on
-    /// Windows, ten nice steps below the core on Linux, which orders it only within its CPU
-    /// cgroup or autogroup (see the module doc); other Unix systems keep the core's.
+    /// Windows; on Linux ten nice steps below the core, which orders it only within its CPU
+    /// cgroup or autogroup, and in the idle I/O class, which only the BFQ and mq-deadline disk
+    /// schedulers honour (see the module doc); other Unix systems keep the core's.
     ClaudeSession,
     /// A short tool run (`fuscript`, a probe): normal priority.
     Tool,
@@ -271,11 +282,13 @@ pub(crate) const CLAUDE_SESSION_NICER_BY: i32 = 10;
 
 #[cfg(target_os = "linux")]
 fn wrap_platform(wrap: &mut CommandWrap, class: ChildClass) {
-    let nicer_by = match class {
-        ChildClass::ClaudeSession => CLAUDE_SESSION_NICER_BY,
-        ChildClass::Sidecar | ChildClass::Tool => 0,
+    let lowered = match class {
+        ChildClass::ClaudeSession => {
+            crate::ffi::Lowered { nicer_by: CLAUDE_SESSION_NICER_BY, idle_io: true }
+        }
+        ChildClass::Sidecar | ChildClass::Tool => crate::ffi::Lowered::NONE,
     };
-    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut(), nicer_by);
+    crate::ffi::own_session_killed_with_parent(wrap.command_mut().as_std_mut(), lowered);
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]

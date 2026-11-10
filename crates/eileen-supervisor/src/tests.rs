@@ -161,7 +161,7 @@ fn helper_entry() {
             write_pids(&dir, &guard.pid.to_string());
         }
         #[cfg(target_os = "linux")]
-        name @ ("session" | "parent" | "parent-exits" | "core" | "echo" | "nice") => {
+        name @ ("session" | "parent" | "parent-exits" | "core" | "echo" | "nice" | "ioprio") => {
             linux::helper_entry(name, &dir);
         }
         // Blocks until released, then exits with 259, which is STILL_ACTIVE.
