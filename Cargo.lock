@@ -868,6 +868,7 @@ version = "0.0.0"
 dependencies = [
  "eileen-dbus-linux",
  "eileen-platform",
+ "eileen-stdx",
  "proptest",
  "rustix",
  "tokio",
