@@ -44,6 +44,18 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 
 ## Progress
 
+Each pull request records itself here (AGENTS.md, "Making a change", rule 9). The table holds
+what merged through 2026-10-27, in merge order, with each squash commit, and is closed: nothing
+is added to it. Since then a pull request adds one line of its own to the list under the table,
+at its end, and edits no other pull request's line. The line gives the branch, the number once
+the pull request has one, its type, and what it brings, written as what `main` holds once it
+merges, so the line stays true when it merges and no later edit is needed; the merge date and
+commit are git's (`git log --first-parent origin/main`). When two pull requests add their lines
+at once, the second to merge keeps both in the conflict. A pull request that narrows or closes a
+bullet under "Still open", or adds to Surprises, Findings for other packages or Decisions to
+record, edits only those lines. A record pull request, such as `wp10/record-wave-6`, brings the
+rest of this file up to date with `main`: the open pull requests, the plans, the measurements.
+
 | Order | Pull request | Branch | State |
 |---|---|---|---|
 | 1 | #26 | `Ubuntu-Compatible` | Merged on 2026-10-22 as e4aff64: `docs/LINUX.md`, `eileen-shell-linux` and `eileen-apps-linux` |
@@ -79,44 +91,79 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 30 | #83 | `wp10/linux-desktop-lane` | Merged on 2026-10-26 as d446972: amendment of section 4.6 with the nightly Linux desktop lane, its `session` job and the first four `linux_session` tests |
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
-| 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
+| 33 | #103 | `wp10/docs-linux-status` | Merged on 2026-10-27 as 7de0357: this file and LINUX.md brought up to date with `main` at a84c198 |
+| 34 | #91 | `wp10/linux-session-tests` | Merged on 2026-10-27 as b13e05c: five more `linux_session` tests for the shell's clients (the power facts and their stream, notifications and their `Closed` event, the Inhibit portal's GTK backend), and the lane's session unit without `CAP_WAKE_ALARM` in its bounding set, so that bwrap starts |
+| 35 | #118 | `wp10/supervisor-stderr-forwarding` | Merged on 2026-10-27 as 71b8dad: amendment to WP0's `eileen-supervisor` and `eileen-cli`, a child's stderr forwarded from `spawn` on every OS, with `ChildSpec::raw_stderr` for a caller that wants the raw pipe (SU5, Findings for other packages) |
+| 36 | #121 | `wp10/desktop-lane-apt` | Merged on 2026-10-27 as 56ea109: amendment of section 4.6, the desktop lane's packages from an Actions cache keyed by the runner image and the package list, and its install step within 10 minutes of its own |
+| 37 | #123, #122, #124 | `wp10/rtkit-fallback`, `wp10/tray-watcher-bounds`, `wp10/mpris-parallel-reads` | Merged on 2026-10-27 as 2fda2e9, fb82ae3 and 7f493bf: the RealtimeKit fallback never lowers a thread's nice level, and a request whose connection failed is reverted over a new one (#90's follow-ups); the tray answers within its deadline when the watcher stalls, and asks a watcher that refused again (#110's); MPRIS players are read concurrently in the watch, each within one bound (#65's and #68's) |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
 
-Open on 2026-10-26, with what each waits for:
+Since 2026-10-28, one line per pull request, each added by the pull request itself:
 
-- #91 (`wp10/linux-session-tests`, ready, based on `main`): five more `linux_session` tests for
-  the shell's clients (the power facts and their stream, notifications and their `Closed`
-  event, the Inhibit portal's GTK backend), and a fix to the lane's `session.sh`, which leaves
-  `CAP_WAKE_ALARM` out of the session unit's bounding set so that bwrap, which glycin needs for
-  every image GTK loads on 26.04, starts. It waits for review.
-- #94 (`wp10/desktop-grounding`, draft, based on `main` since #87 merged): `Grounding` on the
-  AT-SPI2 client, as `LinuxDesktop`. It stays a draft for its own two `lint-repo` check 14
-  problems (its test starts a copy of the test binary with `Command::new`), which wait for the
-  owner's answer on #113.
+- `wp10/record-wave-6` (docs): this file and LINUX.md brought up to date with `main` at 18f71fd:
+  #91, #118 and #121 to #124 recorded, what decision D86 asks of WP10 planned, the open pull
+  requests' status, and this list in place of new table rows.
+
+Open on 2026-11-10, with what each waits for:
+
+- The owner's #144 (`amend/linux-desktop-toolchain`, draft, into `main`, which it now conflicts
+  with) amends WP10's `linux-desktop.yml`: the lane's `session` job gets the step
+  `ci.yml`'s `logic-linux` has, which keeps only the pinned toolchain before rust-cache so that
+  the cache key does not follow the runner image, and xtask's workflow tests lose their one
+  exception, `WITHOUT_THE_TOOLCHAIN_STEP` (the lane's `session` job, on `main`). It asks for
+  WP10's review, still pending. Meanwhile the lane's rust-cache step finds no cache in its
+  scheduled runs on `main` (42364908679 of 2026-11-07 to 42809906168 of 2026-11-10).
+- Dependabot's #167 (`dependabot/cargo/zbus-6.0.0`, into `main`) moves `zbus` from 5.19.0 to 6.x
+  in the root manifest. Its `logic-linux` fails to compile `eileen-dbus-linux` (run 42405365074:
+  `zbus::object_server` is not found from `testing.rs`, and `portal.rs` fails too). BUILD.md
+  section 4.1 pins 5.19.0, so a move to 6 needs that section's amendment and a port of the
+  `-linux` crates; whether and when is the owner's call.
+- The owner's #191 (`wp0/machine-contracts`, draft, into `main`): the `MachineProbe` trait
+  (`facts` with the caller's `Deadline`, `load` and `watch`), `FakeMachineProbe` and the
+  `machine` contracts, which WP10's Linux probe builds on ("Not started yet" below). It also
+  gives `AudioEndpoints` `endpoints` and `watch_endpoints` with default bodies that answer
+  `Unavailable`, so `eileen-audio-linux` needs no edit.
+- #94 (`wp10/desktop-grounding`, draft, into `main`): `Grounding` on the AT-SPI2 client, as
+  `LinuxDesktop`. It stays a draft for its own two `lint-repo` check 14 problems (its test starts
+  a copy of the test binary with `Command::new`), which wait for the owner's answer on #113.
 - #112 (`wp10/desktop-automation`, draft, on #94): `Automation` on the same client. It waits for
   #94.
-- #111 (`wp10/shell-secret-service`, draft): WP10's proposal for the owner, `SecretStore` over the
-  Secret Service with a client of Eileen's own, a `plain` session and no prompts. It waits for
-  the owner's answer.
-- #113 (`wp10/private-bus-spawn-route`, draft): WP10's proposal for the owner, an amendment of
-  section 3.1 that lets `eileen-dbus-linux` depend on `eileen-supervisor` under its
-  `private-bus` feature, so the private test bus starts `dbus-daemon` through
-  `eileen_supervisor::spawn`. It waits for the owner's answer; a WP10 pull request then clears
-  the two check 14 problems at `crates/eileen-dbus-linux/src/testing.rs`.
-- The owner's #77 (`wp0/platform-file-deadlines`) gives the file-reading trait methods the
-  caller's `Deadline`, as BUILD.md section 3.4 says since #76, and WP10's #116
-  (`wp10/platform-deadlines-linux`, ready, based on #77) moves `LinuxApps`, `LinuxRecent` and the
-  Windows stubs to its signatures, so #77 compiles once merged with `main`. When they merge is
-  the owner's call.
-- This pull request (#103, draft), which merges last.
+- #111 (`wp10/shell-secret-service`, draft, into `main`, which it now conflicts with): WP10's
+  proposal for the owner, `SecretStore` over the Secret Service with a client of Eileen's own, a
+  `plain` session and no prompts. It waits for the owner's answer.
+- #113 (`wp10/private-bus-spawn-route`, draft, into `main`, which it now conflicts with): WP10's
+  proposal for the owner, an amendment of section 3.1 that lets `eileen-dbus-linux` depend on
+  `eileen-supervisor` under its `private-bus` feature, so the private test bus starts
+  `dbus-daemon` through `eileen_supervisor::spawn`. It waits for the owner's answer; a WP10 pull
+  request then clears the two check 14 problems at `crates/eileen-dbus-linux/src/testing.rs`.
+- The owner's #77 (`wp0/platform-file-deadlines`, into `main`, which it now conflicts with) gives
+  the file-reading trait methods the caller's `Deadline`, as BUILD.md section 3.4 says since #76,
+  and WP10's #116 (`wp10/platform-deadlines-linux`, ready, into #77) moves `LinuxApps`,
+  `LinuxRecent` and the Windows stubs to its signatures, so #77 compiles once merged with `main`.
+  When they merge is the owner's call.
+- The owner's #119 (`wp11/gaze-proposal`, draft, into `main`) proposes `docs/GAZE.md`, a work
+  package WP11 for gaze through a hardware eye tracker, and WP10's #120 (`wp10/gaze-webcam`,
+  ready, into #119) folds a webcam route into it, crediting Aaron's prototype. Both change only
+  `docs/GAZE.md`, and what becomes of them is the owner's call.
 
 Planned, not yet opened:
 
+- What decision D86 gives WP10, each after the WP2 pull request it builds on, in BUILD.md section
+  6.4's W1 order, none of which is on `main` yet:
+  - the Linux forms of `eileen-supervisor`'s `ipc` module, the pipes as Unix sockets and the
+    caller checks of LINUX.md section 5, after `wp2/supervisor-pipes` and
+    `wp2/supervisor-callers` (items 3 and 4) give the module its types. Until then every `ipc`
+    call on Linux answers `Unsupported`, so no Linux build accepts a caller it could not check
+    (BUILD.md section 2.12), and `wp2/dispatcher`'s tests through a real pipe are Windows-only
+    (item 10). The plan for them is a pull request of its own;
+  - `PathProbe` in `eileen-shell-linux` (BUILD.md section 3.4), after `wp2/path-probe-trait`
+    (item 5) adds the trait and its fake. Until then a path that needs a probe is `Unknown` on
+    Linux (D86);
+  - `LocalTime` from `/etc/localtime`, after `wp2/shell-local-time` (item 6) wires Windows' zone
+    reader into `CoreConfig.local_time`. Until then Linux logs a warning at start and uses UTC
+    (BUILD.md section 3.3.3).
 - After the owner's answer on #113: `PrivateBus` starting its `dbus-daemon` through
   `eileen_supervisor::spawn`, with tests that the daemon dies on drop and on panic.
-- The rest of SU5 (Findings for other packages), an amendment to WP0's `eileen-supervisor` and
-  `eileen-cli`: stderr forwarded from `spawn` on every OS, with a `ChildSpec` field for callers
-  that want the raw pipe.
 - The rest of PL7, an amendment to WP0's `eileen-stdx`: `spawn_named` states Linux's 15-byte
   limit and checks it, and its test's thread gets a name that fits.
 - The cgroup scope of LINUX.md section 5, which kills what outlives a supervised child in a
@@ -147,7 +194,9 @@ branch was rebased onto `main` with `git rebase --onto origin/main <old parent>`
 against the tested one, and pushed with `--force-with-lease`.
 
 The follow-ups after the chains merged as #55 to #57, and the trait implementations' own (#64 to
-#66, #68 and #84) since, and the L2 pull requests' (#87, #90, #107, #110). Still open:
+#66, #68 and #84) since, and the L2 pull requests' (#87, #90, #107, #110); #118 finished SU5,
+and #122, #123 and #124 fixed what this list named for the tray, RealtimeKit and MPRIS on
+2026-10-26. Still open:
 
 - The callers' deadlines for the file reads and writes, under the file-deadline record below.
   WP0 chose both a deadline parameter and a named helper thread: BUILD.md section 3.4 says so
@@ -168,32 +217,44 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   word, so the shortcuts stay dead until a changed set is bound and `watch_input` hears nothing
   more; a change the user makes later in the desktop's settings, which does not reach the sink;
   and `PhysicalActivity`, which `watch_input` never sends, since no source of it is chosen yet.
-- The tray (#110): a watcher that never answers holds the tray holder for its connection's
-  method timeout, so a `set_tray` meanwhile can pass its deadline, and a watcher that answers
-  an error leaves the item unregistered.
+- The tray (#110, #122): a watcher that never answers keeps the holder's registration under way
+  for its connection's method timeout, and each `set_tray` meanwhile spends half its deadline
+  before it answers `Unavailable`; and a watcher that never answered, or refused the first
+  registration and the three retries the next calls make (`RETRIES`), is not asked again until
+  its name gets a new owner, so until then no host shows the item (`host.rs`'s tray section and
+  Traps).
 - For the owner, from #107 and #110: a hotkey's press and a tray choice carry no device on Linux
   (any program on the session bus can send dbusmenu an `Event`), so they cannot meet BUILD.md
   sections 2.5 and 2.9's rule for approve, deny and unmute; and `ShellHost` has no way to return
   a press or a tray click to the core on any OS (section 3.4).
-- The AT-SPI2 client (#87): its connect is unbounded, since zbus 5.19 bounds no connect, so a
-  socket that accepts and never answers holds `accessibility_bus` until the caller's deadline;
+- The AT-SPI2 client (#87): its connect is unbounded. `accessibility_bus` connects through
+  `eileen_dbus_linux::bus_at_within(&address, BUS, call_timeout)`, which refuses an address that
+  is not a Unix socket's and gives the connection `call_timeout` as its method timeout, but
+  zbus 5.19 bounds no connect, its handshake and `Hello` included (Surprises), so a socket that
+  accepts and never answers holds `accessibility_bus` until the caller's deadline (the crate
+  doc's Traps);
   the first reads of a just-launched app get 800 ms where libatspi allows up to 15 s (the AT-SPI2
   record below); and whether its rule for an error name an app chose (`APPS_OWN_ERROR`) moves into
   `DbusError::from_error_name` for every service, MPRIS players being apps too, is
   `eileen-dbus-linux`'s next pull request's decision.
-- RealtimeKit (#90): a request whose system-bus connection failed is reverted over that same
-  connection, which fails with it; and when rtkit refuses real-time, the fallback asks for the
-  policy's nice level even for a thread that already runs higher, which can lower it (nice -16
-  becomes -11).
-- The supervisor (#106, #115): the cgroup scope (Planned above); idle I/O priority for Claude
-  sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5); and the rest of
-  SU5.
+- RealtimeKit (#90, #123): a thread that is already real-time when it registers (registered a
+  second time, or made so by another library through rtkit) is taken off real-time. The
+  fallback compares nice levels only, so when rtkit refuses, it moves such a thread to
+  `SCHED_OTHER`, and so does the revert of a grant, since rtkit has no call that puts a
+  real-time policy back (`eileen-audio-linux`'s crate doc, Invariants and Traps).
+- The supervisor (#106, #115, #118): the cgroup scope (Planned above), and idle I/O priority for
+  Claude sessions and builds, which needs an `ioprio_set` call (LINUX.md section 5).
 - The three Linux fuzz targets (#109) have never been built: no workflow runs `cargo fuzz build`
   yet. Until WP0 phase B's fuzz job, the owner or CI builds them from `fuzz/` on Linux after
   copying the root `Cargo.lock` there.
 - The desktop lane (#83): tests that need input or a clipboard need a compositor with a seat; and
   the owner profile's `all()` filter takes the `linux_session` tests, so it must not run on a
-  Linux desktop (it is harmless on the owner's Windows PC, where that binary is empty).
+  Linux desktop (it is harmless on the owner's Windows PC, where that binary is empty). Since
+  #121 the first run on a new runner image misses the package cache and downloads from the
+  mirror, so on a slow mirror that run fails at the install step's 10-minute limit, and the next
+  run tries again: so it went on 2026-11-06 (run 42210445439, the first on image
+  20261101.186.1), and the next night's run saved the key. Its rust-cache step finds no cache on
+  `main` (the open #144 above amends that step's key).
 - `notifications.rs`'s own mapping of the server's error names (`already_gone`) moves into
   `DbusError`'s mappings.
 - A read-only file system (`EROFS`) is `Io` in both `FileError` and `AutostartError`; if it should
@@ -203,10 +264,12 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   `Opener::checking_files_on` and the test helpers that hold blocking threads
   (`stall_file_checks`, `take_blocking_threads`, `hold_the_blocking_thread`). The answer #84's
   entries name is a thread from `eileen_stdx::thread::spawn_named`.
-- MPRIS: `MprisWatch` reads players one at a time, so players that never answer delay the first
-  state of those behind them by one method timeout each (#68); and a listing reads one player's
-  `Player` properties and then its root interface, so a player that answers the first late and
-  never the second holds `LinuxMedia::sessions` for up to two method timeouts (#65).
+- MPRIS (#65, #68, #124): each player's read is bounded as a whole (`READ_BOUND`, one method
+  timeout), and the listing and the watch read their players at once, but the bus itself can
+  still hold `LinuxMedia::sessions` past its deadline: connecting has no timeout, and the listing
+  asks for the players' names and owners one call at a time before it reads them (`LinuxMedia`'s
+  doc). The watch reports in the order its reads started, so a player that never answers holds
+  back the reports of the players behind it, whose reads go on, until its one bound.
 - From #66: the index's app names are a desktop entry's text, unsanitized; the threads that hung
   reads and checks keep are capped only where the caller gives a pool, which `LinuxRecent` and the
   opener `LinuxApps` makes per call do not take; the opener's calls before its wait each keep the
@@ -216,8 +279,10 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
 
 Not started yet:
 
-- `MachineProbe` on Linux, which waits for WP0 phase B's `wp0/machine-contracts`; until then
-  `LinuxMachineProbe`'s readers mirror the contract shapes;
+- `MachineProbe` on Linux, which waits for WP0 phase B's `wp0/machine-contracts`, the owner's
+  draft #191; until then `LinuxMachineProbe`'s readers mirror the contract shapes;
+- the Linux forms of the `ipc` module, `PathProbe` and `LocalTime` from `/etc/localtime`, which
+  wait for WP2's pull requests (Planned above);
 - launching apps without D-Bus activation, which waits for WP0's `eileen_supervisor::user_launch`,
   phase B, which is not on `main` (the Linux process model it starts children with is, #106;
   LINUX.md sections 5 and 7);
@@ -288,7 +353,7 @@ fixed, by an amendment from WP10 with a regression test:
 | SU2 | `spawn_detached` dropped the guard without waiting on Unix, so an exited guard stayed a zombie that a liveness check by PID reported alive | #117 |
 | SU3 | `try_wait` reaped behind tokio's back, and the drop later killed the freed PID by number | #106 |
 | SU4 | On Linux a Claude session ran at the core's nice value | #115, for the nice value; its CPU share against the core under autogroup is the cgroup scope's |
-| SU5 | stderr was piped but drained only when a caller asked, so a child writing more than the pipe holds blocked and `wait` never returned | #115, in part: an awaited `wait` on Linux drains it. The full fix, forwarding from `spawn` on every OS, is still open (Planned, above) |
+| SU5 | stderr was piped but drained only when a caller asked, so a child writing more than the pipe holds blocked and `wait` never returned | #115 in part (an awaited `wait` on Linux drained it), then #118: `spawn` forwards stderr on every OS, on Windows from a named thread so that a quiet child holds no blocking-pool thread, and `ChildSpec::raw_stderr` hands a caller the raw pipe instead |
 | SU6 | A child stayed in the core's session, so reading `/dev/tty` from a background group stopped it with `SIGTTIN` | #106 |
 | PL7 | Thread names longer than the 15 bytes Linux keeps were cut: `<name>-worker` in `eileen_rt::runtime::build`, `eileen-log-writer` in `eileen-trace`, and `spawn_named` checks none | #105 for `eileen-rt`, #86 (as TR16) for `eileen-trace`; `eileen-stdx`'s half is still open (Planned, above) |
 | BU5 | Off Windows cargo ran as a plain child at nice 0, a kill took cargo alone, and a killed `cargo xtask` left cargo building while its slot was already free | #108 |
@@ -348,12 +413,37 @@ the spawn.
   (`repo_root` in `xtask/src/lib.rs`). With a `CARGO_TARGET_DIR` shared between worktrees,
   `cargo xtask pr-meta` ran a binary that another worktree had built, and checked that worktree's
   head. Each worktree keeps its own target folder, as BUILD.md section 6.1 rule 6 asks.
+- On Ubuntu 26.04 GTK loads every image through glycin, whose loaders run in a sandbox that
+  bwrap makes, and bwrap refuses to start in a non-root process that holds any permitted
+  capability, a refusal glycin does not fall back from, so GTK 3 aborts on its first icon.
+  pam_systemd in systemd 259 gives a regular user's seat login `CAP_WAKE_ALARM` in its ambient
+  set, and systemd keeps it for a unit with `PAMName=`, so the lane's session unit leaves it out
+  of its bounding set (#91).
+- With no GNOME session manager, xdg-desktop-portal-gtk answers an idle `Inhibit` with
+  `Response` 0 before its own `org.freedesktop.ScreenSaver` call returns, and that call fails
+  where nothing owns the name, as in the lane's session: `DesktopHolder::Portal` there says that
+  the portal took the request, not that the screen stays on (#91).
+- The runner's Ubuntu mirror can serve the desktop lane's 99.6 MB of packages at 45 to 50 kB/s,
+  a download that keeps moving, so no apt timeout ends it: the scheduled run of 2026-10-27 on
+  `main` (40479985013) was cancelled at the job's 30 minutes inside the install. apt takes a
+  trusted index's copy of a version over a local `.deb` of it, so the cached packages install
+  without the mirror only from apt's archive folder, with `--no-download` (#121).
+- zbus marks a connection whose socket failed closed only in the socket's reader, once it has
+  failed the pending calls and handed the error to the connection's streams, so a caller that
+  connects again through `Buses` right after the failure can get the failed connection back;
+  `eileen-audio-linux`'s promoter waits for the mark, at most `METHOD_TIMEOUT` (#123).
+- On Windows tokio reads a child's pipe as a blocking file, each pending read holding a thread
+  of the blocking pool, so forwarding every child's stderr that way would fill the pool's 16
+  threads; #118 reads it on a named thread of its own (`supervisor.err`).
 
 ## Decisions to record
 
 Thirteen proposed decision records for the owner, in the shape of [DECISIONS.md](../DECISIONS.md),
-whose last record is D80, from WP10's #114 and accepted on `main` under the owner's standing rule,
-so the next free number is D81. They have no numbers, because the owner assigns them when they join that log.
+whose last record on `main` is D86 (WP10's own D80 came from #114, accepted under the owner's
+standing rule); the owner's open #169 adds two more, numbered D86 and D87 on its branch, which
+conflicts with `main`. They have no numbers here: a record of these takes the next number that
+neither `main` nor an open pull request's record holds when the pull request that adds it to
+that log is published.
 The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
 `docs/PLAYBOOK.md` or says why not (BUILD.md section 4b.3, check 30).
 
@@ -600,9 +690,10 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   profile's `all()` filter takes too (Still open); the `ci` and default profiles leave them out.
   systemd 259's logind defaults to `RemoveIPC=yes`, so the runner user's SysV IPC and POSIX
   shared memory go when a session step's session is the user's last; no step of the lane keeps
-  any between steps.
-- Source: #83, on `main` as d446972; `.config/nextest.toml`; BUILD.md section 4.6; LINUX.md
-  section 6.
+  any between steps. PAM's `login` stack on seat0 gives the session's programs `CAP_WAKE_ALARM`,
+  which stops bwrap, so the session's unit leaves it out of its bounding set (#91, Surprises).
+- Source: #83, on `main` as d446972; #91, on `main` as b13e05c; `.config/nextest.toml`; BUILD.md
+  section 4.6; LINUX.md section 6.
 
 ### What outlives a supervised child in a crash is the cgroup scope's
 
@@ -649,10 +740,13 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   or `CAP_SYS_NICE`. Before its first request the process lowers its hard `RLIMIT_RTTIME` to
   rtkit's `RTTimeUSecMax` (200 ms by default) and keeps its soft limit within it, never raising
   either. It asks for priority 10, capped at rtkit's maximum, and falls back to nice -11, floored
-  at rtkit's minimum, when rtkit refuses. The ticket reverts the thread to the nice level it had,
-  floored at rtkit's minimum, and then makes one more call, so that rtkit 0.14 forgets the
-  thread's priority. A request whose answer never came, which rtkit may still grant, is reverted
-  the same way at once.
+  at rtkit's minimum, when rtkit refuses, unless the thread's nice level is already that level or
+  lower, which it then leaves alone with nothing to revert (nice levels only: a thread already
+  real-time still falls back). The ticket reverts the thread to the nice level it had, floored
+  at rtkit's minimum, and then makes one more call, so that rtkit 0.14 forgets the thread's
+  priority. A request whose answer never came, which rtkit may still grant, is reverted the same
+  way at once: over the same connection after a method timeout, and over a new connection to the
+  system bus after a failed one.
 - Why: rtkit grants real-time only to a process whose hard `RLIMIT_RTTIME` is at most its maximum,
   and Linux's default is unlimited; it needs no privilege and no group, and polkit lets the active
   local session use it. Priority 10 leaves PipeWire's threads, which get rtkit's maximum, 20,
@@ -665,7 +759,8 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   their tickets. `eileen-audio-linux`'s crate doc lists the bound, and that real-time comes only
   through RealtimeKit, under "Do not change without a decision record".
 - Source: LINUX.md sections 4 and 5; rtkit 0.13's and 0.14's `rtkit-daemon.c`; PipeWire 1.0.5's
-  `pipewire.conf`; #80, on `main` as d4945f2; #90, on `main` as aac5055.
+  `pipewire.conf`; #80, on `main` as d4945f2; #90, on `main` as aac5055; #123, on `main` as
+  2fda2e9.
 
 ## Owner direction to record
 
@@ -696,15 +791,38 @@ Measured so far, each where it is recorded:
 - `main` at a84c198, after #117: every job of CI run 40414356056 passes (2026-10-26),
   `logic-linux` with 1057 of 1057 tests and the 4 `linux_session` tests skipped, on the
   `ubuntu-24.04` image, version 20261012.334.1.
+- `main` at 7f493bf, after #124: every job of CI run 40564307456 passes (2026-10-27),
+  `logic-linux` with 1078 of 1078 tests and the 9 `linux_session` tests skipped, on the
+  `ubuntu-24.04` image, version 20261012.334.1.
+- `main` at 18f71fd, after WP0 to WP4's 57 commits: CI run 42405160476 (2026-11-07) ran
+  `logic-linux` on the `ubuntu-26.04` image, version 20261101.186.1, where `main`'s run of
+  2026-11-02 (41375489424) still ran on `ubuntu-24.04`: 1807 of 1807 tests passed, and the ci
+  profile skipped 10, the 9 `linux_session` tests among them. Its `windows-test` failed one test,
+  WP1's `eileen-core::it::job_model::the_registry_agrees_with_the_reference_model`.
 - #83's `session` job, on the hosted `ubuntu-26.04` runner: its four session tests pass against
   the real services in the headless session, at e24cb4a and at its last head 8aca526 (run
   40404308881 of 2026-10-26, on the `ubuntu-26.04` image, version 20261012.163.1: Ubuntu 26.04.1
   with systemd 259.5, which the job's package install moves to 259.9), in about 2 minutes with
   the Linux build cache restored. A run at 1ca07be failed after 34 minutes because
-  WirePlumber started before PipeWire's sockets. No scheduled run on `main` has happened yet.
-- #91's lane run 40406035648 at 2d7d033 (open, on `ubuntu-26.04`): nine `linux_session` tests
-  pass. Its first run at 43b8fc8 failed the three notification tests: notification-daemon
-  aborted on a GTK icon load because bwrap refused to start with a capability.
+  WirePlumber started before PipeWire's sockets.
+- #91's lane runs 40406035648 at 2d7d033 and 40414700997 at 54f9f5f, on `ubuntu-26.04`: nine
+  `linux_session` tests pass. Its first run at 43b8fc8 failed the three notification tests:
+  notification-daemon aborted on a GTK icon load because bwrap refused to start with a
+  capability.
+- The desktop lane's scheduled runs on `main`: run 40479985013 at 71b8dad (2026-10-27) was
+  cancelled at the job's 30 minutes while apt downloaded the session's packages at 45 to
+  50 kB/s (#121). Run 40668602200 at 7f493bf (2026-10-28), the first to pass, missed the package
+  cache, installed from the mirror, saved the key, and passed 520 of 520 integration tests and
+  9 of 9 `linux_session` tests in about 2.5 minutes. Every scheduled run since has passed but
+  one: run 42210445439 at 7209390 (2026-11-06), the first on image 20261101.186.1, missed the
+  cache and ended at the install step's 10 minutes, and run 42364908679 (2026-11-07) installed
+  from the mirror and saved that image's key. At 18f71fd, runs 42472734272 (2026-11-08),
+  42614231101 (2026-11-09) and 42809906168 (2026-11-10) restored the packages from the cache
+  and passed 520 of 520 integration tests and 9 of 9 `linux_session` tests; the last took 4.5
+  minutes, with no build cache found.
+- #121's runs on `wp10/desktop-lane-apt` at 3ca7c67: a cold install from the mirror took 59 s
+  and 63 s, and a warm one from the cache, with no download, 42 s (run 40526956903); one manual
+  run on a slow mirror ended at the install step's 10 minutes (40524629042).
 - #106 at a9a3536, under WSL2 (Ubuntu 24.04): the six supervisor process tests pass 30 of 30 runs
   with `--stress-count 30`, and a mutation that forks off the fork thread fails 30 of 30.
 - #105, under WSL2: before the fix the kernel showed `eileen-guard-wo` for the thread
@@ -734,18 +852,19 @@ Measured so far, each where it is recorded:
 
 Not yet verified:
 
-- **A real Ubuntu desktop.** WSL2 has no GNOME, no portals and no PipeWire by default, and WSLg's
+- A real Ubuntu desktop. WSL2 has no GNOME, no portals and no PipeWire by default, and WSLg's
   compositor and audio are no measure of GNOME (LINUX.md section 6). L0's 200 ms budget has to
   hold on a real Ubuntu desktop, and L1's backends have to pass against the real services.
-- **Ubuntu 26.04**, the reference desktop. Only the desktop lane's `session` job (#83, on
-  `main`) has run there, on a headless session rather than GNOME, and L0's acceptance needs the
-  pull request lanes green on `ubuntu-26.04` as well as `ubuntu-24.04`.
-- **The hosted runner's move to 26.04.** GitHub moves `ubuntu-latest` to 26.04 between 2026-10-19
-  and 2026-11-19 (LINUX.md section 3). Pull request #26 ran on 24.04, and so did `main`'s runs of
-  2026-10-25 (40238334151) and 2026-10-26 (40414356056), so no run of the pull request lanes on
-  26.04 has been seen yet. LINUX.md section 6 suggests pinning `ubuntu-24.04`, or running both,
-  until the move settles; `ci.yml` is WP0's.
-- **The L2 pieces on a real desktop.** To verify on Ubuntu 26.04, attended: that GNOME's
+- Ubuntu 26.04, the reference desktop. The desktop lane's `session` job (#83, on `main`)
+  runs there on a headless session rather than GNOME, and since `ubuntu-latest` moved, so does
+  `logic-linux` (below).
+- The hosted runner's move to 26.04. GitHub moves `ubuntu-latest` to 26.04 between 2026-10-19
+  and 2026-11-19 (LINUX.md section 3). Pull request #26 ran on 24.04, and so did `main`'s runs
+  through 2026-11-02 (41375489424); run 42405160476 at 18f71fd (2026-11-07) ran `logic-linux` on
+  26.04 and passed. L0's acceptance needs the pull request lanes green on both images: each has
+  passed on `main`, at different heads, and `ci.yml`, WP0's, has no job pinned to
+  `ubuntu-24.04`, so 24.04 is no longer checked on each pull request.
+- The L2 pieces on a real desktop. To verify on Ubuntu 26.04, attended: that GNOME's
   `AppIndicator` extension is on by default and honours `ItemIsMenu`, and that Breeze names the
   muted microphone icon as Adwaita does (#110); the shortcuts holder against GNOME 50's portal
   (#107); the AT-SPI2 client against real apps on a real accessibility bus (#87); and a thread
