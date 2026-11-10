@@ -103,6 +103,11 @@ Since 2026-10-28, one line per pull request, each added by the pull request itse
 - `wp10/record-wave-6` (docs): this file and LINUX.md brought up to date with `main` at 18f71fd:
   #91, #118 and #121 to #124 recorded, what decision D86 asks of WP10 planned, the open pull
   requests' status, and this list in place of new table rows.
+- `wp10/ipc-linux-plan` (docs): LINUX.md section 5's plan for the Linux forms of decision D86's
+  `ipc` module and `PathProbe`, with each Windows behaviour's Linux mechanism, what it
+  guarantees and does not, and its kernel floor on Ubuntu 24.04 and 26.04; `run/` under
+  `$XDG_RUNTIME_DIR/eileen/`; and here the pull requests that build them, what WP2's interfaces
+  can keep neutral for Linux, and the decision to record.
 
 Open on 2026-11-10, with what each waits for:
 
@@ -151,14 +156,30 @@ Planned, not yet opened:
 - What decision D86 gives WP10, each after the WP2 pull request it builds on, in BUILD.md section
   6.4's W1 order, none of which is on `main` yet:
   - the Linux forms of `eileen-supervisor`'s `ipc` module, the pipes as Unix sockets and the
-    caller checks of LINUX.md section 5, after `wp2/supervisor-pipes` and
+    caller checks that LINUX.md section 5 plans, after `wp2/supervisor-pipes` and
     `wp2/supervisor-callers` (items 3 and 4) give the module its types. Until then every `ipc`
     call on Linux answers `Unsupported`, so no Linux build accepts a caller it could not check
     (BUILD.md section 2.12), and `wp2/dispatcher`'s tests through a real pipe are Windows-only
-    (item 10). The plan for them is a pull request of its own;
+    (item 10). They land in this order, each reviewed by WP2, whose module it is:
+    - `wp10/ipc-sockets`, after item 3: `PipeServer` and `PipeConn` over Unix sockets in a
+      checked 0700 folder under `$XDG_RUNTIME_DIR/eileen/`, the stale-socket rule, both ends'
+      process ids from `SO_PEERCRED`, and `since` on the boot clock;
+    - `wp10/ipc-peers`, after item 4: `Peer` on a `/proc/<pid>` descriptor and a pidfd,
+      `PeerFacts` with the image and the jobs by session, the `Jobs` registry's Linux entries,
+      `write_user_only` and `grants_only_user` with `run/` under `$XDG_RUNTIME_DIR/eileen/`, and
+      the `/proc/<pid>/stat` parser with a fuzz target of its own;
+    - `wp10/ipc-tcp-owner`, after item 4: `tcp_client_pid` through sock_diag and a walk of
+      `/proc/<pid>/fd`, with L1's measurement of the walk's cost;
+    - an amendment of BUILD.md section 4.1 that pins `libc` for the one `getsockopt` of
+      `SO_PEERPIDFD` in the supervisor's `ffi` module, unless a rustix release that wraps it
+      comes first; until then `Peer` opens `/proc/<pid>` by `SO_PEERCRED`'s process id and
+      checks the start time, to 10 ms;
   - `PathProbe` in `eileen-shell-linux` (BUILD.md section 3.4), after `wp2/path-probe-trait`
-    (item 5) adds the trait and its fake. Until then a path that needs a probe is `Unknown` on
-    Linux (D86);
+    (item 5) adds the trait and its fake, as LINUX.md section 5 plans it, with the desktop-entry
+    parser moved into `eileen-dbus-linux`, which `eileen-shell-linux` may use (or section 3.1's
+    row amended), and new readers of `mimeapps.list` and shared-mime-info's `globs2`, the
+    latter with a fuzz target. Until then a path that needs a probe is `Unknown` on Linux
+    (D86);
   - `LocalTime` from `/etc/localtime`, after `wp2/shell-local-time` (item 6) wires Windows' zone
     reader into `CoreConfig.local_time`. Until then Linux logs a warning at start and uses UTC
     (BUILD.md section 3.3.3).
@@ -167,7 +188,9 @@ Planned, not yet opened:
 - The rest of PL7, an amendment to WP0's `eileen-stdx`: `spawn_named` states Linux's 15-byte
   limit and checks it, and its test's thread gets a name that fits.
 - The cgroup scope of LINUX.md section 5, which kills what outlives a supervised child in a
-  crash or leaves its group, and sets a Claude session's CPU weight.
+  crash or leaves its group, and sets a Claude session's CPU weight. It also gives each `Jobs`
+  entry its scope: the job memory limit and `memory_limit_hit`, and `in_any_job` for a process
+  that left its session.
 - `TextInsertion` on the AT-SPI2 client, then input and capture through the portals.
 
 Pull request #26 was one large change, 5,192 lines in 56 files, more than BUILD.md section 6.1's
@@ -363,6 +386,47 @@ The guard's fix, #108, leaves three limits, documented in the guard: a process t
 the terminal's foreground group; and a program `nice` cannot start exits 127 instead of failing
 the spawn.
 
+For WP2, from LINUX.md section 5's plan for the Linux forms of the `ipc` module and `PathProbe`
+(decision D86). None of WP2's pull requests for them is open yet, so these are suggestions for
+their interfaces, which can stay neutral and still take the Linux forms behind the same names:
+
+1. **`Peer` from a connection.** Let a `PipeConn` give its peer (`client_peer()`,
+   `server_peer()`) beside `Peer::open(pid, since)`. On Linux the connection carries the peer's
+   pidfd (`SO_PEERPIDFD`), which leaves no window for a reused process id; opening by number
+   leaves a 10 ms one, since `/proc/<pid>/stat` counts a start in clock ticks.
+2. **`since` stays the module's own.** Keep it a value of the module that `Peer` compares, not a
+   wall-clock time in the interface: Linux compares a boot-clock start time with it, Windows a
+   `FILETIME` from `GetProcessTimes`.
+3. **Bare, short names.** `PipeServer::bind` and `PipeConn::connect` take a name, such as
+   `eileen-dispatch-<session>`, never a path or a `\\.\pipe\` prefix: a Unix socket's address
+   holds 108 bytes.
+4. **An error for an unsafe folder.** Linux refuses to bind or write a token when its folder is
+   not the user's with mode 0700, or when `XDG_RUNTIME_DIR` is unset. An `IpcError` variant for
+   that, apart from `NameTaken`, keeps the incident plain.
+5. **`tcp_client_pid` may name no process.** After a `fork` several processes hold one socket,
+   where Windows' table names one owner, so an `Option` lets the Linux form answer that no single
+   process owns it, which the endpoint refuses.
+6. **What being in a job means.** On Linux a process can leave its job (its session, with
+   `setsid`) but cannot join another, so `PeerFacts.jobs`' doc and the role tests can say "in"
+   without assuming it cannot be left; the tests that a worker's process is refused hold on both
+   OSes. `ChildSpec::job_memory_limit_mb` and `breakaway_ok` do nothing on Linux until the
+   cgroup scope, and `Child::memory_limit_hit` never resolves there, which their docs can say.
+7. **`PathProbe`'s paths are the OS's.** BUILD.md section 3.4 says the trait's paths are strings
+   as Windows writes them, and the classifier's grammar (drives, UNC, `\\?\`) is Windows'; on
+   Linux a fully qualified path starts with `/`. `full_path` can apply `..` only where the OS
+   reads it lexically: POSIX resolves it after the link before it, so the Linux probe leaves it
+   to `final_path`.
+8. **`link_names` with the count.** Linux cannot list a file's other names. If `link_names`
+   answered the link count beside the names found, the classifier could take fewer names than
+   the count as `Unknown` on any OS, with no Linux rule of its own.
+9. **`handler` is the extension's.** On Linux the program that opens a file follows its MIME
+   type, which GIO may take from the file's first bytes, so `runs_code` cannot rest on the
+   extension's handler alone there; the trait's doc can say the answer is the extension's
+   default.
+10. **`share` needs no change.** No Linux path has a host and a share. A mount that shows this
+    machine's files under another name, or reaches another host, is `final_path`'s `Refused` on
+    Linux, which the classifier already takes as `Unknown`.
+
 ## Surprises
 
 - zbus 5.19 bounds no connect. `Builder::build` was still connecting after 3 s, with a 500 ms
@@ -435,10 +499,17 @@ the spawn.
 - On Windows tokio reads a child's pipe as a blocking file, each pending read holding a thread
   of the blocking pool, so forwarding every child's stderr that way would fill the pool's 16
   threads; #118 reads it on a named thread of its own (`supervisor.err`).
+- Under WSLg, `XDG_RUNTIME_DIR` is `/mnt/wslg/runtime-dir`, a tmpfs of mode 0777 without the
+  sticky bit on this machine (2026-11-10), where the XDG Base Directory specification asks for
+  the user's own folder with mode 0700, so Eileen's socket and `run/` folders check their own
+  owner and mode and never rely on the parent's (LINUX.md section 5).
+- rustix 1.1.5, the workspace's, wraps `SO_PEERCRED` but not `SO_PEERPIDFD` (Linux 6.5), so the
+  one call that gives a peer's pidfd from its socket needs `libc`, which BUILD.md section 4.1
+  does not pin (Planned).
 
 ## Decisions to record
 
-Thirteen proposed decision records for the owner, in the shape of [DECISIONS.md](../DECISIONS.md),
+Fourteen proposed decision records for the owner, in the shape of [DECISIONS.md](../DECISIONS.md),
 whose last record on `main` is D86 (WP10's own D80 came from #114, accepted under the owner's
 standing rule); the owner's open #169 adds two more, numbered D86 and D87 on its branch, which
 conflicts with `main`. They have no numbers here: a record of these takes the next number that
@@ -762,6 +833,34 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   `pipewire.conf`; #80, on `main` as d4945f2; #90, on `main` as aac5055; #123, on `main` as
   2fda2e9.
 
+### On Linux, the ipc sockets and run/ live under XDG_RUNTIME_DIR, and a job is a session until the cgroup scope
+
+- Date: 2026-11-10
+- Status: proposed (by the assistant, for the owner to accept, change or strike)
+- Decision: On Linux the `ipc` module's sockets live in `$XDG_RUNTIME_DIR/eileen/` and BUILD.md
+  section 2.15's `run/` in `$XDG_RUNTIME_DIR/eileen/run/`, each folder the user's own with mode
+  0700, checked for owner and mode before a socket is bound or a token written. With
+  `EILEEN_DATA_DIR` set both follow it; with no `XDG_RUNTIME_DIR` the `ipc` calls answer an
+  error and fall back to no shared folder. Until the cgroup scope of LINUX.md section 5 exists, a
+  caller's job on Linux is the session each child's `setsid` gives it: `PeerFacts.jobs` names
+  the keys whose session the peer is in. Once the scope exists, `in_any_job` also counts a
+  process under any entry's scope, and `jobs` stays by session.
+- Why: The XDG runtime folder is the user's, per machine, local, mode 0700, and gone at the last
+  logout and at reboot, so a per-boot token never reaches a disk, a backup or a second machine
+  that shares an NFS home, as `~/.local/state/eileen/run/` would let it. A session can be left
+  but not joined (`setsid(2)`, `setpgid(2)`), so membership by session cannot be forged, where a
+  process of the user can write itself into a scope that the user's service manager made
+  [inferred: L1 checks the owner of a user scope's files on Ubuntu 26.04].
+- Consequences: LINUX.md section 5's data folder table gains the row and its path classes the
+  folder, as `EileenData`. The runtime folder sits in memory under logind's size limit, so the
+  sessions' folders under `run/` stay small. A process that leaves its session loses every role
+  and passes the "outside every Eileen job" checks: BUILD.md section 7's open risk, cheaper on
+  Linux, until v0.2's sandbox. Under WSLg the parent folder is 0777 (Surprises), which the
+  folder's own check makes harmless. The `ipc` pull requests under Planned build it.
+- Source: LINUX.md section 5; the XDG Base Directory specification; unix(7), setsid(2),
+  setpgid(2), proc_pid_stat(5) and the cgroup v2 documentation, read on 2026-11-10; BUILD.md
+  sections 2.12, 2.15 and 3.1; D86.
+
 ## Owner direction to record
 
 A proposed entry for [OWNER-DIRECTION.md](../OWNER-DIRECTION.md), under its `## 2026-10-21`
@@ -849,6 +948,12 @@ Measured so far, each where it is recorded:
   patches, every lane passes with 306 of 306 (the findings above).
 - The hosted runner: pull request #26's `logic-linux` job asked for `ubuntu-latest` and ran on the
   `ubuntu-24.04` image, version 20261012.334.1 (Ubuntu 24.04.5 LTS), as its log's header says.
+- For LINUX.md section 5's `ipc` plan, this WSL2 machine (Ubuntu 24.04.4, kernel
+  6.18.33.2-microsoft-standard-WSL2, glibc 2.39, `linux-libc-dev` 6.8.0) on 2026-11-10:
+  `XDG_RUNTIME_DIR` is `/mnt/wslg/runtime-dir`, a tmpfs of mode 0777; `getconf CLK_TCK` is 100;
+  Yama's `ptrace_scope` and `fs.protected_hardlinks` are 1; `/mnt/c` and `/mnt/d` are `9p`
+  mounts of `C:\` and `D:\`; the kernel headers define `SO_PEERPIDFD` and
+  `INET_DIAG_CGROUP_ID`; and an owner can set a file's sticky bit (`chmod 1600`).
 
 Not yet verified:
 
@@ -869,6 +974,11 @@ Not yet verified:
   muted microphone icon as Adwaita does (#110); the shortcuts holder against GNOME 50's portal
   (#107); the AT-SPI2 client against real apps on a real accessibility bus (#87); and a thread
   registered with RealtimeKit, with `chrt -p` (#90).
+- The points of LINUX.md section 5's `ipc` and `PathProbe` plan marked [inferred], which their
+  pull requests test first: that a `/proc/<pid>` descriptor fails once its process is gone; that
+  the claude CLI keeps the shim and its hooks' connections in its own session; the cost of the
+  `/proc` walk behind `tcp_client_pid`; the owner of a user scope's files; the kernel of Ubuntu
+  26.04; and that the walk of `final_path` mounts nothing.
 
 ## Outcome
 
