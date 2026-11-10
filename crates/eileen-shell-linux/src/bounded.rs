@@ -5,16 +5,17 @@
 //! if ever: a read that a network file server or a FUSE daemon holds cannot be interrupted.
 //!
 //! [`OneRead`] runs reads of one kind one at a time, which `eileen-apps-linux`'s blocking pool
-//! does for its reads: while a read is held, a new call waits for that read within its own
-//! deadline rather than start another, so a hang keeps one thread however often it is asked.
+//! does for its reads: from the moment a read starts until it ends, any other call waits for it
+//! within its own deadline rather than start another, so a hang keeps one thread however often
+//! it is asked, and however the calls overlap.
 //!
 //! # Traps
 //!
-//! - Two calls at the same moment while a read is held can each leave one; the slot keeps the
-//!   first, and the other's thread ends when its read does.
+//! - While a read is held, every call answers `DeadlineExceeded` at its deadline; the read's
+//!   answer goes only to the call that started it, and the first call after it ends reads anew.
 
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use eileen_platform::{Deadline, PlatformError};
@@ -25,25 +26,52 @@ const ENDED: &str = "the read ended without answering";
 
 /// Reads of one kind, one at a time, each within its caller's deadline.
 #[derive(Debug)]
-pub(crate) struct OneRead<T> {
+pub(crate) struct OneRead {
     /// The name of the threads the reads run on, within Linux's 15 bytes.
     thread: &'static str,
-    /// The answer of a read left past its caller's deadline, while one is.
-    held: Mutex<Option<Receiver<T>>>,
+    /// Whether a read is running, which its thread clears as it ends.
+    running: Arc<Running>,
 }
 
-impl<T: Send + 'static> OneRead<T> {
+/// Whether a read is running, and the signal of its end.
+#[derive(Debug, Default)]
+struct Running {
+    /// True from a read's start to its end, however long its caller waits.
+    read: Mutex<bool>,
+    /// Signalled as a read ends.
+    ended: Condvar,
+}
+
+impl Running {
+    /// The flag. Nothing panics while holding it, and a bool cannot be left half written.
+    fn flag(&self) -> MutexGuard<'_, bool> {
+        self.read.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Clears the flag and signals the end when dropped: as a read ends, panics, or never starts
+/// because its thread could not.
+struct Ends(Arc<Running>);
+
+impl Drop for Ends {
+    fn drop(&mut self) {
+        *self.0.flag() = false;
+        self.0.ended.notify_all();
+    }
+}
+
+impl OneRead {
     /// Reads on threads named `thread`.
-    pub(crate) const fn new(thread: &'static str) -> Self {
-        Self { thread, held: Mutex::new(None) }
+    pub(crate) fn new(thread: &'static str) -> Self {
+        Self { thread, running: Arc::default() }
     }
 
     /// Runs `reading` on a thread of its own and answers what it answers, waiting at most
-    /// `deadline`: past it, [`PlatformError::DeadlineExceeded`] naming `call`. While a read an
-    /// earlier call left is still held, this call waits for it instead, and reads anew once it
-    /// ends within the deadline: the earlier read's answer may be older than the call. The
-    /// answer comes through a channel of one place, so the thread never waits to send it.
-    pub(crate) fn within(
+    /// `deadline`: past it, [`PlatformError::DeadlineExceeded`] naming `call`. While another
+    /// call's read is running, this call waits for it to end instead, and reads anew once it
+    /// does within the deadline. The answer comes through a channel of one place, so the
+    /// thread never waits to send it.
+    pub(crate) fn within<T: Send + 'static>(
         &self,
         call: &'static str,
         deadline: Deadline,
@@ -51,46 +79,42 @@ impl<T: Send + 'static> OneRead<T> {
     ) -> Result<T, PlatformError> {
         let clock = eileen_stdx::clock::system();
         let start = clock.mono();
-        let held = self.slot().take();
-        if let Some(held) = held
-            && matches!(held.recv_timeout(deadline.budget()), Err(RecvTimeoutError::Timeout))
-        {
-            self.keep(held);
-            return Err(PlatformError::DeadlineExceeded { call });
-        }
+        let ends = self.start(call, deadline)?;
         let spent = Duration::from_nanos(clock.mono().0.saturating_sub(start.0));
         let (answer, answered) = mpsc::sync_channel(1);
-        // Detached: the read answers through `answered`, or no one waits for it.
+        // Detached: the read answers through `answered`, or no one waits for it. Its end is
+        // signalled before its answer, so a caller with the answer finds no read running.
         drop(
             eileen_stdx::thread::spawn_named(self.thread, move || {
-                let _ignored = answer.send(reading());
+                let read = reading();
+                drop(ends);
+                let _ignored = answer.send(read);
             })
             .map_err(|error| PlatformError::io(call, &error))?,
         );
         match answered.recv_timeout(deadline.budget().saturating_sub(spent)) {
             Ok(answer) => Ok(answer),
-            Err(RecvTimeoutError::Timeout) => {
-                self.keep(answered);
-                Err(PlatformError::DeadlineExceeded { call })
-            }
+            Err(RecvTimeoutError::Timeout) => Err(PlatformError::DeadlineExceeded { call }),
             Err(RecvTimeoutError::Disconnected) => {
                 Err(PlatformError::Io { what: call, detail: ENDED.to_owned() })
             }
         }
     }
 
-    /// Keeps `read`, held past its caller's deadline, for the next call to wait on, unless
-    /// another call has kept one meanwhile.
-    fn keep(&self, read: Receiver<T>) {
-        let mut held = self.slot();
-        if held.is_none() {
-            *held = Some(read);
+    /// Marks a read running once none is, waiting at most `deadline` for the one that is; the
+    /// guard it answers clears the mark when dropped.
+    fn start(&self, call: &'static str, deadline: Deadline) -> Result<Ends, PlatformError> {
+        let (mut running, _waited) = self
+            .running
+            .ended
+            .wait_timeout_while(self.running.flag(), deadline.budget(), |running| *running)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *running {
+            return Err(PlatformError::DeadlineExceeded { call });
         }
-    }
-
-    /// The slot of the held read. A panic cannot leave it half written.
-    fn slot(&self) -> MutexGuard<'_, Option<Receiver<T>>> {
-        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+        *running = true;
+        drop(running);
+        Ok(Ends(Arc::clone(&self.running)))
     }
 }
 
@@ -152,6 +176,38 @@ mod tests {
         release.send(()).unwrap();
         release.send(()).unwrap();
         assert_eq!(reads.within("a read", LONG, read()), Ok(2), "once it ends, a read anew");
+    }
+
+    #[test]
+    fn a_call_while_another_waits_on_its_read_starts_none() {
+        let reads = Arc::new(OneRead::new("eileen-facts"));
+        let started = Arc::new(AtomicU32::new(0));
+        let (began, begun) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel::<()>(0);
+        let first = {
+            let (reads, started) = (Arc::clone(&reads), Arc::clone(&started));
+            let read = move || {
+                started.fetch_add(1, Ordering::SeqCst);
+                let _ignored = began.send(());
+                let _released = released.recv();
+            };
+            eileen_stdx::thread::spawn_named("first-call", move || {
+                reads.within("a held read", LONG, read)
+            })
+            .unwrap()
+        };
+        begun.recv().unwrap();
+        // The first call waits for its read's answer meanwhile, as long as its deadline allows.
+        let second = {
+            let started = Arc::clone(&started);
+            reads.within("a held read", SHORT, move || {
+                started.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        assert_eq!(second, Err(PlatformError::DeadlineExceeded { call: "a held read" }), "held");
+        assert_eq!(started.load(Ordering::SeqCst), 1, "no read beside the one in flight");
+        drop(release);
+        assert_eq!(first.join().unwrap(), Ok(()), "the first call has its read's answer");
     }
 
     #[test]

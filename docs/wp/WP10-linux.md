@@ -169,9 +169,9 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   `LinuxPower::read`, and the load the changes stream's state, since `read` would restart a
   daemon the user stopped every 30 s); `watch`'s stream ends with its system-bus connection and
   nothing starts it again; a read past its deadline keeps its thread until it returns, at most
-  one for the facts and one for the load's power files; `load` reads within `DEFAULT_DEADLINE`,
-  since the trait gives it none; and the composition root on Linux must give the probe a bridge,
-  or `watch` is `Unavailable`.
+  one for the facts and one for the load's power files, however the calls overlap; `load` reads
+  within `DEFAULT_DEADLINE`, since the trait gives it none; and the composition root on Linux
+  must give the probe a bridge, or `watch` is `Unavailable`.
 - `SecretStore`, which waits for the owner's answer on #111 (the SecretStore record below).
 - `lint-repo` check 14 for tests that start a process: the private bus's `dbus-daemon` in
   `crates/eileen-dbus-linux/src/testing.rs` (the 2 problems `main` reports) and #94's copy of its

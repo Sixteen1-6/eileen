@@ -22,8 +22,8 @@
 //! # Traps
 //!
 //! - A read held past its deadline keeps its thread until it returns, if ever. The facts' pass
-//!   and the power read each run one at a time, so a hang keeps at most one thread of each; a
-//!   call meanwhile waits for the held one within its own deadline.
+//!   and the power read each run one at a time, so a hang keeps at most one thread of each,
+//!   however the calls overlap: a call made while one runs waits for it within its own deadline.
 //! - `facts` and `load` read the power state from sysfs (the `power` module), which does not see
 //!   a program's hold on power-profiles-daemon's `power-saver`, while `watch` reports the hold's
 //!   `BatterySaver`: until the facts read the daemons over D-Bus, the facts read after that change
@@ -69,9 +69,9 @@ pub struct LinuxMachineProbe {
     /// reported.
     cpu: Mutex<Option<(CpuTimes, u8)>>,
     /// The facts' passes, one at a time.
-    passes: OneRead<Result<MachineFacts, ReadError>>,
+    passes: OneRead,
     /// The load's power reads, one at a time.
-    power: OneRead<PowerState>,
+    power: OneRead,
     /// The bridge `watch` follows the power daemons on.
     bridge: Option<Bridge>,
 }
