@@ -182,13 +182,13 @@ mod tests {
     fn a_call_while_another_waits_on_its_read_starts_none() {
         let reads = Arc::new(OneRead::new("eileen-facts"));
         let started = Arc::new(AtomicU32::new(0));
-        let (began, begun) = mpsc::sync_channel(1);
+        let (to_test, from_read) = mpsc::sync_channel(1);
         let (release, released) = mpsc::sync_channel::<()>(0);
         let first = {
             let (reads, started) = (Arc::clone(&reads), Arc::clone(&started));
             let read = move || {
                 started.fetch_add(1, Ordering::SeqCst);
-                let _ignored = began.send(());
+                let _ignored = to_test.send(());
                 let _released = released.recv();
             };
             eileen_stdx::thread::spawn_named("first-call", move || {
@@ -196,7 +196,7 @@ mod tests {
             })
             .unwrap()
         };
-        begun.recv().unwrap();
+        from_read.recv().unwrap();
         // The first call waits for its read's answer meanwhile, as long as its deadline allows.
         let second = {
             let started = Arc::clone(&started);
