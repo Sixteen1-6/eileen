@@ -1,13 +1,12 @@
 # The fuzz workspace of BUILD.md section 4.7, as cargo-fuzz lays it out: its own workspace, kept
 # out of the root one, built with the nightly that `rust-toolchain.toml` here pins, on Linux only.
-# Every target of section 4.7 is declared here, among them the three WP10 adds with its `-linux`
-# crates (`linux_mountinfo`, `linux_proc_status`, `desktop_entry`), `stub_script`, which WP3
-# adds for the stub harness's script and stdin parsers (section 3.3.16 asks a target of every
-# parser of its formats), and `linux_tzif`, which WP10 adds for `/etc/localtime` (section 4.7's
-# table does not list it yet). Each target calls `fuzz_entry::<target>` in a crate that builds on
-# Linux, owned by the package section 4.7's table names (`speech_frame`'s is in `eileen-speech`,
-# its parser in `eileen-contracts`); that crate's corpus replay test runs the same function on
-# every OS (on Linux only for the `-linux` crates' targets).
+# Every target of section 4.7 is declared here, among them the four WP10 adds with its `-linux`
+# crates (`linux_mountinfo`, `linux_proc_status`, `linux_tzif`, `desktop_entry`), and
+# `stub_script`, which WP3 adds for the stub harness's script and stdin parsers (section 3.3.16
+# asks a target of every parser of its formats). Each target calls `fuzz_entry::<target>` in a
+# crate that builds on Linux, owned by the package section 4.7's table names (`speech_frame`'s is
+# in `eileen-speech`, its parser in `eileen-contracts`); that crate's corpus replay test runs the
+# same function on every OS (on Linux only for the `-linux` crates' targets).
 
 [package]
 name = "eileen-fuzz"
