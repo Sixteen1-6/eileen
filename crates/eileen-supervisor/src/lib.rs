@@ -85,7 +85,10 @@ mod detached;
 #[expect(unsafe_code, reason = "the Win32 calls for EcoQoS, MMCSS and process liveness")]
 mod ffi;
 #[cfg(target_os = "linux")]
-#[expect(unsafe_code, reason = "a Linux child's setup between fork and exec, and its pidfd")]
+#[expect(
+    unsafe_code,
+    reason = "a Linux child's setup between fork and exec, its pidfd, and its I/O priority in tests"
+)]
 #[path = "ffi/linux.rs"]
 mod ffi;
 #[cfg(target_os = "linux")]

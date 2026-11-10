@@ -1,6 +1,7 @@
 //! The supervisor's only unsafe code on Linux: the setup a child runs between fork and exec,
-//! and the registration of a child's pidfd with tokio's reactor. Every function here is safe
-//! to call; each unsafe block holds one operation and says why its preconditions hold.
+//! the registration of a child's pidfd with tokio's reactor, and, for the tests, reading a
+//! process's I/O priority. Every function here is safe to call; each unsafe block holds one
+//! operation and says why its preconditions hold.
 
 use std::io;
 use std::os::fd::OwnedFd;
