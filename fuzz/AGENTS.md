@@ -24,7 +24,7 @@ folder builds with another toolchain, on Linux only, outside the root workspace 
   targets).
 - A crash counts as fixed only once its minimised input is in `regressions/<target>/` and a
   focused regression test sits beside the fix.
-- A target belongs to the package BUILD.md section 4.7's table names. WP10 adds the three Linux targets with
+- A target belongs to the package BUILD.md section 4.7's table names. WP10 adds the four Linux targets with
   its crates; WP0 does not declare them.
 - `cargo xtask fuzz` and `cargo xtask fuzz-replay` run the targets once WP0 phase B builds them.
   Until then fuzzing is CI's and the owner's on Linux, never an agent's direct `cargo fuzz`.
