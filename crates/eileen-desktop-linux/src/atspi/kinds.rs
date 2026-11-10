@@ -120,6 +120,15 @@ impl Interfaces {
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
+
+    /// Each interface of the set by its short name, such as `Action` for
+    /// `org.a11y.atspi.Action`, in the table's order.
+    pub fn short_names(self) -> impl Iterator<Item = &'static str> {
+        NAMES
+            .iter()
+            .filter(move |(_, interface)| self.contains(*interface))
+            .filter_map(|(name, _)| name.strip_prefix("org.a11y.atspi."))
+    }
 }
 
 impl BitOr for Interfaces {

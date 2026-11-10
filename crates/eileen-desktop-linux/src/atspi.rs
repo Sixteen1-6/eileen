@@ -8,7 +8,10 @@
 //!   `/org/a11y/atspi/accessible/root`, each an app's root object ([`Atspi::applications`]).
 //! - Each object, reached at its app's unique name and its path ([`ObjectRef`]): its name, role,
 //!   states and interfaces ([`Atspi::accessible`]), its children ([`Atspi::children`]), its text
-//!   ([`Atspi::text`]) and a bounded walk of its tree ([`Atspi::walk`]).
+//!   and selected text ([`Atspi::text`], [`Atspi::selection`]), its box in its window
+//!   ([`Atspi::extents`]), its automation id ([`Atspi::accessible_id`]) and a bounded walk of its
+//!   tree ([`Atspi::walk`]).
+//! - Each app's process, as the bus's daemon knows it ([`Atspi::pid`]).
 //!
 //! An app's text is untrusted: it is sanitized and bounded before it leaves this module, and
 //! errors never carry it, not even an error name the app chose. Every call waits at most the
@@ -21,18 +24,19 @@ mod walk;
 
 use std::time::Duration;
 
-use eileen_contracts::desktop::sanitize;
+use eileen_contracts::desktop::{Rect, sanitize};
 use eileen_contracts::ids::Untrusted;
 use eileen_dbus_linux::DbusError;
 use tokio::time::Instant;
 use zbus::Connection;
+use zbus::fdo::DBusProxy;
 use zbus::names::OwnedUniqueName;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath};
 
 pub use self::bus::{accessibility_bus, toolkit_accessibility};
 pub use self::kinds::{Interfaces, Role, State, StateSet};
-use self::proxies::{AccessibleProxy, Reference, TextProxy};
+use self::proxies::{AccessibleProxy, ComponentProxy, Reference, TextProxy};
 pub use self::walk::{Walk, WalkNode};
 
 /// The call timeout of the accessibility bus's connection: 800 ms, libatspi 2.52's
@@ -53,8 +57,11 @@ const ROOT: &str = "/org/a11y/atspi/accessible/root";
 const NULL: &str = "/org/a11y/atspi/null";
 /// The error an object answers for a method it does not have.
 const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
-/// The most characters of a name kept.
+/// The most characters of a name or an automation id kept.
 const NAME_CHARS: usize = 1_000;
+/// `ATSPI_COORD_TYPE_WINDOW`: coordinates from the top left of the object's window, the one
+/// kind Wayland gives a meaning to.
+const WINDOW_COORDS: u32 = 1;
 
 /// What errors of the registry's listing name.
 const REGISTRY_CALL: &str = "accessibility registry";
@@ -62,6 +69,10 @@ const REGISTRY_CALL: &str = "accessibility registry";
 const OBJECT: &str = "accessible object";
 /// What errors of a text read name.
 const TEXT: &str = "accessible text";
+/// What errors of a box's read name.
+const EXTENTS: &str = "accessible extents";
+/// What errors of a process id's read name.
+const PROCESS: &str = "app process";
 /// The detail of an error the callee answered by a name this client does not know, which is not
 /// kept.
 const APPS_OWN_ERROR: &str = "an error name the app chose";
@@ -195,14 +206,81 @@ impl Atspi {
         max_chars: usize,
     ) -> Result<Untrusted<String>, DbusError> {
         let failed = |error: zbus::Error| object_failure(TEXT, &error);
+        let text = self.text_of(object).await?;
+        let end = i32::try_from(max_chars).unwrap_or(i32::MAX);
+        Ok(sanitize(&text.get_text(0, end).await.map_err(failed)?, max_chars))
+    }
+
+    /// The selected text of `object`: its first selected range (`GetNSelections`,
+    /// `GetSelection(0)`), at most `max_chars` characters of it from its start, sanitized.
+    /// `None` when nothing is selected. A password field is refused as [`Self::text`] refuses
+    /// it, before any `Text` call.
+    pub async fn selection(
+        &self,
+        object: &ObjectRef,
+        max_chars: usize,
+    ) -> Result<Option<Untrusted<String>>, DbusError> {
+        let failed = |error: zbus::Error| object_failure(TEXT, &error);
+        let text = self.text_of(object).await?;
+        if text.get_n_selections().await.map_err(failed)? < 1 {
+            return Ok(None);
+        }
+        let (start, end) = text.get_selection(0).await.map_err(failed)?;
+        if start < 0 || end <= start {
+            return Ok(None);
+        }
+        let end = end.min(start.saturating_add(i32::try_from(max_chars).unwrap_or(i32::MAX)));
+        Ok(Some(sanitize(&text.get_text(start, end).await.map_err(failed)?, max_chars)))
+    }
+
+    /// Where `object` is in its window: `Component.GetExtents` in window coordinates, a negative
+    /// width or height read as 0. An object without `Component`, or whose app has gone, is
+    /// [`DbusError::NotFound`].
+    pub async fn extents(&self, object: &ObjectRef) -> Result<Rect, DbusError> {
+        let failed = |error: zbus::Error| object_failure(EXTENTS, &error);
+        let component: ComponentProxy<'_> =
+            proxies::of(&self.conn, object).await.map_err(failed)?;
+        let (x, y, w, h) = component.get_extents(WINDOW_COORDS).await.map_err(failed)?;
+        let size = |length: i32| u32::try_from(length).unwrap_or(0);
+        Ok(Rect { x, y, w: size(w), h: size(h) })
+    }
+
+    /// The id `object`'s app gives it for automation (`AccessibleId`), sanitized and kept to
+    /// 1,000 characters; `None` when it is empty. In a browser it is the page's own `id`, as
+    /// UI Automation's automation id is, so it stays untrusted.
+    pub async fn accessible_id(
+        &self,
+        object: &ObjectRef,
+    ) -> Result<Option<Untrusted<String>>, DbusError> {
+        let failed = |error: zbus::Error| object_failure(OBJECT, &error);
+        let proxy: AccessibleProxy<'_> = proxies::of(&self.conn, object).await.map_err(failed)?;
+        let id = sanitize(&proxy.accessible_id().await.map_err(failed)?, NAME_CHARS);
+        Ok((!id.get().is_empty()).then_some(id))
+    }
+
+    /// The process of the app at `bus`: `GetConnectionUnixProcessID` of the accessibility bus's
+    /// daemon, which reads it from the connection's socket, never what the app says of itself.
+    /// An app whose connection has gone is [`DbusError::NotFound`].
+    pub async fn pid(&self, bus: &OwnedUniqueName) -> Result<u32, DbusError> {
+        let failed = |error: zbus::Error| object_failure(PROCESS, &error);
+        let daemon = DBusProxy::builder(&self.conn)
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .map_err(failed)?;
+        let pid = daemon.get_connection_unix_process_id(bus.as_ref().into()).await;
+        pid.map_err(|error| failed(error.into()))
+    }
+
+    /// `object`'s `Text`, once its role has shown it is no password field.
+    async fn text_of<'a>(&self, object: &'a ObjectRef) -> Result<TextProxy<'a>, DbusError> {
+        let failed = |error: zbus::Error| object_failure(TEXT, &error);
         let accessible: AccessibleProxy<'_> =
             proxies::of(&self.conn, object).await.map_err(failed)?;
         if Role(accessible.get_role().await.map_err(failed)?) == Role::PASSWORD_TEXT {
             return Err(DbusError::Refused { what: TEXT, reason: "a password field" });
         }
-        let text: TextProxy<'_> = proxies::of(&self.conn, object).await.map_err(failed)?;
-        let end = i32::try_from(max_chars).unwrap_or(i32::MAX);
-        Ok(sanitize(&text.get_text(0, end).await.map_err(failed)?, max_chars))
+        proxies::of(&self.conn, object).await.map_err(failed)
     }
 
     /// [`Self::children`], with `cut` set when `parent` has more children than were read, or an
