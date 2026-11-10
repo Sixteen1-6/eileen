@@ -186,6 +186,19 @@ fn changes_that_coincide_leave_standard_time_all_year() {
     let rule = parse("AAA3BBB2,J100/2,J100/3").unwrap();
     assert!(rule.changes(midnight(2026, 1, 1), midnight(2028, 1, 1)).is_empty(), "no change");
     assert_eq!(rule.offset_at(midnight(2026, 4, 10) + 6 * 3_600), -3 * HOUR, "standard time");
+    // These coincide in common years, and in leap years the end, on April 9, comes a day before
+    // the start: glibc 2.39 keeps standard time all through 2025 to 2027 and from 2029 on.
+    let rule = parse("AAA0BBB-1,J100/2,99/3").unwrap();
+    let start = midnight(2028, 4, 10) + 2 * 3_600;
+    for year in [2025, 2026, 2027] {
+        assert_eq!(rule.offset_at(midnight(year, 7, 1)), 0, "standard time in {year}");
+    }
+    let changes = rule.changes(midnight(2025, 1, 1), midnight(2028, 1, 1));
+    assert_eq!(changes, [(midnight(2025, 1, 1), 0)], "2024's daylight saving time ends");
+    let changes = rule.changes(midnight(2027, 1, 1), midnight(2029, 1, 1));
+    assert_eq!(changes, [(start, HOUR)], "2027 and 2028");
+    let changes = rule.changes(midnight(2028, 1, 1), midnight(2030, 1, 1));
+    assert_eq!(changes, [(start, HOUR), (midnight(2029, 1, 1), 0)], "2028 and 2029");
 }
 
 #[test]

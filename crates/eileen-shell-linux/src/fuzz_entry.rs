@@ -18,9 +18,10 @@ use crate::pressure::{Status, parse_status};
 use crate::zone::{ZoneOffsets, offsets_of, window, write_tzif};
 
 /// The years each `linux_tzif` input is read from: the calendar's first, the year before the
-/// epoch, this one, the last whole year of 32-bit time and the next, and the last two years a
-/// `Date` holds. Each is read with the year after it, and the two must agree.
-const TZIF_YEARS: [u16; 6] = [1, 1969, 2026, 2037, 2038, 9998];
+/// epoch, this one, the next (the third common year after a leap year), the last whole year of
+/// 32-bit time and the next, and the last two years a `Date` holds. Each is read with the year
+/// after it, and the two must agree.
+const TZIF_YEARS: [u16; 7] = [1, 1969, 2026, 2027, 2037, 2038, 9998];
 
 /// The most minutes east or west of UTC an offset of a `TZif` file can round to: 26 hours.
 const TZIF_MAX_MINUTES: i32 = 26 * 60;

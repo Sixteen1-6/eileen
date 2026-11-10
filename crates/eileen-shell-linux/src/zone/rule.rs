@@ -16,6 +16,10 @@
 //!   as glibc reads it. One whose daylight saving time lasts a whole year or more keeps it all
 //!   year, as section 3.3.1 and tzcode say; glibc 2.39 shows standard time in the hours of
 //!   January 1 before the year's start, which no zone of tzdata 2026c's has.
+//! - Otherwise a year starts in the offset the year before ended in. glibc 2.39 starts a year
+//!   whose end comes before its start in daylight saving time whatever the year before ended in;
+//!   the two differ only for a rule whose changes swap order from one year to another, which no
+//!   zone of tzdata 2026c's has.
 
 /// Seconds in a day.
 const DAY: i64 = 86_400;
@@ -121,11 +125,17 @@ impl Rule {
     }
 
     /// Each change of offset at or after `from` and before `until`, in order, as (seconds since
-    /// the epoch, the offset from then on).
+    /// the epoch, the offset from then on). An event that keeps the offset in force is left out.
     pub(super) fn changes(&self, from: i64, until: i64) -> Vec<(i64, i32)> {
-        let mut events = self.events(year_of(from) - 1, year_of(until) + 1);
-        events.retain(|(at, _)| from <= *at && *at < until);
-        events
+        let mut offset = self.offset_at(from.saturating_sub(1));
+        let mut changes = Vec::new();
+        for (at, next) in self.events(year_of(from) - 1, year_of(until) + 1) {
+            if from <= at && at < until && next != offset {
+                changes.push((at, next));
+                offset = next;
+            }
+        }
+        changes
     }
 
     /// The changes the rule makes in the years `first` to `last`, in order. A change's time can
@@ -141,6 +151,9 @@ impl Rule {
                 continue;
             };
             if start == end {
+                // Standard time from the year's first second, as glibc reads it, whatever the
+                // year before ended in.
+                events.push((start_of(year), self.std));
                 continue;
             }
             events.push((start, dst.offset));
