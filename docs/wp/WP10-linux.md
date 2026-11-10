@@ -354,9 +354,9 @@ the spawn.
   (`repo_root` in `xtask/src/lib.rs`). With a `CARGO_TARGET_DIR` shared between worktrees,
   `cargo xtask pr-meta` ran a binary that another worktree had built, and checked that worktree's
   head. Each worktree keeps its own target folder, as BUILD.md section 6.1 rule 6 asks.
-- Ubuntu's tzdata (2026c on 24.04) ships fat zone files, each transition written out to 2037 and
-  a no-op one at 2^31 - 1 (New York's is 3552 bytes, the slim one 1744), so its footer rules
-  matter only after 2037. glibc 2.39 reads RFC 9636 section 3.3.1's all-year daylight saving
+- Ubuntu's tzdata (2026c on 24.04) ships fat zone files, each transition written out to 2037
+  (New York's is 3552 bytes, the slim one 1744, and the last of its 64-bit block is in November
+  2037), so its footer rules matter only after 2037. glibc 2.39 reads RFC 9636 section 3.3.1's all-year daylight saving
   rule (`XXX3EDT4,0/0,J365/23`) as standard time for the first hours of each year; no zone of
   2026c has such a rule, and `zone` keeps daylight saving time all year, as tzcode does.
 
