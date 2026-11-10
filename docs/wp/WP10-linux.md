@@ -80,8 +80,14 @@ parser of untrusted input. WP10's acceptance is BUILD.md section 6.12 (from #31)
 | 31 | #87 | `wp10/desktop-atspi-client` | Merged on 2026-10-26 as 4729302: `eileen-desktop-linux` with a bounded AT-SPI2 client, the first of `eileen-desktop-linux`'s L2 pull requests, which #94 and #112 build on |
 | 32 | #90 | `wp10/audio-rtkit` | Merged on 2026-10-26 as aac5055: `eileen-audio-linux` with `register_audio_thread` through RealtimeKit |
 | 33 | this pull request | `wp10/docs-linux-status` | This file and LINUX.md brought up to date with `main` at a84c198 |
-| 34 | open | `wp10/shortcuts-portal-restart` | Open: the GlobalShortcuts holder follows the portal's name, binding the set again in a new owner's session, and reports the user's later changes (`ShortcutsChanged`) as `ShortcutsBound` |
 | none | #29 | `Ubuntu-Compatible-L1` | Closed: the first D-Bus work as one pull request, replaced by orders 8 and 9 |
+
+Since 2026-10-28, one line per pull request, each added by the pull request itself:
+
+- `wp10/shortcuts-portal-restart` (fix): the GlobalShortcuts holder follows the owner of
+  `org.freedesktop.portal.Desktop` and binds its set again in a session on the name's new owner,
+  and reports the user's later changes (`ShortcutsChanged`, this session's only) as
+  `ShortcutsBound`.
 
 Open on 2026-10-26, with what each waits for:
 
