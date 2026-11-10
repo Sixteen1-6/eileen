@@ -158,17 +158,20 @@ The follow-ups after the chains merged as #55 to #57, and the trait implementati
   adapters to the caller's deadline; once both merge, which is the owner's call,
   `set_run_at_sign_in` takes the deadline and still writes on the caller's thread, and moves to
   a named helper thread, abandoned past the deadline. `open_url` and `open_uri` take no deadline
-  in the trait and keep `DEFAULT_DEADLINE`. `eileen-shell-linux` now has its own copy of
-  `bounded::within`, without the pool, for the machine's facts; moved to `eileen-dbus-linux`, one
-  would serve both crates.
+  in the trait and keep `DEFAULT_DEADLINE`. `eileen-shell-linux` now has its own form,
+  `bounded::OneRead`, for the machine's facts and the load's power read, which runs one read of
+  a kind at a time in place of the pool; moved to `eileen-dbus-linux`, one would serve both
+  crates.
 - `MachineProbe` (order 34): `watch` reports no `Displays` yet, which needs the DRM connectors'
   uevents (a netlink reader) or GNOME's `MonitorsChanged` on `org.gnome.Mutter.DisplayConfig`;
   `facts` and `load` read the power state from sysfs, which does not see a program's hold on
   `power-saver`, though `watch` reports that hold as `BatterySaver` (the facts could take
   `LinuxPower::read`, and the load the changes stream's state, since `read` would restart a
   daemon the user stopped every 30 s); `watch`'s stream ends with its system-bus connection and
-  nothing starts it again; a facts read past its deadline keeps its thread, one per such call;
-  and the composition root on Linux must give the probe a bridge, or `watch` is `Unavailable`.
+  nothing starts it again; a read past its deadline keeps its thread until it returns, at most
+  one for the facts and one for the load's power files; `load` reads within `DEFAULT_DEADLINE`,
+  since the trait gives it none; and the composition root on Linux must give the probe a bridge,
+  or `watch` is `Unavailable`.
 - `SecretStore`, which waits for the owner's answer on #111 (the SecretStore record below).
 - `lint-repo` check 14 for tests that start a process: the private bus's `dbus-daemon` in
   `crates/eileen-dbus-linux/src/testing.rs` (the 2 problems `main` reports) and #94's copy of its
@@ -544,6 +547,8 @@ The pull request that adds them changes `docs/DECISIONS.md`, so it also updates
   deadline and reads every fact on a named thread within it (order 34): the data folder's volume
   is the reason, and the `/proc` and `/sys` reads come along, since some sysfs files ask a
   driver or the firmware (a battery's `status` runs ACPI methods) and a hung device holds them.
+  `MachineProbe::load`, which takes no deadline, reads the same power files within
+  `DEFAULT_DEADLINE`.
 - Source: the L1 critic of 2026-10-22, finding 7; `within` in `crates/eileen-apps-linux/src/open.rs`
   on `wp10/open-portal`; BUILD.md section 2.1.
 
