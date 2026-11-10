@@ -218,11 +218,12 @@ mod tests {
         648056832 140735781690685 140735781691083 140735781691083 140735781695371 0\n";
 
     /// [`OTHER`] as the kernel writes it for a thread under `policy` at real-time priority
-    /// `priority`: field 18 is then `-1 - priority`, 40 the priority and 41 the policy. A test
-    /// cannot make a thread real-time without privilege, so none was read.
+    /// `priority`: field 18 is then `-1 - priority` under `SCHED_FIFO` and `SCHED_RR`, and -101
+    /// under `SCHED_DEADLINE` (6), whose priority is 0; 40 is the priority and 41 the policy. A
+    /// test cannot make a thread real-time without privilege, so none was read.
     fn realtime(policy: u32, priority: u32) -> String {
         let mut fields: Vec<String> = OTHER.split_ascii_whitespace().map(str::to_owned).collect();
-        fields[17] = format!("-{}", priority + 1);
+        fields[17] = if policy == 6 { "-101".to_owned() } else { format!("-{}", priority + 1) };
         fields[39] = priority.to_string();
         fields[40] = policy.to_string();
         fields.join(" ")
