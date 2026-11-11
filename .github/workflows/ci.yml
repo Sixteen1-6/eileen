@@ -105,7 +105,7 @@ jobs:
         run: rustup toolchain install --no-self-update && rustup show active-toolchain
       - name: Formatting
         run: cargo fmt --all --check
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-deny@0.20.2,cargo-machete@0.9.2
       - name: Licenses, advisories, bans and sources (cargo-deny)
@@ -168,7 +168,7 @@ jobs:
         with:
           shared-key: linux
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.148
       - name: Clippy, warnings denied
@@ -331,7 +331,7 @@ jobs:
         # BUILD.md section 4.1: sherpa-onnx-sys and ort get the archive xtask checked by size and
         # SHA-256, instead of downloading their own.
         run: cargo xtask fetch-native --print-env >> "$GITHUB_ENV"
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.148
       - name: Tests
