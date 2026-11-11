@@ -116,7 +116,7 @@ jobs:
         with:
           shared-key: linux
           save-if: false # only pushes to main save the cache (BUILD.md section 4.6)
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest@0.9.148
       - name: Build the tests
