@@ -35,7 +35,6 @@ ignore = [
   { id = "RUSTSEC-2026-0391", reason = "D80: zstd under zip, which never calls with_context" },
   { id = "RUSTSEC-2026-0398", reason = "D80: zstd-safe under zip, seekable feature never enabled" },
   { id = "RUSTSEC-2026-0403", reason = "D80: zstd-safe under zip, legacy off, read::Decoder only" },
-  { id = "RUSTSEC-2026-0410", reason = "D80: zstd-sys, wasm32 only, which is not a graph target" },
   { id = "RUSTSEC-2026-0429", reason = "D85: zip in sherpa-onnx-sys's build script, iOS archives only" },
 ]
 
