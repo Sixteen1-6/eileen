@@ -165,6 +165,24 @@ Every pull request also meets the rules section 6.1 sets for every package.
   and the events `effect.unserved` and `component.ended`. Unit tests on paused tokio time, one
   with the real core (its speech load deadline fires through the driver at 120 s).
   `eileen run` still says it is not built: `wp2/s1-live` wires the composition root.
+- `wp2/driver-loop` (feature, the second half of W1 order item 8): the bus and the console
+  view. `eileen_runtime::bus::bounded` gives the `Bus`, a component that claims `Emit` under
+  the name `bus`, and a `BusHandle` to subscribe through. Each `Subscriber` gets every event
+  published after it subscribed, in the core's order and in the effect's own envelope.
+  Publishing never waits, so a subscriber that reads slowly holds neither the driver nor the
+  others; one that fell further behind than the bus keeps gets `BusEvent::Lagged` with the
+  number it missed, then the oldest event still kept (simulator invariant 6). The bus
+  publishes what is already queued for it, then stops at shutdown or when its queue closes,
+  and each subscriber gets what was kept for it, then `None`. `eileen_runtime::console` is
+  the view `eileen run --console` prints: one line for `Heard`, for `Speaking`, for each
+  `Job*` event (the job by the name its `JobAccepted` gave it, by its id otherwise) and for a
+  lag notice, nothing for the rest. Every text it prints is escaped and cut, since a
+  transcript, a narration or a summary can hold terminal control sequences. Unit tests on
+  paused tokio time, one through the driver with a subscriber that never reads, and an insta
+  snapshot of the lines. `eileen run` still says it is not built: `wp2/s1-live` gives the
+  console its subscriber and the terminal's output, and wires `Bus` beside the other
+  components. The decisions it took are under Decisions; acceptance 9's shuttle test of the
+  fan-out and acceptance 7's canary over a subscriber are still open.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
   2. `amend/wp2-session-wiring` (this amendment).
@@ -236,6 +254,35 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the `PathProbe` platform trait; every pipe client checks the server; `spawn` makes each child's
   Job Object itself; Linux forms are WP10's, and until then `ipc` answers `Unsupported` on
   Linux.
+- The bus (`wp2/driver-loop`), where BUILD.md leaves the shape open:
+  - It is tokio's broadcast channel through `eileen_rt::channel::broadcast`, which WP0 built
+    for it. `bus::CAPACITY` is 1,024 events, the input queue's number, since the plan names
+    none; tokio keeps the next power of two.
+  - `Lagged` is made at the subscriber's end and never published, so it reaches only the
+    subscriber that lagged. It has no place of its own in the core's order, so its envelope
+    carries the `seq` and times of the event that follows it, where that subscriber's view
+    resumes, and an empty `TraceCtx`.
+  - The count of missed events is kept in the subscriber until it has been given, so a `recv`
+    dropped while it waits loses none, and the event after a notice is held with it, so a
+    second overrun cannot take it.
+  - A subscriber never keeps the bus running: the handle holds a weak reference, and a
+    subscriber made after the bus stopped is at its end from the start.
+  - The bus writes no log line of its own. Who lagged, and by how much, is known only to that
+    subscriber; a `bus.lagged` name in `eileen_trace::names` is a question for the pull
+    request that adds the first long-lived subscriber (the hook endpoint).
+- The console view (`wp2/driver-loop`), by the narrowest reading of section 3.5's "what is
+  heard, what Eileen says and the jobs, one line each":
+  - It lives in `eileen_runtime::console`, beside `run`, which the runtime implements;
+    `eileen-cli` keeps the flag and the wiring, and gains no dependency.
+  - `Heard`, `Speaking` and the ten `Job*` events give a line, and so does a lag notice,
+    since a view that drops lines without saying so would break invariant 6 at the last
+    step. Approvals, `SpeakingStopped`, `UserError` and the rest give none; the match names
+    every event, so a new one fails to build until someone decides.
+  - No time on a line: an envelope's `at` is UTC and the view has no local offset until
+    `wp2/shell-local-time`.
+  - Control characters, the bidirectional controls and the line and paragraph separators
+    are written as escapes, a text is cut after 200 characters, and the view keeps at most
+    256 unfinished jobs' names, the oldest going first.
 
 ## Outcome
 

@@ -1133,6 +1133,7 @@ dependencies = [
  "eileen-rt",
  "eileen-stdx",
  "eileen-trace",
+ "insta",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

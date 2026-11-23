@@ -1,0 +1,21 @@
+---
+source: crates/eileen-runtime/src/console/tests.rs
+expression: output
+---
+heard  render the timeline and run the tests
+says   Starting both.
+job    the render accepted: a general task on Claude
+job    the tests accepted: coding on Claude
+job    the tests queued: waiting for a build slot
+job    the render started
+job    the render 40%: frame 1200 of 3000
+job    the tests started in a warm session
+job    the tests: Running the unit tests first.
+job    the tests: 412 passed
+job    the tests blocked: it asks to push the branch
+job    the render completed: The render is in the Exports folder.
+job    the tests failed: the session ended early
+job    the notes accepted: research on Claude
+job    the notes cancelled by voice
+job    job_00000000040000000000000001 interrupted
+lagged events the console missed: 3

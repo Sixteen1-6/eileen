@@ -26,6 +26,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 eileen-trace = { workspace = true, features = ["testing"] }
+insta.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

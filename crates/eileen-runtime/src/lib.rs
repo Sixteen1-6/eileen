@@ -1,14 +1,17 @@
 //! Eileen's runtime around the core (BUILD.md sections 2.1, 2.2, 2.5, 2.12, 2.13 and 6.4): the
 //! driver loop that owns `Core`, the SQLite store, the bus, the memory sampler, the loopback
 //! HTTP endpoint, path classification, the dispatcher pipe server, the sidecar clients and the
-//! flight recorder wiring. The driver loop is built ([`driver`]); the rest is a stub until WP2
-//! builds it.
+//! flight recorder wiring. The driver loop ([`driver`]), the bus ([`bus`]) and the console view
+//! ([`console`]) are built; the rest is a stub until WP2 builds it.
 //!
 //! # Owns
 //!
 //! - The driver loop ([`driver`]: one task owns the core, inputs through a bounded channel,
 //!   effects routed to components by family, the core's timers), the store, the bus with
-//!   explicit `Lagged`, and the sampler.
+//!   explicit `Lagged` ([`bus`]: the component that claims `Emit` and fans each event out to
+//!   its subscribers), and the sampler.
+//! - The view `eileen run --console` prints from the bus ([`console`]), which `eileen-cli`
+//!   gives a subscriber and the terminal.
 //! - The loopback endpoint and the hooks, `PathFact`, `GitFact` and `UrlFact` classification,
 //!   the dispatcher and the `session` and `dev` toolsets.
 //! - The commands of section 3.5 it implements ([`cli`]) and the `worker_hook_payload` and
@@ -35,6 +38,15 @@
 //!   (`driver::tests::timers::a_timer_due_before_an_input_is_stepped_first`).
 //! - `Hud` snapshots reach their component at most 10 a second, the newest at each turn
 //!   (`driver::tests::hud_snapshots_go_at_most_ten_a_second_ending_with_the_last`).
+//! - Publishing a bus event never waits for a subscriber, so one that never reads holds
+//!   neither the core nor the others
+//!   (`driver::tests::bus::a_subscriber_that_never_reads_never_holds_the_core`).
+//! - Every event a subscriber did not get is counted by a `Lagged` notice before the next
+//!   event it gets, never lost silently (simulator invariant 6,
+//!   `bus::tests::every_event_is_delivered_or_counted`).
+//! - The console writes one line per event it shows, and no control character from an event's
+//!   text reaches the terminal
+//!   (`console::tests::text_from_outside_cannot_add_a_line_or_drive_the_terminal`).
 //! - When a run ends, however it ends, every component's task has ended or been aborted
 //!   (`driver::tests::stopping::a_core_panic_still_stops_every_component`).
 //! - The `PreToolUse` endpoint never answers `allow`; `allow` comes only from a held `approve`
@@ -59,8 +71,9 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-runtime`.
-//! - Layers: unit and table tests (the driver on paused tokio time, path classes, the HTTP
-//!   parser), shuttle tests of the bus and the supervisor glue, the redaction canary, and the
+//! - Layers: unit and table tests (the driver and the bus on paused tokio time, path classes,
+//!   the HTTP parser), an insta snapshot of the console's lines (`cargo xtask insta`), shuttle
+//!   tests of the bus and the supervisor glue (not built yet), the redaction canary, and the
 //!   end-to-end smoke with stubs.
 //! - A bug here starts as an event out of order, a lagging subscriber that lost events silently,
 //!   or a path in the wrong class.
@@ -76,6 +89,11 @@
 //!   input is stepped and no timer fires meanwhile, the core's own deadlines included, though
 //!   shutdown and any component's end still end the run. So a component keeps taking effects
 //!   while it waits on anything else.
+//! - A bus subscriber that stops reading is not told until it reads again, and then gets one
+//!   `Lagged` with the count: a reader that must not miss an event (the store's `events` table)
+//!   reads without waiting on anything slower than the bus.
+//! - Everything the console prints goes through `console`'s escaping. A new line that writes
+//!   an event's text directly lets a job's output drive the user's terminal.
 //! - `RunError::Component` keeps the component's words as `Personal`, out of its message, since
 //!   they can quote a path: log `message.get()` only under `pii.message`.
 //!
@@ -83,7 +101,8 @@
 //!
 //! - Span `core.step` (DEBUG, one per input: `seq`, `input`, `effects`); events
 //!   `effect.unserved` (once per family per run) and `component.ended` (its error in
-//!   `pii.message`). The flight recorder's input tap and the lag probe come with WP2's W2 work.
+//!   `pii.message`). The bus and the console log nothing: a subscriber learns of its lag
+//!   from the `Lagged` event. The flight recorder's input tap and the lag probe come with WP2's W2 work.
 //!
 //! # Do not change without a decision record
 //!
@@ -95,7 +114,9 @@
 /// composition root reaches it through the crate that runs the components.
 pub use eileen_contracts::ports::Component;
 
+pub mod bus;
 pub mod cli;
+pub mod console;
 pub mod driver;
 #[doc(hidden)]
 pub mod fuzz_entry;
