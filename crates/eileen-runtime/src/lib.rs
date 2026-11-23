@@ -1,12 +1,14 @@
 //! Eileen's runtime around the core (BUILD.md sections 2.1, 2.2, 2.5, 2.12, 2.13 and 6.4): the
 //! driver loop that owns `Core`, the SQLite store, the bus, the memory sampler, the loopback
 //! HTTP endpoint, path classification, the dispatcher pipe server, the sidecar clients and the
-//! flight recorder wiring. A stub until WP2 builds it.
+//! flight recorder wiring. The driver loop is built ([`driver`]); the rest is a stub until WP2
+//! builds it.
 //!
 //! # Owns
 //!
-//! - The driver loop (one task owns the core, inputs through a bounded channel, effects routed
-//!   to components by family), the store, the bus with explicit `Lagged`, and the sampler.
+//! - The driver loop ([`driver`]: one task owns the core, inputs through a bounded channel,
+//!   effects routed to components by family, the core's timers), the store, the bus with
+//!   explicit `Lagged`, and the sampler.
 //! - The loopback endpoint and the hooks, `PathFact`, `GitFact` and `UrlFact` classification,
 //!   the dispatcher and the `session` and `dev` toolsets.
 //! - The commands of section 3.5 it implements ([`cli`]) and the `worker_hook_payload` and
@@ -21,7 +23,20 @@
 //! # Invariants
 //!
 //! - Every queue is bounded and every task starts through `eileen_rt` (`disallowed-methods`
-//!   bans `unbounded_channel` and `tokio::spawn`).
+//!   bans `unbounded_channel` and `tokio::spawn`); a full input queue answers `Backpressure`
+//!   (`driver::tests::a_full_input_queue_answers_backpressure`).
+//! - Each effect family has at most one component; a second claim, or a claim on `Timer`,
+//!   refuses to start (`driver::tests::a_family_claimed_twice_refuses_to_start`).
+//! - Inputs, a fired timer's included, reach the core in `seq` order with times that never run
+//!   backwards, and a timer comes back at its `at` (WP2 acceptance 16,
+//!   `driver::tests::inputs_take_seq_and_time_in_the_order_the_core_sees`).
+//! - No input is stepped at a time past a pending timer's `at`: a timer due strictly earlier
+//!   goes first, as in the simulator, even when tokio has not woken it yet
+//!   (`driver::tests::timers::a_timer_due_before_an_input_is_stepped_first`).
+//! - `Hud` snapshots reach their component at most 10 a second, the newest at each turn
+//!   (`driver::tests::hud_snapshots_go_at_most_ten_a_second_ending_with_the_last`).
+//! - When a run ends, however it ends, every component's task has ended or been aborted
+//!   (`driver::tests::stopping::a_core_panic_still_stops_every_component`).
 //! - The `PreToolUse` endpoint never answers `allow`; `allow` comes only from a held `approve`
 //!   call after a `UserInput` approval (WP2 acceptance 3).
 //! - Only a runtime reading real memory writes the machine-wide memory files (section 6.1; WP2
@@ -44,8 +59,9 @@
 //! # Testing
 //!
 //! - Fast command: `cargo xtask test -p eileen-runtime`.
-//! - Layers: unit and table tests (path classes, the HTTP parser), shuttle tests of the bus and
-//!   the supervisor glue, the redaction canary, and the end-to-end smoke with stubs.
+//! - Layers: unit and table tests (the driver on paused tokio time, path classes, the HTTP
+//!   parser), shuttle tests of the bus and the supervisor glue, the redaction canary, and the
+//!   end-to-end smoke with stubs.
 //! - A bug here starts as an event out of order, a lagging subscriber that lost events silently,
 //!   or a path in the wrong class.
 //!
@@ -53,10 +69,21 @@
 //!
 //! - The store's SQLite runs on the blocking pool, never on a runtime worker
 //!   (`eileen-runtime::store` is the only module here that may use vendored C).
+//! - A component sends an input's `seq` and times as zero (a non-zero `seq` fails a soft
+//!   assertion): the queue's receiving end in the driver stamps them as it hands the input to the
+//!   core, and stamps a fired timer the same way, never through its own queue.
+//! - A full component queue holds the driver, and the core with it, until there is room: no
+//!   input is stepped and no timer fires meanwhile, the core's own deadlines included, though
+//!   shutdown and any component's end still end the run. So a component keeps taking effects
+//!   while it waits on anything else.
+//! - `RunError::Component` keeps the component's words as `Personal`, out of its message, since
+//!   they can quote a path: log `message.get()` only under `pii.message`.
 //!
 //! # Logs and tracing
 //!
-//! - None yet; WP2 owns the driver's spans, the flight recorder's input tap and the lag probe.
+//! - Span `core.step` (DEBUG, one per input: `seq`, `input`, `effects`); events
+//!   `effect.unserved` (once per family per run) and `component.ended` (its error in
+//!   `pii.message`). The flight recorder's input tap and the lag probe come with WP2's W2 work.
 //!
 //! # Do not change without a decision record
 //!
@@ -69,5 +96,6 @@
 pub use eileen_contracts::ports::Component;
 
 pub mod cli;
+pub mod driver;
 #[doc(hidden)]
 pub mod fuzz_entry;
