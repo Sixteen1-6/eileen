@@ -17,7 +17,7 @@ use eileen_contracts::ids::{MonoTime, Personal, TurnId};
 use eileen_contracts::intent::{
     CoreCommand, FollowUp, LastTurnRefs, Resolution, ResolveCtx, ToolSource,
 };
-use eileen_contracts::jobs::{TurnAuthority, TurnSource};
+use eileen_contracts::jobs::{Depth, TurnAuthority, TurnSource};
 use eileen_contracts::tools::brain::JobRef;
 
 use crate::addressee::{self, Decision, Facts};
@@ -247,7 +247,9 @@ impl Core {
         } else if safety_not_built(resolution) {
             self.not_built(cx, routed);
         } else {
-            self.route_to_brain(cx, routed);
+            let depth =
+                if let Resolution::Brain { depth, .. } = resolution { *depth } else { None };
+            self.route_to_brain(cx, routed, depth);
         }
     }
 
@@ -288,11 +290,12 @@ impl Core {
         self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, NOT_BUILT);
     }
 
-    fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
+    /// The brain, with the depth the user's words set (an L1 override), if any.
+    fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>, depth: Option<Depth>) {
         emit_routed(cx, routed, TurnRoute::Brain, "brain");
         self.spans.router(routed.turn, "brain", "not a core command");
         self.stop_speaking(cx, true);
-        self.send_brain_turn(cx, routed.turn, routed.text, routed.authority);
+        self.send_brain_turn(cx, routed.turn, routed.text, routed.authority, depth);
     }
 
     /// "Go on": a paused barge-in resumes from the paused sample; after a stop, the part the

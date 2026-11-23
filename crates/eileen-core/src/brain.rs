@@ -17,7 +17,7 @@ use eileen_contracts::config::{Humor, Verbosity};
 use eileen_contracts::core_io::{AudioCmd, Earcon, Effect};
 use eileen_contracts::harness::{BrainCmd, BrainEvent, BrainSlot};
 use eileen_contracts::ids::{SpeakId, TurnId};
-use eileen_contracts::jobs::TurnAuthority;
+use eileen_contracts::jobs::{Depth, TurnAuthority};
 
 use crate::clauses::Cutter;
 use crate::speech::Owner;
@@ -44,6 +44,8 @@ pub(crate) struct Live {
     authority: TurnAuthority,
     /// The user's words it holds, for a turn that replaces it before it answered.
     transcript: String,
+    /// The depth the user's words set, an L1 override such as "think hard about this".
+    depth: Option<Depth>,
     cutter: Cutter,
     /// The reply's utterance, once it started.
     speak: Option<SpeakId>,
@@ -63,23 +65,35 @@ impl Brain {
     pub(crate) fn live_words(&self) -> Option<&str> {
         self.live.as_ref().map(|live| live.transcript.as_str())
     }
+
+    /// The depth the user's words set for the turn in flight (its L1 override), which a
+    /// dispatch at that depth passes on as the user's.
+    pub(crate) fn live_depth(&self) -> Option<Depth> {
+        self.live.as_ref().and_then(|live| live.depth)
+    }
 }
 
 impl Core {
-    /// Sends `turn` to the primary brain. A turn still in flight is interrupted, and when it
-    /// had not answered yet the new turn holds both utterances, with the weaker authority.
+    /// Sends `turn` to the primary brain, with the depth the user's words set, if any. A turn
+    /// still in flight is interrupted, and when it had not answered yet the new turn holds
+    /// both utterances, with the weaker authority and either one's depth.
     pub(crate) fn send_brain_turn(
         &mut self,
         cx: &mut Cx<'_>,
         turn: TurnId,
         transcript: &str,
         authority: TurnAuthority,
+        depth: Option<Depth>,
     ) {
         let unanswered = self.interrupt_brain(cx).filter(|old| old.speak.is_none());
         // `Ambient` orders after `Addressed`, so the larger is the weaker.
-        let (words, authority) = match unanswered {
-            Some(old) => (format!("{} {transcript}", old.transcript), old.authority.max(authority)),
-            None => (transcript.to_owned(), authority),
+        let (words, authority, depth) = match unanswered {
+            Some(old) => (
+                format!("{} {transcript}", old.transcript),
+                old.authority.max(authority),
+                depth.or(old.depth),
+            ),
+            None => (transcript.to_owned(), authority, depth),
         };
         let heard = self.turns.take_heard();
         let message = self.message(&words, heard.as_deref());
@@ -95,6 +109,7 @@ impl Core {
             instance: self.brain.instance,
             authority,
             transcript: words,
+            depth,
             cutter: Cutter::default(),
             speak: None,
             silenced: false,

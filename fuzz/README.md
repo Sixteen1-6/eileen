@@ -6,9 +6,12 @@ it.
 
 ## How a target is put together
 
-- `fuzz_targets/<target>.rs` calls `fuzz_entry::<target>` in the neutral crate that owns the
-  parser, and fails when that function returns `Err` naming a broken invariant. The entry
-  never panics itself, because every Eileen binary links the crate.
+- `fuzz_targets/<target>.rs` calls `fuzz_entry::<target>` in a crate that builds on Linux (a
+  neutral crate, or for WP10's targets its `-linux` crate) owned by the package BUILD.md section
+  4.7's table names, even when the parser lives in another crate (`speech_frame`'s entry is in
+  `eileen-speech`, its parser in `eileen-contracts`), and fails when that function returns `Err`
+  naming a broken invariant. The entry never panics itself, because every Eileen binary links
+  the crate.
 - `corpus/<target>/` holds a small, size-capped seed corpus, committed. The owning crate's
   `tests/it/fuzz_corpus.rs` replays it through the same `fuzz_entry` function as an ordinary
   test on every OS (on Linux only for the `-linux` crates' targets).

@@ -1,5 +1,6 @@
 //! Playing a script: stream-json on stdout as the claude CLI writes it, user and control lines
-//! read from stdin on a thread of their own, and the interrupt answered whenever it arrives.
+//! read from stdin on a thread of their own, and the control requests the driver sends
+//! (`initialize`, `mcp_status` and the interrupt) answered whenever they arrive.
 
 use std::io::{self, BufRead, Read as _, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError};
@@ -21,8 +22,9 @@ pub(crate) const MAX_REQUEST_ID_BYTES: usize = 128;
 /// What starts a narration line in assistant text (BUILD.md section 2.5, "Narration").
 const NARRATION_PREFIX: &str = "> ";
 
-/// The text of the error the stub answers a control request other than `interrupt` with.
-const ONLY_INTERRUPT: &str = "the stub harness answers only the interrupt control request";
+/// The text of the error the stub answers a control request it does not know with.
+const NOT_ANSWERED: &str =
+    "the stub harness answers only the initialize, mcp_status and interrupt control requests";
 
 /// How a played script ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,13 +46,26 @@ pub(crate) enum Input {
     Control {
         /// Its id, echoed in the reply.
         request_id: String,
-        /// Whether its subtype is `interrupt`.
-        interrupt: bool,
+        /// What it asks.
+        request: Request,
     },
     /// Another line of the protocol (a `control_response` or a cancel), which the stub ignores.
     Other,
     /// A line that is not the protocol, or a failed read; it ends the run.
     Broken(InputError),
+}
+
+/// What a `control_request` asks, by its subtype.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Request {
+    /// `interrupt`.
+    Interrupt,
+    /// `initialize`, which the driver sends first.
+    Initialize,
+    /// `mcp_status`, which the driver asks until `eileen` is connected.
+    McpStatus,
+    /// Any other subtype.
+    Other,
 }
 
 /// Why a stdin line is not the protocol.
@@ -87,8 +102,12 @@ pub(crate) fn classify(line: &[u8]) -> Option<Input> {
         Some("control_request") => match value.get("request_id").and_then(Value::as_str) {
             Some(id) if !id.is_empty() && id.len() <= MAX_REQUEST_ID_BYTES => Input::Control {
                 request_id: id.to_owned(),
-                interrupt: value.pointer("/request/subtype").and_then(Value::as_str)
-                    == Some("interrupt"),
+                request: match value.pointer("/request/subtype").and_then(Value::as_str) {
+                    Some("interrupt") => Request::Interrupt,
+                    Some("initialize") => Request::Initialize,
+                    Some("mcp_status") => Request::McpStatus,
+                    Some(_) | None => Request::Other,
+                },
             },
             _ => Input::Broken(InputError::BadRequestId),
         },
@@ -136,7 +155,17 @@ pub(crate) fn play(
     input: &Receiver<Input>,
     out: &mut impl Write,
 ) -> Result<Ending, RunError> {
-    let mut player = Player { input, out, users: 0, closed: false, session_id: None };
+    let servers = script
+        .steps()
+        .filter_map(
+            |(_, step, _)| {
+                if let StubScriptLine::Event { json } = step { Some(json) } else { None }
+            },
+        )
+        .find(|event| is_init(event))
+        .and_then(|init| init.get("mcp_servers").cloned())
+        .unwrap_or_else(|| json!([]));
+    let mut player = Player { input, out, users: 0, closed: false, session_id: None, servers };
     for (line, step, event) in script.steps() {
         player.drain()?;
         match step {
@@ -181,6 +210,15 @@ struct Player<'a, W> {
     closed: bool,
     /// The session id of the last `system/init` played, for the narration lines.
     session_id: Option<String>,
+    /// The `mcp_servers` of the script's first `system/init`, which `mcp_status` reports
+    /// before that init is played, as the CLI reports its servers before its first turn.
+    servers: Value,
+}
+
+/// Whether `event` is a `system/init`.
+fn is_init(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("system")
+        && event.get("subtype").and_then(Value::as_str) == Some("init")
 }
 
 impl<W: Write> Player<'_, W> {
@@ -195,9 +233,7 @@ impl<W: Write> Player<'_, W> {
 
     /// Keeps the session id of a `system/init` event.
     fn note_session(&mut self, event: &Value) {
-        if event.get("type").and_then(Value::as_str) == Some("system")
-            && event.get("subtype").and_then(Value::as_str) == Some("init")
-        {
+        if is_init(event) {
             self.session_id = event.get("session_id").and_then(Value::as_str).map(str::to_owned);
         }
     }
@@ -223,20 +259,31 @@ impl<W: Write> Player<'_, W> {
         self.write(event.to_string().as_bytes())
     }
 
-    /// Acts on one stdin line. The interrupt's reply is the `control_response` envelope Eileen
-    /// sends the CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`, `sent_to_cli`)
-    /// without its inner `response` object: no reply the CLI wrote to an interrupt has been
-    /// recorded yet.
-    // FIXME(#5): WP3 acceptance 3's owner-run check records the CLI's own reply to an
-    // interrupt; that recording replaces this shape.
+    /// Acts on one stdin line. Each reply is the `control_response` envelope Eileen sends the
+    /// CLI (`docs/research/fixtures/wp3-approval/stdio-control.json`, `sent_to_cli`): the
+    /// interrupt's without an inner `response` object, as no reply the CLI wrote to an
+    /// interrupt has been recorded yet; `initialize`'s with an empty one, since the CLI's
+    /// holds account details no test needs; `mcp_status`'s with `{"mcpServers": [...]}`, the
+    /// servers of the script's first init.
+    // FIXME(#5): WP3 acceptance 3's owner-run check records the CLI's own replies to an
+    // interrupt and to `mcp_status`; that recording replaces these shapes.
     fn serve(&mut self, input: Input) -> Result<(), RunError> {
         match input {
             Input::User => self.users = self.users.saturating_add(1),
-            Input::Control { request_id, interrupt } => {
-                let response = if interrupt {
-                    json!({ "subtype": "success", "request_id": request_id })
-                } else {
-                    json!({ "subtype": "error", "request_id": request_id, "error": ONLY_INTERRUPT })
+            Input::Control { request_id, request } => {
+                let response = match request {
+                    Request::Interrupt => json!({ "subtype": "success", "request_id": request_id }),
+                    Request::Initialize => {
+                        json!({ "subtype": "success", "request_id": request_id, "response": {} })
+                    }
+                    Request::McpStatus => json!({
+                        "subtype": "success",
+                        "request_id": request_id,
+                        "response": { "mcpServers": self.servers },
+                    }),
+                    Request::Other => {
+                        json!({ "subtype": "error", "request_id": request_id, "error": NOT_ANSWERED })
+                    }
                 };
                 let reply = json!({ "type": "control_response", "response": response });
                 self.write(reply.to_string().as_bytes())?;

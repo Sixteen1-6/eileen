@@ -138,7 +138,7 @@ pub struct SessionFiles {
 }
 
 /// Why a session's files could not be built.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SessionError {
     /// `HarnessConfig.data_dir` is relative, so the run folder would depend on the working
     /// folder.
@@ -484,4 +484,4 @@ fn mcp_config(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

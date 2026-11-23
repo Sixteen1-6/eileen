@@ -97,11 +97,12 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `tracing` and `serde_json` as its only third-party dependencies and has no build dependencies
   (check 24 as #134 amended it, D84). It follows #134 and builds on it.
 - `wp1/speech-life` (#141, merged): the core's half of the speech process's life (section 6.3 as #134
-  amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
+  and #146 amended it, D81, D83), which merges before WP2's `wp2/speech-transport`. `eileen-core` gains
   `life`: `Sidecar(Speech, Start)` on the first step; `HangDumpThenKill` then `Restart` when no
   `Ready` comes within 120 s of a `Start` or `Restart`, or no `Heartbeat` for 5 s from that
   `Ready` or the latest `Heartbeat`; `Restart` alone after an `Exited`; after a kill, `Restart`
-  waits for the killed process's `Exited` as well as the step, for at most 10 s; each `Restart` after a
+  waits for the step and for the killed process's `Exited`, but for that `Exited` at most 10 s
+  from the kill (`EXIT_WAIT_NS`); each `Restart` after a
   backoff step of 1 s doubling to 60 s, back to 1 s once the process stayed up a minute after
   its `Ready`; and `SidecarRestarted` on the bus with the reason. It gains `hud`: the HUD state
   with `MicState::LoadingSpeech`, `SpeechRestarting`, `Muted` or `Listening`, sent when it
@@ -289,6 +290,55 @@ Every pull request also meets the rules section 6.1 sets for every package.
   sentence on how a compete run's results differ (it needs the brain's completion turn; the
   parent says Eileen's own count until then), worktrees for a coding fan-out's children
   (`FIXME(#5)`), and the scenarios themselves once `eileen-replay`'s scenario mode runs them.
+- `wp1/job-steering` again (#175): the review of #165. The router counts a depth as the user's
+  override only when the user said it (the brain turn's L1 override, kept on the live turn, or
+  a reroute's); a depth the brain chose, as it does for every deep answer, picks the depth's
+  model after the kind's policy, with no `override_words`. A deep answer at deep depth takes
+  `routing.deep`'s route and model. A policy naming a route v0.1 does not run falls back to
+  Claude with the depth's model and says so, and a route asked alone is the reason given. A
+  fan-out's parent settles from a tally kept beside the registry, so finished children dropped
+  to make room still count, and a cancelled fan-out ends its children first and itself last.
+  `job::MAX_LIVE` is kept in `start_worker` alone, and a reroute ends the old session before it
+  starts the new one. A reroute carries what the user told the old worker (`Live.told`) and the
+  old job's taint; the bind cuts the task, never the words. A steer to a fan-out names the
+  agents still catching up. An ordinal picks the fan-out in focus as a name does; route words
+  and the focus pass over an app's own render; a render cancelled through `jobs_control` says
+  the app goes on; and renders end lost when the apps sidecar exits. `job.rs`, `lifecycle.rs`
+  and `tests.rs` were split under check 16's 800 lines (`router.rs`, `worker.rs`,
+  `lifecycle/pick.rs`, `lifecycle/tests.rs`, `tests/barge_in.rs`). Tests:
+  `eileen-core::tests::router::*`, `eileen-core::tests::fan_out::*`,
+  `eileen-core::tests::apps::*`, `eileen-core::tests::refusals::*`, and the new cases in
+  `eileen-core::tests::steering` and `eileen-core::lifecycle::tests`.
+- `amend/wp1-speech-reload` again (#188), from review of #146's merged text.
+  Section 6.4 has `wp2/speech-transport` answer `HangDumpThenKill` with the kill alone, and
+  spawn the process again only on the core's `Restart`, as section 6.3 and D81 have it; #178's
+  wording read as a kill and a restart, which would have loaded the models twice for every
+  hang. Sections 2.13, 3.3.16 and 6.3 treat the minimal core's snapshot as a resume snapshot
+  (Surprises below) and name the contracts amendment that lifts the start-only rule for strict
+  replay (item 4 of Next). The clause that a backoff step longer than 10 s is kept in full when
+  the kill's `Exited` never comes gains its tests:
+  `eileen-core::tests::life::a_kill_whose_exit_never_comes_keeps_a_16_s_step_in_full` (five
+  kills in a row: no restart at 10 s, a restart at 16 s) and
+  `eileen-core::tests::life::a_kill_whose_exit_never_comes_restarts_at_10_s_after_a_4_s_step`
+  (three kills in a row: no restart at the 4 s step, a restart at 10 s).
+- `amend/wp1-job-pronouns` (#190), which #165 asked for. Section 2.5 now gives the order
+  `Registry::pick` implements: an explicit name, slug or ordinal; a kind word, never a fan-out's
+  child; a route word, never a child, an app task or an `Act` job; then for a pronoun or no job
+  words the job just announced, the focus job and the newest job outside a fan-out; two or more
+  remaining candidates mean one question. It listed the announced job last, after the focus job,
+  which would always have won. Section 3.3.4 lists `CancelSource` and plans `Typed`: a cancel
+  asked for in a turn takes the variant named like the turn's `TurnSource`, else `Voice`
+  (item 4 of Next).
+- `amend/wp1-job-pronouns` again, from review of #190's merged text. Section 2.5's order holds
+  over unfinished jobs only for a cancel, focus, steer, reroute or interrupt; a request about
+  what a job did (a status question naming a job, `ShowChanges`, `Keep`, `Undo`, "why did you
+  do that?") follows it over jobs that include finished ones, so "undo that" right after a
+  coding job's completion is announced undoes that job, not the focus job. The announced job's
+  window runs to when the request was heard, not to when the brain's call arrives. Section
+  3.3.4 maps a turn's source to `CancelSource` in an exhaustive match (`Scenario` and
+  `FirstRun` as `Voice`, no variant for `ClaudeSession`, `JobEvent` and `Connector`), says a
+  cancel from a CLI turn is recorded as `Voice` today as well as a typed one, and keeps a
+  provisional D79 line. The code and its tests are in items 2 and 4 of Next.
 - Next, in this order. WP3's follow-up to #161, which binds a worker on `WorkerEvent::Ready`
   for slice S1, edits `job.rs` and builds on this pull request rather than beside it.
   1. `wp1/speech-late`: the rule for turns heard late (section 2.8), with the simulation test
@@ -298,7 +348,18 @@ Every pull request also meets the rules section 6.1 sets for every package.
      with many jobs (dispatch and fan-out, `Init` or `Ready`, `TurnDone` and `Exited`, steer,
      reroute, cancel, a restart from `snapshot()`) against the reference model's rows and
      events, and the simulator's checks of invariants 4, 5 and 12 with a core restart in the
-     world.
+     world. This pull request, or whichever WP1 pull request touches `control.rs` or
+     `lifecycle` first, also takes two fixes from review of #190. The core takes the announced
+     job once, when it routes the turn: `send_brain_turn` keeps `self.announced(cx.now)` on the
+     brain's `Live`, and `control` passes that to `Registry::pick` instead of reading
+     `announced` when the call arrives (section 2.5), tested in `tests::steering` with job A
+     announced ending at t, the focus on B, "cancel it" heard at t + 3 s and sent to the brain,
+     and `jobs_control { job: "it", action: cancel }` arriving at t + 12 s, giving
+     `JobCancelled` for A, not B. And a test in `lifecycle::tests` of `choose`'s parent arm: in
+     the two coding fan-outs of
+     `an_ordinal_or_an_agents_name_picks_the_agent_of_the_fan_out_in_focus`, "the coding job"
+     gives `Pick::Ask(vec![second, first])` with no focus and `Pick::One(first)` with the focus
+     on `first_one`.
   3. Invariants 2, 3 and 9 in the world's check after every step, with the generator pacing
      barge-in windows at 32 ms (acceptance 1), once #151 is fixed. Invariant 9's microphone
      part waits for the core to act on `MicInUseElsewhere` (#152), and the enumeration gains a
@@ -308,21 +369,49 @@ Every pull request also meets the rules section 6.1 sets for every package.
      focus job), sessions and the warm pool, memory admission (with the worker cap in place of
      `job::MAX_LIVE`), the permission gate, approvals, announcements as data, the input lock,
      the journal, the settings flow, the regret window, forget, route proposals and the
-     first-run state machine; `eileen-replay`'s strict and scenario modes; and the scenarios
-     of `scenarios/feel/`, `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
+     first-run state machine; `CancelSource::Typed` in the pinned `bus` module, with a cancel
+     asked for in a turn, on the fast path or through `jobs_control`, recorded by the turn's
+     source (section 3.3.4): the turn's `TurnSource` threaded to both cancel sites (on `Routed`
+     for `cancel_spoken`, on the brain's `Live` for `control` and `reroute`) and mapped in an
+     exhaustive match with no catch-all arm, tested so that `UserInput::Cli` "cancel the
+     render" gives `JobCancelled { by: Cli }`, `UserInput::Typed` gives `Typed`, a scenario's
+     turn gives `Voice`, and a `jobs_control` cancel or reroute from a typed turn gives `Typed`;
+     `jobs_control`'s `show_changes`, `keep` and `undo` once `FIXME(#5)`'s worktree and
+     snapshot wiring lands, naming jobs that include finished ones (section 2.5), with a test
+     that "undo that" right after a coding job's completion is announced, while another job
+     holds the focus, restores the coding job; the contracts amendment that adds to
+     `CoreSnapshotV1` the speech process's life, the HUD's line and the rest of the live state,
+     each with a default, with a restore for replay that skips what only a resume does,
+     lifting section 3.3.16's rule that strict replay of the minimal core starts only from the
+     core's start, and tested by a strict replay from a mid-session checkpoint, taken while
+     speech is up and a job is running, that matches the recording; `eileen-replay`'s strict and scenario modes (strict
+     mode refusing any checkpoint of the minimal core but the start's, with a plain message, if
+     it lands before that amendment); and the scenarios of `scenarios/feel/`,
+     `scenarios/jobs/` and `scenarios/first-run/` (acceptance 10).
   5. `wp1/machine-fit` and the speaker gate once WP0's `wp0/machine-contracts` merges, with the
-     `heavy-app` and `roomy` profiles and `scenarios/machine/`; the D77 parts once WP7's
-     amendment of section 3.3.13 merges (acceptance 17).
+     `heavy-app` and `roomy` profiles and `scenarios/machine/`, and with the first reload the
+     core orders that stops recognition, the speech process's reload rule (the 5 s count
+     suspended until the reload's first `Heartbeat`, a kill when none comes within 120 s) and
+     its simulation test (section 6.3 as #146 amended it); the D77 parts once WP7's amendment
+     of section 3.3.13 merges (acceptance 17).
 
 ## Surprises
 
 - The minimal core orders no reload that stops recognition, so the suspension of the 5 s
   heartbeat count from such a reload to its first `Heartbeat` has nothing to start it yet. #146
-  amends section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
-  comes within 120 s, to the machine profile's core part, which orders the first such reload.
-- The speech process's life and the HUD's line are not in `CoreSnapshotV1`, so strict replay of
-  the minimal core starts from the checkpoint taken at the core's start (section 3.3.16 as #146
-  amends it) until a contracts amendment adds them with the full `Core::step`.
+  amended section 6.3 to move it, with its simulation test of a reload whose first `Heartbeat`
+  comes within 120 s, to the machine profile's core part, which orders the first such reload
+  (item 5 of Next above).
+- The minimal core's `CoreSnapshotV1` is a resume snapshot, not a replay checkpoint. It lacks
+  the core's live state (the speech process's life, the HUD's line, the turn phase, the
+  utterance holding the floor and what Eileen last said, live timers, the brain turn, the
+  announcement queue and the speech turns already handled), and a core restored from it
+  interrupts the unfinished jobs and starts speech again on its first step. So strict replay of
+  the minimal core starts only from the checkpoint taken at the core's start, and an incident
+  whose start checkpoint has left the flight recorder's ring replays in scenario mode (sections
+  2.13 and 3.3.16 as #188 amended them), until the contracts amendment with the full
+  `Core::step` carries every field and a restore for replay skips what only a resume does (item
+  4 of Next above).
 
 - A brain reply streams in, so it reaches the speech process as several `SpeechCmd::Speak`
   commands naming one `SpeakId`, clauses numbered on across them, and a `Drained` can come while
@@ -452,9 +541,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   flight recorder and `eileen record` do this when they are wired.
 - `float_roundtrip` on serde_json makes a float in a recorded line read back exactly; the
   default parser can be a unit in the last place off, which would break the exact inverse the
-  crate doc promises. Features unify across a build, so it belongs in the root manifest's
-  `serde_json` entry, which is an amendment; `eileen-record` turns it on in its own manifest
-  only until that amendment merges.
+  crate doc promises. Features unify across a build, so the root manifest's `serde_json` entry
+  carries it (#157), and `eileen-record` takes `serde_json` from the workspace like every other
+  member, as section 3.1 requires (#194, an amendment from WP3's lane that closed #185).
 
 - The job graph: `queued` goes to `running`, `failed`, `cancelled` or `interrupted`;
   `running` to `blocked`, `awaiting_approval`, `completed`, `failed`, `cancelled` or
@@ -516,23 +605,37 @@ Every pull request also meets the rules section 6.1 sets for every package.
 
 - The focus job is the row's `focus` flag, held by at most one unfinished job. A new job
   takes it (a fan-out's parent for the fan-out), as does a job the user follows, steers or
-  reroutes to; when it ends, the focus moves to the newest unfinished job outside a fan-out.
-  A render the app started takes it only when no job has it, since the user did not ask for
-  it. Each change persists the rows whose flag changed.
-- Section 2.5 lists "it right after an announcement" last among the pronoun rules; the core
+  reroutes to; when it ends, the focus moves to the newest unfinished job outside a fan-out
+  that is not an app task. A render the app started takes it only when no other job is open,
+  since the user did not ask for it. Each change persists the rows whose flag changed.
+- Section 2.5 listed "it right after an announcement" last among the pronoun rules; the core
   tries it first for a pronoun, since the focus job would otherwise always win, and only for
-  an unfinished job announced within `conversation.follow_up_s` with no reply since. Names
+  an unfinished job announced within `conversation.follow_up_s` with no reply since. Section
+  2.5 gives that order since #190. `control` reads that window when the brain's `jobs_control`
+  call arrives, so a slow brain can carry a request heard inside it past its end; section 2.5
+  runs it to when the request was heard since the follow-up to #190, and item 2 of Next keeps
+  the announced job on the brain turn. `pick` passes over finished jobs because its callers
+  cancel, focus, steer and reroute; a request about what a job did names finished jobs too
+  (section 2.5), which `show_changes`, `keep` and `undo` need when they are built. Names
   match after the articles and the words "job", "task", "please" and "now" are dropped. Kind
   and route words name only jobs outside a fan-out, whose children are named by ordinal or
-  name. Words that fit several jobs pick the focus job among them, or ask one question naming
-  the newest three; the answer is a new request that names the job, since the core keeps no
-  pending question yet.
+  name, and route words never name an app task or an `Act` job, which no route runs (their
+  rows say Claude only because a row needs a route). An ordinal, a name, a kind word or a route
+  word that fits several jobs picks the one in focus among them (the focus job, a child or the
+  parent of it, or a sibling of a focused child), or asks one question naming the newest
+  three; the answer is a new request that names the job, since the core keeps no pending
+  question yet.
 - A fan-out's children announce only their failures (section 2.5's table interrupts for
   `JobFailed`); their completions are on the bus and the HUD, and the parent's end is the one
   announcement, with Eileen's own count rather than a worker's words. A parent whose children
   were all cancelled is cancelled by the source that cancelled the last of them (the HUD's
   cancel of the last agent cancels the fan-out from the HUD), and one whose children all
-  failed fails.
+  failed fails. The parent settles from a tally the core keeps beside the registry (children
+  accepted, completed, cancelled and failed, and the last cancel's source), not from the
+  children still kept, since a running fan-out's finished children are among the oldest
+  finished jobs the registry drops to make room. A cancelled fan-out cancels its children first,
+  by their parent, and ends itself last, by the user's source, so it ends once, after its last
+  child.
 - Steer is `WorkerCmd::Interrupt` then `WorkerCmd::Prompt`. The core counts the user turns a
   worker owes (`Live.owed`): the bound task's and one per steer, at most 8, and the job ends
   with the last `TurnDone`, so the interrupted turn's own `TurnDone` (errored or not) never
@@ -540,30 +643,55 @@ Every pull request also meets the rules section 6.1 sets for every package.
   up; tell it again in a moment.", so the brain never says it told a worker that heard
   nothing. This assumes each user turn ends in one `result`, an interrupted one included,
   which WP3's mid-turn interrupt case (its acceptance 3) is to confirm. A steer before the
-  session is ready waits and goes with the task in the bind; a steer to a fan-out's parent goes
-  to each running child.
-- Reroute accepts the new job before it cancels the old one, so a fan-out's parent never sees
-  all its children end in between. The new job keeps the name and ordinal the user knows
-  (`Registry::successor`) with a slug of its own, and works in the old job's folder. The old
-  transcript is not attached (`FIXME(#3)`): sessions run with no session persistence and the
-  harness keeps no transcript. A cancel through `jobs_control` is recorded as `Voice`:
-  `CancelSource` has no source for a typed brain turn. The new session's `cwd` is the old
+  session is ready waits and goes with the task in the bind, which cuts the task to make room,
+  never the words (at most `job::STEER_CHARS`, the newest kept); a steer to a fan-out's parent
+  goes to each running child, and when some owe eight turns the brain hears which ("Told flaky
+  login tests; agent two is still catching up.").
+- Reroute ends the old session first, so no more than `job::MAX_LIVE` workers run even for a
+  moment (`start_worker` keeps that bound, the one place it is kept), then accepts the new job,
+  then cancels the old job, so a fan-out's parent never sees all its children end in between.
+  The new job keeps the name and ordinal the user knows (`Registry::successor`) with a slug of
+  its own, works in the old job's folder, starts with the old job's taint (that folder holds
+  what the old job read) and no grants, and is given what the user told the old worker
+  (`Live.told`, sent or still waiting) with the task. The old transcript is not attached
+  (`FIXME(#3)`): sessions run with no session persistence and the harness keeps no
+  transcript. A cancel through `jobs_control` is recorded as `Voice`:
+  `CancelSource` has no source for a typed brain turn, and a "cancel" from a typed or CLI turn
+  on the fast path is recorded as `Voice` too, though `Cli` exists, since neither cancel site
+  sees the turn's `TurnSource` (`Routed` and the brain's `Live` carry only its authority).
+  Section 3.3.4 plans `Typed` since #190 and maps every source since its follow-up (item 4 of
+  Next). The new session's `cwd` is the old
   session's `run/<session>/cwd`, as section 2.5 asks ("the same working directory"); section
   2.12's path classes name a session's own `run\<session>\cwd` its `JobFolder` and "another
   session's folder" `EileenData`, so the runtime's classifier must take the job folder from
   the session's `SessionSpec.cwd`, not from its id, or a rerouted worker's file tools are
   refused. The pull request suggests that wording for section 2.12.
-- The router treats any route, model or depth the brain passes in `jobs_dispatch` or a
-  reroute as the user's spoken override (the tool's schema says to leave them out to let
-  policy decide) and records the brain turn's words with it. An asked model beats an asked
-  depth, which beats the policy's model; an asked route v0.1 does not build is refused, and a
-  policy naming one falls back to Claude.
+- The router treats a route or a model the brain passes in `jobs_dispatch` or a reroute as the
+  user's spoken override, and a depth only when the user said it: the brain turn's L1 override
+  ("quick answer", "think hard about this"), which the core keeps on the live turn from
+  `Resolution::Brain.depth`, or a reroute's. Section 2.3 has the brain pick the depth of every
+  deep answer itself, so a depth it chose is no override: it picks the depth's model only after
+  the kind's policy, and no words are recorded. An override is recorded with the brain turn's
+  words; an asked model beats a said depth, which beats the policy's model. A deep answer at
+  deep depth takes `routing.deep`'s route and model (section 2.3 configures the deep workers
+  apart from the brain), after the kind's policy; other kinds at deep depth keep the strongest
+  model, and a considered deep answer the mid one. An asked route v0.1 does not build is
+  refused; a policy or `routing.deep` naming one falls back to Claude with the depth's model,
+  never with a model meant for that route, and the reason says so. A route asked alone is the
+  reason given.
 - An app task the user started in the app has no turn: its `authorized_by` is the nil turn
   id and its bus events carry no turn. Its row needs a route, so it says Claude with an empty
-  model, and its completion is announced with no attribution. Cancelling it stops the
-  tracking, and Eileen says the app is still running it, since the adapter has no op to stop
-  a render. A render started through Eileen's own `render_start` call opens its job once the
-  core forwards tool calls to connectors (`FIXME(#3)`).
+  model, and its completion is announced with no attribution. Cancelling it, by voice or
+  through `jobs_control`, stops the tracking, and Eileen says the app is still running it,
+  since the adapter has no op to stop a render. When the apps sidecar exits, each render it
+  reported ends as failed on its row and is announced as lost ("I lost track of the render
+  when the app's bridge stopped."), and none stays remembered, so a render still running when
+  the sidecar is back opens a job of its own. A bridge to Resolve lost mid-render while the
+  sidecar runs on is WP6's to report as `RenderDone { ok: false }`. At most `RENDERS_KEPT`
+  renders are remembered, the oldest whose job has ended forgotten first; while every one
+  still runs, a new render is not tracked. A render started through Eileen's own
+  `render_start` call opens its job once the core forwards tool calls to connectors
+  (`FIXME(#3)`).
 - `jobs_control`'s `show_changes`, `keep` and `undo` are answered "I can't do that to a job
   yet." until the worktree and snapshot wiring of `FIXME(#5)` lands. `interrupt` is answered
   the same way until the pause of section 2.5 is built (with the hands-off pause and the
