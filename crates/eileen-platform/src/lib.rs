@@ -5,12 +5,11 @@
 //!
 //! - The platform traits ([`Grounding`], [`Automation`], [`Input`], [`ShellHost`], ...) and
 //!   the handle and value types only their signatures use ([`PlatformError`], [`Deadline`],
-//!   [`Subscription`], ...).
+//!   [`Subscription`], ...). Among them [`PathProbe`], every OS read of the runtime's path
+//!   classification (decision D86), with the two rules about a path's form that every probe
+//!   applies before it reads anything: [`path_fully_qualified`] and [`path_allow_listed`].
 //! - The fakes beside each trait, under `cfg(any(test, feature = "fake"))`.
 //! - [`machine`]: the OS id normalisation, the machine hash and [`machine::FileMachineIdentity`].
-//! - [`PathProbe`], every OS read of the runtime's path classification (decision D86), and the
-//!   two rules about a path's form that every probe applies before it reads anything:
-//!   [`path_fully_qualified`] and [`path_allow_listed`].
 //!
 //! # Does not own
 //!
