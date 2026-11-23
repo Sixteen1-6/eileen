@@ -165,6 +165,27 @@ Every pull request also meets the rules section 6.1 sets for every package.
   and the events `effect.unserved` and `component.ended`. Unit tests on paused tokio time, one
   with the real core (its speech load deadline fires through the driver at 120 s).
   `eileen run` still says it is not built: `wp2/s1-live` wires the composition root.
+- `wp2/path-probe-trait` (feature, the first half of W1 order item 5): the `PathProbe` trait
+  of section 3.4 with `FinalPath`, `ShareKind` and `FileHandler`, and `FakePathProbe`, in
+  `eileen-platform`'s new `paths` module. `WinPathProbe` follows as a second pull request on
+  the same topic, `wp2/path-probe-win`: seven Win32 reads, the link walk, a COM apartment
+  thread for the shortcut and a helper thread for each deadline are well past 500 lines of
+  logic on their own, and nothing in this half waits for them. `wp2/path-classes` (item 11)
+  needs only this half for its table tests and both for acceptance 10's rows over real files.
+  The two rules of form are public functions beside the trait, `path_fully_qualified` (what
+  `full_path` takes) and `path_allow_listed` (what a probe opens), each answering the one
+  `Refused` value, so the fake, `WinPathProbe` and the classifier, which section 2.12 has check
+  the allow-list before any call that opens a file, share one definition. Their table tests
+  (`it::paths`) hold a row for each form section 3.4 lists that needs no classifier: each drive
+  and volume spelling, a pipe under each of the three prefixes, `GLOBALROOT`, `CONIN$`, and
+  every UNC spelling. `FakePathProbe` holds an answer, or an error, per path, host and share,
+  shortcut and extension, refuses by form whatever answer is set, and records every call in
+  order, so a classifier test can show that no method that opens a file was asked about a UNC
+  path and that `share` was asked first. #77 is still open and held, so the fake builds on
+  `main`'s `Deadline`, a budget with no clock: `set_file_time` says how long each call that
+  takes a deadline runs, and a call that would outlast its deadline answers `DeadlineExceeded`.
+  When #77 merges, `set_file_time` takes its `ManualClock` and moves it, as the other fakes do
+  there. The crate doc lists the trait and the two rules.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
   2. `amend/wp2-session-wiring` (this amendment).
@@ -175,7 +196,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
      `write_user_only`.
   5. `wp2/path-probe-trait`: the trait and `FakePathProbe` in `eileen-platform`, then
      `WinPathProbe` in `eileen-shell-win`. If #77 is still held, it builds on `main`'s
-     `Deadline` and says so.
+     `Deadline` and says so. Two pull requests: `wp2/path-probe-trait` (the trait and the
+     fake, on `main`'s `Deadline`), then `wp2/path-probe-win` (`WinPathProbe`).
   6. `wp2/shell-local-time`: the zone reader and its wiring into `CoreConfig.local_time`.
   7. `wp2/speech-transport` (after 3 and 4, since its caller check needs `Peer` and the
      registry): acceptance 15, with the interim kill without a dump. `wp1/speech-life` (#141)
@@ -226,9 +248,17 @@ Every pull request also meets the rules section 6.1 sets for every package.
   `jobs_dispatch`, so the endpoint answers them by role.
 - #142's test fixtures name the dispatcher pipe `eileen-dispatch-ws_...`. That is fixture data:
   the harness writes whatever pipe the endpoints give, and the plan keeps one pipe per runtime.
-- `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
-  for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
-  by then, and says so.
+- `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 was still open
+  and held for the owner when `wp2/path-probe-trait` was built, so the fake builds on `main`'s
+  `Deadline`, and `eileen-platform` does not yet depend on `eileen-stdx` for a `ManualClock`.
+- The allow-list is a rule about a path's form, and a DOS device name has a drive path's form:
+  `C:\x\NUL` passes `path_allow_listed` until `full_path` turns it into `\\.\NUL`. Section 2.12
+  has the rule checked on `full_path`'s answer and again inside each call that opens a file,
+  so `WinPathProbe` has to take the full path again inside each such call before it applies
+  the rule; the fake cannot, and a row for `C:\x\NUL` sets `full_path`'s answer.
+- Section 3.4 does not say whether `PathProbe::handler`'s `extension` carries its dot.
+  `AssocQueryStringW` takes `.txt`; the trait's doc leaves it open and the fake matches what a
+  test set, so `wp2/path-probe-win` settles it with the classifier's first use.
 
 ## Decisions
 
@@ -236,6 +266,23 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the `PathProbe` platform trait; every pipe client checks the server; `spawn` makes each child's
   Job Object itself; Linux forms are WP10's, and until then `ipc` answers `Unsupported` on
   Linux.
+- `wp2/path-probe-trait`, where section 3.4 leaves the fake's shape open, each the narrowest
+  reading:
+  - A path with no answer set is an ordinary file that exists (its own full and final path,
+    one name, no short name, no shortcut target); a host and share with none are
+    `NotThisMachine`, and an extension with none has no handler. A classifier row then sets
+    only what makes it differ. The fake models no file system: a link is an answer the test
+    sets for `final_path`, a `Refused` one for a target off the allow-list.
+  - Paths match as written, since case is what `full_path` and `final_path` report and the
+    classifier folds; hosts, shares and extensions match without ASCII case.
+  - A refusal by form comes before the deadline, since it is decided before anything is
+    opened; `share` and `handler` open no file of the user's but take the deadline, as the
+    trait has it.
+  - The allow-list takes backslashes only, and a volume only as `\\?\Volume{GUID}\` with a
+    whole GUID, section 2.12's list as written: `C:/x`, `\\.\Volume{...}\` and a drive or
+    volume with no root (`\\.\C:` is the raw volume) are refused. `path_fully_qualified`
+    takes either separator, since `full_path` is what applies them, and a UNC path only with
+    both a host and a share.
 
 ## Outcome
 
