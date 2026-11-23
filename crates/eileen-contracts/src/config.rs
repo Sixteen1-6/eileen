@@ -17,16 +17,18 @@ use serde_json::Value;
 use crate::ids::{ApprovalId, ProposalId, WallTime};
 use crate::schema::Registry;
 
+mod auto_or;
 mod sections;
 
+pub use auto_or::AutoOr;
 pub use sections::{
     AnnounceMode, AnnouncementsConfig, AnticipationConfig, ApprovalsConfig, AssistantConfig,
-    AutoOr, BackendChoice, ClaudePluginConfig, ConfigGrant, ConversationConfig, DesktopConfig,
+    BackendChoice, BenchMode, ClaudePluginConfig, ConfigGrant, ConversationConfig, DesktopConfig,
     DictationConfig, Distill, FirstRunConfig, FleetConfig, FlightConfig, FocusConfig,
     HotkeysConfig, HudConfig, Humor, IncidentsConfig, KindRouting, LearningConfig, LoggingConfig,
-    McpConfig, McpServerConfig, MemoryConfig, MemoryProfile, PermissionsConfig, PrivacyConfig,
-    RecordingConfig, RecycleThresholds, RoutingConfig, SpeechConfig, Verbosity, VoiceConfig,
-    VoiceEngine,
+    MachineConfig, McpConfig, McpServerConfig, MemoryConfig, MemoryProfile, PermissionsConfig,
+    PrivacyConfig, RecordingConfig, RecycleThresholds, RoutingConfig, SpeechConfig, Verbosity,
+    VoiceConfig, VoiceEngine,
 };
 
 /// The whole configuration.
@@ -71,6 +73,8 @@ pub struct Config {
     pub first_run: FirstRunConfig,
     /// Speech engines.
     pub speech: SpeechConfig,
+    /// The machine profile.
+    pub machine: MachineConfig,
     /// The `eileen` Claude plugin.
     pub claude_plugin: ClaudePluginConfig,
     /// Logs.
@@ -156,6 +160,10 @@ pub enum CheckKind {
     VoiceRealtime,
     /// The brain benchmark passes for the new backend.
     BrainBenchmark,
+    /// A fitted setting of section 2.16 given a value instead of `auto`: the core's settings
+    /// flow computes the plan with the change (`eileen_core::fit`, no IO) and, when it does not
+    /// fit the PC's usual memory, says its cost and asks first.
+    MachineFit,
     /// No check.
     None,
 }
@@ -347,7 +355,8 @@ pub(crate) fn register(r: &mut Registry) {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{AutoOr, BenchMode, Config};
+    use crate::machine::Precision;
 
     #[test]
     fn an_empty_file_gives_the_defaults() {
@@ -361,6 +370,36 @@ mod tests {
     #[test]
     fn watermarking_is_opt_in() {
         assert!(!Config::default().voice.watermark_exports, "no watermark unless the user asks");
+    }
+
+    #[test]
+    fn every_fitted_setting_is_auto_until_the_user_sets_it() {
+        let defaults = Config::default();
+        assert_eq!(defaults.routing.hot_spare, AutoOr::Auto, "row 4, the spare");
+        assert_eq!(defaults.memory.pool_deep, AutoOr::Auto, "row 3");
+        assert_eq!(defaults.memory.pool_computer_use, AutoOr::Auto, "row 5");
+        assert_eq!(defaults.memory.max_workers, AutoOr::Auto, "row 7");
+        assert_eq!(defaults.memory.max_build_heavy_jobs, AutoOr::Auto, "row 8");
+        assert_eq!(defaults.speech.asr, None, "row 1: the plan chooses");
+        assert_eq!(defaults.speech.tts_precision, AutoOr::Auto, "row 2");
+        assert_eq!(defaults.speech.threads, AutoOr::Auto, "row 6");
+        assert_eq!(defaults.speech.embed, None, "row 9: the plan chooses");
+        assert_eq!(defaults.speech.pin_working_set, AutoOr::Auto, "row 10");
+        assert_eq!(defaults.incidents.max_mb, AutoOr::Auto, "row 11, incidents");
+        assert_eq!(defaults.recording.max_mb, AutoOr::Auto, "row 11, recordings");
+        assert_eq!(defaults.machine.bench, BenchMode::OnChange, "benchmarks on a change");
+        assert!(defaults.machine.announce, "plan changes are announced");
+        let set: Config = serde_json::from_str(
+            r#"{"routing": {"hot_spare": true}, "memory": {"max_workers": 2},
+                "speech": {"tts_precision": "int8", "threads": "auto"},
+                "machine": {"bench": "off"}}"#,
+        )
+        .unwrap();
+        assert_eq!(set.routing.hot_spare, AutoOr::Value(true), "keep a spare brain anyway");
+        assert_eq!(set.memory.max_workers, AutoOr::Value(2), "run at most two agents");
+        assert_eq!(set.speech.tts_precision, AutoOr::Value(Precision::Int8), "a precision");
+        assert_eq!(set.speech.threads, AutoOr::Auto, "auto written out");
+        assert_eq!(set.machine.bench, BenchMode::Off, "no automatic benchmarks");
     }
 
     #[test]

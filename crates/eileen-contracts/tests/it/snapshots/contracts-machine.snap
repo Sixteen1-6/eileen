@@ -1,0 +1,1517 @@
+---
+source: crates/eileen-contracts/tests/it/schemas.rs
+---
+{
+  "definitions": {
+    "AdapterFacts": {
+      "description": "A GPU or an NPU.",
+      "properties": {
+        "dedicated_mb": {
+          "description": "Dedicated memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "driver": {
+          "description": "The driver version.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AdapterKind",
+          "description": "What it is."
+        },
+        "name": {
+          "description": "Its name, as the driver reports it.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "shared_mb": {
+          "description": "Shared memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "dedicated_mb",
+        "shared_mb",
+        "driver"
+      ],
+      "type": "object"
+    },
+    "AdapterKind": {
+      "description": "What an adapter is.",
+      "oneOf": [
+        {
+          "const": "integrated_gpu",
+          "description": "A GPU that shares the system's memory.",
+          "type": "string"
+        },
+        {
+          "const": "discrete_gpu",
+          "description": "A GPU with memory of its own.",
+          "type": "string"
+        },
+        {
+          "const": "npu",
+          "description": "An adapter with the generic machine-learning attribute and no graphics attribute.",
+          "type": "string"
+        }
+      ]
+    },
+    "AudioFacts": {
+      "description": "The audio endpoints (section 2.16), as the audio component reported them.",
+      "properties": {
+        "capture": {
+          "description": "The capture endpoints.",
+          "items": {
+            "$ref": "#/$defs/EndpointFacts"
+          },
+          "type": "array"
+        },
+        "default_capture": {
+          "description": "The default capture endpoint, an index into `capture`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "default_render": {
+          "description": "The default render endpoint, an index into `render`.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "loopback": {
+          "description": "The default render endpoint's loopback opened (the echo reference of section 2.2).",
+          "type": "boolean"
+        },
+        "render": {
+          "description": "The render endpoints.",
+          "items": {
+            "$ref": "#/$defs/EndpointFacts"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capture",
+        "render",
+        "loopback"
+      ],
+      "type": "object"
+    },
+    "BenchConditions": {
+      "description": "What the PC was doing while a benchmark ran; a number taken while it pages is pessimistic.",
+      "properties": {
+        "available_mb": {
+          "description": "Available memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cpu_busy_pct": {
+          "description": "CPU busy, percent.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "eileen_version": {
+          "description": "Eileen's version.",
+          "type": "string"
+        },
+        "on_battery": {
+          "description": "The PC ran on its battery.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "available_mb",
+        "cpu_busy_pct",
+        "on_battery",
+        "eileen_version"
+      ],
+      "type": "object"
+    },
+    "BenchKind": {
+      "description": "What a benchmark runs (section 2.16's table).",
+      "oneOf": [
+        {
+          "const": "vad",
+          "description": "10 s of a bundled clip through the voice activity detector.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A bundled 8 s command clip through a recognizer.",
+          "properties": {
+            "asr": {
+              "properties": {
+                "engine": {
+                  "description": "The recognizer, by its name in `models.toml`.",
+                  "type": "string"
+                },
+                "threads": {
+                  "description": "The threads it ran on.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "engine",
+                "threads"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "asr"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One clause of three to six words through a voice.",
+          "properties": {
+            "tts": {
+              "properties": {
+                "engine": {
+                  "description": "The voice engine, by its name in `models.toml`.",
+                  "type": "string"
+                },
+                "precision": {
+                  "$ref": "#/$defs/Precision",
+                  "description": "The precision it ran at."
+                },
+                "threads": {
+                  "description": "The threads it ran on.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "engine",
+                "precision",
+                "threads"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tts"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The clone timing on the bundled synthetic reference.",
+          "properties": {
+            "clone_ttfa": {
+              "properties": {
+                "engine": {
+                  "description": "The cloning engine, by its name in `models.toml`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "engine"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "clone_ttfa"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One 12-word utterance through an embedding model, 20 times.",
+          "properties": {
+            "embed": {
+              "properties": {
+                "model": {
+                  "description": "The model, by its name in `models.toml`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "embed"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "disk_read",
+          "description": "A sequential read of 64 MB of an installed model file.",
+          "type": "string"
+        }
+      ]
+    },
+    "BenchResult": {
+      "description": "What a benchmark measured.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "CPU time.",
+          "properties": {
+            "cpu": {
+              "properties": {
+                "per_mille_of_core": {
+                  "description": "Per mille of one core.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "per_mille_of_core"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "cpu"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A speech stage.",
+          "properties": {
+            "speech": {
+              "properties": {
+                "first_ms": {
+                  "description": "The first clause or the first partial, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rtf_per_mille": {
+                  "description": "The real-time factor, per mille.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "tail_ms": {
+                  "description": "The recognizer's tail, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rtf_per_mille",
+                "first_ms",
+                "tail_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "speech"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A round trip.",
+          "properties": {
+            "latency": {
+              "properties": {
+                "p50_ms": {
+                  "description": "The median, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "p95_ms": {
+                  "description": "The 95th percentile, ms.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "p50_ms",
+                "p95_ms"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "latency"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A read.",
+          "properties": {
+            "read": {
+              "properties": {
+                "mb_s": {
+                  "description": "MB per second.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "mb_s"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "read"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The benchmark failed.",
+          "properties": {
+            "failed": {
+              "properties": {
+                "reason": {
+                  "description": "Why, in Eileen's own words.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CoreClass": {
+      "description": "One efficiency class of cores (`GetLogicalProcessorInformationEx`; a higher class is faster,\nand a CPU with one core type has one class).",
+      "properties": {
+        "efficiency_class": {
+          "description": "The class, as the OS numbers it.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "logical": {
+          "description": "Logical processors of this class.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "physical": {
+          "description": "Physical cores of this class.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "efficiency_class",
+        "physical",
+        "logical"
+      ],
+      "type": "object"
+    },
+    "CpuFacts": {
+      "description": "The processor.",
+      "properties": {
+        "classes": {
+          "description": "Cores per efficiency class, highest (fastest) class first.",
+          "items": {
+            "$ref": "#/$defs/CoreClass"
+          },
+          "type": "array"
+        },
+        "features": {
+          "description": "The instruction-set features int8 inference uses.",
+          "items": {
+            "$ref": "#/$defs/CpuFeature"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "logical": {
+          "description": "Logical processors.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The processor name string, as the OS reports it.",
+          "type": "string",
+          "x-eileen-text": "untrusted"
+        },
+        "physical": {
+          "description": "Physical cores.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vendor": {
+          "$ref": "#/$defs/CpuVendor",
+          "description": "Who made it."
+        }
+      },
+      "required": [
+        "name",
+        "vendor",
+        "logical",
+        "physical",
+        "classes",
+        "features"
+      ],
+      "type": "object"
+    },
+    "CpuFeature": {
+      "description": "An instruction-set feature int8 inference uses.",
+      "oneOf": [
+        {
+          "const": "avx2",
+          "description": "AVX2.",
+          "type": "string"
+        },
+        {
+          "const": "avx512",
+          "description": "AVX-512.",
+          "type": "string"
+        },
+        {
+          "const": "avx_vnni",
+          "description": "AVX-VNNI.",
+          "type": "string"
+        },
+        {
+          "const": "neon",
+          "description": "Arm NEON.",
+          "type": "string"
+        },
+        {
+          "const": "dot_prod",
+          "description": "Arm's dot-product extension.",
+          "type": "string"
+        }
+      ]
+    },
+    "CpuVendor": {
+      "description": "Who made the processor.",
+      "oneOf": [
+        {
+          "const": "intel",
+          "description": "Intel.",
+          "type": "string"
+        },
+        {
+          "const": "amd",
+          "description": "AMD.",
+          "type": "string"
+        },
+        {
+          "const": "arm",
+          "description": "An Arm design.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anyone else.",
+          "type": "string"
+        }
+      ]
+    },
+    "DiskFacts": {
+      "description": "The volume that holds the data folder.",
+      "properties": {
+        "data_free_mb": {
+          "description": "Free space, MB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "data_total_mb": {
+          "description": "Total space, MB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "media": {
+          "$ref": "#/$defs/DiskMedia",
+          "description": "What the volume is (the seek-penalty query)."
+        }
+      },
+      "required": [
+        "data_free_mb",
+        "data_total_mb",
+        "media"
+      ],
+      "type": "object"
+    },
+    "DiskMedia": {
+      "description": "What a volume is.",
+      "oneOf": [
+        {
+          "const": "ssd",
+          "description": "A solid-state disk.",
+          "type": "string"
+        },
+        {
+          "const": "hdd",
+          "description": "A spinning disk.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "The query gave no answer.",
+          "type": "string"
+        }
+      ]
+    },
+    "EndpointBus": {
+      "description": "How an endpoint is connected.",
+      "oneOf": [
+        {
+          "const": "builtin",
+          "description": "Built into the PC.",
+          "type": "string"
+        },
+        {
+          "const": "usb",
+          "description": "USB.",
+          "type": "string"
+        },
+        {
+          "const": "bluetooth",
+          "description": "Bluetooth.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "EndpointFacts": {
+      "description": "One audio endpoint.",
+      "properties": {
+        "bus": {
+          "$ref": "#/$defs/EndpointBus",
+          "description": "How it is connected."
+        },
+        "channels": {
+          "description": "Its mix format's channel count.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "form": {
+          "$ref": "#/$defs/EndpointForm",
+          "description": "Its form factor."
+        },
+        "mix_hz": {
+          "description": "Its mix format's sample rate, Hz.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Its friendly name, which can name a person.",
+          "type": "string",
+          "x-eileen-text": "personal"
+        }
+      },
+      "required": [
+        "name",
+        "form",
+        "bus",
+        "mix_hz",
+        "channels"
+      ],
+      "type": "object"
+    },
+    "EndpointForm": {
+      "description": "An endpoint's form factor.",
+      "oneOf": [
+        {
+          "const": "microphone",
+          "description": "A microphone.",
+          "type": "string"
+        },
+        {
+          "const": "headset",
+          "description": "A headset, microphone and earphones together.",
+          "type": "string"
+        },
+        {
+          "const": "headphones",
+          "description": "Headphones.",
+          "type": "string"
+        },
+        {
+          "const": "speakers",
+          "description": "Speakers.",
+          "type": "string"
+        },
+        {
+          "const": "line_in",
+          "description": "A line input.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "Anything else.",
+          "type": "string"
+        }
+      ]
+    },
+    "FitChoice": {
+      "description": "One fitted setting's effective value and why.",
+      "properties": {
+        "fits": {
+          "description": "False only for an override the budget does not cover.",
+          "type": "boolean"
+        },
+        "key": {
+          "description": "The setting key, such as `routing.hot_spare`; `idle_work` for row 12, which no setting\noverrides.",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/FitReason",
+          "description": "Why."
+        },
+        "sentence": {
+          "description": "The reason in words, from Eileen's own template.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/FitSource",
+          "description": "Who chose it."
+        },
+        "value": {
+          "$ref": "#/$defs/FitValue",
+          "description": "The value."
+        }
+      },
+      "required": [
+        "key",
+        "value",
+        "source",
+        "fits",
+        "reason",
+        "sentence"
+      ],
+      "type": "object"
+    },
+    "FitPause": {
+      "description": "An item the live re-check let go (section 2.16, \"The live re-check\").",
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/PauseCause",
+          "description": "Why it was let go."
+        },
+        "key": {
+          "description": "The setting key of the item, such as `routing.hot_spare`.",
+          "type": "string"
+        },
+        "since": {
+          "$ref": "#/$defs/WallTime",
+          "description": "Since when."
+        }
+      },
+      "required": [
+        "key",
+        "cause",
+        "since"
+      ],
+      "type": "object"
+    },
+    "FitReason": {
+      "description": "Why a fitted setting has its value.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Kept or left out by the memory budget.",
+          "properties": {
+            "budget": {
+              "properties": {
+                "cost_mb": {
+                  "description": "The item's measured cost, MB.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "left_mb": {
+                  "description": "The budget left after it, MB; may be negative.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "cost_mb",
+                "left_mb"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "budget"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A measurement on this PC.",
+          "properties": {
+            "measured": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/BenchKind",
+                  "description": "What ran."
+                },
+                "result": {
+                  "$ref": "#/$defs/BenchResult",
+                  "description": "What it measured."
+                }
+              },
+              "required": [
+                "kind",
+                "result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "measured"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The performance cores.",
+          "properties": {
+            "cores": {
+              "properties": {
+                "performance": {
+                  "description": "How many there are.",
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "performance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "cores"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The data volume's free space.",
+          "properties": {
+            "disk": {
+              "properties": {
+                "free_mb": {
+                  "description": "Free space, MB.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "free_mb"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "disk"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "battery_saver",
+          "description": "Battery saver is on.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A measurement did not adopt it.",
+          "properties": {
+            "not_adopted": {
+              "properties": {
+                "by": {
+                  "description": "The measurement, such as \"WP4 acceptance 14\".",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "not_adopted"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "user_chose",
+          "description": "The user set it.",
+          "type": "string"
+        },
+        {
+          "const": "held_back",
+          "description": "An override that admission's rule 1 keeps from starting.",
+          "type": "string"
+        },
+        {
+          "const": "default",
+          "description": "Nothing on this PC changes the starting value.",
+          "type": "string"
+        }
+      ]
+    },
+    "FitSource": {
+      "description": "Who chose a fitted setting's value.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "The machine profile: the key is `auto`.",
+          "type": "string"
+        },
+        {
+          "const": "override",
+          "description": "The user's override, which the plan never changes.",
+          "type": "string"
+        }
+      ]
+    },
+    "FitValue": {
+      "description": "A fitted setting's value.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "On or off.",
+          "properties": {
+            "bool": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "bool"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A count.",
+          "properties": {
+            "count": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An engine or model, by its name in `models.toml`.",
+          "properties": {
+            "engine": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "engine"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A precision.",
+          "properties": {
+            "precision": {
+              "$ref": "#/$defs/Precision"
+            }
+          },
+          "required": [
+            "precision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A size, MB.",
+          "properties": {
+            "mb": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mb"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MachineBench": {
+      "description": "One short benchmark, with the conditions it ran under.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it ran."
+        },
+        "conditions": {
+          "$ref": "#/$defs/BenchConditions",
+          "description": "What the PC was doing meanwhile."
+        },
+        "kind": {
+          "$ref": "#/$defs/BenchKind",
+          "description": "What it ran."
+        },
+        "result": {
+          "$ref": "#/$defs/BenchResult",
+          "description": "What it measured."
+        },
+        "took_ms": {
+          "description": "How long it took, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "at",
+        "kind",
+        "took_ms",
+        "conditions",
+        "result"
+      ],
+      "type": "object"
+    },
+    "MachineClass": {
+      "description": "How much room a PC has (section 2.16).",
+      "oneOf": [
+        {
+          "const": "tight",
+          "description": "The budget covers neither the deep pool session nor the spare.",
+          "type": "string"
+        },
+        {
+          "const": "standard",
+          "description": "Between the two.",
+          "type": "string"
+        },
+        {
+          "const": "roomy",
+          "description": "The budget covers every memory row with at least 2 GB to spare.",
+          "type": "string"
+        }
+      ]
+    },
+    "MachineFacts": {
+      "description": "What Eileen read about this PC (section 2.16), stored in `machine\\facts.toml`. Never a\nserial number, a hardware id, the machine's name, a user name or an account.",
+      "properties": {
+        "adapters": {
+          "description": "The GPUs and NPUs, from `DXCore`.",
+          "items": {
+            "$ref": "#/$defs/AdapterFacts"
+          },
+          "type": "array"
+        },
+        "audio": {
+          "$ref": "#/$defs/AudioFacts",
+          "description": "The audio endpoints, as the audio component reported them."
+        },
+        "commit_limit_mb": {
+          "description": "The commit limit, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cpu": {
+          "$ref": "#/$defs/CpuFacts",
+          "description": "The processor."
+        },
+        "degraded": {
+          "description": "The facts that could not be read: unknown, never reported as zero.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disk": {
+          "$ref": "#/$defs/DiskFacts",
+          "description": "The volume that holds the data folder."
+        },
+        "execution_providers": {
+          "description": "The ONNX Runtime execution providers the shipped library can create here, as the speech\nprocess reported them; empty until it has.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "memory_total_mb": {
+          "description": "Total physical memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "monitors": {
+          "description": "How many monitors there are.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "os": {
+          "$ref": "#/$defs/Platform",
+          "description": "The operating system."
+        },
+        "os_build": {
+          "description": "The build and its update revision, for example `26200.6899`.",
+          "type": "string"
+        },
+        "power": {
+          "$ref": "#/$defs/PowerState",
+          "description": "The power source and battery saver."
+        },
+        "probe_ms": {
+          "description": "How long reading them took, ms.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When the facts were read."
+        }
+      },
+      "required": [
+        "read_at",
+        "probe_ms",
+        "os",
+        "os_build",
+        "memory_total_mb",
+        "commit_limit_mb",
+        "cpu",
+        "adapters",
+        "execution_providers",
+        "disk",
+        "power",
+        "audio",
+        "monitors",
+        "degraded"
+      ],
+      "type": "object"
+    },
+    "MachinePlan": {
+      "description": "What the plan chose (section 2.16); in `machine\\plan.toml`, on the bus and on the HUD.",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/WallTime",
+          "description": "When it was computed."
+        },
+        "budget_mb": {
+          "description": "`usual.available_mb + usual.plan_items_mb - reserve_mb`, MB; may be negative.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "choices": {
+          "description": "Rows 1 to 12 of section 2.16's table, in that order.",
+          "items": {
+            "$ref": "#/$defs/FitChoice"
+          },
+          "type": "array"
+        },
+        "class": {
+          "$ref": "#/$defs/MachineClass",
+          "description": "How much room the PC has."
+        },
+        "paused": {
+          "description": "Items the live re-check let go, until they come back.",
+          "items": {
+            "$ref": "#/$defs/FitPause"
+          },
+          "type": "array"
+        },
+        "reserve_mb": {
+          "description": "The admission reserve, `memory.reserve_mb`, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "staged": {
+          "description": "Row 13: the staged features.",
+          "items": {
+            "$ref": "#/$defs/StagedFeature"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The summary sentence, from Eileen's own template.",
+          "type": "string"
+        },
+        "usual": {
+          "$ref": "#/$defs/UsualMemory",
+          "description": "The usual memory it was computed from."
+        },
+        "v": {
+          "description": "The plan's format version, [`PLAN_VERSION`].",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "at",
+        "class",
+        "usual",
+        "reserve_mb",
+        "budget_mb",
+        "choices",
+        "staged",
+        "paused",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ModelFit": {
+      "description": "One entry of the model catalogue the plan reads, from `models.toml`.",
+      "properties": {
+        "adopted": {
+          "description": "WP4 adopted it.",
+          "type": "boolean"
+        },
+        "command_accuracy_per_mille": {
+          "description": "Its accuracy on WP4's command corpus, per mille (row 1 of the plan).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "low_memory": {
+          "description": "It is the low-memory choice for its role.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The model's name in `models.toml`.",
+          "type": "string"
+        },
+        "resident_mb": {
+          "description": "Its resident size, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole",
+          "description": "What it does."
+        }
+      },
+      "required": [
+        "name",
+        "role",
+        "resident_mb",
+        "low_memory",
+        "adopted"
+      ],
+      "type": "object"
+    },
+    "ModelRole": {
+      "description": "What a model does.",
+      "oneOf": [
+        {
+          "const": "vad",
+          "description": "Voice activity detection.",
+          "type": "string"
+        },
+        {
+          "const": "asr",
+          "description": "Recognition.",
+          "type": "string"
+        },
+        {
+          "const": "turn",
+          "description": "End of turn.",
+          "type": "string"
+        },
+        {
+          "const": "tts",
+          "description": "Synthesis.",
+          "type": "string"
+        },
+        {
+          "const": "clone",
+          "description": "Voice cloning.",
+          "type": "string"
+        },
+        {
+          "const": "embed",
+          "description": "The L2 embedding model.",
+          "type": "string"
+        },
+        {
+          "const": "speaker",
+          "description": "The speaker check.",
+          "type": "string"
+        }
+      ]
+    },
+    "PauseCause": {
+      "description": "Why the live re-check let an item go.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Available memory stayed under the reserve for 30 s.",
+          "properties": {
+            "memory_low": {
+              "properties": {
+                "largest": {
+                  "description": "The biggest process that is not Eileen's, and its working set in MB.",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "x-eileen-text": "personal"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "memory_low"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Paging stayed above `memory.max_paging_kb_s` for 30 s.",
+          "properties": {
+            "paging": {
+              "properties": {
+                "kb_s": {
+                  "description": "The 30 s average, KB/s.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kb_s"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "paging"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "battery_saver",
+          "description": "Battery saver is on.",
+          "type": "string"
+        }
+      ]
+    },
+    "PowerState": {
+      "description": "The power source and battery saver.",
+      "properties": {
+        "battery_saver": {
+          "description": "Battery saver is on.",
+          "type": "boolean"
+        },
+        "has_battery": {
+          "description": "The PC has a battery.",
+          "type": "boolean"
+        },
+        "on_battery": {
+          "description": "It runs on the battery now.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "has_battery",
+        "on_battery",
+        "battery_saver"
+      ],
+      "type": "object"
+    },
+    "Precision": {
+      "description": "A model's numeric precision.",
+      "oneOf": [
+        {
+          "const": "fp32",
+          "description": "32-bit floating point.",
+          "type": "string"
+        },
+        {
+          "const": "int8",
+          "description": "8-bit integers.",
+          "type": "string"
+        },
+        {
+          "const": "q8",
+          "description": "8-bit quantised.",
+          "type": "string"
+        },
+        {
+          "const": "q4",
+          "description": "4-bit quantised.",
+          "type": "string"
+        }
+      ]
+    },
+    "StagedFeature": {
+      "description": "A feature shown with its state and reason, not chosen by the plan (row 13).",
+      "properties": {
+        "feature": {
+          "description": "The feature, such as `speaker_check`.",
+          "type": "string"
+        },
+        "sentence": {
+          "description": "Its state and reason in words, with any measured numbers, from Eileen's own template.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/StagedState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "feature",
+        "state",
+        "sentence"
+      ],
+      "type": "object"
+    },
+    "StagedState": {
+      "description": "A staged feature's state.",
+      "oneOf": [
+        {
+          "const": "off",
+          "description": "Not used.",
+          "type": "string"
+        },
+        {
+          "const": "on_demand",
+          "description": "Used when the user asks for it.",
+          "type": "string"
+        },
+        {
+          "const": "shadow",
+          "description": "Measured but not acted on.",
+          "type": "string"
+        },
+        {
+          "const": "on",
+          "description": "In use.",
+          "type": "string"
+        }
+      ]
+    },
+    "UsualMemory": {
+      "description": "The PC's usual memory: `samples::usual` over 7 days of hourly summaries (section 2.16). What\nthe PC would usually have free without Eileen's own extras is `available_mb` plus\n`plan_items_mb`.",
+      "properties": {
+        "available_mb": {
+          "description": "The 25th percentile of the hourly medians of available memory, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "headroom_p10_mb": {
+          "description": "The usual 10th percentile of commit headroom, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hours": {
+          "description": "The qualifying hours behind it; 0 means the first minute's reading after start.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_items_mb": {
+          "description": "The median of what the plan's own items held at those samples, MB.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hours",
+        "available_mb",
+        "plan_items_mb",
+        "headroom_p10_mb"
+      ],
+      "type": "object"
+    }
+  }
+}

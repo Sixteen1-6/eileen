@@ -148,3 +148,16 @@
 "RouteStat.app_major" = "the app's major version"
 "RouteStat.task" = "a task class key, enum-like"
 "SourceStat.host" = "a registrable domain, validated (section 3.3.13)"
+
+# The machine profile (section 3.3.17): what Eileen's own probe, benchmarks and models.toml wrote,
+# or the OS reported. Processor and adapter names are Untrusted and endpoint names Personal.
+"MachineFacts.os_build" = "the OS build and its update revision, read by Eileen's probe"
+"MachineFacts.execution_providers[]" = "ONNX Runtime execution provider names, as the shipped runtime reports them"
+"MachineFacts.degraded[]" = "names of facts Eileen's probe could not read"
+"AdapterFacts.driver" = "the adapter's driver version, from the OS"
+"BenchKind.asr.engine" = "a recognizer's name, a key of Eileen's own models.toml"
+"BenchKind.tts.engine" = "a voice engine's name, a key of Eileen's own models.toml"
+"BenchKind.clone_ttfa.engine" = "a cloning engine's name, a key of Eileen's own models.toml"
+"BenchKind.embed.model" = "an embedding model's name, a key of Eileen's own models.toml"
+"BenchConditions.eileen_version" = "Eileen's own version string"
+"BenchResult.failed.reason" = "the sentence Eileen's benchmark code wrote"

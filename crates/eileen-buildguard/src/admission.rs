@@ -12,7 +12,9 @@
 //!   0.5 GB per compile job, the same headroom rule holds, and the running build has been
 //!   sampled past its peak (its memory has stopped rising for 30 s).
 //! - The ticket's job count is [`jobs_for`]: `min(6, max(2, floor((available_gb - 1.5) /
-//!   0.5)))`, ceiling 8 when one holder has both slots; it never falls as memory rises.
+//!   0.5)))`, ceiling 8 when one holder has both slots, and from WP0 phase B never above the
+//!   PC's logical core count ([`logical_cores`]), which no memory figure changes (sections 2.16
+//!   and 6.1); it never falls as memory rises.
 
 use std::fmt;
 
@@ -72,11 +74,21 @@ impl Thresholds {
     }
 }
 
-/// The compile jobs a ticket gets at `avail_mb` of available memory.
+/// The compile jobs a ticket gets at `avail_mb` of available memory, never more than
+/// `logical_cores` (at least one) when the core count is known.
 #[must_use]
-pub fn jobs_for(avail_mb: u32, both_slots: bool) -> u32 {
+pub fn jobs_for(avail_mb: u32, both_slots: bool, logical_cores: Option<u32>) -> u32 {
     let cap = if both_slots { 8 } else { 6 };
-    (avail_mb.saturating_sub(1_536) / 512).clamp(2, cap)
+    let by_memory = (avail_mb.saturating_sub(1_536) / 512).clamp(2, cap);
+    logical_cores.map_or(by_memory, |cores| by_memory.min(cores.max(1)))
+}
+
+/// The PC's logical processors as this process may use them
+/// ([`std::thread::available_parallelism`]); `None` when the OS does not say.
+#[must_use]
+pub fn logical_cores() -> Option<u32> {
+    let cores = std::thread::available_parallelism().ok()?;
+    u32::try_from(cores.get()).ok()
 }
 
 /// A build's estimated commit, MB: 1 GB plus 0.5 GB per compile job.
@@ -263,10 +275,11 @@ const fn paging_ok(view: &View, t: &Thresholds) -> Result<(), Reason> {
     Ok(())
 }
 
-/// Slot 0's rule, for a build that starts while no other build holds a slot.
+/// Slot 0's rule, for a build that starts while no other build holds a slot, on a PC with
+/// `cores` logical processors when known.
 #[must_use]
-pub fn decide_slot0(view: &View, t: &Thresholds) -> Decision {
-    let jobs = jobs_for(view.latest_avail_mb, false);
+pub fn decide_slot0(view: &View, t: &Thresholds, cores: Option<u32>) -> Decision {
+    let jobs = jobs_for(view.latest_avail_mb, false, cores);
     match headroom_ok(view, jobs, t).and_then(|()| paging_ok(view, t)) {
         Ok(()) => Decision::Admit { jobs },
         Err(reason) => Decision::Refuse(reason),
@@ -275,10 +288,15 @@ pub fn decide_slot0(view: &View, t: &Thresholds) -> Decision {
 
 /// The second-build rule (slot 1's rule in section 6.1), for a build that starts while
 /// another holds a slot, whichever slot is free, given whether the running build is past its
-/// peak.
+/// peak, on a PC with `cores` logical processors when known.
 #[must_use]
-pub fn decide_second_build(view: &View, running_past_peak: bool, t: &Thresholds) -> Decision {
-    let jobs = jobs_for(view.latest_avail_mb, false);
+pub fn decide_second_build(
+    view: &View,
+    running_past_peak: bool,
+    t: &Thresholds,
+    cores: Option<u32>,
+) -> Decision {
+    let jobs = jobs_for(view.latest_avail_mb, false, cores);
     let needs_mb = second_build_needs_mb(jobs);
     if view.latest_avail_mb < needs_mb {
         let avail_mb = view.latest_avail_mb;
@@ -294,10 +312,10 @@ pub fn decide_second_build(view: &View, running_past_peak: bool, t: &Thresholds)
 }
 
 /// Exclusive work's rule (both slots free): slot 0's rule and slot 1's memory requirement,
-/// with the job ceiling at 8.
+/// with the job ceiling at 8, on a PC with `cores` logical processors when known.
 #[must_use]
-pub fn decide_exclusive(view: &View, t: &Thresholds) -> Decision {
-    let jobs = jobs_for(view.latest_avail_mb, true);
+pub fn decide_exclusive(view: &View, t: &Thresholds, cores: Option<u32>) -> Decision {
+    let jobs = jobs_for(view.latest_avail_mb, true, cores);
     let needs_mb = second_build_needs_mb(jobs);
     if view.latest_avail_mb < needs_mb {
         let avail_mb = view.latest_avail_mb;
@@ -368,29 +386,61 @@ mod tests {
     #[test]
     fn jobs_are_two_up_to_two_and_a_half_gigabytes() {
         let gb = |tenths: u32| tenths * 1024 / 10;
-        assert_eq!(jobs_for(gb(20), false), 2, "2.0 GB");
-        assert_eq!(jobs_for(gb(24), false), 2, "2.4 GB");
-        assert_eq!(jobs_for(gb(25), false), 2, "2.5 GB");
-        assert_eq!(jobs_for(gb(30), false), 3, "3.0 GB");
-        assert_eq!(jobs_for(gb(45), false), 6, "4.5 GB");
-        assert_eq!(jobs_for(gb(90), false), 6, "capped at 6");
-        assert_eq!(jobs_for(gb(90), true), 8, "8 with both slots");
-        assert_eq!(jobs_for(0, false), 2, "never under 2");
+        assert_eq!(jobs_for(gb(20), false, None), 2, "2.0 GB");
+        assert_eq!(jobs_for(gb(24), false, None), 2, "2.4 GB");
+        assert_eq!(jobs_for(gb(25), false, None), 2, "2.5 GB");
+        assert_eq!(jobs_for(gb(30), false, None), 3, "3.0 GB");
+        assert_eq!(jobs_for(gb(45), false, None), 6, "4.5 GB");
+        assert_eq!(jobs_for(gb(90), false, None), 6, "capped at 6");
+        assert_eq!(jobs_for(gb(90), true, None), 8, "8 with both slots");
+        assert_eq!(jobs_for(0, false, None), 2, "never under 2");
     }
 
     proptest! {
         #[test]
         fn jobs_never_fall_as_memory_rises(a: u32, b: u32, both: bool) {
             let (low, high) = if a <= b { (a, b) } else { (b, a) };
-            prop_assert!(jobs_for(low, both) <= jobs_for(high, both), "monotonic");
+            prop_assert!(jobs_for(low, both, None) <= jobs_for(high, both, None), "monotonic");
         }
+
+        #[test]
+        fn jobs_never_exceed_logical_cores_and_never_fall_as_memory_rises(
+            a in any::<u32>(),
+            b in any::<u32>(),
+            both in any::<bool>(),
+        ) {
+            let (low, high) = if a <= b { (a, b) } else { (b, a) };
+            for cores in [2, 4, 8, 22] {
+                let fewer = jobs_for(low, both, Some(cores));
+                let more = jobs_for(high, both, Some(cores));
+                prop_assert!(more <= cores, "{more} jobs on {cores} logical processors");
+                prop_assert!(fewer <= more, "monotonic on {cores} cores: {fewer} then {more}");
+                prop_assert!(fewer >= 2, "never under 2 on {cores} cores");
+            }
+        }
+    }
+
+    #[test]
+    fn a_four_core_pc_never_runs_six_compile_jobs() {
+        let plenty = 9_000;
+        assert_eq!(jobs_for(plenty, false, Some(4)), 4, "capped at the 4 logical processors");
+        assert_eq!(jobs_for(plenty, true, Some(4)), 4, "both slots too");
+        assert_eq!(jobs_for(plenty, false, Some(22)), 6, "22 leave the memory cap of 6");
+        assert_eq!(jobs_for(plenty, true, Some(22)), 8, "and of 8 with both slots");
+        assert_eq!(jobs_for(plenty, false, Some(0)), 1, "a count of 0 still runs one job");
+        assert_eq!(
+            decide_slot0(&view(plenty, 20_000, 100), &Thresholds::DEFAULT, Some(4)),
+            Decision::Admit { jobs: 4 },
+            "slot 0 admits with the capped count"
+        );
+        assert!(super::logical_cores().is_some_and(|cores| cores >= 1), "this machine says");
     }
 
     #[test]
     fn slot0_admits_low_memory_with_low_paging() {
         // 1.3 GB available, 5.5 GB headroom, light paging: admitted with 2 jobs.
         assert_eq!(
-            decide_slot0(&view(1_331, 5_632, 300), &Thresholds::DEFAULT),
+            decide_slot0(&view(1_331, 5_632, 300), &Thresholds::DEFAULT, None),
             Decision::Admit { jobs: 2 },
             "admitted"
         );
@@ -398,10 +448,10 @@ mod tests {
 
     #[test]
     fn slot0_refuses_high_paging_and_tight_headroom() {
-        let high = decide_slot0(&view(1_331, 5_632, 9_000), &Thresholds::DEFAULT);
+        let high = decide_slot0(&view(1_331, 5_632, 9_000), &Thresholds::DEFAULT, None);
         assert!(matches!(high, Decision::Refuse(Reason::Paging { .. })), "{high:?}");
         // 2 jobs estimate 2 GB of commit; 3.9 GB of headroom minus that is under the 2 GB floor.
-        let tight = decide_slot0(&view(1_331, 3_993, 100), &Thresholds::DEFAULT);
+        let tight = decide_slot0(&view(1_331, 3_993, 100), &Thresholds::DEFAULT, None);
         assert!(
             matches!(tight, Decision::Refuse(Reason::Headroom { estimate_mb: 2_048, .. })),
             "{tight:?}"
@@ -410,17 +460,18 @@ mod tests {
 
     #[test]
     fn slot1_needs_memory_and_a_past_peak() {
-        let low = decide_second_build(&view(2_000, 9_000, 100), true, &Thresholds::DEFAULT);
+        let low = decide_second_build(&view(2_000, 9_000, 100), true, &Thresholds::DEFAULT, None);
         assert_eq!(
             low,
             Decision::Refuse(Reason::SecondBuildMemory { avail_mb: 2_000, needs_mb: 2_560 }),
             "below"
         );
-        let early = decide_second_build(&view(5_000, 9_000, 100), false, &Thresholds::DEFAULT);
+        let early =
+            decide_second_build(&view(5_000, 9_000, 100), false, &Thresholds::DEFAULT, None);
         assert_eq!(early, Decision::Refuse(Reason::SecondBuildBeforePeak), "before the peak");
         assert!(
             matches!(
-                decide_second_build(&view(5_000, 9_000, 100), true, &Thresholds::DEFAULT),
+                decide_second_build(&view(5_000, 9_000, 100), true, &Thresholds::DEFAULT, None),
                 Decision::Admit { .. }
             ),
             "admitted"

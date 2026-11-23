@@ -118,3 +118,10 @@ pinned_by = "WP9"
 [modules.ports]
 file = "src/ports.rs"
 provisional = false
+
+# The machine profile (section 3.3.17): WP0 phase B's `wp0/machine-contracts` adds it already
+# pinned, so the packages that read and write it build against a fixed shape.
+[modules.machine]
+file = "src/machine.rs"
+provisional = false
+pinned_by = "WP0"

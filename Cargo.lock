@@ -1084,9 +1084,12 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "eileen-contracts",
+ "eileen-platform",
+ "eileen-stdx",
  "secrecy",
  "serde_json",
  "thiserror 2.0.21",
+ "toml",
 ]
 
 [[package]]

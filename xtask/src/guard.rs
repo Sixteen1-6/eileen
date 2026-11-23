@@ -21,7 +21,7 @@ use eileen_buildguard::guard::RECHECK_EVERY;
 use eileen_buildguard::slots::Holder;
 use eileen_buildguard::{
     CargoInvocation, Env, Reason, Refusal, Request, SLOT_HELD_ENV, Slots, Store, SystemMemory,
-    Ticket, acquire, acquire_desktop, disk, spawn_cargo,
+    Ticket, acquire, acquire_desktop, admission, disk, spawn_cargo,
 };
 
 use crate::cli::GuardOptions;
@@ -90,6 +90,7 @@ pub(crate) fn run(
         memory: &mut memory,
         clock: &clock,
         free_disk_gb: disk::free_disk_gb(&worktree),
+        logical_cores: admission::logical_cores(),
         slot_held: std::env::var(SLOT_HELD_ENV).ok(),
         pid: std::process::id(),
         report: &mut report,
@@ -131,6 +132,7 @@ fn run_in(
             memory: &mut *env.memory,
             clock,
             free_disk_gb: env.free_disk_gb,
+            logical_cores: env.logical_cores,
             slot_held: env.slot_held.clone(),
             pid: env.pid,
             report: &mut logged,
@@ -383,6 +385,7 @@ mod tests {
             memory,
             clock: &clock,
             free_disk_gb: Some(100),
+            logical_cores: None,
             slot_held: None,
             pid: std::process::id(),
             report: &mut report,

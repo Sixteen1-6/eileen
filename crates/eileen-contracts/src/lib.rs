@@ -1,9 +1,9 @@
 //! The types every Eileen process, pipe, file and socket shares, with their JSON Schemas.
 //!
-//! One module per producing area (BUILD.md section 3.3). The modules on slice S1's path are
-//! pinned: their snapshots are the contract, and a change is an amendment. The rest are marked
-//! provisional in `modules.toml` and in their own module doc, and the package that owns their
-//! producer pins them in its first pull request.
+//! One module per producing area (BUILD.md section 3.3). The modules on slice S1's path and
+//! `machine` (WP0 phase B) are pinned: their snapshots are the contract, and a change is an
+//! amendment. The rest are marked provisional in `modules.toml` and in their own module doc, and
+//! the package that owns their producer pins them in its first pull request.
 //!
 //! # Owns
 //!
@@ -36,7 +36,8 @@
 //!   `it::text::free_text_is_wrapped_or_allowlisted`).
 //! - `modules.toml` lists exactly the modules here, and a provisional module says so in its doc
 //!   (test `it::modules::modules_toml_matches_the_crate`); WP0 pinned exactly the modules on
-//!   slice S1's path, and every other module names the package that pins it (test
+//!   slice S1's path in phase A, and every other module names the package that pins it, WP0
+//!   for `machine` (test
 //!   `it::modules::wp0_pinned_exactly_the_slice_modules`).
 //!
 //! # Boundaries
@@ -91,6 +92,7 @@ pub mod ids;
 pub mod intent;
 pub mod jobs;
 pub mod learn;
+pub mod machine;
 pub mod ports;
 pub mod record;
 pub mod scenario;

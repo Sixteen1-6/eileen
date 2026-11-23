@@ -120,7 +120,8 @@ pub const fn setup_kind(input: &Input) -> Option<SetupKind> {
         | Input::Sidecar(..)
         | Input::Learn(_)
         | Input::Store(_)
-        | Input::Timer(_) => None,
+        | Input::Timer(_)
+        | Input::Machine(_) => None,
     }
 }
 

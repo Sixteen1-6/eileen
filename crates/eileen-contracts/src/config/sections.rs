@@ -2,12 +2,12 @@
 //! setting without a default, the default is the conservative one (off, unbound, or the default
 //! model in `models.toml`) and WP7 settles it.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
+use super::AutoOr;
 use crate::core_io::Rung;
 use crate::desktop::FieldCategory;
 use crate::fleet::FleetMode;
@@ -15,55 +15,8 @@ use crate::hud::Corner;
 use crate::ids::ApprovalId;
 use crate::jobs::{Depth, GrantMatcher, JobKind, ObservedSource, PoolClass, Route, Tier};
 use crate::learn::{LadderPolicy, PackageType};
+use crate::machine::Precision;
 use crate::schema::Registry;
-
-/// A setting that is `"auto"` or a value.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum AutoOr<T> {
-    /// Eileen computes it.
-    #[default]
-    Auto,
-    /// This value.
-    Value(T),
-}
-
-impl<T: Serialize> Serialize for AutoOr<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Auto => serializer.serialize_str("auto"),
-            Self::Value(value) => value.serialize(serializer),
-        }
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for AutoOr<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr<T> {
-            Word(String),
-            Value(T),
-        }
-        match Repr::<T>::deserialize(deserializer)? {
-            Repr::Word(word) if word == "auto" => Ok(Self::Auto),
-            Repr::Word(word) => {
-                Err(serde::de::Error::custom(format!("expected \"auto\" or a value, not {word:?}")))
-            }
-            Repr::Value(value) => Ok(Self::Value(value)),
-        }
-    }
-}
-
-impl<T: JsonSchema> JsonSchema for AutoOr<T> {
-    fn schema_name() -> Cow<'static, str> {
-        Cow::Owned(format!("AutoOr_{}", T::schema_name()))
-    }
-
-    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
-        let value = generator.subschema_for::<T>();
-        json_schema!({ "anyOf": [{ "const": "auto" }, value] })
-    }
-}
 
 /// The assistant's name and manner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -278,8 +231,8 @@ pub struct RoutingConfig {
     pub fallback_brain: BackendChoice,
     /// Per job kind.
     pub kinds: BTreeMap<JobKind, KindRouting>,
-    /// Keep a warm spare brain.
-    pub hot_spare: bool,
+    /// Keep a warm spare brain; `auto` is the machine profile's plan (section 2.16, row 4).
+    pub hot_spare: AutoOr<bool>,
     /// When the brain's session is recycled.
     pub recycle: RecycleThresholds,
     /// Start the brain on a partial transcript.
@@ -298,7 +251,7 @@ impl Default for RoutingConfig {
             deep: model("strong"),
             fallback_brain: model("fast"),
             kinds: BTreeMap::new(),
-            hot_spare: true,
+            hot_spare: AutoOr::Auto,
             recycle: RecycleThresholds::default(),
             speculative: false,
         }
@@ -371,14 +324,18 @@ pub struct MemoryConfig {
     pub max_paging_kb_s: AutoOr<u32>,
     /// Ask before queueing for longer than this, minutes.
     pub queue_ask_min: u16,
-    /// Warm computer-use sessions.
-    pub pool_computer_use: u8,
-    /// Warm deep-answer sessions.
-    pub pool_deep: u8,
+    /// Warm computer-use sessions; `auto` is the plan's target (section 2.16, row 5).
+    pub pool_computer_use: AutoOr<u8>,
+    /// Warm deep-answer sessions; `auto` is the plan's target (section 2.16, row 3).
+    pub pool_deep: AutoOr<u8>,
     /// Which pool fills first.
     pub pool_order: Vec<PoolClass>,
-    /// Build-heavy jobs at once.
-    pub max_build_heavy_jobs: u8,
+    /// Claude worker sessions running together; `auto` is `min(8, max(2, performance cores))`
+    /// (section 2.16, row 7).
+    pub max_workers: AutoOr<u8>,
+    /// Build-heavy jobs at once; `auto` is 1, or 2 on a `Roomy` PC with at least 32 GB
+    /// (section 2.16, row 8).
+    pub max_build_heavy_jobs: AutoOr<u8>,
     /// A worker's Job Object memory limit, MB; 0 is off.
     pub worker_job_limit_mb: u32,
 }
@@ -390,25 +347,26 @@ impl Default for MemoryConfig {
             reserve_mb: AutoOr::Auto,
             max_paging_kb_s: AutoOr::Auto,
             queue_ask_min: 10,
-            pool_computer_use: 1,
-            pool_deep: 1,
+            pool_computer_use: AutoOr::Auto,
+            pool_deep: AutoOr::Auto,
             pool_order: vec![PoolClass::Deep, PoolClass::ComputerUse],
-            max_build_heavy_jobs: 1,
+            max_workers: AutoOr::Auto,
+            max_build_heavy_jobs: AutoOr::Auto,
             worker_job_limit_mb: 0,
         }
     }
 }
 
-/// The memory profile.
+/// The memory profile: a coarse override of the machine profile's plan (section 2.16).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryProfile {
-    /// Chosen from the PC's memory.
+    /// The machine profile's plan.
     #[default]
     Auto,
     /// Every model at full size.
     Full,
-    /// The low-memory models.
+    /// The small choices of the plan's rows 1 and 2, and no spare.
     Low,
 }
 
@@ -642,20 +600,54 @@ impl Default for FirstRunConfig {
     }
 }
 
-/// Speech engines, by their names in `models.toml`; `None` is the default there.
+/// Speech engines, by their names in `models.toml`; `None` means the machine profile chooses
+/// (section 2.16). The old low-memory-models flag is `memory.profile = "low"`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SpeechConfig {
     /// Voice activity detection.
     pub vad: Option<String>,
-    /// Recognition.
+    /// Recognition (section 2.16, row 1).
     pub asr: Option<String>,
     /// End of turn.
     pub turn: Option<String>,
-    /// Pin the speech process's working set.
-    pub pin_working_set: bool,
-    /// Use the low-memory models.
-    pub low_memory_models: bool,
+    /// The L2 embedding model (section 2.16, row 9).
+    pub embed: Option<String>,
+    /// Speech threads; `auto` is the count the measurements found fastest, never above the
+    /// performance cores and never under 2 (section 2.16, row 6).
+    pub threads: AutoOr<u8>,
+    /// The voice's precision; `auto` is the plan's choice (section 2.16, row 2).
+    pub tts_precision: AutoOr<Precision>,
+    /// Keep the speech process resident; `auto` is the plan's choice (section 2.16, row 10).
+    pub pin_working_set: AutoOr<bool>,
+}
+
+/// The machine profile (section 2.16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct MachineConfig {
+    /// When the short benchmarks run on their own.
+    pub bench: BenchMode,
+    /// Announce a plan change the user would notice, once a day per setting when idle.
+    pub announce: bool,
+}
+
+impl Default for MachineConfig {
+    fn default() -> Self {
+        Self { bench: BenchMode::OnChange, announce: true }
+    }
+}
+
+/// When the machine profile's short benchmarks run on their own; setup and an explicit request
+/// run them either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchMode {
+    /// When a fact a result depends on changes, at a quiet moment on mains power.
+    #[default]
+    OnChange,
+    /// Never on their own.
+    Off,
 }
 
 /// The `eileen` Claude plugin.
@@ -702,13 +694,14 @@ impl Default for FlightConfig {
 pub struct IncidentsConfig {
     /// How long they are kept, days.
     pub keep_days: u16,
-    /// Their total size cap, MB.
-    pub max_mb: u32,
+    /// Their total size cap, MB; `auto` is the machine profile's disk cap (section 2.16, row
+    /// 11): 1,024 while the data volume has 20 GB free, half that under 20 GB, 256 under 4 GB.
+    pub max_mb: AutoOr<u32>,
 }
 
 impl Default for IncidentsConfig {
     fn default() -> Self {
-        Self { keep_days: 30, max_mb: 1024 }
+        Self { keep_days: 30, max_mb: AutoOr::Auto }
     }
 }
 
@@ -720,13 +713,14 @@ pub struct RecordingConfig {
     pub audio: bool,
     /// How long they are kept, days.
     pub keep_days: u16,
-    /// Their total size cap, MB.
-    pub max_mb: u32,
+    /// Their total size cap, MB; `auto` is the machine profile's disk cap (section 2.16, row
+    /// 11): 2,048 while the data volume has 20 GB free, half that under 20 GB, 256 under 4 GB.
+    pub max_mb: AutoOr<u32>,
 }
 
 impl Default for RecordingConfig {
     fn default() -> Self {
-        Self { audio: false, keep_days: 7, max_mb: 2048 }
+        Self { audio: false, keep_days: 7, max_mb: AutoOr::Auto }
     }
 }
 
@@ -776,6 +770,9 @@ pub(super) fn register(r: &mut Registry) {
     r.add::<AnticipationConfig>();
     r.add::<MemoryConfig>();
     r.add::<AutoOr<u32>>();
+    r.add::<AutoOr<u8>>();
+    r.add::<AutoOr<bool>>();
+    r.add::<AutoOr<Precision>>();
     r.add::<MemoryProfile>();
     r.add::<PermissionsConfig>();
     r.add::<ConfigGrant>();
@@ -790,6 +787,8 @@ pub(super) fn register(r: &mut Registry) {
     r.add::<FocusConfig>();
     r.add::<FirstRunConfig>();
     r.add::<SpeechConfig>();
+    r.add::<MachineConfig>();
+    r.add::<BenchMode>();
     r.add::<ClaudePluginConfig>();
     r.add::<LoggingConfig>();
     r.add::<FlightConfig>();

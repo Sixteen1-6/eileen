@@ -648,7 +648,8 @@ impl World {
             | Input::Memory(_)
             | Input::Settings(_)
             | Input::Store(_)
-            | Input::Timer(_) => {}
+            | Input::Timer(_)
+            | Input::Machine(_) => {}
         }
     }
 
@@ -715,7 +716,8 @@ impl World {
             | Effect::Settings(_)
             | Effect::Persist(_)
             | Effect::Incident(_)
-            | Effect::Notify(_) => {}
+            | Effect::Notify(_)
+            | Effect::Machine(_) => {}
         }
         self.effects.push(effect);
     }

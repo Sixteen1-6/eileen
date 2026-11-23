@@ -131,6 +131,9 @@ pub struct Env<'a> {
     pub clock: &'a dyn Clock,
     /// Free disk on the worktree's volume, GB, when known.
     pub free_disk_gb: Option<u64>,
+    /// The PC's logical processors, when known ([`crate::admission::logical_cores`]): no ticket
+    /// gets more compile jobs than this (sections 2.16 and 6.1).
+    pub logical_cores: Option<u32>,
     /// The value of `EILEEN_BUILD_SLOT_HELD` in this process's environment.
     pub slot_held: Option<String>,
     /// This process's id, for the holder record.
@@ -144,6 +147,7 @@ impl fmt::Debug for Env<'_> {
         f.debug_struct("Env")
             .field("store", &self.store)
             .field("free_disk_gb", &self.free_disk_gb)
+            .field("logical_cores", &self.logical_cores)
             .field("slot_held", &self.slot_held)
             .field("pid", &self.pid)
             .finish_non_exhaustive()
@@ -435,14 +439,14 @@ fn admit(
         if zero_held || one_held {
             return Err(Reason::SlotsTaken);
         }
-        let jobs = admitted(decide_exclusive(view, t))?;
+        let jobs = admitted(decide_exclusive(view, t, env.logical_cores))?;
         let zero = take(Slot::Zero)?;
         let one = take(Slot::One)?;
         return Ok((vec![zero, one], Slots::Both, jobs));
     }
     let (free, running) = match (zero_held, one_held) {
         (false, false) => {
-            let jobs = admitted(decide_slot0(view, t))?;
+            let jobs = admitted(decide_slot0(view, t, env.logical_cores))?;
             return Ok((vec![take(Slot::Zero)?], Slots::Zero, jobs));
         }
         (false, true) => (Slot::Zero, Slot::One),
@@ -460,7 +464,7 @@ fn admit(
         .recent_at(now, Duration::from_millis(now.saturating_sub(first.started_ms)))
         .unwrap_or_default();
     let past = past_peak(&during, first.started_ms, now);
-    let jobs = admitted(decide_second_build(view, past, t))?;
+    let jobs = admitted(decide_second_build(view, past, t, env.logical_cores))?;
     let held = match free {
         Slot::Zero => Slots::Zero,
         Slot::One => Slots::One,
@@ -547,6 +551,7 @@ mod tests {
             memory: &mut memory,
             clock: &clock,
             free_disk_gb: None,
+            logical_cores: None,
             slot_held: None,
             pid: std::process::id(),
             report: &mut report,

@@ -194,3 +194,50 @@ fn the_walk_sees_a_plain_string_and_skips_a_wrapped_one() {
     assert_eq!(found, expected, "free text");
     assert_eq!(refs, ["Other"], "references followed");
 }
+
+#[test]
+fn the_machine_profile_s_names_are_wrapped_and_its_plain_strings_listed() {
+    let found = free_text_paths();
+    assert!(
+        found.contains("MachineFacts.os_build"),
+        "the walk reaches the machine profile through Input::Machine: {found:#?}"
+    );
+    let catalogue = eileen_contracts::schema::catalogue();
+    let machine = &catalogue.modules["machine"];
+    for (definition, kind) in
+        [("CpuFacts", "untrusted"), ("AdapterFacts", "untrusted"), ("EndpointFacts", "personal")]
+    {
+        assert_eq!(
+            machine[definition]["properties"]["name"]["x-eileen-text"], kind,
+            "{definition}.name is {kind}"
+        );
+        let path = format!("{definition}.name");
+        assert!(!found.contains(&path), "{path} is wrapped, so it is not free text");
+    }
+    let allowed = allowlist();
+    let listed: Vec<&str> = allowed
+        .keys()
+        .map(String::as_str)
+        .filter(|path| {
+            ["MachineFacts.", "AdapterFacts.", "BenchKind.", "BenchConditions.", "BenchResult."]
+                .iter()
+                .any(|prefix| path.starts_with(prefix))
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            "AdapterFacts.driver",
+            "BenchConditions.eileen_version",
+            "BenchKind.asr.engine",
+            "BenchKind.clone_ttfa.engine",
+            "BenchKind.embed.model",
+            "BenchKind.tts.engine",
+            "BenchResult.failed.reason",
+            "MachineFacts.degraded[]",
+            "MachineFacts.execution_providers[]",
+            "MachineFacts.os_build",
+        ],
+        "the machine profile's plain strings, each listed with a reason"
+    );
+}

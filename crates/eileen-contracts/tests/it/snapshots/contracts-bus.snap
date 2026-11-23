@@ -1024,6 +1024,36 @@ source: crates/eileen-contracts/tests/it/schemas.rs
             "lagged"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The machine profile's plan changed (section 2.16); the announcement table's row for it\nspeaks a change the user would notice.",
+          "properties": {
+            "machine_plan_changed": {
+              "properties": {
+                "changed": {
+                  "description": "The keys of the choices that changed.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "plan": {
+                  "$ref": "#/$defs/MachinePlan",
+                  "description": "The new plan."
+                }
+              },
+              "required": [
+                "plan",
+                "changed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "machine_plan_changed"
+          ],
+          "type": "object"
         }
       ]
     },

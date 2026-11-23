@@ -19,6 +19,7 @@ use crate::ids::{
     ApprovalId, JobId, Personal, ProposalId, RouteProposalId, SkillId, TurnId, Untrusted, WallTime,
 };
 use crate::jobs::{JobStatus, Tier};
+use crate::machine::{FitChoice, FitPause, MachineBench, MachineClass, StagedFeature};
 use crate::record::BlobRef;
 use crate::schema::Registry;
 
@@ -342,6 +343,31 @@ pub enum HudPanel {
         /// The question.
         question: Untrusted<String>,
     },
+    /// The machine panel, for "Eileen, about this PC" (section 2.16).
+    Machine(MachineView),
+}
+
+/// The machine panel (section 2.16). A choice's "Back to automatic" control sends
+/// `HudInput::SetSetting` with the key and the value `"auto"`, through the normal settings flow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MachineView {
+    /// The plan's summary sentence.
+    pub summary: String,
+    /// How much room the PC has.
+    pub class: MachineClass,
+    /// Every row of the plan with its value, reason sentence, source and whether it fits.
+    pub choices: Vec<FitChoice>,
+    /// The staged features, the speaker check's state and its measured numbers among them.
+    pub staged: Vec<StagedFeature>,
+    /// What the live re-check let go, and why.
+    pub paused: Vec<FitPause>,
+    /// The facts in plain lines, from Eileen's own templates.
+    pub facts: Vec<String>,
+    /// One line per audio endpoint, apart from `facts` because an endpoint's name can name a
+    /// person.
+    pub endpoints: Vec<Personal<String>>,
+    /// The last benchmarks.
+    pub benches: Vec<MachineBench>,
 }
 
 /// One image on a contact sheet.
@@ -391,7 +417,7 @@ pub struct FirstRunView {
 }
 
 /// The small indicators.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[expect(clippy::struct_excessive_bools, reason = "one flag per indicator")]
 pub struct Indicators {
     /// The learning loop is working.
@@ -406,10 +432,25 @@ pub struct Indicators {
     pub brain_warming: bool,
     /// A voice is rendering.
     pub rendering_voice: bool,
-    /// Memory is low.
-    pub low_memory: bool,
     /// Desktop jobs are paused.
     pub desktop_jobs_paused: bool,
+    /// The machine chip, which replaces the low-memory flag (section 2.16).
+    pub machine: Option<MachineChip>,
+}
+
+/// The machine chip (section 2.16): the plan's class, what the live re-check let go and why,
+/// and battery saver, with the chip's words from Eileen's own templates ("tight memory", "spare
+/// paused: Resolve, 6 GB", "battery saver: idle work waits").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MachineChip {
+    /// How much room the PC has.
+    pub class: MachineClass,
+    /// What the live re-check let go, and why.
+    pub paused: Vec<FitPause>,
+    /// Battery saver is on, so idle work waits.
+    pub battery_saver: bool,
+    /// The chip's words; `Personal`, because they can name the biggest process.
+    pub line: Personal<String>,
 }
 
 /// What a HUD click or text box sends. Every variant a click can send has a grammar entry or a
@@ -519,6 +560,8 @@ pub(crate) fn register(r: &mut Registry) {
     r.add::<Credit>();
     r.add::<FirstRunView>();
     r.add::<Indicators>();
+    r.add::<MachineView>();
+    r.add::<MachineChip>();
     r.add::<HudInput>();
     r.add::<FirstRunChoice>();
 }
