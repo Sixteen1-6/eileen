@@ -1,9 +1,9 @@
 //! Config assertions over `.github/workflows/` and `.config/nextest.toml` that no command checks:
 //! how the jobs that save rust-cache, and every job that restores what they save, keep the cache
-//! usable, and how the test jobs keep insta's pending snapshots from a failed run out of the tree
-//! and in the run's artifact, every changed one from a single run. CI runs these tests like any
-//! other, so a later edit that drops or changes one of these steps fails the pull request that
-//! makes it.
+//! usable, how the test jobs keep insta's pending snapshots from a failed run out of the tree and
+//! in the run's artifact, every changed one from a single run, and that clippy lints the
+//! configuration that ships as well as every target. CI runs these tests like any other, so a
+//! later edit that drops or changes one of these steps fails the pull request that makes it.
 
 #[cfg(test)]
 mod tests {
@@ -303,6 +303,23 @@ mod tests {
         // The aggregate does not wait for maintenance.
         let all_green = job_text("all-green");
         assert!(!all_green.contains("prune-caches"), "{all_green}");
+    }
+
+    #[test]
+    fn clippy_lints_the_shipped_configuration_as_well_as_every_target() {
+        for name in ["logic-linux", "windows-clippy"] {
+            let steps = steps(&job(CI, name));
+            let every_target = position(
+                &steps,
+                &["run: cargo clippy --workspace --all-targets --locked -- -D warnings\n"],
+            );
+            // Without `--all-targets` cargo leaves dev-dependencies out, and with them the
+            // features only tests turn on (`eileen-audio`'s `fake`, `eileen-trace`'s `testing`,
+            // tokio's `test-util`), which otherwise join the one library unit a release links.
+            let shipped =
+                position(&steps, &["run: cargo clippy --workspace --locked -- -D warnings\n"]);
+            assert!(shipped > every_target, "{name}: the shipped configuration, after the rest");
+        }
     }
 
     fn job_text(name: &str) -> String {

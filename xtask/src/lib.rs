@@ -33,6 +33,10 @@
 //!   its steps and, after its tests, keeps the pending snapshots a failure leaves under `target/`;
 //!   nextest's `ci` profile runs on after a failure; `hygiene` rejects a pending file committed
 //!   to the tree (tests in `workflows::tests::pending`, each rule also shown failing on a fixture).
+//! - `logic-linux` and `windows-clippy` run clippy over every target and then over libraries and
+//!   binaries alone, which lints the configuration that ships, without the features only
+//!   dev-dependencies turn on (test
+//!   `workflows::tests::clippy_lints_the_shipped_configuration_as_well_as_every_target`).
 //! - Every failure names its check or step, where it is, the fix and the command to rerun.
 //!
 //! # Boundaries
