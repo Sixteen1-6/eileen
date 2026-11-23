@@ -855,7 +855,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "properties": {
         "at": {
           "$ref": "#/$defs/WallTime",
-          "description": "Wall-clock time when it was made."
+          "description": "Wall-clock time when it was made; on an input, when the input queue handed it to the core."
         },
         "body": {
           "$ref": "#/$defs/BusEvent",
@@ -867,10 +867,10 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         "mono": {
           "$ref": "#/$defs/MonoTime",
-          "description": "Monotonic time when it was made."
+          "description": "Monotonic time when it was made; on an input, when the input queue handed it to the core."
         },
         "seq": {
-          "description": "The core-wide replay order.",
+          "description": "The core-wide replay order; on an input, the runtime's input queue stamps it.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -890,7 +890,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "properties": {
         "at": {
           "$ref": "#/$defs/WallTime",
-          "description": "Wall-clock time when it was made."
+          "description": "Wall-clock time when it was made; on an input, when the input queue handed it to the core."
         },
         "body": {
           "$ref": "#/$defs/Effect",
@@ -902,10 +902,10 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         "mono": {
           "$ref": "#/$defs/MonoTime",
-          "description": "Monotonic time when it was made."
+          "description": "Monotonic time when it was made; on an input, when the input queue handed it to the core."
         },
         "seq": {
-          "description": "The core-wide replay order.",
+          "description": "The core-wide replay order; on an input, the runtime's input queue stamps it.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -925,7 +925,7 @@ source: crates/eileen-contracts/tests/it/schemas.rs
       "properties": {
         "at": {
           "$ref": "#/$defs/WallTime",
-          "description": "Wall-clock time when it was made."
+          "description": "Wall-clock time when it was made; on an input, when the input queue handed it to the core."
         },
         "body": {
           "$ref": "#/$defs/Input",
@@ -937,10 +937,10 @@ source: crates/eileen-contracts/tests/it/schemas.rs
         },
         "mono": {
           "$ref": "#/$defs/MonoTime",
-          "description": "Monotonic time when it was made."
+          "description": "Monotonic time when it was made; on an input, when the input queue handed it to the core."
         },
         "seq": {
-          "description": "The core-wide replay order.",
+          "description": "The core-wide replay order; on an input, the runtime's input queue stamps it.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"

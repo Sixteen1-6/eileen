@@ -1,7 +1,8 @@
 //! The job lifecycle (BUILD.md section 2.5): the states a job passes through and the one graph
 //! of steps between them, the name, slug and fan-out ordinal a job gets at accept, the approval
-//! deadline, the jobs a cancel can name, what a core restart does to unfinished jobs, and where
-//! a coding job works. [`Registry`] is pure and cloneable: `Core::step` keeps one, and
+//! deadline, the jobs a cancel can name and which job a request names (section 2.5's pronoun
+//! rules), the focus job, what a core restart does to unfinished jobs, and where a coding job
+//! works. [`Registry`] is pure and cloneable: `Core::step` keeps one, and
 //! `tests/it/job_model.rs` checks it against a reference model on random command sequences.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -10,7 +11,8 @@ use std::fmt;
 use eileen_contracts::harness::WorktreeSpec;
 use eileen_contracts::ids::{JobId, Personal, WallTime};
 use eileen_contracts::jobs::{Job, JobKind, JobStatus};
-use eileen_contracts::tools::brain::JobRef;
+
+mod pick;
 
 /// The most jobs the registry keeps. The oldest finished job goes to make room, and while every
 /// kept job is unfinished a new one is refused.
@@ -30,8 +32,10 @@ pub const SLUG_MAX: usize = 40;
 /// this many in seven days, the oldest is forgotten first.
 pub const SLUGS_KEPT: usize = 1024;
 
-/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8).
-const ORDINALS: [&str; 8] = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+/// A fan-out child's spoken ordinal, in accept order (section 3.3.2: `fanout` is 1 to 8), and
+/// the count a fan-out's acknowledgement says.
+pub(crate) const ORDINALS: [&str; 8] =
+    ["one", "two", "three", "four", "five", "six", "seven", "eight"];
 
 /// Words a slug does not start with.
 const ARTICLES: [&str; 3] = ["the", "a", "an"];
@@ -222,6 +226,12 @@ impl Registry {
         self.jobs.iter().find(|job| job.id == id)
     }
 
+    /// The kept job `id`, for a test to set what the core does not track yet, such as taint.
+    #[cfg(test)]
+    pub(crate) fn get_mut(&mut self, id: JobId) -> Option<&mut Job> {
+        self.jobs.iter_mut().find(|job| job.id == id)
+    }
+
     /// A core restart: every unfinished job is interrupted, since no worker or admission queue
     /// outlives the core that started it (invariant 12). Returns them in accept order.
     pub fn restart(&mut self, at: WallTime) -> Vec<JobId> {
@@ -346,19 +356,76 @@ impl Registry {
         self.jobs.iter().filter(due).map(|job| job.id).collect()
     }
 
-    /// The unfinished job `target` names, the newest first: by id, by slug, by spoken name in
-    /// any case, or by a fan-out child's ordinal. A job with no ordinal is never "the first
-    /// one".
+    /// The unfinished job the user is focused on, if any.
     #[must_use]
-    pub fn resolve(&self, target: &JobRef) -> Option<JobId> {
-        let mut open = self.jobs.iter().rev().filter(|job| !job.status.is_terminal());
-        let found = match target {
-            JobRef::Id(id) => open.find(|job| job.id == *id),
-            JobRef::Slug(slug) => open.find(|job| job.slug == *slug),
-            JobRef::Name(name) => open.find(|job| job.name.eq_ignore_ascii_case(name.trim())),
-            JobRef::Ordinal(ordinal) => open.find(|job| job.ordinal == Some(*ordinal)),
-        };
-        found.map(|job| job.id)
+    pub fn focused(&self) -> Option<JobId> {
+        let focus = self.jobs.iter().find(|job| job.focus && !job.status.is_terminal());
+        focus.map(|job| job.id)
+    }
+
+    /// Moves the focus to `id`, an unfinished job, at `at`. Returns the jobs whose focus
+    /// changed; nothing when `id` is not a kept, unfinished job.
+    pub fn focus_on(&mut self, id: JobId, at: WallTime) -> Vec<JobId> {
+        if self.get(id).is_none_or(|job| job.status.is_terminal()) {
+            return Vec::new();
+        }
+        let mut changed = Vec::new();
+        for job in &mut self.jobs {
+            let focus = job.id == id;
+            if job.focus != focus {
+                job.focus = focus;
+                job.updated = at;
+                changed.push(job.id);
+            }
+        }
+        changed
+    }
+
+    /// Once the focus job has finished, or no job has the focus: a finished job gives it up,
+    /// and it moves to the newest unfinished job outside a fan-out that is not an app's own
+    /// work, which the user did not ask for, or to the newest app task when no other job is
+    /// open. Returns the jobs whose focus changed.
+    pub fn refocus(&mut self, at: WallTime) -> Vec<JobId> {
+        if self.focused().is_some() {
+            return Vec::new();
+        }
+        let mut changed = Vec::new();
+        for job in self.jobs.iter_mut().filter(|job| job.focus) {
+            job.focus = false;
+            job.updated = at;
+            changed.push(job.id);
+        }
+        let open = |job: &&Job| !job.status.is_terminal() && job.spec.parent.is_none();
+        let asked =
+            self.jobs.iter().rev().filter(open).find(|job| job.spec.kind != JobKind::AppTask);
+        let next = asked.or_else(|| self.jobs.iter().rev().find(open));
+        if let Some(next) = next.map(|job| job.id) {
+            changed.extend(self.focus_on(next, at));
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        changed
+    }
+
+    /// The name, slug and ordinal of a job that replaces `old` (a reroute): the name and
+    /// ordinal the user knows, which are never regenerated, and a slug of its own.
+    pub fn successor(&self, old: JobId, at: WallTime) -> Result<Naming, Refused> {
+        let job = self.get(old).ok_or(Refused::Unknown(old))?;
+        let slug = self.free_slug(job.slug.clone(), at);
+        Ok(Naming { name: job.name.clone(), slug, ordinal: job.ordinal })
+    }
+
+    /// Records the unfinished job `id`'s progress, at most 100 percent; returns the job when
+    /// the percent changed.
+    pub fn progress(&mut self, id: JobId, pct: u8, at: WallTime) -> Option<&Job> {
+        let job = self.jobs.iter_mut().find(|job| job.id == id && !job.status.is_terminal())?;
+        let pct = pct.min(100);
+        if job.progress_pct == Some(pct) {
+            return None;
+        }
+        job.progress_pct = Some(pct);
+        job.updated = at;
+        Some(&*job)
     }
 
     /// Where `job` works. A coding job whose repository is an absolute path works in place,
@@ -398,6 +465,17 @@ impl Registry {
             }
         }
     }
+}
+
+/// Which job a request names, from [`Registry::pick`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick {
+    /// This job.
+    One(JobId),
+    /// Several jobs fit and none is in focus: Eileen asks which, once. Newest first.
+    Ask(Vec<JobId>),
+    /// No unfinished job fits.
+    Nothing,
 }
 
 /// How a job of `kind` is spoken of when the brain gave no title.
@@ -486,87 +564,4 @@ fn fnv1a(text: &str) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use eileen_contracts::jobs::{JobKind, JobStatus};
-
-    use super::{Step, absolute, fnv1a, legal, name_of, repo_key, slug_of};
-
-    const ALL: [JobStatus; 8] = [
-        JobStatus::Queued,
-        JobStatus::Running,
-        JobStatus::Blocked,
-        JobStatus::AwaitingApproval,
-        JobStatus::Completed,
-        JobStatus::Failed,
-        JobStatus::Cancelled,
-        JobStatus::Interrupted,
-    ];
-
-    #[test]
-    fn the_steps_take_exactly_the_edges_of_the_graph() {
-        let steps = [
-            Step::Start,
-            Step::Block,
-            Step::AwaitApproval { deadline: eileen_contracts::ids::WallTime(0) },
-            Step::Resume,
-            Step::Complete,
-            Step::Fail,
-            Step::Cancel,
-            Step::Interrupt,
-        ];
-        for from in ALL {
-            for to in ALL {
-                let by_step = steps.iter().any(|step| step.leaves(from) && step.status() == to);
-                assert_eq!(by_step, legal(from, to), "{from:?} to {to:?}");
-            }
-            if from.is_terminal() {
-                assert!(steps.iter().all(|step| !step.leaves(from)), "{from:?} is final");
-            }
-        }
-    }
-
-    #[test]
-    fn names_have_two_to_four_words() {
-        assert_eq!(
-            name_of(Some("the hello file please now"), JobKind::General),
-            "the hello file please"
-        );
-        assert_eq!(name_of(Some("render"), JobKind::AppTask), "the render", "one word");
-        assert_eq!(name_of(Some(" The "), JobKind::Research), "the research job", "an article");
-        assert_eq!(name_of(None, JobKind::Coding), "the coding job", "no hint");
-        assert_eq!(name_of(Some("   "), JobKind::Coding), "the coding job", "a blank hint");
-    }
-
-    #[test]
-    fn slugs_are_short_lower_case_ascii_with_no_leading_article() {
-        assert_eq!(slug_of("The hello file!"), "hello-file", "the article goes");
-        assert_eq!(slug_of("Fix Ünïcode parsing"), "fix-n-code-parsing", "ASCII only");
-        assert_eq!(slug_of("日本語"), "", "nothing to keep");
-        let long = slug_of("synchronise every calendar entry between devices tonight");
-        assert_eq!(long, "synchronise-every-calendar-entry-between", "cut at a word");
-        assert_eq!(slug_of(&"x".repeat(90)).len(), super::SLUG_MAX, "one long word is cut");
-    }
-
-    #[test]
-    fn one_repository_named_two_ways_has_one_key() {
-        assert_eq!(repo_key("D:\\Code\\Demo\\"), repo_key(" d:/code/demo"), "the same repository");
-        assert_ne!(repo_key("D:\\code\\demo"), repo_key("D:\\code\\other"), "another one");
-        assert_eq!(repo_key("/home/u/demo/"), repo_key("/home/u/demo"), "a trailing slash");
-        assert_ne!(repo_key("/home/u/Demo"), repo_key("/home/u/demo"), "Linux keeps case");
-        assert_eq!(fnv1a(""), 0xcbf2_9ce4_8422_2325, "the offset basis");
-        assert_eq!(fnv1a("a"), 0xaf63_dc4c_8601_ec8c, "the published value for \"a\"");
-    }
-
-    #[test]
-    fn only_an_absolute_path_with_no_dot_parts_is_a_checkout() {
-        let checkouts =
-            ["D:\\code\\demo", " d:/code/demo/ ", "\\\\server\\share\\demo", "/home/u/demo"];
-        for repo in checkouts {
-            assert!(absolute(repo), "{repo:?} is a checkout");
-        }
-        let names = ["demo", "learning", "..\\..", "..\\x", "run/x", "D:demo", "D:\\code\\..\\x"];
-        for repo in names.into_iter().chain(["/home/./u", "\\\\.\\pipe\\x", "", "   "]) {
-            assert!(!absolute(repo), "{repo:?} is not");
-        }
-    }
-}
+mod tests;

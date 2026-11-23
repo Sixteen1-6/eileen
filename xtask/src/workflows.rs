@@ -1,10 +1,14 @@
-//! Config assertions over `.github/workflows/` that no command checks: how the jobs that save
-//! rust-cache, and every job that restores what they save, keep the cache usable. CI runs these
-//! tests like any other, so a later edit that drops or changes one of these steps fails the pull
-//! request that makes it.
+//! Config assertions over `.github/workflows/` and `.config/nextest.toml` that no command checks:
+//! how the jobs that save rust-cache, and every job that restores what they save, keep the cache
+//! usable, and how the test jobs keep insta's pending snapshots from a failed run out of the tree
+//! and in the run's artifact, every changed one from a single run. CI runs these tests like any
+//! other, so a later edit that drops or changes one of these steps fails the pull request that
+//! makes it.
 
 #[cfg(test)]
 mod tests {
+    mod pending;
+
     const CI: &str = include_str!("../../.github/workflows/ci.yml");
     const TOOLCHAIN: &str = include_str!("../../rust-toolchain.toml");
 
@@ -36,17 +40,20 @@ mod tests {
 
     /// The lines of one job under `jobs:`, from its `name:` line to the next job.
     fn job<'a>(workflow: &'a str, name: &str) -> Vec<&'a str> {
+        try_job(workflow, name).unwrap_or_else(|| panic!("the workflow has no `{name}` job"))
+    }
+
+    fn try_job<'a>(workflow: &'a str, name: &str) -> Option<Vec<&'a str>> {
         let lines: Vec<&str> = workflow.lines().collect();
         let header = format!("{name}:");
-        let start = lines
-            .iter()
-            .position(|line| indent_of(line) == 2 && line.trim() == header)
-            .unwrap_or_else(|| panic!("the workflow has no `{name}` job"));
-        lines[start + 1..]
-            .iter()
-            .take_while(|line| line.trim().is_empty() || indent_of(line) > 2)
-            .copied()
-            .collect()
+        let start = lines.iter().position(|line| indent_of(line) == 2 && line.trim() == header)?;
+        Some(
+            lines[start + 1..]
+                .iter()
+                .take_while(|line| line.trim().is_empty() || indent_of(line) > 2)
+                .copied()
+                .collect(),
+        )
     }
 
     /// A job's steps, each as the text of its lines, trimmed and without comment lines, in

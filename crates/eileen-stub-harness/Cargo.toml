@@ -32,7 +32,7 @@ eileen-harness.workspace = true
 # Starts the binary as `ClaudeWorker` will.
 eileen-supervisor.workspace = true
 # The Redactor: every script passes through it unchanged.
-eileen-trace.workspace = true
+eileen-trace = { workspace = true, features = ["testing"] }
 tokio.workspace = true
 
 [lints]

@@ -41,7 +41,8 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 1. Synthetic echo through `RoomMixer`: no far-end words leak, the command is recovered, and false
    barge-ins stay under 1 per 10 minutes of video.
 2. Barge-in on the owner's PC with speakers: onset to silence at most 150 ms at p95 over 20
-   trials, with the right heard prefix; a backchannel resumes.
+   trials, with the right heard prefix; a backchannel resumes; the loopback's lag behind her
+   PCM is recorded, and over 40 ms it opens an amendment.
 3. Idle listening: the speech process under 8 percent of one core and the full stack about
    1.25 GB resident, recorded with the machine state.
 4. End of turn: half-finished sentences do not end early on the synthetic set, nor on the
@@ -65,11 +66,13 @@ evidence when it holds. The lines below are reminders; the full text in BUILD.md
 13. The speaker check against section 2.8's bar is recorded as a `SpeakerBar`; a check that does
     not pass, or lacks the people or utterances, gates nothing on voice.
 14. The machine profile's speech part: setup benchmarks, thread counts, command accuracy,
-    recognizer swaps, endpoints and execution providers.
+    recognizer swaps, endpoints and execution providers, and `Bench` and `Providers` reaching the
+    machine link, never `Input::Voice`.
 15. The core end of the speech pipe, over an in-memory transport with a scripted stand-in: a late
     connect or a restart recognises each turn once, the latest `SetMode` and `SetHotwords` arrive
-    before any audio, a gap sets the break flag, muted frames are never written, and `Bench` and
-    `Providers` reach the machine link.
+    before any audio and the held commands after them, a gap sets the break flag, muted frames are
+    never written, and with no connection up the energy fallback raises `BargeInWindow` for the
+    utterance playing, numbered modulo 256, so a run across window 255 still pauses.
 
 Every pull request also meets the rules section 6.1 sets for every package.
 
@@ -106,8 +109,10 @@ The parts of the audio series, in merge order, as each opens:
    reporting `Err` when one takes more than it was given, needs more than a PCM body, or returns
    a different error after its first), with a seed corpus. The entry stays
    in `eileen-speech`, as BUILD.md section 4.7's table gives the target to WP4, though the parser
-   is in `eileen-contracts`; `fuzz/AGENTS.md` says "the neutral crate that owns the parser", and
-   pull request #136 proposes the wording under "Suggested guidance changes".
+   is in `eileen-contracts`; `fuzz/AGENTS.md` said "the neutral crate that owns the parser", and
+   `amend/wp4-audio-settled` writes there the rule #136 proposed. The audio series' parts changed
+   only `eileen-audio`, so the entry is still WP0's stub; the speech series' first part, which
+   changes `eileen-speech`, points it at `FrameReader` with the seed corpus.
 2. `wp4/s1-audio-transport` (#140, merged 2026-11-01): defines what WP2's
    `wp2/speech-transport` builds against, so it merges early. In `eileen-audio`: the `SpeechTransport` trait (`accept` a verified connection
    within a deadline, `close` one the component is done with), with std types only, as section
@@ -188,7 +193,7 @@ The parts of the audio series, in merge order, as each opens:
    reply in two batches playing both and draining after each; the clause counts of `Played`;
    the refusals and the logged drops, each queue with its own count; and the render callback
    inside `allocation_counter::measure`).
-7. `wp4/s1-audio-aec` (#162, draft): echo cancellation and the energy barge-in fallback,
+7. `wp4/s1-audio-aec` (#162, merged 2026-11-02): echo cancellation and the energy barge-in fallback,
    crate-private in `eileen-audio` (`aec`, `energy`) until the component takes them.
    `EchoCanceller` wraps sonora 0.2.0 at the speech pipe's 16 kHz mono in 10 ms chunks: AEC3
    with noise suppression and the high-pass filter against the loopback while it sounds,
@@ -210,8 +215,66 @@ The parts of the audio series, in merge order, as each opens:
    `eileen_audio::energy::tests` (the window assembly, the detector's rules, and both inside
    `allocation_counter::measure`). Acceptance 1's transcript-level check needs the recognizer
    and comes after both series (W2).
+8. `wp4/s1-audio-link` (#164, merged 2026-11-07): the connection half of the component.
+   `eileen_audio::component` now returns the audio component, which takes the audio and speech
+   effect families, captures
+   from `AudioConfig::capture` (a `SharedSource`, new) into the ring from its start, and serves
+   each connection `AudioConfig::speech` gives: the latest `SetMode` and `SetHotwords` first,
+   then the commands held while none was up, then the ring's unconfirmed frames with their flags,
+   then live frames. It sends a `Ping` every second and answers the speech process's, reports
+   each `Pong` as `Input::Sidecar(SidecarId::Speech, Heartbeat)`, confirms through the ring from
+   each `Pong` and `EndOfTurn`, forwards every event as `Input::Voice`, and hands a connection
+   back when it breaks or the codec refuses a frame. `SetCapture` stops and starts the capture
+   stream, and a mute empties the ring. While no connection is up it answers `Speak` with
+   `SpeakDone` and `Check` with `CheckResult` `Unavailable`, and holds other commands (at most
+   64). The capture callback (`capture::Framer`) downmixes, converts to 16 kHz with part 4's
+   resamplers and cuts 512-sample frames with their capture times, allocating nothing. Evidence:
+   the integration tests in `tests/it/speech_pipe.rs` (acceptance 15's late connect, kill,
+   reload, latest mode and hotwords, overrun and mute pieces, the heartbeat and confirmation, a
+   refused frame, the `Speak` answer while no connection is up, the held commands' maximum of
+   64 with the drop logged, and a clean stop logging no warning) and the unit tests in
+   `eileen_audio::capture::tests`. The review's follow-up (#173) serves a mute while a write or
+   a closing connection's last read waits on the pipe, answers a read's `Ping`s with one `Pong`
+   and drains the handoff before every write, logs the link's `channel.full` as running totals
+   with the inputs' capacity, and keeps a capture buffer's whole frames when it ends inside a
+   device frame; its tests add a write that misses its deadline, a command whose own write
+   fails and the transport's shutdown, and #174 amends section 4.6 so CI lints the shipped
+   configuration, which tests compile with `fake` on. Still to come in later parts: PCM into
+   playback and the playback commands, echo cancellation and the capture flags, the energy
+   fallback while no connection is up with its `BargeInWindow` events (BUILD.md section 2.8),
+   and `PlayPhrase` and `Record` as `never!`. `Bench` and `Providers` to the machine link are not
+   in the series: they land in WP4's first pull request after `wp0/machine-contracts`, with
+   those events in `eileen_contracts::speech` (BUILD.md section 6.6, acceptance 14). The core's
+   span id in each speech command frame stays 0 until an amendment of its own says how the id
+   reaches the component; #173 proposed one way, and `amend/wp4-audio-settled` left it out,
+   since it changes what an effect's envelope or its routing carries.
 
-The speech series has not opened yet.
+The amendment after the connection part:
+
+- #180 (`amend/wp4-audio-settled`, open): writes into BUILD.md what the parts proposed under
+  "Suggested guidance changes" and settles two open points. Capture and loopback run at the
+  endpoint's own rate, 48 kHz through the 3:1 conversion, 44.1 kHz through the 160:441
+  conversion or 16 kHz taken as it is, and a stream at any other rate (8, 32, 88.2 or 96 kHz) is
+  refused with a logged reason, which `eileen doctor audio` shows (#148; sections 2.2, 2.8, 3.5,
+  6.6 and 7). Eileen's own PCM becomes AEC3's reference once it has sounded for 50 ms since the
+  loopback last did, or while no loopback runs, and AEC3 is bypassed once the reference and her
+  PCM have both been silent for 500 ms; the loopback's lag is measured on the owner's PC, and
+  over 40 ms it opens an amendment (#162; 6.6 acceptance 2). Components send inputs with `seq`,
+  `at` and `mono` zero and the runtime's input queue stamps them, which WP2's section 6.4 builds
+  and tests (#164; sections 3.3.15 and 6.4). Held commands go after the latest `SetMode` and
+  `SetHotwords` and before any audio, and a full queue refuses the newest (#164). The energy
+  fallback reaches the core as `BargeInWindow`, one per speech window of the detector's run for
+  the utterance playing, numbered modulo 256, with no contract change (section 2.8). The machine
+  link leaves slice S1's gate and lands after `wp0/machine-contracts`, and WP2's speech
+  transport no longer tests it, as #178 also settled (sections 0, 3.3.17, 6.1, 6.4 and 6.6). A
+  fuzz target's entry stays in a crate of the package section 4.7's table names
+  (`fuzz/AGENTS.md` and `fuzz/README.md`, #136). Evidence: the sources each change cites, read
+  on `main`, listed in its pull request.
+
+The speech series has not opened yet. When it does, `tts.synth` cannot take its remote `speak`
+parent from the command frame, since the audio component sends `span` 0 until the plan settles
+how the core's span id reaches it; so the series builds no span against that parent before then,
+which would fail the span-parent check in every simulation run.
 
 ## Surprises
 
@@ -353,13 +416,18 @@ The speech series has not opened yet.
 - The loopback is a capture stream too: cpal opens it as an input stream on the render endpoint
   with `AUDCLNT_STREAMFLAGS_LOOPBACK` and no converter, so a 44.1 kHz endpoint's echo reference
   also arrives at 44.1 kHz and takes the 160:441 conversion, even when playback runs at 48 kHz
-  through Windows' converter. BUILD.md sections 2.2 step 1, 2.8 and 6.6 still say capture and
-  loopback run at 48 kHz; the pull request for this part proposes the wording under "Suggested
-  guidance changes".
-- An endpoint mixing at any other rate (32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
-  resampler. Until the part of this series that first opens a cpal stream decides what then
-  happens (refuse the endpoint with a logged reason, or add the conversions, measured against
-  the same bar), such an endpoint is unsupported.
+  through Windows' converter. BUILD.md sections 2.2 step 1, 2.8 and 6.6 said capture and
+  loopback run at 48 kHz; `amend/wp4-audio-settled` writes the endpoint's own rate there.
+- A 16 kHz capture or loopback stream, such as a Bluetooth hands-free headset's wideband
+  microphone, needs no conversion: `Framer` takes it as it is, and
+  `sixteen_kilohertz_mono_is_framed_sample_for_sample_with_each_frames_time` pins that.
+- An endpoint mixing at any other rate (8, 32, 88.2 or 96 kHz) gets `UnsupportedRates` from the
+  resampler, and its capture or loopback stream is refused with a logged reason, as
+  `amend/wp4-audio-settled` settles in BUILD.md sections 2.2 step 1, 2.8 and 6.6; with no
+  loopback running, AEC3 takes her own PCM. Today the reason reaches only the log (`link.rs`
+  warns "capture did not start"); the plan has `eileen doctor audio` name such an endpoint, and
+  no contract carries a HUD notice for it. Conversions for those rates would each need their
+  own measurement against the same bar first, an open risk in BUILD.md section 7.
 
 - The test sources and sinks pace on the tokio clock, not on `eileen_stdx::clock::ManualClock`.
   The component's speech connections take their deadlines from tokio's timer, so a source on
@@ -445,7 +513,7 @@ The speech series has not opened yet.
 - The reference: the loopback while it carries her; Eileen's own PCM once her PCM has sounded
   in five chunks (50 ms) since the loopback last sounded, or while no loopback stream runs;
   bypassed once the reference and her PCM have both been silent for 500 ms. Section 2.2 step 1
-  bypasses on 500 ms of loopback silence alone, which, read literally, would bypass AEC3 under
+  bypassed on 500 ms of loopback silence alone, which, read literally, would bypass AEC3 under
   her voice when the loopback does not carry it (a broken loopback, or the default endpoint
   changed under it); while the loopback works the readings agree, since her voice is in it.
   An earlier rule waited for 500 ms of loopback silence before switching, which left AEC3
@@ -453,9 +521,10 @@ The speech series has not opened yet.
   loopback a buffer or two behind her stream, which the room tests now model. A loopback more
   than 40 ms behind her PCM, once placed on the microphone's clock, would hand the reference to
   her PCM and back at each reply after a pause, and each change restarts AEC3's learning time;
-  the device part measures the real lag on the owner's PC. The pull request
-  proposes a sentence for section 2.2 under "Suggested guidance changes". A chunk is silent
-  under -60 dBFS.
+  the device part measures the real lag on the owner's PC, and a lag over 40 ms opens an
+  amendment (BUILD.md section 6.6, acceptance 2). `amend/wp4-audio-settled` writes this rule
+  into sections 2.2 step 1, 2.8 and 6.6, as the pull request proposed. A chunk is
+  silent under -60 dBFS.
 - The devices' samples are untrusted: a NaN or infinite sample in the microphone, the loopback
   or her PCM, or one past 24 dB over full scale, becomes silence before sonora or the flags see it, and the report says so, for the
   component part to count and log. AEC3 is never reset, so one bad sample in its filter would
@@ -490,8 +559,14 @@ The speech series has not opened yet.
   process disconnects, so no stale floor carries over. `WindowAssembler` builds the windows
   from the canceller's chunks: each pairs the cancelled samples with the microphone's, and
   carries the flags of every chunk it spans, a chunk split between two windows counting in
-  both, so the component wires the same code the room tests run. It returns windows and onsets; turning them into the core's barge-in input is the component
-  part's, since no contract carries the fallback yet.
+  both, so the component wires the same code the room tests run. It returns windows and onsets. The
+  component part sends the core one `VoiceEvent::BargeInWindow` for the utterance playing per
+  speech window of a run, numbered as that contract counts windows, modulo 256 (the low eight
+  bits of the window's place since the utterance began playing, never saturated, since
+  `window` is a `u8` and `Turns::barge_in_window` counts a run with wrapping addition, so a run
+  about 8.2 s into a reply still pauses), and with `prob_pct` 100, so the core ducks at the
+  first and pauses at the third with no contract change, as `amend/wp4-audio-settled` settles
+  in BUILD.md sections 2.8 and 6.6.
 - The tests run the room at 16 kHz, so each buffer is one chunk; the resamplers are measured on
   their own. Ten minutes of a bed in one test took 19.5 s and 20.1 s on Windows CI and 14 s on
   Linux, near the default nextest profile's 30 s limit on a loaded PC, so each bed runs as four
@@ -505,6 +580,78 @@ The speech series has not opened yet.
   her PCM moves AEC3's reference by 20 ms. A loopback that carries her at another volume is
   tested on the canceller directly. Lining the loopback's buffers up with the microphone's is
   the component's: the canceller takes `None` only while no loopback stream runs.
+
+- The speech link runs in the component's one task. Its pending accept, read and effect are
+  owned futures (each takes its half, source or transport handle and gives it back), so they
+  live across the loop's turns and none is dropped part way; this also lets a read in flight be
+  awaited when a write fails, so the halves rejoin before the connection goes back. A reader
+  task per connection was weighed: it would read while a long replay writes, but it needs its
+  own channel and a way to hand its half back. Writes go a second of audio at a time instead,
+  with the loop reading between batches and sending a due `Ping` before the next, so a speech
+  process that reads a long replay slowly still answers a heartbeat each second and the core
+  does not count it dead. When a write fails, the read in flight is awaited and the frames it
+  brought are still taken, so an `EndOfTurn` or `SpeakDone` sent just before the break reaches
+  the core; a command whose write failed is served as one that came with no connection up.
+- A mute never waits on the pipe (follow-up #173). Each write, and a closing connection's last
+  read, races the pending effect: a mute stops capture at once and drops any `SetCapture` parked
+  before it, and any other effect is parked, at most 64, for the loop to serve in order after
+  the wait. Before, a slow speech process could hold a mute for a write's 2 s and a read's 1 s,
+  with the capture stream and the mic indicator still on, past section 4.7's one-buffer budget
+  and simulator invariant 9. Audio goes a frame at a time under one deadline for the batch, so
+  after a mute only the frame already begun is finished and the rest of the batch, captured
+  before the mute, is dropped with the ring. Handing the connection back once a write outlived
+  one buffer was weighed: it would also stop the frames, but the speech process exits when its
+  connection closes, so a mute during a slow replay would cost a 10 to 20 s model reload. A
+  writer task per connection was weighed too; it frees the loop from writes, but frames already
+  queued to it go out after the mute unless the queue is cleared, which is the same race again.
+- The ring's handoff holds 128 frames (about 4 s), up from part 3's 64: a write that waits out
+  its 2 s deadline and the read awaited after it (up to 1 s) stall the loop that drains the
+  handoff, and 2 s of room would lose the very audio the next connection should replay. The
+  component drains the handoff before every write and before that read, and one `Pong`
+  answers all the `Ping`s of a read (follow-up #173; before, each `Ping` had its own write and
+  deadline), so no stretch between two drains is longer than one write's deadline and one
+  read's. A test stalls a connection until its write misses the deadline and finds no frame
+  lost or flagged on the next.
+- A read that misses its one-second deadline is started again, never a failure: silence is the
+  core's business, counted as missed heartbeats, and during a reload it counts none until the
+  120 s load deadline. A write that misses its two-second deadline ends the connection, as
+  the writer can no longer tell where the stream is.
+- While no connection is up the ring is drained from the handoff every 10 ms, so the handoff
+  never fills; on a connection the same tick writes what the ring holds.
+- Commands held while no connection is up go to the next connection after the latest `SetMode`
+  and `SetHotwords` and before any audio, and leave the queue only once that write succeeds; a
+  full queue refuses the new command, logged as `channel.full` on `audio.speech.held` (BUILD.md
+  section 6.6 fixes that order, from `amend/wp4-audio-settled`). The
+  link's other `channel.full` events, the ring's drops and the inputs the core's queue refused,
+  go in the once-a-second report when they changed, each with its running total as `times`
+  and the inputs' with the capacity the queue's last refusal gave, as every other emitter does
+  (follow-up #173; before, each gave the count since the last report, and the inputs' had no
+  capacity). `Speak`
+  and `Check` are never held, since they are answered at once. With no transport, or after it
+  has shut down, nothing is held, since no connection will come.
+- While capture is off the 10 ms drain is off too: a mute empties the ring and nothing new
+  arrives, and a component wired with no microphone (as `eileen-cli` still is) never gets a
+  frame. So a muted component, connected or not, wakes once a second for its `Ping`, not a
+  hundred times; a new connection's replay runs on the loop's own flag, not on the tick.
+- A connection handed back logs at warn, except when the component itself is stopping, which
+  is an ordinary end and logs at info, so a clean run and stop logs no warning.
+- Inputs leave the component with `seq`, `at` and `mono` zero: only the runtime's input queue
+  can give an input its place in the core-wide replay order, and the component reads no clock.
+  `eileen-runtime` has no `InputSink` yet; WP2's queue fills them when it takes an input, as
+  BUILD.md section 3.3.15 now says for every component (`amend/wp4-audio-settled`).
+- The capture callback takes a buffer in chunks of 480 device frames (10 ms at 48 kHz) into
+  scratch buffers allocated once, so a device buffer of any length allocates nothing. It takes
+  whole device frames before it chunks, so a buffer that ends inside a device frame loses that
+  partial frame only (follow-up #173; before, the downmix refused the last chunk whole). A frame's
+  capture time is the buffer's plus its first sample's place in it at 16 kHz; the resampler's
+  own delay (under 3 ms) is not subtracted. Every frame carries no capture flag until echo
+  cancellation joins.
+- The integration tests take the `fake` feature through a dev-dependency of `eileen-audio` on
+  itself, so `cargo nextest run --workspace` builds them without a feature flag and no shipped
+  binary carries the memory transport. Under resolver 3 that turns `fake` on in every build of
+  the workspace that compiles test targets, clippy over `--all-targets` included, so #174
+  amends section 4.6 with a clippy run over libraries and binaries alone, the one check of the
+  configuration that ships.
 
 ## Outcome
 

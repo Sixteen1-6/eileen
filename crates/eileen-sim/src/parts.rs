@@ -18,14 +18,17 @@
 //!   everything it sends: the primary from the start as instance 1, and each `Start`,
 //!   `Recycle` and `Promote` a new one with the next number and its `Ready`; `Stop` ends one
 //!   with `Exited`. A slot answers each `Turn` sent to it with the next scripted reply (text in
-//!   deltas, an optional `jobs_dispatch` call, `TurnDone`), after a delay the profile draws
+//!   deltas, an optional `jobs_dispatch` call and an optional `jobs_control` call, `TurnDone`),
+//!   after a delay the profile draws
 //!   ([`BrainTurn`]); `Interrupt` drops the rest of the slot's turn. A stalled turn sends
 //!   nothing for the stall, then its whole answer; its process hears no interrupt until then,
 //!   and a later turn to the same slot waits for it, as a stuck process would, while the other
 //!   slots answer at once. A failed turn ends in an error with no text.
 //! - A worker session answers `Start` with `Init`, `Bind` with one `PreToolUse` for a write in
 //!   its job folder and then `TurnDone` (later when slow, or `Exited` part way when it
-//!   crashes), and `Cancel` with `Exited`.
+//!   crashes), `Prompt` with a `TurnDone` after the same work, `Interrupt` with an errored
+//!   `TurnDone` in place of the turn in progress, if one is, and `Cancel` with `Exited`. A
+//!   test can make every turn's work take longer ([`Workers::set_work_ms`]), so jobs overlap.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -82,6 +85,8 @@ const BRAIN_MODEL: &str = "sim-brain";
 const WORKER_START_MS: u64 = 500;
 const WORKER_HOOK_MS: u64 = 300;
 const WORKER_DONE_MS: u64 = 1_200;
+/// How long after an `Interrupt` the interrupted turn's `TurnDone` comes, ms.
+const WORKER_INTERRUPT_MS: u64 = 50;
 /// When a crashing worker session exits after its `Bind`, ms: after its hook, before its end.
 const WORKER_CRASH_MS: u64 = 600;
 /// The exit code of a crashed worker session.
@@ -117,6 +122,11 @@ impl Due {
     pub fn pop(&mut self, now_ms: u64) -> Option<Input> {
         let key = *self.items.keys().next().filter(|(at, _)| *at <= now_ms)?;
         self.items.remove(&key)
+    }
+
+    /// Whether a scheduled item is one `pick` picks.
+    pub fn any(&self, pick: impl Fn(&Input) -> bool) -> bool {
+        self.items.values().any(pick)
     }
 
     /// Drops every scheduled item `drop` picks.
@@ -528,6 +538,8 @@ pub struct BrainReply {
     pub deltas: Vec<String>,
     /// A `jobs_dispatch` call's arguments, sent after the first delta.
     pub dispatch: Option<Value>,
+    /// A `jobs_control` call's arguments, sent after the first delta and any dispatch.
+    pub control: Option<Value>,
     /// Whether the turn ends in an error.
     pub fail: bool,
     /// How long the brain sends nothing before this answer, ms: a stalled instance, which
@@ -542,6 +554,7 @@ impl BrainReply {
         Self {
             deltas: deltas.iter().map(|d| (*d).to_owned()).collect(),
             dispatch: None,
+            control: None,
             fail: false,
             stall_ms: None,
         }
@@ -551,6 +564,20 @@ impl BrainReply {
     #[must_use]
     pub fn dispatching(mut self, title: &str, task: &str) -> Self {
         self.dispatch = Some(json!({ "kind": "general", "task": task, "title_hint": title }));
+        self
+    }
+
+    /// The same reply, dispatching a job with exactly these `jobs_dispatch` arguments.
+    #[must_use]
+    pub fn dispatching_args(mut self, args: Value) -> Self {
+        self.dispatch = Some(args);
+        self
+    }
+
+    /// The same reply, calling `jobs_control` with these arguments.
+    #[must_use]
+    pub fn controlling(mut self, args: Value) -> Self {
+        self.control = Some(args);
         self
     }
 
@@ -697,6 +724,7 @@ impl Brain {
                 if pace.fail {
                     reply.deltas.clear();
                     reply.dispatch = None;
+                    reply.control = None;
                     reply.fail = true;
                 }
                 reply.stall_ms = reply.stall_ms.or(pace.stall_ms);
@@ -793,11 +821,16 @@ fn answer(start_ms: u64, sent: Sent, reply: &BrainReply, pace: BrainTurn, due: &
         let text = Untrusted::new(text.clone());
         let delta = BrainEvent::TextDelta { instance: number, turn, text };
         due.schedule(at, Input::Brain(delta));
-        if index == 0
-            && let Some(call) =
-                reply.dispatch.as_ref().and_then(|args| dispatch(number, turn, authority, args))
-        {
-            due.schedule(at.saturating_add(20), Input::ToolCall(call));
+        if index == 0 {
+            let calls =
+                [("jobs_dispatch", &reply.dispatch, 20), ("jobs_control", &reply.control, 40)];
+            for (tool, args, after) in calls {
+                if let Some(call) =
+                    args.as_ref().and_then(|args| tool_call(number, turn, authority, tool, args))
+                {
+                    due.schedule(at.saturating_add(after), Input::ToolCall(call));
+                }
+            }
         }
         at = at.saturating_add(pace.delta_ms);
     }
@@ -809,18 +842,19 @@ fn turn_done(instance: u32, turn: TurnId, is_error: bool) -> BrainEvent {
     BrainEvent::TurnDone { instance, turn, cost: Cost::default(), context_tokens: 1_000, is_error }
 }
 
-/// The brain's `jobs_dispatch` call, over the instance's own shim connection (the tool name
-/// always parses).
-fn dispatch(
+/// The brain's call of `tool`, over the instance's own shim connection (the tool names it is
+/// given always parse).
+fn tool_call(
     number: u32,
     turn: TurnId,
     authority: TurnAuthority,
+    tool: &str,
     args: &Value,
 ) -> Option<ToolCallRequest> {
     Some(ToolCallRequest {
         caller: Caller::Shim { connection: u64::from(number), role: ShimRole::Brain },
         origin: CallOrigin::Brain { turn, authority },
-        tool: ToolName::new("jobs_dispatch").ok()?,
+        tool: ToolName::new(tool).ok()?,
         args: Untrusted::new(args.clone()),
         paths: Vec::new(),
         urls: Vec::new(),
@@ -867,9 +901,24 @@ pub enum WorkerFault {
 #[derive(Debug, Default)]
 pub struct Workers {
     hooks: u64,
+    /// How long a turn's work takes, ms, when a test set it; otherwise `WORKER_DONE_MS`.
+    work_ms: Option<u64>,
 }
 
 impl Workers {
+    /// Makes every turn's work from now on take `ms` before its `TurnDone`.
+    pub const fn set_work_ms(&mut self, ms: u64) {
+        self.work_ms = Some(ms);
+    }
+
+    /// How long a turn's work takes, ms.
+    const fn work(&self) -> u64 {
+        match self.work_ms {
+            Some(ms) => ms,
+            None => WORKER_DONE_MS,
+        }
+    }
+
     /// Answers a worker command; `fault` says how a `Bind` goes wrong, if it does.
     pub fn command(
         &mut self,
@@ -908,18 +957,38 @@ impl Workers {
                     is_error: false,
                     summary: Untrusted::new("Created hello.txt with hi.".to_owned()),
                 };
-                due.schedule(at(WORKER_DONE_MS), Input::Worker(session, done));
+                due.schedule(at(self.work()), Input::Worker(session, done));
+            }
+            WorkerCmd::Prompt { .. } => {
+                let done = WorkerEvent::TurnDone {
+                    cost: Cost::default(),
+                    is_error: false,
+                    summary: Untrusted::new("Done as you asked.".to_owned()),
+                };
+                due.schedule(now_ms.saturating_add(self.work()), Input::Worker(session, done));
+            }
+            WorkerCmd::Interrupt => {
+                let turn_done = |input: &Input| {
+                    of_session(input, session)
+                        && matches!(input, Input::Worker(_, WorkerEvent::TurnDone { .. }))
+                };
+                if due.any(turn_done) {
+                    due.drop_where(turn_done);
+                    let stopped = WorkerEvent::TurnDone {
+                        cost: Cost::default(),
+                        is_error: true,
+                        summary: Untrusted::new(String::new()),
+                    };
+                    let at = now_ms.saturating_add(WORKER_INTERRUPT_MS);
+                    due.schedule(at, Input::Worker(session, stopped));
+                }
             }
             WorkerCmd::Cancel => {
                 due.drop_where(|input| of_session(input, session));
                 let exited = WorkerEvent::Exited { code: None };
                 due.schedule(now_ms.saturating_add(20), Input::Worker(session, exited));
             }
-            WorkerCmd::Prompt { .. }
-            | WorkerCmd::Interrupt
-            | WorkerCmd::Recycle
-            | WorkerCmd::RemoveWorktree
-            | WorkerCmd::RestoreSnapshot { .. } => {}
+            WorkerCmd::Recycle | WorkerCmd::RemoveWorktree | WorkerCmd::RestoreSnapshot { .. } => {}
         }
     }
 }

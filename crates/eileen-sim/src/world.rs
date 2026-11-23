@@ -432,6 +432,11 @@ impl World {
         self.speech_queue.retain(|queued| playing.contains(queued));
     }
 
+    /// Makes every worker turn's work from now on take `ms`, so jobs run side by side.
+    pub const fn set_worker_ms(&mut self, ms: u64) {
+        self.workers.set_work_ms(ms);
+    }
+
     /// Queues the scripted brain's reply to the next turn it is sent.
     pub fn script_brain(&mut self, reply: BrainReply) {
         self.brain.script(reply);
