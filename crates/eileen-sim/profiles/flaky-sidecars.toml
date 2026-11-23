@@ -1,0 +1,54 @@
+# Flaky sidecars (BUILD.md section 4.7): every fault site is on in every run, so the speech
+# process crashes, hangs past its deadline and loads slowly, workers stop part way or run
+# late, the brain stalls or fails, and the bus subscriber falls behind. An active site fires
+# three times in a hundred; the speech process's sites are reached once a second, at each
+# heartbeat. Schema: profile.schema.json beside it.
+name = "flaky-sidecars"
+steps = 2000
+seeds = 64
+max_step_ms = 300
+speech_queue_max = 8
+bus_subscriber_capacity = 32
+bus_subscriber_drain = 2
+barge_in_pct = 33
+
+[input_mix]
+voice = 5
+user = 2
+playback = 1
+timer = 3
+activity = 1
+
+[pc]
+physical_mb = 16384
+commit_limit_mb = 24576
+others_mb = 8000
+others_commit_mb = 9000
+largest = "browser"
+largest_mb = 2500
+paging_floor_mb = 1000
+paging_kb_s_per_mb = 40
+paging_limit_kb_s = 4000
+cpu_busy_pct = 15
+
+[pc.power]
+has_battery = false
+on_battery = false
+battery_saver = false
+
+[eileen]
+core = 60
+speech = 1250
+brain = 400
+worker = 400
+
+[brain]
+first_ms = 800
+first_jitter_ms = 2000
+delta_ms = 150
+dispatch_pct = 30
+stall_ms = 30000
+
+[faults]
+activate_per_mille = 1000
+fire_per_mille = 30

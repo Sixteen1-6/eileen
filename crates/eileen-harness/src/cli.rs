@@ -1,8 +1,14 @@
 //! The commands of BUILD.md section 3.5 that the harness implements, which `eileen-cli`
-//! dispatches here: `bench brain`, `claude` and `doctor claude`. A stub until WP3 builds them:
-//! each says it is not built yet.
+//! dispatches here: `bench brain`, `claude` and `doctor claude`. `doctor claude` is built
+//! ([`doctor`]); the other two say they are not built yet.
+
+use std::io::{self, Write};
 
 use clap::{Args, Subcommand};
+
+use crate::locate::LocateError;
+
+pub mod doctor;
 
 /// Why a command of this crate failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -12,6 +18,19 @@ pub enum CliError {
     NotBuilt {
         /// The command as the user typed it, without its arguments.
         command: &'static str,
+    },
+    /// No claude CLI could be used; the doctor printed what it searched and passed over.
+    #[error(transparent)]
+    Locate(#[from] LocateError),
+    /// `eileen doctor claude` found the CLI unusable (signed out, too old, or no answer); the
+    /// report says which.
+    #[error("the claude CLI is not ready for Eileen (see the report above)")]
+    ClaudeNotReady,
+    /// The doctor's report could not be printed, or its runtime could not start.
+    #[error("`eileen doctor claude` could not run: {reason}")]
+    DoctorFailed {
+        /// The I/O error, as text.
+        reason: String,
     },
 }
 
@@ -48,7 +67,27 @@ pub const fn claude(_command: Option<ClaudeCommand>) -> Result<(), CliError> {
     not_built("eileen claude")
 }
 
-/// Runs `eileen doctor claude`.
-pub const fn doctor_claude() -> Result<(), CliError> {
-    not_built("eileen doctor claude")
+/// Runs `eileen doctor claude` and prints its report on standard output: the CLI Eileen
+/// would run, its version, whether it is signed in, and the toolchains a worker sees, all in a
+/// coding worker's environment. Fails
+/// when no CLI can be used or the one found is not ready.
+pub fn doctor_claude() -> Result<(), CliError> {
+    let failed = |error: io::Error| CliError::DoctorFailed { reason: error.to_string() };
+    let inputs = doctor::DoctorInputs::from_process();
+    // Two blocking threads: on Windows each child pipe is read on one, and a probe reads its
+    // standard output and drains its standard error at once.
+    let runtime =
+        eileen_rt::runtime::build("doctor", Some(1), doctor::BLOCKING_THREADS).map_err(failed)?;
+    let found = doctor::doctor(&inputs, &mut doctor::SupervisedRunner::new(&runtime));
+    let mut out = io::stdout().lock();
+    match found {
+        Ok(report) => {
+            write!(out, "{report}").map_err(failed)?;
+            if report.healthy() { Ok(()) } else { Err(CliError::ClaudeNotReady) }
+        }
+        Err(error) => {
+            write!(out, "{}", doctor::LocateReport(&error)).map_err(failed)?;
+            Err(CliError::Locate(error))
+        }
+    }
 }

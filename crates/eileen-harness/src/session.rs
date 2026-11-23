@@ -35,6 +35,7 @@ use eileen_contracts::harness::{Effort, EnvPolicy, SessionSpec};
 use eileen_contracts::jobs::{JobKind, Toolset};
 use serde_json::{Map, Value, json};
 
+pub(crate) use self::env::worker_env;
 pub use self::env::{
     BRAIN_ALLOWLIST, HostEnv, PASS_THROUGH, SessionEnv, is_denylisted, mcp_tool_timeout_ms,
 };
@@ -137,7 +138,7 @@ pub struct SessionFiles {
 }
 
 /// Why a session's files could not be built.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SessionError {
     /// `HarnessConfig.data_dir` is relative, so the run folder would depend on the working
     /// folder.
@@ -483,4 +484,4 @@ fn mcp_config(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -3,7 +3,9 @@
 Each file here is a minimised simulator failure, a `SimRegression` of BUILD.md section 3.3.16,
 named `<name>.toml`: the profile, the seed that found it, the commit, the decoded inputs (one
 JSON `InputRecord` per string, never a buffer of random bytes), every injected fault as an
-explicit record, and the invariant that failed.
+explicit record (its step's `seq`, the site's name and what it injected), and the invariant
+that failed. A replay fires exactly those faults at those steps and draws no other, and refuses
+a file that names a site the world cannot fire.
 
 Every pull request replays every file here (`eileen-sim::it::regressions`), and each must pass:
 a file is added together with the fix of the failure it records. Replay one with

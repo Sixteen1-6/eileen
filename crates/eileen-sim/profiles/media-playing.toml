@@ -1,0 +1,53 @@
+# Media playing (BUILD.md section 4.7): a video is playing when the run starts and other audio
+# starts and stops often, with room talk and physical input between the user's own turns; the
+# PC is on battery. Schema: profile.schema.json beside it.
+name = "media-playing"
+steps = 2000
+seeds = 64
+max_step_ms = 200
+speech_queue_max = 8
+bus_subscriber_capacity = 64
+bus_subscriber_drain = 2
+barge_in_pct = 33
+media_at_start = true
+
+[input_mix]
+voice = 5
+user = 1
+playback = 2
+timer = 1
+activity = 4
+
+[pc]
+physical_mb = 16384
+commit_limit_mb = 24576
+others_mb = 9000
+others_commit_mb = 10000
+largest = "browser"
+largest_mb = 3500
+paging_floor_mb = 1000
+paging_kb_s_per_mb = 40
+paging_limit_kb_s = 4000
+cpu_busy_pct = 25
+
+[pc.power]
+has_battery = true
+on_battery = true
+battery_saver = false
+
+[eileen]
+core = 60
+speech = 1250
+brain = 400
+worker = 400
+
+[brain]
+first_ms = 800
+first_jitter_ms = 400
+delta_ms = 150
+dispatch_pct = 10
+stall_ms = 30000
+
+[faults]
+activate_per_mille = 250
+fire_per_mille = 10

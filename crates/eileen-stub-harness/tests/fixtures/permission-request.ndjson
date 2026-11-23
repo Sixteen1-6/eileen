@@ -1,0 +1,4 @@
+{"kind":"await_user"}
+{"kind":"narration","line":"Starting"}
+{"kind":"permission_request","tool_name":"Bash","tool_input":{"command":"touch tier2-asked.txt"}}
+{"kind":"narration","line":"never played"}

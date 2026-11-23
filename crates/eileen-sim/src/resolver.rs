@@ -1,7 +1,8 @@
 //! [`SimResolver`]: the scripted intent resolver the simulated core uses in place of the stub,
-//! beside [`crate::world::SimSettings`]. It knows the phrases the minimal core answers itself,
-//! resolves everything else to the brain, and finds a follow-up only for the phrases it is told
-//! about, and only when the core passed Eileen's last turn.
+//! beside [`crate::world::SimSettings`]. It knows the phrases the minimal core answers itself
+//! and "cancel" followed by the words naming a job, resolves everything else to the brain, and
+//! finds a follow-up only for the phrases it is told about, and only when the core passed
+//! Eileen's last turn.
 
 use eileen_contracts::connectors::AppCapability;
 use eileen_contracts::intent::{
@@ -10,6 +11,7 @@ use eileen_contracts::intent::{
 use eileen_contracts::learn::{PhrasingFact, RouteStat, SkillMeta};
 use eileen_contracts::ports::IntentResolver;
 use eileen_contracts::tools::ToolSpec;
+use eileen_contracts::tools::brain::JobRef;
 
 /// A scripted resolver: a table of phrases and core commands, and a list of follow-ups.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,8 +65,13 @@ impl IntentResolver for SimResolver {
     fn resolve(&self, utterance: &str, _: &ResolveCtx) -> Resolution {
         let utterance = normalise(utterance);
         let known = self.commands.iter().find(|(phrase, _)| *phrase == utterance);
-        known.map_or(Resolution::Brain { depth: None, addressee_unsure: false }, |(_, command)| {
-            Resolution::Command { command: command.clone(), slots: SlotValues::new() }
+        let named = || {
+            let words = utterance.strip_prefix("cancel ")?;
+            Some(CoreCommand::Cancel { job: Some(JobRef::Name(words.to_owned())) })
+        };
+        let command = known.map(|(_, command)| command.clone()).or_else(named);
+        command.map_or(Resolution::Brain { depth: None, addressee_unsure: false }, |command| {
+            Resolution::Command { command, slots: SlotValues::new() }
         })
     }
 

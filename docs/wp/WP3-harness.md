@@ -28,8 +28,8 @@ slice.
 - Branch: `wp3/<topic>`; the slice's pull request is `wp3/worker-brain`.
 - Depends on: WP0 phase A. Wave: W1. Desktop: no.
 - Owns: `crates/eileen-harness`, `crates/eileen-stub-harness`, `tests/harness-scripts/`,
-  `scenarios/claude/`, the fuzz targets `stream_json_line` and `control_message` with their
-  corpora and regressions, and this file.
+  `scenarios/claude/`, the fuzz targets `stream_json_line`, `control_message` and
+  `stub_script` with their corpora and regressions, and this file.
 
 ## Done when
 
@@ -189,7 +189,210 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   and that no path lies under a `.claude` folder. This is the environment half of acceptance 4
   and the CI half of acceptance 8 ("every session spawns with vendor memory off").
 
+- `wp3/claude-locate`: the CLI's location and `eileen doctor claude`. `eileen_harness::locate`
+  walks the worker's `PATH` in order, then npm's folder under `%APPDATA%` and the native
+  installer's `~/.local/bin`. It accepts only the two layouts section 2.5 names: npm's package
+  binary, reached through a shim (`claude.cmd`, `claude.ps1`, or npm's link on Unix) read for
+  the package's `bin\claude.exe`, and the native installer's `~/.local/bin` executable or one
+  of its releases. Anything else is passed over and named: a shim that runs `cli.js` through
+  node, the Claude desktop app's bundled copy (its `Claude-Data`, `AnthropicClaude` and MSIX
+  folders, or any `claude-code\<version>` folder), a folder under `.claude`, and any other
+  `claude` on `PATH` ("not an npm or native-installer copy"). Links and junctions are followed
+  by reading each one, with every target refused by name (desktop app, `.claude`) before
+  anything there is looked at. The version comes from the layout where it is exact: the
+  package's `package.json`, or the release a Unix link leads to. The native installer's
+  `claude.exe` on Windows is a copy of some release, not always the newest in its versions
+  folder, so its version comes from `claude --version`.
+  `cli::doctor_claude` builds a coding worker's environment with the same code a worker's
+  session uses (`session::worker_env`) and looks for the CLI and the toolchains on its `PATH`.
+  Until WP2's runtime reads the registry's `PATH` and the toolchain folders, that `PATH` is the
+  shell's, and the report says so. Every probe is a short tool run through `eileen_supervisor`
+  with a deadline. `claude auth status` (20 s) is read by its exit code only: 0 is signed in,
+  and any other code is signed out, because only 0 is recorded (D4, the subscription harness
+  report); the report names the code. Signed out, it prints the `claude auth login` suggestion
+  and starts nothing else; signed in, it asks `claude --version` when the layout gave no
+  version and looks for `cargo` and `node` on the worker's `PATH` and the MSVC tools through
+  vswhere. It reports the version against the floor (`MIN_CLI`, 2.1.284) and the tested
+  release (`TESTED_CLI`, 2.1.304), names the npm shim or the native installer and the
+  executable, and compares the running sessions' versions with the installed one once WP2's
+  status endpoint can report them (until then it says it did not check). The tests run against
+  fake npm and native layouts in a temporary folder, a scripted probe runner, and the real
+  supervised runner against this test binary run again as a chatty child. This is acceptance 5
+  and the doctor half of the D77 floor. The owner's PC has the native installer (2.1.316 when
+  this was written), so its run should report the native installer, the `.localin`
+  executable, a version newer than the tested one, and signed in. Still to do there: that run,
+  and recording here the exit code `claude auth status` gives when signed out.
+
+- `wp3/stub-play`: `eileen-stub-harness` plays `StubScriptLine` scripts (section 6.5's item
+  for it). The script is named by `--stub-script <path>` or, when no argument names one, by
+  `EILEEN_STUB_SCRIPT`; every other argument is ignored, so `ClaudeWorker` can start the stub
+  with the claude CLI's own argv. The whole script loads before anything plays, and a line
+  that does not parse, a `crash` code outside 0 to 255, or a line that would write a line
+  break inside its one stdout line, is a typed error naming the line. `event` lines are
+  written as the script's own `json` text, byte for byte, found by a small scan of the line
+  (a re-serialised value would sort its keys, and serde_json's `raw_value` feature would
+  change how every crate built beside the stub parses an object holding its private marker
+  key), `malformed` bytes as one line, a `narration` as an
+  assistant text message whose lines start with `> `, `delay` waits, `crash` exits with its
+  code, and `await_user` holds until the next stream-json user line; after the last line the
+  stub waits for stdin to close, and a user line then (a turn the script lacks) is an error.
+  A named thread reads stdin into a bounded queue, lines capped at 16 MB as the harness caps
+  the CLI's, and a stdin line that is not the protocol ends the run with a typed
+  `InputError`. An interrupt `control_request` gets a success `control_response` with its id
+  whenever it arrives, during a delay included, in a shape `Requests::settle` accepts; any
+  other request gets an error reply. That reply copies the `control_response` envelope Eileen
+  sends the CLI (`stdio-control.json`, `sent_to_cli`) without its inner `response` object: no
+  reply the CLI wrote to an interrupt is recorded yet, and acceptance 3's owner-run check
+  records one to replace it. The stub answers and plays on: what the real CLI
+  does to the turn after an interrupt is acceptance 3's owner-run check, and a script can
+  then carry it. A `permission_request` line ends the run with `RunError::NotPlayed` and
+  plays nothing after it, never a silent allow, until `wp3/approval-contract` plays the
+  guard and `approve` (above). The first five scripts in `tests/harness-scripts/` (a worker
+  job that writes `hello.txt` and narrates, a `Skill` call, a crash mid-turn, a malformed line
+  and a two-turn brain conversation with text deltas) are derived from the approval contract
+  test's recorded runs, and the folder's README names each one's source. Their `system/init`
+  lines drop the fixtures' `$omitted` annotation and put back `cwd`, `slash_commands`,
+  `skills`, `plugins` and `output_style` with placeholder values; the README lists the fields
+  still left out. The brain script's
+  `stream_event` lines are not recorded, since those runs did not ask for partial messages;
+  the owner-run recordings replace them. Integration tests start the binary through
+  `eileen_supervisor` and read its stdout back through `eileen_harness::stream`: each script's
+  worker or brain events, the crash's exit code, the hold at `await_user` with interrupts
+  answered before and between turns and during a ten-minute delay, the script from the
+  environment under claude's argv, the typed errors, and a crash and a `permission_request`
+  that stop the stub while its stdin is still open and still exit with their codes; a corpus
+  test checks every script loads, passes the `Redactor` unchanged, holds no `$` annotation key
+  and is named in the README. The `stub_script` fuzz target (section 3.3.16 asks one of every
+  parser of its formats) runs scripts and stdin lines through `load` and the stdin reader;
+  its seeds are the harness scripts cut to 4 KB and hand-written lines, replayed by
+  `it::fuzz_corpus`. Part of acceptance 2; the pooled job and cancel come
+  with `ClaudeWorker` running against the stub.
+- `wp3/claude-worker` (#159, merged): `ClaudeWorker` as a `WorkerDriver` without the pool
+  (sections 3.3.8 and 6.5, as #161 and #172 amend them). `start` refuses a spec that asks for
+  a plugin snapshot check, a snapshot restore, a worktree, a build slot or a job memory limit,
+  which come later, rather than starting without them; registers the session's hook and shim
+  tokens with the process's `Redactor` (`worker_for` takes it) until the session's exit is
+  seen; writes the run folder (`run/<session>/cwd`, the settings file and `mcp.json` from
+  `wp3/session-files`); spawns `HarnessConfig::claude_exe` through `eileen_supervisor` in the
+  Claude class (Job Object, below-normal priority) with exactly the session's environment;
+  and, within `HarnessConfig::init_deadline` (120 s by default), asks `initialize`, then
+  `mcp_status` until `eileen` is connected. The `initialize` reply carries the signed-in
+  account, so only its success is checked and it is dropped unread. A `failed` server refuses
+  the session, which is never bound, with a `worker.refused` log; a server still `pending` at
+  the deadline, an exit before readiness or an error reply ends the start with a
+  `worker.fault` log. `bind` writes the first user line (the task, `Follow skill
+  eileen-learned:<id>` with any inline skill text, and the facts block) in the shape the
+  contract test wrote; `send` writes later turns, the interrupt through
+  `stream::control::Requests` once the first turn's init offers it, and cancels by killing
+  the Job Object and waiting for the job to empty. A write that fails or passes its deadline
+  ends the session, since part of a line may have reached the CLI. `next_event` gives the
+  first turn's `Init`, each line's worker events, settles control replies, and ends with
+  `Exited` and the exit code, so a crash before `TurnDone` fails the job in the core. Every
+  init is checked: one without `eileen` connected or with an auto-memory folder kills the
+  session at that line, before the model's first message, with no `Init` and no other event
+  from that turn, and logs `worker.refused` with the reason alone (no text the CLI wrote, no
+  path). Control requests still open when the next turn's init arrives are abandoned, so a
+  dropped reply never fills the four the session may hold, while a reply written after its
+  turn's `result` still settles. `next_event` is cancel-safe: a partly read line stays
+  buffered, and a session being ended stays in the driver until its exit is seen. Its stdout
+  read has no deadline, since a tool call can run for minutes in silence; the core's cancel
+  ends a stalled session. `worker.fault` also logs failed writes, unmatched or failed control
+  replies, abandoned requests and a kill whose exit was not seen. `worker_for(Route::Claude)`
+  returns it; other routes stay `RouteUnavailable`; `languages()` is `Any`. The stub answers
+  `initialize` (with an empty response) and `mcp_status` (with its script's first init's
+  servers). Its runs against the stub are in `eileen-stub-harness::it::worker`, because Cargo
+  names the stub's binary only to its own package's tests: a job to completion with its events
+  in order, narration, a `Skill` call, a crash's exit code, cancel with the stub held at
+  `await_user` (the exit code is the kill's; on Linux the process is gone from `/proc`), a new
+  session after a cancel that gives none of the old one's events, a later turn with its second
+  init and an interrupt, `eileen` failed at `mcp_status`, `eileen` pending past a 1 s init
+  deadline, a memory folder in the first turn's init and in a later turn's init, a tool input
+  quoting the session's hook and shim tokens, and the environment the stub records
+  (`EILEEN_STUB_ENV_FILE`):
+  no denylisted variable, the pass-through list, the user's `PATH`, and
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` though the user's own environment set it to 0. Each
+  test's folder is removed when it ends. A unit test runs the readiness exchange over an
+  in-memory pipe with tracing captured: an `initialize` reply, and an error reply, holding an
+  email-shaped string leave nothing in the logs. The `control_message` fuzz entry checks the
+  readiness reader against the control parser on every line, and four `hand-ready-` seeds
+  reach it. `eileen-harness::it::real_claude` runs
+  `start` against the signed-in CLI on the owner's PC, with the default config's fast model,
+  and expects `mcp_status` to report the missing shim before any user line; the owner-run
+  pull request runs it. Acceptance 2 except the pooled bind and the approval path;
+  acceptance 4's denylist and pass-through part (the `cargo --version` run in a coding
+  worker's shell and the file-access check for `.claude` paths are left); acceptance 8's init
+  checks. Left for later:
+  `wp3/worker-ready`, the contract pull request of section 6.5 (`WorkerEvent::Ready`,
+  `WorkerEvent::Refused` and `WorkerRefusal`, `pid` out of `Init`, the core's bind on `Ready`
+  and its `PreToolUse` hold; until it merges a live job does not bind, and `FIXME(#5)` marks
+  both places in `worker::claude`); the pool, recycle, worktrees, the snapshot check and
+  restore, build slots, `JOB_OBJECT_LIMIT_JOB_MEMORY`, rate-limit events, a stub grandchild
+  to show the kill takes the whole Job Object, and `session_files` reading the host from
+  `HarnessConfig::host` instead of a third argument.
+- `wp3/claude-worker-review`: fixes from a review of #159. `bind` carries the text of a skill
+  the session's snapshot lacks instead of `Follow skill eileen-learned:<id>`, under a heading
+  that names the skill only to say where the steps came from, so the model is not sent to call
+  a skill outside the manifest (section 2.10, which marks such a call `snapshot_tampered`); a
+  skill's text without its skill is refused (`DriverError::UnnamedInlineSkill`). `start`
+  creates the working folder only when it is the session's scratch folder under its run folder
+  (a `..` disqualifies it), and refuses any other that is not an existing folder before writing
+  anything, so a mistyped repository is never made empty in the user's tree. A session being
+  ended keeps the deadline of the wait it is in, so a `next_event` dropped again and again
+  still kills it at its deadline, and a cancel kills a session that a dropped call left waiting
+  for its own exit. Its tokens stay registered until its stderr forwarding has ended, within
+  the same deadline, since the log sinks redact a line when it is logged. The stdout reader
+  gives a line cut at the cap as it was kept, one byte past the cap, so a line whose byte past
+  the cap is `\r` is no longer taken for one at the cap; it keeps a line of exactly the cap
+  ending in `\r\n` whole, and gives its buffer back to 64 KiB after each line. `driver-job`, `driver-skill` and `driver-crash`
+  were copies of the `worker-` scripts, which the tests now play. Unit tests cover the
+  readiness poll from not listed through pending to connected on a paused clock, the CLI's
+  error-reply shape in the privacy check, the line cap, the working folder, and the three
+  ending cases against a real quiet process (the stub cannot close its stdout and live on,
+  since it forbids unsafe code and on Windows a child would inherit its stdout). The
+  `real_claude` probe keeps the default init deadline. Left for later, before
+  `wp3/worker-brain` wires workers: `eileen_harness::component` is built from
+  `&HarnessConfig` alone (section 3.3.15), `ComponentCtx` carries no redactor and
+  `HarnessConfig` derives `Eq`, so it cannot reach the process's `Redactor` that
+  `TraceGuard::redactor()` hands the log sinks. Workers built there would register session
+  tokens with a private redactor, and the tokens would reach the log files unredacted. It needs
+  an amendment to section 3.3.15 (`component(cfg, redactor: Arc<Redactor>)`) agreed with WP2,
+  whose `eileen-cli` wiring passes the guard's redactor.
+- `amend/stub-script-fuzz` (#156, `type: amendment`): puts the `stub_script` fuzz target that
+  `wp3/stub-play` (#154) built into the plan. Section 3.3.16 asks a fuzz target of each parser
+  of its shared formats, `StubScriptLine` among them, but section 4.7's table had no row for
+  the stub harness. The table now has `stub_script` (stub harness scripts and the stdin lines a
+  driver writes to the stub, WP3), and section 6.5's Owns list, like the list above, names it.
+  The comment at the top of `fuzz/Cargo.toml`, WP0's file, no longer says the table lacks the
+  target; only that comment changes. No new tests: `it::fuzz_corpus` already replays the seeds.
+- `amend/serde-json-float-roundtrip` (#194, `type: amendment`): closes WP1's issue #185 from
+  this lane. `crates/eileen-record/Cargo.toml`, WP1's file, takes `serde_json` from the
+  workspace entry, which carries `float_roundtrip` since #157, and its comment promising the
+  change goes; WP1's and WP0's files record it, and `Cargo.lock` is unchanged. No new tests:
+  `eileen-record::it::round_trip::stubs_resolve_to_exactly_the_value_written_through_the_disk_store`
+  and `eileen-contracts::it::wire::a_written_float_reads_back_exactly` pass in CI with the
+  feature reaching every crate through the root entry alone.
+- Next for WP3, issue #186, now that #185 is closed: in `eileen-stub-harness`, `round_trips` in
+  `fuzz_entry` compares a `stub_script` line's value before and after a print-and-parse round
+  trip with `before == after`, and `same`, which lets two floats differ by up to
+  `8 * f64::EPSILON` relative, goes with its doc comment. If the owner declines #157 and its
+  root entry is reverted, the tolerance's reason holds again and #186 closes unchanged.
+
 ## Surprises
+
+- CLI 2.1.316 writes nothing on stdout, not even `system/init`, until the first user line
+  arrives (a probe on the owner's PC on 2026-11-01: `claude -p` with stream-json in and out,
+  `--setting-sources ""`, an empty strict MCP config and no tools, stdin held open for 12 s
+  with nothing written: no output, exit 0 when stdin closed). The approval runs wrote their
+  first user line at once, so they never showed it, and section 3.3.8's Start row ("wait for
+  `system/init`") and the core's bind on `WorkerEvent::Init` both assume init comes first.
+  Against the real CLI, `ClaudeWorker::start` would pass its init deadline. The same probe
+  found that the CLI answers two control requests before any user line, with no model turn:
+  `initialize` (a `control_response` whose response holds `capabilities`, `pid`,
+  `claude_code_version`, `current_permission_mode`, the models and the account, which must
+  never be logged; on this run `capabilities` was `ui_surface_v1` and
+  `mcp_call_result_not_for_model_v1`, not the list `system/init` gives) and `mcp_status`
+  (`{"mcpServers": [...]}`). The amendment of 2026-11-01 (#161) builds readiness on them and
+  moves the memory check to the first turn's init.
 
 - `it::modules::exactly_the_slice_modules_are_pinned` failed for any module a package pinned,
   though section 3.3 has each package's first pull request pin its own. `wp3/worker-tools`
@@ -214,6 +417,11 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   match before it becomes a `]`-ended mark. The parser redacts each string until it settles,
   at most 8 times, and a string still changing then becomes `[redacted:unsettled]`. The
   trace's log writer redacts once, so a log can keep such a token.
+
+- npm's shim names the real binary relative to its own folder (`"%dp0%\node_modules\..."`
+  in the `.cmd`, `"$basedir/node_modules/..."` in the `.ps1`), so reading the shim finds the
+  binary without running node. The desktop app keeps each bundled CLI in a
+  `claude-code\<version>` folder, which no npm or native layout uses.
 
 ## Decisions
 
@@ -333,6 +541,25 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   every host, so `github_token` goes on both.
 - A subagent tool in a spec's `builtin_tools` or `allowed_tools` is dropped, not refused: the
   session still starts, without it.
+- A Claude session, worker or brain, is ready when it answers `initialize` and `mcp_status`
+  reports `eileen` connected, not when it writes `system/init`, which CLI 2.1.316 writes only
+  after the first user line (`amend/worker-readiness`, #161 and its follow-up of 2026-11-07,
+  `type: amendment`). The harness component turns a worker's `start` into
+  `WorkerEvent::Ready { pid }`, or into `Refused` then `Exited` when `eileen` is not
+  connected, and the core binds on `Ready`; the brain's backend gives `BrainEvent::Ready` from
+  the same check, so `brain_events` stops mapping `Line::Init` to `Ready`. Every init is
+  checked for `eileen` connected and for a memory path other than the session's own folder
+  (any path while its writes are not `Native`); a failure kills the session at that line and
+  gives `Refused` then `Exited`, with no `Init` from that turn. The core starts a `Native`
+  session's job again once with memory off, fails any other refused job with the variant's
+  sentence, and holds a worker's `PreToolUse` until its session's `Init`. The `initialize`
+  reply carries the signed-in account, so it is checked and dropped, never logged or
+  recorded. One later WP3 pull request adds `Ready`, `Refused` and `WorkerRefusal` to
+  `eileen-contracts`, drops `pid` from `Init`, and changes the core's `worker_event` and the
+  simulator's worker sessions (`Ready` on `Start`, `Init` after the `Bind`) with their tests;
+  until it merges, a live job does not bind. The replayer (section 3.3.16, WP1) serves `Ready`
+  after a `Start`, `Init` after the `Bind` and a `Refused` with its `Exited` in place, and
+  D77's `NotesVersion` rides on `Ready`.
 
 ## Outcome
 

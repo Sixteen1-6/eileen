@@ -1,30 +1,67 @@
-//! The invariants of BUILD.md section 4.7 that the skeleton checks after every step, each a
-//! named function over what the run produced so far. Their numbers are the section's, which
-//! regressions and acceptance lines cite. WP1 adds the other thirteen.
+//! The invariants of BUILD.md section 4.7, each a named function over what the run produced so
+//! far. Their numbers are the section's, which regressions and acceptance lines cite. The world
+//! checks 6, 8, 10 and 13 after every step ([`CHECKED`]); `turn::exhaustive` checks 2, 3, 9 and
+//! 10 after every input it enumerates ([`EXHAUSTIVE`]). WP1 adds the others.
 //!
+//! - 2, [`barge_in_pauses_in_time`]: after a speech window while Eileen speaks, playback is
+//!   ducked by the next callback and paused by the callback after the third consecutive
+//!   window, onset to silence stays within [`ONSET_TO_SILENCE_MS`], and a pause is resumed or
+//!   stopped within [`PAUSE_RESOLVES_MS`].
+//! - 3, [`heard_prefix_matches_playback`]: what the brain is told the user heard equals the
+//!   text mapped from the samples handed to the device. After a stop with no pause first the
+//!   core can still be a character short (#151).
 //! - 6, [`bus_events_are_attributed`]: every bus event carries a turn or job id where it
 //!   belongs, nothing is emitted for a job after its terminal event, order is kept, a slow
 //!   subscriber gets an explicit `Lagged` and never silent loss, and no unaddressed speech
 //!   becomes a bus event.
+//! - 8, [`children_restart_with_bounded_backoff`]: a hung child goes down within
+//!   [`HUNG_KILL_MS`] of hanging, a load that never finishes within [`LOAD_KILL_MS`] of its
+//!   start, and a crashed or hung child is restarted only after it went down, between
+//!   [`BACKOFF_MIN_MS`] and [`BACKOFF_MAX_MS`] later, and at most [`RESTARTS_PER_WINDOW`] times
+//!   in any [`RESTART_WINDOW_MS`]. That killed children leave no descendants waits for the
+//!   simulated Job Objects.
+//! - 9, [`nothing_sounds_while_muted`]: capture stops within one 10 ms frame of a mute the user
+//!   asks for, and nothing is spoken, played or handed to the device while muted or while
+//!   another app uses the microphone. The core does not act on the microphone part yet (#152).
+//!   The call, cancel and input-lease parts wait for those features.
 //! - 10, [`utterances_do_not_overlap`]: two utterances never overlap and the speech queue stays
 //!   bounded.
 //! - 13, [`spans_follow_the_table`]: the span-parent table holds for every span the run
 //!   produced, and every log line inside a turn carries its turn id.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
-use eileen_contracts::ids::{Envelope, SpeakId, TurnId};
+use eileen_contracts::connectors::SidecarId;
+use eileen_contracts::ids::{Envelope, TurnId};
 use eileen_trace::names;
 use eileen_trace::{EventRecord, SpanRecord};
 use serde_json::Value;
 
-/// The invariants the skeleton checks, by number and name.
+mod audio;
+
+pub use audio::{
+    AudioEvent, AudioRecord, BargeInWatch, CAPTURE_STOPS_MS, HEARD_MARKER, Handed, HeardWatch,
+    MuteWatch, ONSET_TO_SILENCE_MS, OverlapWatch, PAUSE_BY_WINDOW, PAUSE_RESOLVES_MS, WINDOW_MS,
+    barge_in_pauses_in_time, heard_prefix_matches_playback, nothing_sounds_while_muted,
+};
+
+/// The invariants the world checks after every step, by number and name.
 pub const CHECKED: &[(u8, &str)] = &[
     (6, "bus_events_are_attributed"),
+    (8, "children_restart_with_bounded_backoff"),
     (10, "utterances_do_not_overlap"),
     (13, "spans_follow_the_table"),
+];
+
+/// The invariants `turn::exhaustive` checks after every input, by number and name (section
+/// 4.7, "Exhaustive tests").
+pub const EXHAUSTIVE: &[(u8, &str)] = &[
+    (2, "barge_in_pauses_in_time"),
+    (3, "heard_prefix_matches_playback"),
+    (9, "nothing_sounds_while_muted"),
+    (10, "utterances_do_not_overlap"),
 ];
 
 /// A broken invariant.
@@ -155,6 +192,149 @@ fn subscriber_lost_nothing(
     Ok(())
 }
 
+/// The shortest wait from a child going down to its restart, ms: the first backoff step.
+pub const BACKOFF_MIN_MS: u64 = 1_000;
+/// The longest wait from a child going down to its restart, ms: the last backoff step, which
+/// the speech process's audio ring covers (section 6.6).
+pub const BACKOFF_MAX_MS: u64 = 60_000;
+/// The window restarts are counted in, ms.
+pub const RESTART_WINDOW_MS: u64 = 60_000;
+/// The most restarts of one child in any window. Steps of 1, 2, 4, 8 and 16 s put five
+/// restarts of a child that crashes at once in its first minute, and the steps start again
+/// from 1 s only after a minute up.
+pub const RESTARTS_PER_WINDOW: usize = 6;
+/// The longest a hung child may stay up after it hung, ms: five missed one-second heartbeats,
+/// counted from the last one, which came at or before the hang.
+pub const HUNG_KILL_MS: u64 = 5_000;
+/// The longest a load that never finishes may last from its start or restart, ms.
+pub const LOAD_KILL_MS: u64 = 120_000;
+
+/// What happened to a supervised child, as the world saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildEvent {
+    /// The core started it.
+    Started,
+    /// It went down: the core had it hang-dumped and killed, or it exited.
+    Down,
+    /// It stopped answering while up (a fault the world injected).
+    Hung,
+    /// Its load will never finish (a fault the world injected).
+    Stuck,
+    /// The core restarted it.
+    Restarted,
+}
+
+/// One event in a child's life, at a virtual time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildRecord {
+    /// When, ms of virtual time.
+    pub at_ms: u64,
+    /// Which child.
+    pub child: SidecarId,
+    /// What happened.
+    pub event: ChildEvent,
+}
+
+/// Invariant 8 over the children's lives so far, at `now_ms`.
+pub fn children_restart_with_bounded_backoff(
+    records: &[ChildRecord],
+    now_ms: u64,
+) -> Result<(), Violation> {
+    const N: u8 = 8;
+    const NAME: &str = "children_restart_with_bounded_backoff";
+    let fail = |detail: String| Err(Violation::new(N, NAME, detail));
+    let mut children: BTreeMap<SidecarId, Life> = BTreeMap::new();
+    for record in records {
+        let Life { down, restarts, loaded, kill_by } = children.entry(record.child).or_default();
+        match record.event {
+            ChildEvent::Started => {
+                *down = None;
+                *loaded = record.at_ms;
+            }
+            ChildEvent::Hung if kill_by.is_none() => {
+                *kill_by = Some(record.at_ms.saturating_add(HUNG_KILL_MS));
+            }
+            ChildEvent::Stuck if kill_by.is_none() => {
+                *kill_by = Some(loaded.saturating_add(LOAD_KILL_MS));
+            }
+            ChildEvent::Hung | ChildEvent::Stuck => {}
+            ChildEvent::Down => {
+                if let Some(by) = kill_by.take()
+                    && record.at_ms > by
+                {
+                    return fail(format!(
+                        "{:?} went down at {} ms, after its kill was due at {by} ms",
+                        record.child, record.at_ms
+                    ));
+                }
+                // The exit that follows a kill is the same going down.
+                if down.is_none() {
+                    *down = Some(record.at_ms);
+                }
+            }
+            ChildEvent::Restarted => {
+                let Some(since) = down.take() else {
+                    return fail(format!(
+                        "{:?} restarted at {} ms while it was up",
+                        record.child, record.at_ms
+                    ));
+                };
+                *loaded = record.at_ms;
+                let wait = record.at_ms.saturating_sub(since);
+                if !(BACKOFF_MIN_MS..=BACKOFF_MAX_MS).contains(&wait) {
+                    return fail(format!(
+                        "{:?} restarted {wait} ms after it went down at {since} ms",
+                        record.child
+                    ));
+                }
+                restarts.push_back(record.at_ms);
+                while restarts
+                    .front()
+                    .is_some_and(|first| first.saturating_add(RESTART_WINDOW_MS) <= record.at_ms)
+                {
+                    restarts.pop_front();
+                }
+                if restarts.len() > RESTARTS_PER_WINDOW {
+                    return fail(format!(
+                        "{:?} restarted {} times in the {RESTART_WINDOW_MS} ms to {} ms",
+                        record.child,
+                        restarts.len(),
+                        record.at_ms
+                    ));
+                }
+            }
+        }
+    }
+    for (child, life) in &children {
+        if let Some(since) = life.down
+            && now_ms.saturating_sub(since) > BACKOFF_MAX_MS
+        {
+            return fail(format!(
+                "{child:?} went down at {since} ms and was not restarted by {now_ms} ms"
+            ));
+        }
+        if let Some(by) = life.kill_by
+            && now_ms > by
+        {
+            return fail(format!("{child:?} hung and was not killed by {by} ms"));
+        }
+    }
+    Ok(())
+}
+
+/// One child's life as invariant 8 follows it.
+#[derive(Debug, Default)]
+struct Life {
+    /// When it went down, while it is down.
+    down: Option<u64>,
+    /// Its restarts inside the window.
+    restarts: VecDeque<u64>,
+    /// When its latest start or restart went out.
+    loaded: u64,
+    /// When it must be down by, once it hung or its load stuck.
+    kill_by: Option<u64>,
+}
+
 /// Invariant 10 over the events published so far and the speech queue's length now.
 pub fn utterances_do_not_overlap(
     published: &[Envelope<BusEvent>],
@@ -163,22 +343,14 @@ pub fn utterances_do_not_overlap(
 ) -> Result<(), Violation> {
     const N: u8 = 10;
     const NAME: &str = "utterances_do_not_overlap";
-    let mut speaking: Option<SpeakId> = None;
+    let mut watch = OverlapWatch::default();
     for event in published {
-        if let BusEvent::Speaking { speak, .. } = &event.body {
-            if let Some(other) = speaking.filter(|other| other != speak) {
-                return Err(Violation::new(
-                    N,
-                    NAME,
-                    format!("{speak} started at seq {} while {other} was speaking", event.seq),
-                ));
-            }
-            speaking = Some(*speak);
-        }
-        if let BusEvent::SpeakingStopped { speak, .. } = &event.body
-            && speaking == Some(*speak)
-        {
-            speaking = None;
+        if let Some((speak, other)) = watch.follow(&event.body) {
+            return Err(Violation::new(
+                N,
+                NAME,
+                format!("{speak} started at seq {} while {other} was speaking", event.seq),
+            ));
         }
     }
     if speech_queue > speech_queue_max {

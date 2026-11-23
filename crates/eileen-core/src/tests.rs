@@ -1,21 +1,26 @@
 //! The minimal core through `Core::step`, with a scripted resolver: the gate, the fast path,
-//! one brain turn, barge-in and mute; the one job is in `jobs`.
+//! one brain turn and mute. Barge-in is in `barge_in`, one job in `jobs`, many jobs in
+//! `steering`, `fan_out`, `router`, `apps` and `refusals`, and the speech process in `life`.
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
-use eileen_contracts::connectors::{AppCapability, ConnectorManifest};
+use eileen_contracts::connectors::{
+    AppCapability, ConnectorManifest, Platform, RunsIn, SidecarEvent, SidecarId,
+};
 use eileen_contracts::core_io::{
     AudioCmd, Earcon, Effect, Input, PlaybackEvent, TimerId, UserInput,
 };
 use eileen_contracts::desktop::FieldCategory;
 use eileen_contracts::harness::{BrainCmd, BrainEvent, BrainSlot};
+use eileen_contracts::hud::{HudState, MicState};
 use eileen_contracts::ids::{
-    Envelope, MonoTime, Personal, SkillId, SpeakId, TraceCtx, TurnId, Untrusted, WallTime,
+    ConnectorId, Envelope, MonoTime, Personal, SkillId, SpeakId, TraceCtx, TurnId, Untrusted,
+    WallTime,
 };
 use eileen_contracts::intent::{
     Capabilities, CoreCommand, FollowUp, Resolution, ResolveCtx, SlotValues,
 };
-use eileen_contracts::jobs::{Cost, TurnAuthority};
+use eileen_contracts::jobs::{Cost, Depth, TurnAuthority};
 use eileen_contracts::learn::{
     CheckPlan, ForgetTarget, Outcome, PhrasingFact, Recipe, ReplayRefusal, ReplayState, ReplayStep,
     RouteStat, ShadowVerdict, SkillMeta, SkillRef, StepResult, TrajectoryStep, Transition,
@@ -27,6 +32,7 @@ use eileen_contracts::ports::{
 use eileen_contracts::record::CoreSnapshotV1;
 use eileen_contracts::speech::{SpeechCmd, TurnEndReason, VoiceEvent};
 use eileen_contracts::tools::ToolSpec;
+use eileen_contracts::tools::brain::JobRef;
 use eileen_stdx::rng::CoreRng;
 
 use crate::{Core, CoreConfig, CorePorts, fresh_snapshot};
@@ -90,6 +96,9 @@ impl IntentResolver for Scripted {
     fn rebuild(&mut self, _: &[SkillMeta], _: &[PhrasingFact]) {}
 
     fn resolve(&self, utterance: &str, _: &ResolveCtx) -> Resolution {
+        if utterance.starts_with("think hard") {
+            return Resolution::Brain { depth: Some(Depth::Deep), addressee_unsure: false };
+        }
         let command = match utterance {
             "what time is it" => Some(CoreCommand::WhatTime),
             "stop" => Some(CoreCommand::Stop),
@@ -97,6 +106,17 @@ impl IntentResolver for Scripted {
             "mute" => Some(CoreCommand::Mute),
             "unmute" => Some(CoreCommand::Unmute),
             "cancel" => Some(CoreCommand::Cancel { job: None }),
+            "cancel agent one" => Some(CoreCommand::Cancel { job: Some(JobRef::Ordinal(1)) }),
+            "cancel the hello file" => {
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name("The hello file".to_owned())) })
+            }
+            "cancel the other file" => {
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name("the other file".to_owned())) })
+            }
+            "cancel the render" | "cancel the research" | "cancel it" | "cancel claude's job" => {
+                let words = utterance.trim_start_matches("cancel ").to_owned();
+                Some(CoreCommand::Cancel { job: Some(JobRef::Name(words)) })
+            }
             "how's it going" => Some(CoreCommand::HowsItGoing),
             "forget that" => Some(CoreCommand::Forget(ForgetTarget::Fact { id: "f1".to_owned() })),
             "off the record" => Some(CoreCommand::OffTheRecord(true)),
@@ -139,13 +159,17 @@ fn ports(follow_ups: Vec<&'static str>) -> CorePorts {
     }
 }
 
-/// A core with a virtual clock.
+/// A core with a virtual clock, whose speech process is up: the HUD states it sends are kept
+/// apart from the other effects, in `hud`.
 struct Harness {
     core: Core,
     rng: CoreRng,
     seq: u64,
     now_ms: u64,
     turns: u64,
+    hud: Option<HudState>,
+    /// How many HUD states the core has sent.
+    hud_sent: usize,
 }
 
 impl Harness {
@@ -154,15 +178,36 @@ impl Harness {
     }
 
     fn with(config: CoreConfig, follow_ups: Vec<&'static str>) -> Self {
+        let mut h = Self::booting(config, follow_ups);
+        h.step(Input::User(UserInput::SetMute(false)));
+        h.step(speech(ready()));
+        h
+    }
+
+    /// A core restarted from `snapshot`, as a new process with its clock and random numbers
+    /// starting again, whose speech process is up; with the effects of its first step.
+    fn resumed(snapshot: CoreSnapshotV1) -> (Self, Vec<Effect>) {
+        let mut h = Self::booting(CoreConfig::default(), Vec::new());
+        h.core = Core::new(CoreConfig::default(), ports(Vec::new()), Some(snapshot));
+        let first = h.step(Input::User(UserInput::SetMute(false)));
+        h.step(speech(ready()));
+        (h, first)
+    }
+
+    /// A core that has taken no step yet.
+    fn booting(config: CoreConfig, follow_ups: Vec<&'static str>) -> Self {
         Self {
             core: Core::new(config, ports(follow_ups), None),
             rng: CoreRng::from_seed(3),
             seq: 0,
             now_ms: 1_000,
             turns: 0,
+            hud: None,
+            hud_sent: 0,
         }
     }
 
+    /// One step; the HUD state it sends, if any, goes to `hud`.
     fn step(&mut self, body: Input) -> Vec<Effect> {
         self.seq += 1;
         let mono = MonoTime(self.now_ms * 1_000_000);
@@ -170,7 +215,26 @@ impl Harness {
         let input = Envelope { seq: self.seq, at, mono, ctx: TraceCtx::default(), body };
         let mut effects = Vec::new();
         self.core.step(mono, &mut self.rng, input, &mut effects);
-        effects.into_iter().map(|effect| effect.body).collect()
+        let mut rest = Vec::new();
+        for effect in effects {
+            if let Effect::Hud(state) = effect.body {
+                self.hud = Some(*state);
+                self.hud_sent += 1;
+            } else {
+                rest.push(effect.body);
+            }
+        }
+        rest
+    }
+
+    /// What the HUD shows instead of Eileen saying it.
+    fn hud_line(&self) -> Option<&str> {
+        self.hud.as_ref().and_then(|state| state.speaking.as_deref())
+    }
+
+    /// The microphone as the HUD shows it.
+    fn mic(&self) -> Option<&MicState> {
+        self.hud.as_ref().map(|state| &state.mic)
     }
 
     fn wait(&mut self, ms: u64) {
@@ -184,6 +248,28 @@ impl Harness {
         self.step(Input::Voice(VoiceEvent::SpeechStarted { turn, source: 0, replayed: false }));
         self.wait(400);
         self.step(Input::Voice(end_of_turn(turn, text)))
+    }
+}
+
+/// From the speech process's sidecar client.
+const fn speech(event: SidecarEvent) -> Input {
+    Input::Sidecar(SidecarId::Speech, event)
+}
+
+/// The speech process's `Ready`, which serves no tools.
+fn ready() -> SidecarEvent {
+    SidecarEvent::Ready {
+        manifest: Box::new(ConnectorManifest {
+            id: ConnectorId::new("pc.speech").unwrap(),
+            version: "0.1.0".to_owned(),
+            runs: RunsIn::Sidecar { binary: "eileen-speech".to_owned() },
+            platforms: vec![Platform::Windows],
+            tools: Vec::new(),
+            events: Vec::new(),
+            checks: Vec::new(),
+            senses_room: false,
+            requires_opt_in: false,
+        }),
     }
 }
 
@@ -289,7 +375,8 @@ fn a_core_resumes_muted_with_its_counters() {
         effects.contains(&Effect::Audio(AudioCmd::SetCapture(true))),
         "unmuting starts capture"
     );
-    assert_eq!(h.core.snapshot().counters.get("effect_seq"), Some(&43), "seq continues from 40");
+    // The first step also starts speech: `Start`, its load deadline and the HUD's state.
+    assert_eq!(h.core.snapshot().counters.get("effect_seq"), Some(&46), "seq continues from 40");
 }
 
 #[test]
@@ -434,121 +521,6 @@ fn text_from_another_instance_or_turn_is_dropped() {
         text: Untrusted::new("Here it is. ".to_owned()),
     });
     assert_eq!(spoken(&h.step(ours)).len(), 1, "the instance it was sent to");
-}
-
-#[test]
-fn stop_while_eileen_speaks_ducks_pauses_and_stops() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
-    let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
-    h.step(Input::Voice(VoiceEvent::ClauseReady { speak, clause: 0, chars: 30, samples: 1_000 }));
-    h.step(Input::Playback(PlaybackEvent::Played { speak, clause: 0, samples_played: 500 }));
-    let barge = |window| Input::Voice(VoiceEvent::BargeInWindow { speak, window, prob_pct: 90 });
-    let effects = h.step(barge(1));
-    assert!(
-        effects.contains(&Effect::Audio(AudioCmd::Duck { db: -20 })),
-        "ducked at the first window"
-    );
-    h.wait(32);
-    h.step(barge(2));
-    h.wait(32);
-    let effects = h.step(barge(3));
-    assert!(effects.contains(&Effect::Audio(AudioCmd::Pause { speak })), "paused at the third");
-    h.wait(200);
-    let effects = h.say("stop");
-    assert!(effects.contains(&Effect::Audio(AudioCmd::Stop { speak })), "playback stops");
-    assert!(
-        effects.contains(&Effect::Speech(SpeechCmd::Cancel { speak })),
-        "synthesis is cancelled"
-    );
-    assert!(
-        effects.contains(&Effect::Brain(BrainCmd::Interrupt { slot: BrainSlot::Primary })),
-        "the brain turn is interrupted"
-    );
-    assert!(
-        events(&effects).iter().any(|e| matches!(
-            e,
-            BusEvent::SpeakingStopped { interrupted: true, heard_chars: 15, .. }
-        )),
-        "half of the first clause was heard: {effects:?}"
-    );
-}
-
-#[test]
-fn an_addressed_barge_in_is_taken_and_the_brain_is_told_what_was_heard() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
-    let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
-    h.step(Input::Voice(VoiceEvent::ClauseReady { speak, clause: 0, chars: 30, samples: 1_000 }));
-    h.step(Input::Playback(PlaybackEvent::Played { speak, clause: 0, samples_played: 500 }));
-    for window in 1..=3 {
-        h.step(Input::Voice(VoiceEvent::BargeInWindow { speak, window, prob_pct: 90 }));
-    }
-    let effects = h.say("Eileen, what about lakes?");
-    let (_, message) = brain_turn(&effects).expect("a new brain turn");
-    assert!(message.contains("[interrupted] they heard: \"Rivers carry wa\""), "{message}");
-}
-
-#[test]
-fn a_backchannel_resumes_from_the_paused_sample() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
-    let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
-    for window in 1..=3 {
-        h.step(Input::Voice(VoiceEvent::BargeInWindow { speak, window, prob_pct: 90 }));
-    }
-    let effects = h.say("mm-hm");
-    assert_eq!(
-        effects,
-        [
-            Effect::Audio(AudioCmd::Resume { speak }),
-            Effect::Speech(SpeechCmd::Resume { speak }),
-            Effect::Audio(AudioCmd::Unduck),
-        ],
-        "resumed and unducked, and nothing on the bus"
-    );
-}
-
-#[test]
-fn a_pause_with_nothing_addressed_resumes_at_the_deadline() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
-    let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
-    let mut last = Vec::new();
-    for window in 1..=3 {
-        // Speech windows come 32 ms apart, so the pause re-arms the duck's timer for later.
-        h.wait(32);
-        last = h.step(Input::Voice(VoiceEvent::BargeInWindow { speak, window, prob_pct: 90 }));
-    }
-    let (timer, at) = timer_set(&last).expect("the decision timer");
-    h.step(Input::Voice(VoiceEvent::Partial {
-        turn: TurnId::from_parts(5, 5),
-        text: Personal::new("so anyway I was".to_owned()),
-        stable: false,
-    }));
-    assert!(at.0 - h.now_ms * 1_000_000 <= 600_000_000, "within 600 ms of the pause");
-    h.now_ms = at.0 / 1_000_000;
-    let effects = h.step(Input::Timer(timer));
-    assert!(
-        effects.contains(&Effect::Audio(AudioCmd::Resume { speak })),
-        "room talk resumes: {effects:?}"
-    );
-}
-
-#[test]
-fn go_on_plays_the_rest_after_a_stop() {
-    let mut h = Harness::new();
-    let turn = ask_brain(&mut h, "Eileen, tell me about rivers");
-    let speak = spoken(&h.step(delta(turn, "Rivers carry water to the sea. They "))).remove(0).0;
-    h.step(Input::Voice(VoiceEvent::ClauseReady { speak, clause: 0, chars: 30, samples: 1_000 }));
-    h.step(Input::Playback(PlaybackEvent::Played { speak, clause: 0, samples_played: 500 }));
-    h.say("stop");
-    let effects = h.say("go on");
-    assert_eq!(
-        spoken(&effects).first().map(|s| s.1.clone()),
-        Some(vec!["water to the sea.".to_owned()]),
-        "from the start of the word that was cut"
-    );
 }
 
 #[test]
@@ -715,4 +687,11 @@ fn safety_commands_not_built_yet_are_answered_and_never_reach_the_brain() {
     assert!(spoken(&h.step(delta(turn, "Rivers carry water. "))).is_empty(), "its text is dropped");
 }
 
+mod apps;
+mod barge_in;
+mod fan_out;
 mod jobs;
+mod life;
+mod refusals;
+mod router;
+mod steering;

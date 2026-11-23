@@ -1,8 +1,9 @@
 //! Turn-taking (BUILD.md sections 2.2 and 2.8): who holds the floor, Eileen's utterance and
 //! its playback accounting, barge-in with pause-then-decide, the heard prefix and mute.
 //!
-//! [`Turns`] is pure and cloneable: `Core::step` delegates every turn-taking input to it, and an
-//! exhaustive test can clone a state to share each prefix of the sequences it enumerates. It
+//! [`Turns`] is pure, cloneable and hashable: `Core::step` delegates every turn-taking input to
+//! it, and `turn::exhaustive` (`eileen-sim`'s `exhaustive` module) clones a state to share each
+//! prefix of the sequences it enumerates and hashes it to skip states already explored. It
 //! decides nothing about meaning. Whether an utterance was addressed, a backchannel or "stop" is
 //! the core's call, handed back through [`Turns::resolve_barge_in`] and [`Turns::stop`]; what
 //! the machine wants done comes out as [`Out`] values the core turns into effects.
@@ -77,6 +78,14 @@ pub enum Out {
         /// Whether it resumed after a barge-in.
         resumed: bool,
     },
+    /// Text of the utterance that will not be heard, because the speech process made no
+    /// clause of it or went down first: the core shows it on the HUD instead.
+    Unspoken {
+        /// The utterance.
+        speak: SpeakId,
+        /// The text.
+        text: String,
+    },
     /// A barge-in began: playback is ducked.
     BargeIn {
         /// The utterance.
@@ -94,7 +103,7 @@ pub enum Out {
 }
 
 /// One clause of an utterance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Clause {
     text: String,
     /// Its samples, once the speech process reported it ready.
@@ -102,7 +111,7 @@ struct Clause {
 }
 
 /// Where a barge-in stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Barge {
     None,
     /// Ducked; `run` consecutive windows so far, the last numbered `window`.
@@ -115,7 +124,7 @@ enum Barge {
 }
 
 /// The utterance holding the floor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Utterance {
     speak: SpeakId,
     clauses: Vec<Clause>,
@@ -190,8 +199,9 @@ fn join<S: AsRef<str>>(pieces: impl IntoIterator<Item = S>) -> String {
     out
 }
 
-/// Turn-taking state: pure, with no IO and no clock of its own.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Turn-taking state: pure, with no IO and no clock of its own. It hashes, so an exhaustive
+/// search can key the states it has explored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Turns {
     muted: bool,
     hearing: Option<TurnId>,
@@ -267,9 +277,15 @@ impl Turns {
         }
     }
 
-    /// The user's turn ended.
-    pub const fn end_of_turn(&mut self) {
-        self.hearing = None;
+    /// The user's turn ended; returns the turn that was being heard.
+    pub const fn end_of_turn(&mut self) -> Option<TurnId> {
+        self.hearing.take()
+    }
+
+    /// What the user did not hear of the last interrupted utterance, left for "go on".
+    #[must_use]
+    pub fn rest(&self) -> Option<&str> {
+        self.rest.as_deref()
     }
 
     /// A brain turn is in flight.
@@ -285,21 +301,24 @@ impl Turns {
     }
 
     /// Mutes or unmutes; muting stops Eileen mid-sentence. Returns whether anything changed.
+    /// Each earcon sounds outside the mute it confirms (invariant 9): the mute's before the
+    /// change is announced, the unmute's after.
     pub fn set_mute(&mut self, muted: bool, out: &mut Vec<Out>) -> bool {
         if self.muted == muted {
             return false;
         }
+        self.muted = muted;
         if muted {
             self.stop(true, out);
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Muted)));
             out.push(Out::Audio(AudioCmd::SetCapture(false)));
             self.hearing = None;
+            out.push(Out::Muted(true));
         } else {
             out.push(Out::Audio(AudioCmd::SetCapture(true)));
+            out.push(Out::Muted(false));
             out.push(Out::Audio(AudioCmd::Earcon(Earcon::Unmuted)));
         }
-        self.muted = muted;
-        out.push(Out::Muted(muted));
         true
     }
 
@@ -447,13 +466,36 @@ impl Turns {
     }
 
     /// The speech process finished what `speak` was sent. An utterance it made no clause for
-    /// (speech is down, section 6.6) ends here, unheard, rather than holding the floor.
+    /// (speech is down, section 6.6) ends here, unheard, rather than holding the floor, and its
+    /// text goes to the HUD.
     pub fn speak_done(&mut self, speak: SpeakId, out: &mut Vec<Out>) {
-        let unsynthesized = self.utterance.as_ref().is_some_and(|utterance| {
+        let Some(utterance) = self.utterance.as_ref().filter(|utterance| {
             utterance.speak == speak && utterance.clauses.iter().all(|c| c.samples.is_none())
-        });
-        if unsynthesized {
+        }) else {
+            return;
+        };
+        out.push(Out::Unspoken { speak, text: utterance.text() });
+        self.end(false, out);
+    }
+
+    /// The speech process went down and will synthesize nothing more. The utterance keeps the
+    /// clauses it had synthesized in order from the first, whose samples the audio driver holds
+    /// and plays, and is closed; the text of the rest goes to the HUD. With no clause
+    /// synthesized it ends here, unheard.
+    pub fn speech_lost(&mut self, out: &mut Vec<Out>) {
+        let Some(utterance) = self.utterance.as_mut() else { return };
+        let ready = utterance.clauses.iter().take_while(|c| c.samples.is_some()).count();
+        let lost = utterance.clauses.split_off(ready);
+        utterance.closed = true;
+        let (speak, drained) = (utterance.speak, utterance.drained);
+        if !lost.is_empty() {
+            let text = join(lost.iter().map(|clause| clause.text.as_str()));
+            out.push(Out::Unspoken { speak, text });
+        }
+        if ready == 0 {
             self.end(false, out);
+        } else if drained {
+            self.finish(out);
         }
     }
 

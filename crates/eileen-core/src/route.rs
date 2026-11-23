@@ -12,12 +12,12 @@
 
 use std::collections::VecDeque;
 
-use eileen_contracts::bus::{BusEvent, CancelSource, SpeakCause, TurnRoute};
+use eileen_contracts::bus::{BusEvent, SpeakCause, TurnRoute};
 use eileen_contracts::ids::{MonoTime, Personal, TurnId};
 use eileen_contracts::intent::{
     CoreCommand, FollowUp, LastTurnRefs, Resolution, ResolveCtx, ToolSource,
 };
-use eileen_contracts::jobs::{TurnAuthority, TurnSource};
+use eileen_contracts::jobs::{Depth, TurnAuthority, TurnSource};
 use eileen_contracts::tools::brain::JobRef;
 
 use crate::addressee::{self, Decision, Facts};
@@ -32,11 +32,17 @@ const NOT_BUILT: &str = "I can't do that yet.";
 /// again.
 const HANDLED_KEPT: usize = 8;
 
-/// The speech turns already routed, newest last, at most `HANDLED_KEPT`.
+/// The speech turns already routed, or dropped when speech went down, newest last, at most
+/// `HANDLED_KEPT`.
 #[derive(Debug, Default)]
 pub(crate) struct Handled(VecDeque<TurnId>);
 
 impl Handled {
+    /// Whether `turn` was handled already.
+    pub(crate) fn contains(&self, turn: TurnId) -> bool {
+        self.0.contains(&turn)
+    }
+
     /// Records `turn`; false when it was already handled.
     pub(crate) fn first_time(&mut self, turn: TurnId) -> bool {
         if self.0.contains(&turn) {
@@ -150,7 +156,7 @@ impl Core {
 
     /// Text typed in Eileen's own UI, or sent from the command line, as a turn of its own.
     pub(crate) fn typed(&mut self, cx: &mut Cx<'_>, text: &str, source: TurnSource) {
-        let turn = TurnId::from_parts(cx.ms(), cx.random());
+        let turn = TurnId::from_parts(cx.mint(), cx.random());
         self.utterance(cx, turn, text, source);
     }
 
@@ -241,7 +247,9 @@ impl Core {
         } else if safety_not_built(resolution) {
             self.not_built(cx, routed);
         } else {
-            self.route_to_brain(cx, routed);
+            let depth =
+                if let Resolution::Brain { depth, .. } = resolution { *depth } else { None };
+            self.route_to_brain(cx, routed, depth);
         }
     }
 
@@ -261,7 +269,7 @@ impl Core {
             Fast::Stop => self.stop_speaking(cx, true),
             Fast::Cancel(job) => {
                 self.stop_speaking(cx, true);
-                self.cancel_job(cx, job.as_ref(), CancelSource::Voice);
+                self.cancel_spoken(cx, routed.turn, job.as_ref());
             }
             Fast::GoOn => self.go_on(cx, routed.turn),
             Fast::WhatTime => {
@@ -282,11 +290,12 @@ impl Core {
         self.say(cx, Owner::turn(routed.turn), SpeakCause::Reply, NOT_BUILT);
     }
 
-    fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>) {
+    /// The brain, with the depth the user's words set (an L1 override), if any.
+    fn route_to_brain(&mut self, cx: &mut Cx<'_>, routed: Routed<'_>, depth: Option<Depth>) {
         emit_routed(cx, routed, TurnRoute::Brain, "brain");
         self.spans.router(routed.turn, "brain", "not a core command");
         self.stop_speaking(cx, true);
-        self.send_brain_turn(cx, routed.turn, routed.text, routed.authority);
+        self.send_brain_turn(cx, routed.turn, routed.text, routed.authority, depth);
     }
 
     /// "Go on": a paused barge-in resumes from the paused sample; after a stop, the part the

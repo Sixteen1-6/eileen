@@ -17,6 +17,7 @@ use crate::stream::{
     self, Block, BrainAt, Init, Line, MAX_LINE_BYTES, MAX_SKILL_NAME_BYTES, MAX_TOOL_INPUT_BYTES,
     NARRATION_PREFIX, PlanWindows,
 };
+use crate::worker::claude::{Status, eileen_status, reply_to};
 
 /// The process id the worker mapping is given.
 const PID: u32 = 4242;
@@ -26,6 +27,9 @@ const INSTANCE: u32 = 7;
 /// name, skill arguments, `can_use_tool` reason or `control_response` error may keep it. The
 /// seeds `hand-assistant-secret`, `hand-reason-secret` and `hand-error-secret` hold it.
 const SECRET: &str = "fuzz-secret-7c1e";
+/// The id of the readiness request whose replies the `control_message` entry reads, as the
+/// worker driver numbers its first one.
+const READY_ID: &str = "eileen_ready_1";
 /// The marks of the token kinds a cut cannot make: a prefix and a run of token bytes, with no
 /// rule on what ends it. A cut text that the redactor would mark again kept one of these.
 const TOKEN_MARKS: [&str; 3] =
@@ -78,11 +82,14 @@ pub fn stream_json_line(data: &[u8]) -> Result<(), &'static str> {
 /// keep no registered secret, the stream parser reads the line the same, an interrupt with the
 /// same id parses back as that interrupt, and with one interrupt open (`eileen_1`) only a response
 /// to `eileen_1` settles it, which closes it, and anything else leaves it open. The seed
-/// `hand-response-eileen-1` takes the settling branch.
+/// `hand-response-eileen-1` takes the settling branch. The worker driver's readiness reader
+/// agrees with the parser on every line (`readiness_agrees`); the `hand-ready-` seeds reach it.
 pub fn control_message(data: &[u8]) -> Result<(), &'static str> {
     let redactor = Arc::new(Redactor::new());
     let _secret = redactor.add_literal(SECRET).map_err(|_| "the redactor refused the secret")?;
-    let Ok(message) = control::parse(data, &redactor) else {
+    let parsed = control::parse(data, &redactor);
+    readiness_agrees(data, parsed.as_ref().ok())?;
+    let Ok(message) = parsed else {
         if matches!(stream::parse(data, &redactor), Line::Control(_)) {
             return Err("the stream parser read a line the control parser refused");
         }
@@ -116,6 +123,33 @@ pub fn control_message(data: &[u8]) -> Result<(), &'static str> {
         return Err("the stream parser read the control line differently");
     }
     settles_only_its_request(message)
+}
+
+/// The worker driver's readiness reader (`worker::claude`) agrees with the control parser: a
+/// line is a reply to the request asked exactly when the parser reads a response to its id, and
+/// a success exactly when the parser finds no error, except for a subtype the parser refuses,
+/// which the driver takes as an error, and a line over the cap, which the driver never reads
+/// whole. Eileen's status is read from any success's response.
+fn readiness_agrees(data: &[u8], parsed: Option<&Message>) -> Result<(), &'static str> {
+    let reply = reply_to(data, READY_ID);
+    if let Some(Ok(response)) = &reply
+        && eileen_status(response) == Status::Connected
+        && !response.to_string().contains("\"connected\"")
+    {
+        return Err("eileen read as connected from a response naming no connected server");
+    }
+    let success = match parsed {
+        Some(Message::Response { request_id, error }) if request_id == READY_ID => {
+            Some(error.is_none())
+        }
+        _ => None,
+    };
+    match (reply, success) {
+        (None | Some(Err(())), None) => Ok(()),
+        (Some(reply), Some(success)) if reply.is_ok() == success => Ok(()),
+        (Some(Ok(_)), None) if data.len() > MAX_LINE_BYTES => Ok(()),
+        _ => Err("the readiness reader and the control parser disagree on a reply"),
+    }
 }
 
 /// With one interrupt open, `message` settles it exactly when it is a response to its id.

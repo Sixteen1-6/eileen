@@ -1,0 +1,2 @@
+{"input":{"seq":1,"mono":1000000,"at":1792627199001000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"open notepad"}}}}}
+{"input":{"seq":2,"mono":2000000,"at":1792627199002000,"ctx":{"turn":null,"job":null,"call":null},"input":{"user":{"typed":{"text":"and the calc
