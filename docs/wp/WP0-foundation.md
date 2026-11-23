@@ -177,10 +177,10 @@ until #139 matched `main`'s entry in full, because both kept the image's stable 
 pinned 1.99.0 (`a820fa96`). With #139 merged, `main` saves under the pinned-only hash
 (`df0daf48`) and `prune-caches` deleted the `a820fa96` entries (on 2026-11-07 the only `linux`
 entry left was `df0daf48`), so the lane lost its only matching Rust cache and builds from a partial
-restore each night until it keeps only the pinned toolchain too. That change is pull request #144,
-an amendment to WP10's file, still held for the owner; until it merges, the workflow tests list the
-lane's `session` job as the one known exception and fail once it gains the step. BUILD.md's
-sections 4.6 and 4b.3 gained `prune-caches` and this cache policy in amendments #143 and #170.
+restore each night until it keeps only the pinned toolchain too. Pull request #144, an amendment
+to WP10's file, gives the lane's `session` job the same step, and the workflow tests now hold it to
+the same text with no exception. BUILD.md's sections 4.6 and 4b.3 gained `prune-caches` and this
+cache policy in amendments #143 and #170.
 
 Section 4.1's `serde_json` line and the root manifest agree since #157 (merged on 2026-11-07 as
 e64fed4, from `amend/serde-json-float-roundtrip`), which turns serde_json's `float_roundtrip`
