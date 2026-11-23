@@ -27,7 +27,8 @@
 //! - A shipped binary never enables `fake` (check 15 reads the feature lists).
 //! - A path probe opens only a drive or volume path. [`path_allow_listed`] is the one
 //!   definition, and [`FakePathProbe`] refuses by it whatever answer a test set
-//!   (`it::paths::a_pipe_a_device_and_every_unc_spelling_are_off_the_allow_list`).
+//!   (`it::paths::a_pipe_a_device_and_every_unc_spelling_are_off_the_allow_list` and the unit
+//!   test `a_method_that_opens_a_file_refuses_a_path_off_the_allow_list_whatever_is_set`).
 //!
 //! # Boundaries
 //!

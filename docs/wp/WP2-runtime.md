@@ -250,12 +250,20 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the harness writes whatever pipe the endpoints give, and the plan keeps one pipe per runtime.
 - `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 was still open
   and held for the owner when `wp2/path-probe-trait` was built, so the fake builds on `main`'s
-  `Deadline`, and `eileen-platform` does not yet depend on `eileen-stdx` for a `ManualClock`.
+  `Deadline`, and `eileen-platform` on `main` has no `ManualClock` to keep time on.
 - The allow-list is a rule about a path's form, and a DOS device name has a drive path's form:
   `C:\x\NUL` passes `path_allow_listed` until `full_path` turns it into `\\.\NUL`. Section 2.12
   has the rule checked on `full_path`'s answer and again inside each call that opens a file,
   so `WinPathProbe` has to take the full path again inside each such call before it applies
-  the rule; the fake cannot, and a row for `C:\x\NUL` sets `full_path`'s answer.
+  the rule; the fake cannot, and a row for `C:\x\NUL` sets `full_path`'s answer. The one
+  form the rule refuses by itself is `..` under `\\.\`, where Windows still applies it and the
+  drive is an ordinary component, so `\\.\C:\..\pipe\x` names a pipe; a full path holds no
+  `..`, so nothing a probe should open is refused.
+- Two things section 2.12's allow-list does not settle, both for `wp2/path-probe-win` and
+  proposed for section 7's open risks: a drive letter mapped to a share (`net use`, `subst`
+  onto a UNC path) has a drive path's form, so opening it reaches the server; and
+  `GetFullPathNameW` may read `\??\C:\x` as rooted with no drive, which would read the core's
+  current drive, although section 3.4 lists `\??\` among the paths `full_path` takes.
 - Section 3.4 does not say whether `PathProbe::handler`'s `extension` carries its dot.
   `AssocQueryStringW` takes `.txt`; the trait's doc leaves it open and the fake matches what a
   test set, so `wp2/path-probe-win` settles it with the classifier's first use.

@@ -55,6 +55,8 @@ fn a_path_that_needs_a_current_directory_is_not_fully_qualified() {
         r"\\host\",
         r"\\\share",
         r"\??\",
+        r"\\?\",
+        r"\\.\",
         r"\?\C:\x",
         "CONIN$",
         "NUL",
@@ -77,6 +79,10 @@ fn each_drive_and_volume_spelling_is_on_the_allow_list() {
         r"\??\C:\job\a.txt",
         r"\\.\C:\job\a.txt",
         r"\\?\d:\",
+        // Only `\\.\` applies `..`; elsewhere it is a name or stays on the drive.
+        r"\\?\C:\job\..\x",
+        r"C:\job\..x\a.txt",
+        r"\\.\C:\job\..x\a.txt",
         // A stream of a file on a drive is still that drive's file.
         r"C:\job\a.txt:stream",
         volume_root.as_str(),
@@ -104,6 +110,10 @@ fn a_pipe_a_device_and_every_unc_spelling_are_off_the_allow_list() {
         "CONIN$",
         r"\\.\NUL",
         r"\\.\PhysicalDrive0",
+        // Under `\\.\` Windows still applies `..`, which climbs over the drive.
+        r"\\.\C:\..\pipe\eileen-dispatch",
+        r"\\.\C:\job\..\..\GLOBALROOT\Device",
+        r"\\.\C:\job/../../UNC/fileserver/team",
         // Every UNC spelling.
         r"\\fileserver\team\plan.docx",
         "//fileserver/team/plan.docx",

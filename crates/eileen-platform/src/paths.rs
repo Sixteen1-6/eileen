@@ -62,8 +62,12 @@ pub trait PathProbe: Send + Sync {
     /// [`ShareKind::NotThisMachine`] unless the host is `localhost`, a literal loopback address
     /// or one of this computer's own names, compared as text with no name lookup of any kind.
     /// The classifier calls it before any method that opens a file.
-    fn share(&self, host: &str, share: &str, deadline: Deadline)
-    -> Result<ShareKind, PlatformError>;
+    fn share(
+        &self,
+        host: &str,
+        share: &str,
+        deadline: Deadline,
+    ) -> Result<ShareKind, PlatformError>;
 
     /// A `.lnk` file's target as stored, its variables unexpanded; `None` for a shortcut that
     /// names no file. Never resolved, because resolving searches the disk and can rewrite the
@@ -138,18 +142,28 @@ pub fn path_fully_qualified(path: &str) -> Result<(), PlatformError> {
 ///
 /// The rule reads the path's form only, so it is applied to [`PathProbe::full_path`]'s
 /// answer: a DOS device name such as `C:\x\NUL` has a drive path's form until the full path
-/// turns it into `\\.\NUL`.
+/// turns it into `\\.\NUL`. One form is refused here all the same, because nothing after
+/// this rule would catch it: under `\\.\` Windows still applies `..`, and the drive is an
+/// ordinary component there, so `\\.\C:\..\pipe\x` names a pipe. A full path holds no `..`,
+/// so the refusal costs no path a probe should open.
 pub fn path_allow_listed(path: &str) -> Result<(), PlatformError> {
     let backslash = |byte| byte == b'\\';
-    let prefixed = [VERBATIM, OBJECT, DEVICE].iter().find_map(|prefix| path.strip_prefix(prefix));
-    let allowed = match prefixed {
-        Some(rest) => {
-            drive_root(rest.as_bytes(), backslash)
-                || (path.starts_with(VERBATIM) && volume_root(rest.as_bytes()))
-        }
-        None => drive_root(path.as_bytes(), backslash),
+    let allowed = if let Some(rest) = path.strip_prefix(DEVICE) {
+        drive_root(rest.as_bytes(), backslash) && stays_below_its_root(rest.as_bytes())
+    } else if let Some(rest) = path.strip_prefix(VERBATIM) {
+        drive_root(rest.as_bytes(), backslash) || volume_root(rest.as_bytes())
+    } else if let Some(rest) = path.strip_prefix(OBJECT) {
+        drive_root(rest.as_bytes(), backslash)
+    } else {
+        drive_root(path.as_bytes(), backslash)
     };
     if allowed { Ok(()) } else { Err(OFF_ALLOW_LIST) }
+}
+
+/// Whether no component of `path` is `..`, read with either separator as Windows reads a
+/// path under `\\.\`.
+fn stays_below_its_root(path: &[u8]) -> bool {
+    path.split(|byte| is_separator(*byte)).all(|component| component != b"..")
 }
 
 /// Either separator `GetFullPathNameW` reads.
@@ -447,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn set_answers_come_back_for_each_path_share_shortcut_and_extension() {
+    fn set_answers_and_errors_come_back_for_each_path() {
         let probe = FakePathProbe::default();
         probe.set_full_path(r"C:\job\..\other\x.", Ok(r"C:\other\x".to_owned()));
         assert_eq!(probe.full_path(r"C:\job\..\other\x.").unwrap(), r"C:\other\x", "full");
@@ -510,7 +524,9 @@ mod tests {
         let probe = FakePathProbe::default();
         let pipe = r"\\.\pipe\eileen-dispatch";
         let unc = r"\\fileserver\team\plan.docx";
-        for path in [pipe, unc] {
+        let long_unc = r"\\?\UNC\fileserver\team\plan.docx";
+        let object_pipe = r"\??\pipe\eileen-dispatch";
+        for path in [pipe, unc, long_unc, object_pipe] {
             let found = FinalPath { existing: path.to_owned(), missing: vec![] };
             probe.set_final_path(path, Ok(found));
             probe.set_link_names(path, Ok(vec![path.to_owned()]));
