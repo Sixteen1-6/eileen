@@ -7,6 +7,9 @@
 //! likes (late, or again after a kill), and sees each connection the component hands back. Every
 //! queue in it has a maximum: the connections waiting to be accepted, the bytes in flight each
 //! way, and the record of connections handed back.
+//!
+//! [`played`] gives what playback hands a device for the PCM a stand-in sends, so a test compares
+//! a capture of Eileen's speech with it bit for bit.
 
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -153,6 +156,16 @@ impl StandIns {
             Ok(None) => Err(NotHandedBack::Gone),
         }
     }
+}
+
+/// What playback hands a device at `device_rate`, on each of its channels, for `samples` of 24 kHz
+/// synthesis played as one utterance without a break: its own interpolator over the whole of
+/// them, which gives the same samples bit for bit however the utterance is cut into clauses,
+/// frames and buffers, at full gain. `None` when playback has no conversion to `device_rate`
+/// (it has 48 kHz and 44.1 kHz).
+#[must_use]
+pub fn played(device_rate: u32, samples: &[i16]) -> Option<Vec<f32>> {
+    crate::playback::rendered(device_rate, samples)
 }
 
 fn connection(id: ConnectionId, stream: DuplexStream) -> SpeechConnection {

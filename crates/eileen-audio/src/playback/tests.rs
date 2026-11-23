@@ -14,7 +14,6 @@ use tokio::time::sleep;
 
 use super::{EVENTS, MARKERS, PlayError, Player, Renderer, SYNTH_RATE, default_queue, playback};
 use crate::pace::Pace;
-use crate::resample::{Conversion, Resampler};
 use crate::stream::{AudioSink as _, AudioStream, RenderInfo, StreamFormat};
 use crate::testing::{BUFFER, MONO_48K, Scratch, bits, ms};
 use crate::wav::{CaptureSink, WavClip};
@@ -39,16 +38,11 @@ fn tone(from: usize, len: usize) -> Vec<i16> {
         .collect()
 }
 
-/// What the renderer should hand the device for `input`, played without a break: the same
+/// What the renderer should hand a 48 kHz device for `input`, played without a break: the same
 /// interpolator over the whole input in one call, which gives the same samples bit for bit as
 /// any cut into buffers.
 fn upsampled(input: &[i16]) -> Vec<f32> {
-    let mut resampler = Resampler::new(Conversion::From24kTo48k);
-    let floats: Vec<f32> = input.iter().map(|&s| f32::from(s) / 32_768.0).collect();
-    let mut out = vec![0.0; resampler.output_len(floats.len())];
-    let n = resampler.process(&floats, &mut out).unwrap();
-    out.truncate(n);
-    out
+    super::rendered(48_000, input).unwrap()
 }
 
 /// A player and a `CaptureSink` running its renderer from time zero.

@@ -12,14 +12,19 @@
 //! later part of the audio series hands these 16 kHz chunks to the component's side and cancels
 //! the echo there, and the capture flags come from it. Until then every frame carries no capture
 //! flag.
+//!
+//! [`Capture`] is the component's side: it starts the source's stream with a framer in its
+//! callback, and stops it on a mute, which empties the ring.
 
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use eileen_contracts::speech::AUDIO_FRAME_SAMPLES;
 
+use crate::SharedSource;
 use crate::resample::{ResampleError, Resampler, downmix};
-use crate::ring::{CaptureFlags, CaptureWriter};
-use crate::stream::{CaptureCallback, CaptureInfo, StreamFormat};
+use crate::ring::{CaptureFlags, CaptureWriter, HANDOFF_FRAMES, STORE_FRAMES, SpeechRing};
+use crate::stream::{AudioStream, CaptureCallback, CaptureInfo, StreamFormat};
 
 /// The speech pipe's rate.
 pub(crate) const SPEECH_RATE_HZ: u32 = 16_000;
@@ -134,6 +139,74 @@ fn offset(samples: usize, rate_hz: u32) -> Duration {
 )]
 fn to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16
+}
+
+/// The component's side of the microphone: its source, the stream while capture runs, and the
+/// ring it fills.
+pub(crate) struct Capture {
+    /// Every frame the speech process has not confirmed.
+    pub(crate) ring: SpeechRing,
+    source: Option<SharedSource>,
+    stream: Option<Box<dyn AudioStream>>,
+    /// Mutes so far, so a write of audio can tell that one came while it waited.
+    mutes: u64,
+}
+
+impl Capture {
+    /// Capture from `source`, into an empty ring; nothing runs until [`Self::set`] starts it.
+    pub(crate) fn new(source: Option<SharedSource>) -> Self {
+        Self { ring: SpeechRing::new(STORE_FRAMES, HANDOFF_FRAMES), source, stream: None, mutes: 0 }
+    }
+
+    /// Whether the capture stream runs.
+    pub(crate) const fn running(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    /// The mutes so far.
+    pub(crate) const fn mutes(&self) -> u64 {
+        self.mutes
+    }
+
+    /// Starts or stops capture. Stopping empties the ring, so nothing captured before a mute is
+    /// written after it, and the first frame after capture resumes carries the break flag.
+    pub(crate) fn set(&mut self, on: bool) {
+        if !on {
+            if let Some(stream) = self.stream.take() {
+                stream.stop();
+            }
+            self.ring.capture_stopped();
+            self.mutes = self.mutes.wrapping_add(1);
+            return;
+        }
+        if self.stream.is_some() {
+            return;
+        }
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let mut source = source.lock().unwrap_or_else(PoisonError::into_inner);
+        let framer = match Framer::new(source.format(), self.ring.open_capture()) {
+            Ok(framer) => framer,
+            Err(error) => {
+                tracing::warn!(%error, format = ?source.format(), "capture did not start");
+                return;
+            }
+        };
+        let started = source.start(framer.into_callback());
+        drop(source);
+        match started {
+            Ok(stream) => self.stream = Some(stream),
+            Err(error) => tracing::warn!(%error, "capture did not start"),
+        }
+    }
+
+    /// Stops the stream as the component stops, and leaves the ring as it is.
+    pub(crate) fn finish(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            stream.stop();
+        }
+    }
 }
 
 #[cfg(test)]

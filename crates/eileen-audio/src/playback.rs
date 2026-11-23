@@ -5,10 +5,10 @@
 //! Two halves. The [`Player`] is the component's: PCM frames go into it straight from the speech
 //! connection, never through `Core::step` (section 3.3.7), are converted from 24 kHz synthesis to
 //! the device's rate by the resampler of `crate::resample`, and wait in a bounded queue, which
-//! refuses and logs a frame that does not fit. The [`Renderer`] is the render callback's: it
-//! hands the queued samples to the device and counts them, allocating, freeing, blocking and
-//! logging nothing (the crate's invariant), and reports what it played as [`PlaybackEvent`]s
-//! over a second bounded queue.
+//! refuses and logs a frame that does not fit. The [`Renderer`] (in `render`) is the render
+//! callback's: it hands the queued samples to the device and counts them, allocating, freeing,
+//! blocking and logging nothing (the crate's invariant), and reports what it played as
+//! [`PlaybackEvent`]s over a second bounded queue.
 //!
 //! The rules:
 //!
@@ -58,6 +58,7 @@
 //! after the audio it drops, so a renderer that sees the stop also sees every marker queued
 //! before it.
 
+mod render;
 #[cfg(test)]
 mod tests;
 
@@ -72,8 +73,9 @@ use eileen_stdx::num;
 use eileen_trace::names;
 use rtrb::{Consumer, Producer, RingBuffer};
 
+pub(crate) use self::render::Renderer;
 use crate::resample::{Conversion, Resampler};
-use crate::stream::{RenderInfo, StreamFormat};
+use crate::stream::StreamFormat;
 
 /// The rate the speech process synthesizes at, the only one a PCM frame may carry.
 pub(crate) const SYNTH_RATE: u32 = 24_000;
@@ -222,6 +224,25 @@ pub(crate) fn ramp_frames(rate: u32) -> usize {
     usize::try_from(rate / 1_000).unwrap_or(1).max(1)
 }
 
+/// A synthesized sample at the device's full scale of 1.0.
+fn to_device(sample: i16) -> f32 {
+    f32::from(sample) / 32_768.0
+}
+
+/// What the renderer hands a device at `device_rate`, on each channel, for `samples` of one
+/// utterance played without a break: a fresh interpolator over the whole of them in one call,
+/// which gives the same samples bit for bit as any cut into clauses, frames and buffers. `None`
+/// when playback has no conversion to that rate.
+#[cfg(any(test, feature = "fake"))]
+pub(crate) fn rendered(device_rate: u32, samples: &[i16]) -> Option<Vec<f32>> {
+    let mut resampler = Resampler::new(Conversion::between(SYNTH_RATE, device_rate)?);
+    let input: Vec<f32> = samples.iter().copied().map(to_device).collect();
+    let mut output = vec![0.0; resampler.output_len(input.len())];
+    let written = resampler.process(&input, &mut output).ok()?;
+    output.truncate(written);
+    Some(output)
+}
+
 /// The default queue for a device of `format`: [`QUEUE_SECONDS`] of its frames.
 pub(crate) fn default_queue(format: StreamFormat) -> usize {
     usize::try_from(format.sample_rate_hz).unwrap_or(usize::MAX).saturating_mul(QUEUE_SECONDS)
@@ -271,24 +292,7 @@ pub(crate) fn playback_with(
         drops: [0; Queue::ALL],
         lost: 0,
     };
-    let renderer = Renderer {
-        samples: sample_out,
-        markers: marker_out,
-        events: event_in,
-        shared,
-        channels: usize::from(format.channels.max(1)),
-        rate: u64::from(rate),
-        gain: 1.0,
-        ramp_to: 1.0,
-        ramp: ramp_frames(rate),
-        ramp_steps: f32::from(u16::try_from(ramp_frames(rate)).unwrap_or(u16::MAX)),
-        ramp_step: 0.0,
-        ramp_left: 0,
-        played_every: usize::try_from(rate / 20).unwrap_or(1).max(1),
-        since_played: 0,
-        current: None,
-    };
-    Ok((player, renderer))
+    Ok((player, Renderer::new(sample_out, marker_out, event_in, shared, format)))
 }
 
 /// What the player knows of one utterance.
@@ -362,7 +366,7 @@ impl Player {
             self.begin(speak, ordinal, fresh);
         }
         self.input.clear();
-        self.input.extend(samples.iter().map(|&s| f32::from(s) / 32_768.0));
+        self.input.extend(samples.iter().copied().map(to_device));
         self.output.resize(needed, 0.0);
         let written = self.resampler.process(&self.input, &mut self.output).unwrap_or(0);
         let converted = self.output.get(..written).unwrap_or_default();
@@ -423,6 +427,11 @@ impl Player {
         *times += 1;
         let times = *times;
         tracing::warn!(name: names::CHANNEL_FULL, channel = queue.channel(), capacity, times);
+    }
+
+    /// Whether audio is queued that the renderer has not yet handed to the device.
+    pub(crate) fn has_audio(&self) -> bool {
+        self.samples.slots() < self.capacity
     }
 
     /// Serves a playback command and returns whether it was one.
@@ -542,270 +551,20 @@ impl Player {
         if let Some(event) = self.reported.pop_front() {
             return Some(event);
         }
-        loop {
-            let event = self.events.pop().ok()?;
-            // A `Drained` for the newest utterance with samples queued since is stale: the
-            // renderer ran dry before that audio came. Passed on after the audio's
-            // `ClauseReady`, it would end a closed reply in the core with its last clause
-            // unplayed. The renderer reports the next dry spell when that audio has played.
-            let stale = matches!(event, PlaybackEvent::Drained { speak } if self.newest == Some(speak))
-                && self.samples.slots() < self.capacity;
-            if !stale {
+        while let Ok(event) = self.events.pop() {
+            if !self.is_stale(&event) {
                 return Some(event);
             }
         }
-    }
-}
-
-/// The clause being played.
-#[derive(Debug, Clone, Copy)]
-struct Current {
-    ordinal: u64,
-    speak: SpeakId,
-    clause: u16,
-    /// Device frames left of the marker being played.
-    left: usize,
-    /// Device frames of this clause handed to the device.
-    clause_frames: u64,
-    /// Whether its pause was reported.
-    paused: bool,
-    /// Whether the queue ran dry since its last marker was taken, and `Drained` was reported.
-    drained: bool,
-}
-
-/// What the renderer does next.
-enum Step {
-    /// Play up to this many frames of the current clause.
-    Play(usize),
-    /// Nothing to play: silence.
-    Silence,
-}
-
-/// The render callback's half. Allocates, frees, blocks and logs nothing.
-pub(crate) struct Renderer {
-    samples: Consumer<f32>,
-    markers: Consumer<Marker>,
-    events: Producer<PlaybackEvent>,
-    shared: Arc<Shared>,
-    channels: usize,
-    rate: u64,
-    /// The gain of the last frame scaled.
-    gain: f32,
-    /// The target the latest ramp moves to.
-    ramp_to: f32,
-    /// Frames a ramp takes (1 ms), as a count and as a divisor.
-    ramp: usize,
-    ramp_steps: f32,
-    /// The gain change per frame of the ramp under way, and its frames left.
-    ramp_step: f32,
-    ramp_left: usize,
-    played_every: usize,
-    since_played: usize,
-    current: Option<Current>,
-}
-
-impl Renderer {
-    /// Fills one buffer of interleaved device samples: the queued audio, then silence.
-    pub(crate) fn fill(&mut self, out: &mut [f32], _info: RenderInfo) {
-        let target = f32::from_bits(self.shared.gain.load(Ordering::Acquire));
-        let frames = out.len() / self.channels;
-        let mut done = 0;
-        while done < frames {
-            let Step::Play(run) = self.step() else { break };
-            let start = done.saturating_mul(self.channels);
-            let room = out.get_mut(start..).unwrap_or_default();
-            let played = self.copy(room, run.min(frames - done));
-            if played == 0 {
-                break;
-            }
-            done += played;
-            self.count(played);
-        }
-        for sample in out.iter_mut().skip(done.saturating_mul(self.channels)) {
-            *sample = 0.0;
-        }
-        self.apply_gain(out, target);
+        None
     }
 
-    /// Decides what plays next, moving through the markers and acting on holds.
-    fn step(&mut self) -> Step {
-        loop {
-            let Some(mut current) = self.current else {
-                let Ok(Marker { ordinal, speak, clause, frames }) = self.markers.pop() else {
-                    return Step::Silence;
-                };
-                self.reach(ordinal);
-                self.current = Some(Current {
-                    ordinal,
-                    speak,
-                    clause,
-                    left: frames,
-                    clause_frames: 0,
-                    paused: false,
-                    drained: false,
-                });
-                continue;
-            };
-            let hold = self.shared.hold(current.ordinal);
-            if hold == Hold::Stopped {
-                self.report(PlaybackEvent::Stopped {
-                    speak: current.speak,
-                    clause: current.clause,
-                    samples_played: self.synth_samples(current.clause_frames),
-                });
-                self.skip(current.left);
-                self.skip_rest_of(current.ordinal);
-                self.current = None;
-                continue;
-            }
-            if hold == Hold::Playing && current.paused {
-                // Resumed: the next pause is reported, even one that comes while it is dry.
-                current.paused = false;
-                self.current = Some(current);
-            }
-            if current.left == 0 {
-                match self.markers.peek().copied() {
-                    Ok(Marker { ordinal, clause, frames, .. }) if ordinal == current.ordinal => {
-                        let _taken = self.markers.pop();
-                        if clause != current.clause {
-                            current.clause = clause;
-                            current.clause_frames = 0;
-                        }
-                        current.left = frames;
-                        current.drained = false;
-                        self.current = Some(current);
-                    }
-                    Ok(_) => {
-                        // A later utterance began, so this one takes no more audio. A dry spell
-                        // already reported is the same one, so it is not reported again.
-                        if !current.drained {
-                            self.report(PlaybackEvent::Drained { speak: current.speak });
-                        }
-                        self.current = None;
-                    }
-                    Err(_) if hold == Hold::Paused => return self.hold_paused(current),
-                    Err(_) => {
-                        // Dry: every sample queued so far has played. The utterance stays
-                        // current, so its next batch continues it.
-                        if !current.drained {
-                            current.drained = true;
-                            self.current = Some(current);
-                            self.report(PlaybackEvent::Drained { speak: current.speak });
-                        }
-                        return Step::Silence;
-                    }
-                }
-                continue;
-            }
-            if hold == Hold::Paused {
-                return self.hold_paused(current);
-            }
-            self.current = Some(current);
-            return Step::Play(current.left);
-        }
-    }
-
-    /// Holds a paused clause, reporting the pause once.
-    fn hold_paused(&mut self, mut current: Current) -> Step {
-        if !current.paused {
-            current.paused = true;
-            self.current = Some(current);
-            self.report(PlaybackEvent::Paused {
-                speak: current.speak,
-                clause: current.clause,
-                samples_played: self.synth_samples(current.clause_frames),
-            });
-        }
-        Step::Silence
-    }
-
-    /// Notes that the renderer reached `ordinal`, so the player may reuse older slots.
-    fn reach(&self, ordinal: u64) {
-        if ordinal > self.shared.head.load(Ordering::SeqCst) {
-            self.shared.head.store(ordinal, Ordering::SeqCst);
-        }
-    }
-
-    /// Copies up to `frames` queued samples into `out`, each on every channel; returns the frames
-    /// copied.
-    fn copy(&mut self, out: &mut [f32], frames: usize) -> usize {
-        let frames = frames.min(self.samples.slots()).min(out.len() / self.channels);
-        let Ok(chunk) = self.samples.read_chunk(frames) else { return 0 };
-        let (first, second) = chunk.as_slices();
-        for (sample, frame) in first.iter().chain(second).zip(out.chunks_exact_mut(self.channels)) {
-            frame.fill(*sample);
-        }
-        chunk.commit_all();
-        frames
-    }
-
-    /// Counts `frames` handed to the device for the current clause, and reports `Played` each
-    /// time another 50 ms has gone out.
-    fn count(&mut self, frames: usize) {
-        let Some(mut current) = self.current else { return };
-        current.left -= frames.min(current.left);
-        current.clause_frames += num::saturating_u64_from_usize(frames);
-        self.current = Some(current);
-        self.since_played += frames;
-        if self.since_played >= self.played_every {
-            // One report however long the buffer, so two never come within 50 ms of audio.
-            self.since_played %= self.played_every;
-            self.report(PlaybackEvent::Played {
-                speak: current.speak,
-                clause: current.clause,
-                samples_played: self.synth_samples(current.clause_frames),
-            });
-        }
-    }
-
-    /// Drops `frames` queued samples unplayed.
-    fn skip(&mut self, frames: usize) {
-        let frames = frames.min(self.samples.slots());
-        if let Ok(chunk) = self.samples.read_chunk(frames) {
-            chunk.commit_all();
-        }
-    }
-
-    /// Drops the queued markers of `ordinal`, and their samples.
-    fn skip_rest_of(&mut self, ordinal: u64) {
-        while let Ok(marker) = self.markers.peek().copied() {
-            if marker.ordinal != ordinal {
-                break;
-            }
-            let _taken = self.markers.pop();
-            self.skip(marker.frames);
-        }
-    }
-
-    /// `frames` device frames as samples of the 24 kHz clause.
-    fn synth_samples(&self, frames: u64) -> u32 {
-        let scaled = u128::from(frames) * u128::from(SYNTH_RATE) / u128::from(self.rate.max(1));
-        num::saturating_u32_from_u64(num::saturating_u64_from_u128(scaled))
-    }
-
-    /// Queues an event, or counts it lost when the queue is full.
-    fn report(&mut self, event: PlaybackEvent) {
-        if self.events.push(event).is_err() {
-            self.shared.lost.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Scales the buffer by the gain. A new `target` starts a ramp from the gain now to it over
-    /// the next millisecond of frames, which runs on into later buffers when this one is shorter.
-    fn apply_gain(&mut self, out: &mut [f32], target: f32) {
-        if target.to_bits() != self.ramp_to.to_bits() {
-            self.ramp_to = target;
-            self.ramp_left = self.ramp;
-            self.ramp_step = (target - self.gain) / self.ramp_steps;
-        }
-        for frame in out.chunks_exact_mut(self.channels) {
-            if self.ramp_left > 0 {
-                self.ramp_left -= 1;
-                self.gain = if self.ramp_left == 0 { target } else { self.gain + self.ramp_step };
-            }
-            for sample in frame {
-                *sample *= self.gain;
-            }
-        }
+    /// Whether `event` is a `Drained` that audio queued since has made stale: one for the newest
+    /// utterance while samples are queued, so the renderer ran dry before that audio came. Passed
+    /// on after the audio's `ClauseReady`, it would end a closed reply in the core with its last
+    /// clause unplayed; the renderer reports the next dry spell when that audio has played.
+    pub(crate) fn is_stale(&self, event: &PlaybackEvent) -> bool {
+        matches!(*event, PlaybackEvent::Drained { speak } if self.newest == Some(speak))
+            && self.has_audio()
     }
 }

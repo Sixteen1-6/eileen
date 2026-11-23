@@ -27,23 +27,30 @@
 //! latest `SetMode` and `SetHotwords` are kept, and other commands wait in a bounded queue for
 //! the next connection, any past its maximum dropped and logged.
 //!
-//! Every wait has a deadline: each accept, read and write, a write's covering the whole of it.
-//! The pending accept, read and effect are owned futures that live across the loop's turns, so
-//! none is dropped part way; a read in flight when a write fails is awaited, within its deadline,
-//! so the connection's two halves rejoin before it goes back. The handoff is drained before each
-//! write and before that last read, so no wait of the loop's can fill it.
+//! Playback (section 6.6, "Duck, and what waits for W2", and the `playback` submodule): the
+//! component starts the render stream of `AudioConfig::playback` as it starts, takes each PCM
+//! frame the speech process sends straight into the player, never through `Core::step` (section
+//! 3.3.7), serves `Duck`, `Unduck`, `Pause`, `Resume` and `Stop`, and passes what playback reports
+//! to the core as `Input::Playback`, on the pump and the once-a-second report. It relies on the
+//! speech process sending a clause's PCM before its `ClauseReady`, as the contract says, and holds
+//! a `Drained` that would reach the core between a `ClauseReady` and its audio should one come the
+//! other way. `PlayPhrase` and `Record` are W2 work that the core does not send until then: one
+//! that comes anyway fails a `never!` soft assertion and is dropped with a logged reason.
 //!
-//! A mute never waits on the pipe. While a write or that last read waits, the component keeps
-//! taking effects: a mute stops capture at once, and any other effect is parked, in order, for
-//! the loop to serve once the wait is over. Audio is written a frame at a time, so a mute that
-//! comes during a write lets only the frame already begun finish; the rest of the batch, captured
-//! before the mute, is dropped with the ring.
+//! Every wait has a deadline, and a mute or a playback command never waits on the pipe (the
+//! `wait` submodule). The handoff is drained before each write and before a closing connection's
+//! last read, so no wait of the loop's can fill it. Audio is written a frame at a time, so a mute
+//! that comes during a write lets only the frame already begun finish; the rest of the batch,
+//! captured before the mute, is dropped with the ring.
+
+mod playback;
+mod wait;
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use eileen_contracts::connectors::{SidecarEvent, SidecarId};
@@ -57,23 +64,20 @@ use eileen_contracts::speech::{
     VoiceEvent,
 };
 use eileen_trace::names;
-use tokio::time::{Instant, Interval, MissedTickBehavior};
+use tokio::time::Instant;
 
-use crate::SharedSource;
-use crate::capture::Framer;
-use crate::ring::{HANDOFF_FRAMES, STORE_FRAMES, SpeechRing};
-use crate::stream::AudioStream;
+use self::playback::Speakers;
+use self::wait::{Incoming, Owned, ReadDone, maybe, next_accept, next_read, racing, ticker};
+use crate::capture::Capture;
+use crate::ring::STORE_FRAMES;
 use crate::transport::{
     AcceptError, ConnectionError, ConnectionId, SpeechConnection, SpeechReader, SpeechTransport,
     SpeechWriter,
 };
+use crate::{SharedSink, SharedSource};
 
 /// A `Ping` goes this often on a connection.
 pub(crate) const PING_EVERY: Duration = Duration::from_secs(1);
-/// Each wait for a connection; the next wait follows at once.
-const ACCEPT_WITHIN: Duration = Duration::from_secs(5);
-/// Each read; a read that misses it is simply started again.
-const READ_WITHIN: Duration = Duration::from_secs(1);
 /// Each write, the whole of it. One that misses it ends the connection.
 const WRITE_WITHIN: Duration = Duration::from_secs(2);
 /// How often the ring is drained: into the connection while one is up, from the handoff into
@@ -83,28 +87,26 @@ const PUMP_EVERY: Duration = Duration::from_millis(10);
 const FRAMES_PER_WRITE: usize = 32;
 /// Commands held while no connection is up.
 pub(crate) const HELD_COMMANDS: usize = 64;
-/// Effects that came while a write or a read waited, kept for the loop to serve after it. Past
-/// this many the component stops taking effects until the wait is over, and the runtime's own
-/// bounded queue holds the rest.
-const PARKED_EFFECTS: usize = 64;
 /// Bytes asked for in each read.
 const READ_BYTES: usize = 16 * 1024;
 /// The PC microphone's audio source number ([`eileen_contracts::speech::FrameHeader::source`]).
 const MICROPHONE: u16 = 0;
 
-/// The audio component: capture into the speech ring and the core end of the speech pipe.
-/// Playback, echo cancellation and the energy fallback join it in later parts.
+/// The audio component: capture into the speech ring, playback and the core end of the speech
+/// pipe. Echo cancellation and the energy fallback join it in later parts.
 pub(crate) struct AudioComponent {
     speech: Option<Arc<dyn SpeechTransport>>,
     capture: Option<SharedSource>,
+    playback: Option<SharedSink>,
 }
 
 impl AudioComponent {
     pub(crate) const fn new(
         speech: Option<Arc<dyn SpeechTransport>>,
         capture: Option<SharedSource>,
+        playback: Option<SharedSink>,
     ) -> Self {
-        Self { speech, capture }
+        Self { speech, capture, playback }
     }
 }
 
@@ -125,56 +127,10 @@ impl Component for AudioComponent {
     }
 }
 
-type Owned<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-
-/// A finished read, with the half and buffer it used.
-struct ReadDone {
-    reader: SpeechReader,
-    buf: Box<[u8]>,
-    result: Result<usize, ConnectionError>,
-}
-
-fn next_read(mut reader: SpeechReader, mut buf: Box<[u8]>) -> Owned<ReadDone> {
-    Box::pin(async move {
-        let result = reader.read(&mut buf, READ_WITHIN).await;
-        ReadDone { reader, buf, result }
-    })
-}
-
-/// A finished wait for an effect, with the source it came from.
-type EffectDone = (Box<dyn EffectSource>, Option<Envelope<Effect>>);
-
-fn next_effect(mut effects: Box<dyn EffectSource>) -> Owned<EffectDone> {
-    Box::pin(async move {
-        let effect = effects.recv().await;
-        (effects, effect)
-    })
-}
-
-fn next_accept(
-    transport: Arc<dyn SpeechTransport>,
-) -> Owned<Result<SpeechConnection, AcceptError>> {
-    Box::pin(async move { transport.accept(ACCEPT_WITHIN).await })
-}
-
-/// Waits for the future if there is one, and for ever if not. A future that finished must be
-/// replaced or cleared before the next wait.
-async fn maybe<T>(future: Option<&mut Owned<T>>) -> T {
-    match future {
-        Some(future) => future.await,
-        None => std::future::pending().await,
-    }
-}
-
-fn ticker(every: Duration) -> Interval {
-    let mut interval = tokio::time::interval(every);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    interval
-}
-
 async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), ComponentError> {
     let ComponentCtx { inputs, effects, shutdown, .. } = ctx;
-    let mut speech = Link::new(inputs, effects, component.speech, component.capture);
+    let speakers = Speakers::start(component.playback.as_ref());
+    let mut speech = Link::new(inputs, effects, component.speech, component.capture, speakers);
     speech.capture.set(true);
     let mut stop = shutdown.wait();
     let mut pump = ticker(PUMP_EVERY);
@@ -198,7 +154,7 @@ async fn run(component: AudioComponent, ctx: ComponentCtx) -> Result<(), Compone
             biased;
             () = &mut stop => break,
             done = maybe(speech.incoming.next.as_mut()) => {
-                speech.incoming.arrived(done, &mut speech.capture);
+                speech.incoming.arrived(done, &mut speech.capture, &mut speech.speakers);
             }
             done = maybe(reading) => speech.on_read(done).await,
             accepted = maybe(speech.accepting.as_mut()) => {
@@ -247,98 +203,12 @@ struct Live {
     reading: Option<Owned<ReadDone>>,
 }
 
-/// The effects routed to the component: the wait for the next one, and those that came while a
-/// write or a read waited.
-struct Incoming {
-    /// The wait for the next effect; `None` once the source has ended.
-    next: Option<Owned<EffectDone>>,
-    /// Effects that came while a write or a read waited, oldest first; at most
-    /// [`PARKED_EFFECTS`].
-    parked: VecDeque<Envelope<Effect>>,
-}
-
-impl Incoming {
-    /// Takes what the wait for an effect gave and starts the next wait. A mute is served at
-    /// once, through `capture`, and drops any `SetCapture` still parked, which it comes after;
-    /// any other effect is parked for the loop.
-    fn arrived(&mut self, done: EffectDone, capture: &mut Capture) {
-        let (source, effect) = done;
-        let Some(envelope) = effect else {
-            self.next = None;
-            return;
-        };
-        self.next = Some(next_effect(source));
-        if matches!(envelope.body, Effect::Audio(AudioCmd::SetCapture(false))) {
-            self.parked
-                .retain(|parked| !matches!(parked.body, Effect::Audio(AudioCmd::SetCapture(_))));
-            capture.set(false);
-        } else {
-            self.parked.push_back(envelope);
-        }
-    }
-}
-
-/// Awaits `work` while taking effects as they come: a mute stops capture before `work` ends,
-/// and any other effect is parked for the loop. With [`PARKED_EFFECTS`] parked it takes no more
-/// until `work` ends.
-async fn racing<T>(
-    work: impl Future<Output = T>,
-    incoming: &mut Incoming,
-    capture: &mut Capture,
-) -> T {
-    let mut work = std::pin::pin!(work);
-    loop {
-        let room = incoming.parked.len() < PARKED_EFFECTS;
-        tokio::select! {
-            biased;
-            out = &mut work => return out,
-            done = maybe(incoming.next.as_mut()), if room => incoming.arrived(done, capture),
-        }
-    }
-}
-
-/// The microphone's side: its source, the stream while capture runs, and the ring it fills.
-struct Capture {
-    ring: SpeechRing,
-    source: Option<SharedSource>,
-    stream: Option<Box<dyn AudioStream>>,
-    /// Mutes so far, so a write of audio can tell that one came while it waited.
-    mutes: u64,
-}
-
-impl Capture {
-    /// Starts or stops capture. Stopping empties the ring, so nothing captured before a mute is
-    /// written after it, and the first frame after capture resumes carries the break flag.
-    fn set(&mut self, on: bool) {
-        if !on {
-            if let Some(stream) = self.stream.take() {
-                stream.stop();
-            }
-            self.ring.capture_stopped();
-            self.mutes = self.mutes.wrapping_add(1);
-            return;
-        }
-        if self.stream.is_some() {
-            return;
-        }
-        let Some(source) = self.source.as_ref() else {
-            return;
-        };
-        let mut source = source.lock().unwrap_or_else(PoisonError::into_inner);
-        let framer = match Framer::new(source.format(), self.ring.open_capture()) {
-            Ok(framer) => framer,
-            Err(error) => {
-                tracing::warn!(%error, format = ?source.format(), "capture did not start");
-                return;
-            }
-        };
-        let started = source.start(framer.into_callback());
-        drop(source);
-        match started {
-            Ok(stream) => self.stream = Some(stream),
-            Err(error) => tracing::warn!(%error, "capture did not start"),
-        }
-    }
+/// Drops an audio command the audio series does not serve, which the core sends only from W2
+/// (section 6.6): a warning with its reason, and a failed `never!` soft assertion, so a test or
+/// the simulator that sends one fails while a running Eileen carries on.
+fn unserved(command: &'static str, reason: &'static str) {
+    tracing::warn!(command, reason, "an audio command the audio series does not serve was dropped");
+    eileen_stdx::never!(true, "the core sent {command}, which the audio series does not serve");
 }
 
 /// The component's state between the loop's turns.
@@ -346,6 +216,7 @@ struct Link {
     inputs: Box<dyn InputSink>,
     incoming: Incoming,
     capture: Capture,
+    speakers: Speakers,
     transport: Option<Arc<dyn SpeechTransport>>,
     /// The wait for the next connection, while none is up and the transport is open.
     accepting: Option<Owned<Result<SpeechConnection, AcceptError>>>,
@@ -375,19 +246,13 @@ impl Link {
         effects: Box<dyn EffectSource>,
         transport: Option<Arc<dyn SpeechTransport>>,
         source: Option<SharedSource>,
+        speakers: Speakers,
     ) -> Self {
         Self {
             inputs,
-            incoming: Incoming {
-                next: Some(next_effect(effects)),
-                parked: VecDeque::with_capacity(PARKED_EFFECTS),
-            },
-            capture: Capture {
-                ring: SpeechRing::new(STORE_FRAMES, HANDOFF_FRAMES),
-                source,
-                stream: None,
-                mutes: 0,
-            },
+            incoming: Incoming::new(effects),
+            capture: Capture::new(source),
+            speakers,
             transport,
             accepting: None,
             live: None,
@@ -490,15 +355,28 @@ impl Link {
             | AudioCmd::Unduck
             | AudioCmd::Pause { .. }
             | AudioCmd::Resume { .. }
-            | AudioCmd::Stop { .. }
-            | AudioCmd::PlayPhrase { .. }
-            | AudioCmd::Earcon(_)
-            | AudioCmd::Record { .. } => {
-                tracing::debug!(
-                    ?cmd,
-                    "this audio command is served by a later part of the audio series"
-                );
+            | AudioCmd::Stop { .. } => {
+                if let Some(event) = self.speakers.command(cmd) {
+                    self.send(Input::Playback(event), TraceCtx::default());
+                }
             }
+            AudioCmd::Earcon(earcon) => {
+                tracing::debug!(?earcon, "earcons are played by a later part of the audio series");
+            }
+            AudioCmd::PlayPhrase { .. } => unserved(
+                "PlayPhrase",
+                "the phrase cache is W2 work; until then the core speaks every reply through Speak",
+            ),
+            AudioCmd::Record { .. } => {
+                unserved("Record", "recording for the first run and enrollment is W2 work");
+            }
+        }
+    }
+
+    /// Passes what playback reported to the core, as `Input::Playback`.
+    fn report_playback(&mut self) {
+        while let Some(event) = self.speakers.next_event() {
+            self.send(Input::Playback(event), TraceCtx::default());
         }
     }
 
@@ -558,9 +436,11 @@ impl Link {
         }
     }
 
-    /// Writes the next batch of the ring's frames; true when more are waiting at once. With no
-    /// connection up it moves the handoff's frames into the store instead.
+    /// Passes playback's events to the core, then writes the next batch of the ring's frames;
+    /// true when more are waiting at once. With no connection up it moves the handoff's frames
+    /// into the store instead.
     async fn pump(&mut self) -> bool {
+        self.report_playback();
         if self.live.is_none() {
             self.capture.ring.pull();
             return false;
@@ -595,9 +475,11 @@ impl Link {
         }
     }
 
-    /// Once a second: a `Ping` on the connection, and the counts of what was dropped.
+    /// Once a second: a `Ping` on the connection, the counts of what was dropped, and any event
+    /// playback reported after the pump stopped taking them.
     async fn on_second(&mut self) {
         self.report();
+        self.report_playback();
         if self.live.is_none() {
             return;
         }
@@ -693,15 +575,17 @@ impl Link {
                 false
             }
             FrameBody::Event(event) => {
+                if let VoiceEvent::ClauseReady { speak, clause, samples, .. } = event.event {
+                    self.speakers.announce(speak, clause, samples);
+                }
                 self.send(Input::Voice(event.event), event.ctx);
                 false
             }
-            FrameBody::Pcm { header, .. } => {
-                tracing::debug!(
-                    speak = %header.speak,
-                    clause = header.clause,
-                    "PCM is played by a later part of the audio series"
-                );
+            FrameBody::Pcm { header, samples } => {
+                // Straight into playback, never through the core (section 3.3.7).
+                if let Some(event) = self.speakers.play(header, &samples) {
+                    self.send(Input::Playback(event), TraceCtx::default());
+                }
                 false
             }
             // The reader refuses these from the speech process.
@@ -739,24 +623,24 @@ impl Link {
     }
 
     async fn write_pieces(&mut self) -> Result<(), Ended> {
-        let Self { live, out, cuts, incoming, capture, .. } = self;
+        let Self { live, out, cuts, incoming, capture, speakers, .. } = self;
         let Some(live) = live.as_mut() else {
             return Ok(());
         };
         let deadline = Instant::now() + WRITE_WITHIN;
-        let mutes = capture.mutes;
+        let mutes = capture.mutes();
         let mut from = 0;
         // Without cuts, `out` is one piece and holds no audio.
         for end in cuts.iter().copied().chain(std::iter::once(out.len())) {
             if end <= from {
                 continue;
             }
-            if capture.mutes != mutes {
+            if capture.mutes() != mutes {
                 break;
             }
             let piece = out.get(from..end).unwrap_or_default();
             let within = deadline.saturating_duration_since(Instant::now());
-            racing(live.writer.write_all(piece, within), incoming, capture)
+            racing(live.writer.write_all(piece, within), incoming, capture, speakers)
                 .await
                 .map_err(Ended::Connection)?;
             from = end;
@@ -774,6 +658,7 @@ impl Link {
         let Some(live) = self.live.take() else {
             return;
         };
+        self.speakers.connection_closed();
         if matches!(ended, Ended::Shutdown) {
             tracing::info!(connection = %live.id, reason = %ended, "speech connection handed back");
         } else {
@@ -799,7 +684,7 @@ impl Link {
         self.capture.ring.pull();
         let reading = self.live.as_mut()?.reading.take()?;
         let ReadDone { reader, buf, result } =
-            racing(reading, &mut self.incoming, &mut self.capture).await;
+            racing(reading, &mut self.incoming, &mut self.capture, &mut self.speakers).await;
         if let Ok(n) = result
             && let Err(ended) = self.take_bytes(buf.get(..n).unwrap_or_default()).await
         {
@@ -808,19 +693,19 @@ impl Link {
         Some(reader)
     }
 
-    /// Whether the ring needs draining: capture runs. With capture off the ring holds nothing (a
-    /// mute empties it, and with no microphone nothing ever arrives), so a muted component wakes
-    /// once a second for its `Ping`, not a hundred times. A new connection's replay runs on the
-    /// loop's `more` flag, not on this tick.
-    const fn drains(&self) -> bool {
-        self.capture.stream.is_some()
+    /// Whether the pump runs: capture runs, or playback had something to do lately
+    /// (`Speakers::active`). With capture off the ring holds nothing (a mute empties it, and with
+    /// no microphone nothing ever arrives), so a muted component that is not speaking wakes once
+    /// a second for its `Ping`, not a hundred times. A new connection's replay runs on the loop's
+    /// `more` flag, not on this tick.
+    fn drains(&self) -> bool {
+        self.capture.running() || self.speakers.active()
     }
 
-    /// The component is stopping: capture stops and the connection goes back.
+    /// The component is stopping: capture and playback stop and the connection goes back.
     async fn finish(&mut self) {
-        if let Some(stream) = self.capture.stream.take() {
-            stream.stop();
-        }
+        self.capture.finish();
+        self.speakers.finish();
         self.close(None, Ended::Shutdown).await;
     }
 }

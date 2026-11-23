@@ -49,13 +49,27 @@
 //! - The ring keeps every frame the speech process has not confirmed, up to 180 s, numbered from
 //!   the core's start (decision D81); a mute empties it, so nothing captured before a mute is
 //!   written after it (`ring::tests`).
-//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), stops a
-//!   paused utterance at a sample and resumes it from exactly that sample, and never plays audio
-//!   of a stopped utterance (`playback::tests`). Its queues are bounded: a PCM frame that does
-//!   not fit the sample or marker queue is refused and logged, and so is a new utterance past
-//!   the live limit, an early pause past the ones it remembers and an event the player reports
-//!   itself past the event limit; its render side allocates nothing
-//!   (`allocation_counter::measure` in the same tests).
+//! - The speech process's PCM goes straight from the connection into playback, never through
+//!   `Core::step` (section 3.3.7), and plays on `AudioConfig::playback` bit for bit as the
+//!   interpolator gives it; `Duck`, `Unduck`, `Pause`, `Resume` and `Stop` reach playback from
+//!   their effect, and `Played`, `Paused`, `Stopped` and `Drained` reach the core as
+//!   `Input::Playback`, a `Stopped` with the exact samples played (`tests/it/playback_link.rs`).
+//!   No `Drained` reaches the core between a clause's `ClauseReady` and its audio, and one held
+//!   for audio that never comes reaches it when the connection closes. A sink that was given and
+//!   did not start reports `Stalled` at each utterance's first PCM and answers each `Stop` with
+//!   `Stopped` at the first sample, so no reply holds the floor unheard. `PlayPhrase` and
+//!   `Record`, W2 work, fail a `never!` soft assertion and are dropped with a logged reason,
+//!   never silently (the same tests).
+//! - Playback takes a duck or unduck in the next output callback (simulator invariant 2), even
+//!   while a write on the speech pipe waits, since the component serves the five playback
+//!   commands as they arrive; it stops a paused utterance at a sample and resumes it from exactly
+//!   that sample, and never plays audio of a stopped utterance (`playback::tests`, and through the
+//!   component `tests/it/playback_link.rs`). Its queues are bounded: a PCM frame that does not fit
+//!   the sample or marker queue is refused and logged, and so is a new utterance past the live
+//!   limit, an early pause past the ones it remembers and an event the player reports itself past
+//!   the event limit; its render side allocates nothing
+//!   (`allocation_counter::measure` in the same tests, and around every render callback the
+//!   component gives a sink in `tests/it/playback_link.rs`).
 //! - Echo cancellation runs on the speech pipe's 16 kHz mono in 10 ms chunks, against the
 //!   loopback while it carries Eileen, her own PCM once she has sounded for 50 ms without it or
 //!   while none runs, and bypassed (high-pass filter and noise suppression only) once the
@@ -72,11 +86,12 @@
 //! - Called by `eileen-cli`, which builds the component and implements [`SpeechTransport`] over
 //!   WP2's transport; WP2's tests use `fake`. Cross-crate items: [`SpeechTransport`],
 //!   [`SpeechConnection`] and its halves and byte traits, [`AudioSource`], [`AudioSink`],
-//!   [`AudioConfig`] with its [`SharedSource`], [`SetupError`], and the test audio
-//!   `eileen run --audio-source wav:<file> --audio-sink capture:<file>` selects and other crates'
-//!   tests use: [`WavClip`], [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its speaker,
-//!   microphone and loopback, [`RoomConfig`], [`Bed`] and [`BedSource`], and [`Pace`]. The
-//!   component never names the pipe, spawns a process or sees the token.
+//!   [`AudioConfig`] with its [`SharedSource`] and [`SharedSink`], [`SetupError`], and the test
+//!   audio `eileen run --audio-source wav:<file> --audio-sink capture:<file>` selects and other
+//!   crates' tests use: [`WavClip`], [`WavSource`], [`CaptureSink`], [`RoomMixer`] with its
+//!   speaker, microphone and loopback, [`RoomConfig`], [`Bed`] and [`BedSource`], [`Pace`], and
+//!   `fake::played`, what playback hands a device for given synthesized samples. The component
+//!   never names the pipe, spawns a process or sees the token.
 //! - May depend on `eileen-platform`, `eileen-rt`, `eileen-contracts`, `eileen-stdx`,
 //!   `eileen-trace`, `tracing`, `tokio` and `thiserror`; `eileen-audio-win` and `cpal` under the
 //!   Windows target table; `rtrb` for the ring's and playback's handoffs, `hound` for WAV files,
@@ -93,33 +108,39 @@
 //!
 //! - Fast command: `cargo xtask test -p eileen-audio`.
 //! - Layers: integration tests of the component's end of the speech pipe in
-//!   `tests/it/speech_pipe.rs` (WP4 acceptance 15: a `WavSource` microphone and a scripted
-//!   stand-in for the speech process over the memory transport, on paused tokio time: a late
-//!   connect, a kill and a reload each recognising every command once, the latest mode and
-//!   hotwords first, an overrun's break flag, mutes, the heartbeat and confirmation, a refused
-//!   frame, the answers while no connection is up and the held commands' maximum, a write that
-//!   misses its deadline, a command whose own write fails, the transport shutting down, a mute
-//!   while a write waits, one `Pong` for a read's `Ping`s, and the logs of a clean stop, a
-//!   dropped command, refused inputs and an overrun); unit tests for the capture framing
+//!   `tests/it/speech_pipe.rs` (WP4 acceptance 15: a `WavSource` microphone and a scripted stand-in
+//!   for the speech process over the memory transport, on paused tokio time: a late connect, a kill
+//!   and a reload each recognising every command once, the latest mode and hotwords first, an
+//!   overrun's break flag, mutes, the heartbeat and confirmation, a refused frame, the answers
+//!   while no connection is up and the held commands' maximum, a write that misses its deadline, a
+//!   command whose own write fails, the transport shutting down, a mute while a write waits, one
+//!   `Pong` for a read's `Ping`s, and the logs of a clean stop, a dropped command, refused inputs
+//!   and an overrun); integration tests of its playback in `tests/it/playback_link.rs` (a
+//!   stand-in's PCM on a `CaptureSink` whose render callbacks run inside
+//!   `allocation_counter::measure`, on paused tokio time: a reply's clauses bit for bit with
+//!   `Played` and `Drained` at the core, a `Drained` held while an announced clause's audio is on
+//!   its way and one released when the connection closes, a duck from the next output callback, a
+//!   duck and a stop while a write waits, a pause and resume, a stop's exact position and the PCM
+//!   refused after it, `PlayPhrase` and `Record` dropped and logged, and speakers that do not
+//!   start reporting `Stalled` and `Stopped`); unit tests for the capture framing
 //!   (`capture::tests`, a buffer that ends inside a device frame among them, and the callback
 //!   inside `allocation_counter::measure`), the DSP, the ring's rules and the memory transport
 //!   (paused tokio time), loom for the ring's shared atomics (`RUSTFLAGS="--cfg loom"`, with
-//!   `--lib ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag
-//!   the same models run once on a real thread), the test sources and sinks under paused tokio
-//!   time (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits,
-//!   the room's delay and attenuation on an impulse, its loopback, and a room stopped and started
+//!   `--lib ring::concurrency`; no CI lane runs it yet, section 4.6 plans one; without the flag the
+//!   same models run once on a real thread), the test sources and sinks under paused tokio time
+//!   (`wav::tests`, `room::tests`: a WAV round trip, the pacing, the read and capture limits, the
+//!   room's delay and attenuation on an impulse, its loopback, and a room stopped and started
 //!   again), playback over a `CaptureSink` under paused tokio time (`playback::tests`: each
-//!   command, compared bit for bit with the interpolator over the whole clause), echo
-//!   cancellation and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music
-//!   and a speech video, made bit for bit the same on every platform, with the loopback two
-//!   chunks behind her stream (`aec::tests`: an ERLE floor against the loopback and against own
-//!   PCM, after a handover once AEC3 has learned her PCM's delay afresh, and after a NaN, a
-//!   near-end command's energy kept alone, over Eileen and over each bed, the reference switch
-//!   to the chunk, the learning time, the flags,
-//!   and no false onset in ten minutes of each bed, counted from a fresh canceller, in four runs
-//!   of 153 s that each stay under the test profiles' time limit), the window assembly and the
-//!   detector's rules (`energy::tests`), and device tests on the owner's PC under
-//!   `desktop.lock`.
+//!   command, compared bit for bit with the interpolator over the whole clause), echo cancellation
+//!   and the energy fallback over a 16 kHz `RoomMixer` with synthetic voices, music and a speech
+//!   video, made bit for bit the same on every platform, with the loopback two chunks behind her
+//!   stream (`aec::tests`: an ERLE floor against the loopback and against own PCM, after a handover
+//!   once AEC3 has learned her PCM's delay afresh, and after a NaN, a near-end command's energy
+//!   kept alone, over Eileen and over each bed, the reference switch to the chunk, the learning
+//!   time, the flags, and no false onset in ten minutes of each bed, counted from a fresh
+//!   canceller, in four runs of 153 s that each stay under the test profiles' time limit), the
+//!   window assembly and the detector's rules (`energy::tests`), and device tests on the owner's PC
+//!   under `desktop.lock`.
 //! - A bug here starts as Eileen hearing herself, or a word lost at a buffer boundary.
 //!
 //! # Traps
@@ -157,12 +178,14 @@
 //! - The component's pending accept, read and effect are owned futures kept across its loop's
 //!   turns, so none is dropped part way; a read in flight when a write fails is awaited within
 //!   its deadline, so the two halves rejoin before the connection goes back.
-//! - A mute never waits on the speech pipe. While a write, or a closing connection's last read,
-//!   waits, the component keeps taking effects: a mute stops capture at once and drops any
-//!   `SetCapture` parked before it, and any other effect is parked, at most 64, for the loop to
-//!   serve in order after the wait. Audio goes a frame at a time under one deadline for the
-//!   batch, so after a mute only the frame already begun is finished. A new wait on the pipe
-//!   goes through the same race.
+//! - A mute and the playback commands never wait on the speech pipe. While a write, or a closing
+//!   connection's last read, waits, the component keeps taking effects: a mute stops capture at
+//!   once and drops any `SetCapture` parked before it, `Duck`, `Unduck`, `Pause`, `Resume` and
+//!   `Stop` go to the player at once while playback runs (each an atomic store or a bounded queue
+//!   operation, never parked, so they keep their order), and any other effect is parked, at most
+//!   64, for the loop to serve in order after the wait. Audio goes a frame at a time under one
+//!   deadline for the batch, so after a mute only the frame already begun is finished. A new wait
+//!   on the pipe goes through the same race.
 //! - A speech command frame's `span` is 0: an effect's envelope carries no span id, so the
 //!   speech process cannot open `tts.synth` under the core's `speak` span until the plan says
 //!   how one reaches this component.
@@ -189,6 +212,26 @@
 //!   over: it comes once per dry spell, so more than once while synthesis is behind, and the
 //!   utterance keeps taking audio after it. `SpeakDone` ends nothing here; only the core knows
 //!   when a reply is closed.
+//! - The render callback reports through a queue the component polls, not by waking it, since
+//!   the callback may not block or allocate. The component takes those events on its 10 ms pump,
+//!   which runs while capture does, and with capture off while playback has had something to do
+//!   (audio queued, an event, a frame or a command) in the last 200 ms; the once-a-second report
+//!   takes any later one. So a reply heard while muted still reaches the core within a pump, and
+//!   a muted, silent component wakes once a second.
+//! - The render stream runs from the component's start to its stop, silent while nothing is
+//!   queued; whether a real endpoint's stream rests while idle, for section 4.5's idle budget, is
+//!   the device part's choice. A sink at a rate playback cannot convert to, or one that does not
+//!   start, leaves the component without playback, logged at warn: its PCM is dropped, the core
+//!   hears `Stalled` at each utterance's first PCM (it stops the utterance) and `Stopped` at the
+//!   first sample for each `Stop`. With no sink given at all, as in the stub runs, PCM is dropped
+//!   and nothing is reported.
+//! - The component relies on the speech process sending a clause's PCM before its `ClauseReady`,
+//!   as `VoiceEvent::ClauseReady` says, since the player's filter of a stale `Drained` sees only
+//!   audio already queued. Should a `ClauseReady` come first, or its PCM span reads the pump runs
+//!   between, the component holds a `Drained` for that utterance until the announced samples have
+//!   come, then drops it (the renderer reports the next dry spell) unless no audio was queued
+//!   since; a later utterance, a refused frame or a closed connection ends that wait, and a `Stop`
+//!   drops the held `Drained`, since `Stopped` ends the utterance in the core.
 //!
 //! # Logs and tracing
 //!
@@ -200,6 +243,12 @@
 //!   (`audio.speech.held`), as it happens. A connection handed back logs its id and reason at
 //!   warn, or at info when the component is stopping, a connection made at info, and each accept
 //!   wait that ends with none at debug.
+//! - Playback that did not start (a sink at a rate with no conversion, or one whose stream
+//!   failed) at warn, with the error and the format; PCM refused for its rate at warn; PCM for an
+//!   utterance that takes no more audio (stopped, or overtaken by a later one), PCM with no
+//!   playback, and a playback command with no playback, each at debug.
+//! - A `PlayPhrase` or `Record` effect, which the audio series does not serve, at warn with the
+//!   command and the reason, beside the failed `never!` (`soft_assert.failed` once tracing runs).
 //! - `channel.full` when playback drops something for want of room, each `channel` with its own
 //!   `times`: a frame refused by the sample queue (`audio.playback`) or the marker queue
 //!   (`audio.playback.markers`), a new utterance past the live limit
@@ -238,18 +287,9 @@ mod energy;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 mod link;
-mod ring;
-// The capture callback converts with these; synthesis takes its conversion when the component
-// wires playback in a later part, so until then some items only tests use.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the component wires synthesis's conversion in a later part")
-)]
-mod resample;
-// The component plays the speech process's PCM through this in a later part; until then only its
-// tests use it.
-#[cfg_attr(not(test), expect(dead_code, reason = "the component wires playback in a later part"))]
 mod playback;
+mod resample;
+mod ring;
 
 pub mod pace;
 pub mod room;
@@ -275,8 +315,12 @@ pub use wav::{CaptureSink, WavClip, WavSource};
 /// stream (mute stops it), and a test keeps a handle to the same source.
 pub type SharedSource = Arc<Mutex<dyn AudioSource>>;
 
-/// What the audio component reads at start. Later parts of WP4's audio series add the playback
-/// sink and the loopback.
+/// A playback sink the component and its creator share: the component starts its stream, and a
+/// test keeps a handle to the same sink to read back what was played.
+pub type SharedSink = Arc<Mutex<dyn AudioSink>>;
+
+/// What the audio component reads at start. A later part of WP4's audio series adds the
+/// loopback.
 #[derive(Clone, Default)]
 pub struct AudioConfig {
     /// The speech process's connections; `None` runs without the speech pipe, as the stub and
@@ -285,6 +329,9 @@ pub struct AudioConfig {
     /// Where the microphone's audio comes from: the endpoint, or a test's [`WavSource`] or
     /// [`RoomMixer`] microphone. `None` captures nothing.
     pub capture: Option<SharedSource>,
+    /// Where Eileen's speech plays: the endpoint, or a test's [`CaptureSink`] or [`RoomMixer`]
+    /// speaker. `None` plays nothing, and the speech process's PCM is dropped.
+    pub playback: Option<SharedSink>,
 }
 
 impl fmt::Debug for AudioConfig {
@@ -292,16 +339,21 @@ impl fmt::Debug for AudioConfig {
         f.debug_struct("AudioConfig")
             .field("speech", &self.speech.is_some())
             .field("capture", &self.capture.is_some())
+            .field("playback", &self.playback.is_some())
             .finish()
     }
 }
 
 /// The audio component. It takes the audio and speech effect families: it captures into the
-/// speech ring from its start, and serves the speech pipe over the connections `cfg.speech`
-/// gives.
+/// speech ring from its start, plays the speech process's PCM on `cfg.playback` and serves the
+/// playback commands, and serves the speech pipe over the connections `cfg.speech` gives.
 #[must_use]
 pub fn component(cfg: &AudioConfig) -> Box<dyn Component> {
-    Box::new(link::AudioComponent::new(cfg.speech.clone(), cfg.capture.clone()))
+    Box::new(link::AudioComponent::new(
+        cfg.speech.clone(),
+        cfg.capture.clone(),
+        cfg.playback.clone(),
+    ))
 }
 
 #[cfg(test)]
