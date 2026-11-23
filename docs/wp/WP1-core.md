@@ -541,9 +541,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   flight recorder and `eileen record` do this when they are wired.
 - `float_roundtrip` on serde_json makes a float in a recorded line read back exactly; the
   default parser can be a unit in the last place off, which would break the exact inverse the
-  crate doc promises. Features unify across a build, so it belongs in the root manifest's
-  `serde_json` entry, which is an amendment; `eileen-record` turns it on in its own manifest
-  only until that amendment merges.
+  crate doc promises. Features unify across a build, so the root manifest's `serde_json` entry
+  carries it (#157), and `eileen-record` takes `serde_json` from the workspace like every other
+  member, as section 3.1 requires (#194, an amendment from WP3's lane that closed #185).
 
 - The job graph: `queued` goes to `running`, `failed`, `cancelled` or `interrupted`;
   `running` to `blocked`, `awaiting_approval`, `completed`, `failed`, `cancelled` or

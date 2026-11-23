@@ -364,6 +364,18 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   driver writes to the stub, WP3), and section 6.5's Owns list, like the list above, names it.
   The comment at the top of `fuzz/Cargo.toml`, WP0's file, no longer says the table lacks the
   target; only that comment changes. No new tests: `it::fuzz_corpus` already replays the seeds.
+- `amend/serde-json-float-roundtrip` (#194, `type: amendment`): closes WP1's issue #185 from
+  this lane. `crates/eileen-record/Cargo.toml`, WP1's file, takes `serde_json` from the
+  workspace entry, which carries `float_roundtrip` since #157, and its comment promising the
+  change goes; WP1's and WP0's files record it, and `Cargo.lock` is unchanged. No new tests:
+  `eileen-record::it::round_trip::stubs_resolve_to_exactly_the_value_written_through_the_disk_store`
+  and `eileen-contracts::it::wire::a_written_float_reads_back_exactly` pass in CI with the
+  feature reaching every crate through the root entry alone.
+- Next for WP3, issue #186, now that #185 is closed: in `eileen-stub-harness`, `round_trips` in
+  `fuzz_entry` compares a `stub_script` line's value before and after a print-and-parse round
+  trip with `before == after`, and `same`, which lets two floats differ by up to
+  `8 * f64::EPSILON` relative, goes with its doc comment. If the owner declines #157 and its
+  root entry is reverted, the tolerance's reason holds again and #186 closes unchanged.
 
 ## Surprises
 

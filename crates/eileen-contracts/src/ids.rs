@@ -508,11 +508,11 @@ impl TraceCtx {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "Envelope_{E}")]
 pub struct Envelope<E> {
-    /// The core-wide replay order.
+    /// The core-wide replay order; on an input, the runtime's input queue stamps it.
     pub seq: u64,
-    /// Wall-clock time when it was made.
+    /// Wall-clock time when it was made; on an input, when the input queue handed it to the core.
     pub at: WallTime,
-    /// Monotonic time when it was made.
+    /// Monotonic time when it was made; on an input, when the input queue handed it to the core.
     pub mono: MonoTime,
     /// Its correlation.
     pub ctx: TraceCtx,
