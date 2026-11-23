@@ -1,26 +1,41 @@
+use std::fs;
 use std::future::Future;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use eileen_contracts::harness::{
-    BuildSlotTicket, JobBinding, SessionSpec, WorkerCmd, WorktreeSpec,
+    BuildSlotTicket, JobBinding, SessionSpec, WorkerCmd, WorkerEvent, WorktreeSpec,
 };
-use eileen_contracts::ids::{JobId, Personal, SkillId, TraceCtx};
+use eileen_contracts::ids::{JobId, Personal, SkillId, TraceCtx, WorkerSessionId};
 use eileen_contracts::jobs::JobKind;
 use eileen_contracts::learn::{SkillRef, SnapshotManifest};
+use eileen_supervisor::ChildSpec;
 use eileen_trace::Redactor;
+use eileen_trace::redact::LiteralGuard;
 use eileen_trace::test_support::capture;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _, BufReader, duplex};
+use tokio::sync::oneshot;
+use tokio::time::{Instant, timeout};
 
 use super::{
-    Asked, ClaudeWorker, Lines, Pipes, Status, check_init, eileen_status, first_turn, reply_to,
-    unsupported, user_line,
+    Asked, ClaudeWorker, EXIT_DEADLINE, KEPT_LINE_CAPACITY, Lines, Pipes, Process, STATUS_POLL,
+    Session, Status, check_init, eileen_status, first_turn, reply_to, unsupported, user_line,
+    write_files,
 };
-use crate::stream::{Init, Line, parse};
+use crate::session::session_files;
+use crate::stream::control::Requests;
+use crate::stream::{Init, Line, MAX_LINE_BYTES, parse};
 use crate::{DriverError, HarnessConfig, WorkerDriver as _};
+
+/// How long a call may take before a test calls it hung: a guard above every deadline the
+/// driver has, never a measurement.
+const HANG: Duration = Duration::from_secs(30);
 
 /// The output of a future that answers without waiting, as every refusal before a spawn does.
 fn at_once<F: Future>(future: F) -> F::Output {
@@ -69,28 +84,59 @@ fn init(status: &str, memory: Option<&str>) -> Init {
     init.as_ref().clone()
 }
 
+/// [`binding`] with the skill `cargo-rename-bin` and a facts block.
+fn skill_binding() -> JobBinding {
+    let mut binding = binding();
+    binding.skill = Some(SkillRef { id: SkillId::new("cargo-rename-bin").unwrap(), version: 3 });
+    binding.facts =
+        vec!["The repository builds with cargo xtask".to_owned(), "Rust 1.95".to_owned()];
+    binding
+}
+
 #[test]
 fn the_first_turn_is_the_task_alone_without_a_skill_or_facts() {
-    assert_eq!(first_turn(&binding()), "Rename the build script", "the task as it is");
+    assert_eq!(first_turn(&binding()), Ok("Rename the build script".to_owned()), "the task");
+}
+
+#[test]
+fn the_first_turn_names_a_skill_in_the_snapshot_and_carries_the_facts_block() {
+    assert_eq!(
+        first_turn(&skill_binding()).unwrap(),
+        "Rename the build script\n\n\
+         Follow skill eileen-learned:cargo-rename-bin\n\n\
+         Facts:\n\
+         - The repository builds with cargo xtask\n\
+         - Rust 1.95",
+        "task, skill line, facts"
+    );
 }
 
 #[test]
 fn the_first_turn_names_the_skill_carries_its_inline_text_and_the_facts_block() {
-    let mut binding = binding();
-    binding.skill = Some(SkillRef { id: SkillId::new("cargo-rename-bin").unwrap(), version: 3 });
+    let mut binding = skill_binding();
     binding.inline_skill = Some("1. Edit Cargo.toml's [[bin]] name.".to_owned());
-    binding.facts =
-        vec!["The repository builds with cargo xtask".to_owned(), "Rust 1.95".to_owned()];
+    let turn = first_turn(&binding).unwrap();
     assert_eq!(
-        first_turn(&binding),
+        turn,
         "Rename the build script\n\n\
-         Follow skill eileen-learned:cargo-rename-bin\n\n\
+         Follow these steps (Eileen skill cargo-rename-bin):\n\n\
          1. Edit Cargo.toml's [[bin]] name.\n\n\
          Facts:\n\
          - The repository builds with cargo xtask\n\
          - Rust 1.95",
-        "task, skill line, inline skill, facts"
+        "task, the skill's text under a heading naming it, facts"
     );
+    assert!(
+        !turn.contains("eileen-learned:"),
+        "the snapshot lacks the skill, so the model is not sent to call it (section 2.10)"
+    );
+}
+
+#[test]
+fn a_skills_text_without_its_skill_is_refused() {
+    let mut binding = binding();
+    binding.inline_skill = Some("1. Edit Cargo.toml's [[bin]] name.".to_owned());
+    assert_eq!(first_turn(&binding), Err(DriverError::UnnamedInlineSkill), "nothing names it");
 }
 
 #[test]
@@ -281,13 +327,28 @@ fn a_read_dropped_partway_keeps_the_part_of_the_line_it_had_read() {
 /// (section 3.3.8). It names no real account.
 const ACCOUNT_EMAIL: &str = "someone.signed.in@example.com";
 
-/// A `control_response` to `request_id` with `subtype` and `response`.
-fn control_reply(request_id: &str, subtype: &str, response: &Value) -> String {
+/// A success `control_response` to `request_id` with `response`.
+fn control_reply(request_id: &str, response: &Value) -> String {
     json!({
         "type": "control_response",
-        "response": { "subtype": subtype, "request_id": request_id, "response": response },
+        "response": { "subtype": "success", "request_id": request_id, "response": response },
     })
     .to_string()
+}
+
+/// An error `control_response` to `request_id`, in the CLI's shape: `error` beside `subtype`,
+/// where the control parser reads it.
+fn control_error(request_id: &str, error: &str) -> String {
+    json!({
+        "type": "control_response",
+        "response": { "subtype": "error", "request_id": request_id, "error": error },
+    })
+    .to_string()
+}
+
+/// An `mcp_status` response listing `eileen` at `status`.
+fn eileen_at(status: &str) -> Value {
+    json!({ "mcpServers": [{ "name": "eileen", "status": status }] })
 }
 
 /// What one readiness exchange did.
@@ -296,6 +357,8 @@ struct Exchange {
     ready: Result<(), Asked>,
     /// The subtype of each control request the driver wrote, in order.
     asked: Vec<String>,
+    /// How long it took on the test's paused clock, which moves only when the driver sleeps.
+    waited: Duration,
     /// Whether anything captured (a span, an event, any field) holds [`ACCOUNT_EMAIL`].
     leaked: bool,
     /// How many spans and events were captured.
@@ -303,18 +366,25 @@ struct Exchange {
 }
 
 /// The readiness exchange over an in-memory pipe whose CLI side has already written `replies`,
-/// run with tracing captured.
+/// run with tracing captured on a paused clock, so the waits between `mcp_status` requests
+/// cost nothing. A driver that waits for a reply that never comes fails at [`HANG`].
 fn ready_against(replies: &[String]) -> Exchange {
     let (driver_stdin, mut cli_stdin) = duplex(64 * 1024);
     let (mut cli_stdout, driver_stdout) = duplex(64 * 1024);
     let mut pipes = Pipes::new(driver_stdin, BufReader::new(driver_stdout));
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
-    let (ready, captured) = capture(|| {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    let ((ready, waited), captured) = capture(|| {
         runtime.block_on(async {
             for reply in replies {
                 cli_stdout.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
             }
-            pipes.ready().await
+            let started = Instant::now();
+            let ready = timeout(HANG, pipes.ready()).await.expect("the driver hung on a reply");
+            (ready, started.elapsed())
         })
     });
     // Closes the driver's end of stdin, so what it wrote reads to its end.
@@ -329,7 +399,8 @@ fn ready_against(replies: &[String]) -> Exchange {
         })
         .collect();
     let leaked = format!("{captured:?}").contains(ACCOUNT_EMAIL);
-    Exchange { ready, asked, leaked, logged: captured.events.len() + captured.spans.len() }
+    let logged = captured.events.len() + captured.spans.len();
+    Exchange { ready, asked, waited, leaked, logged }
 }
 
 #[test]
@@ -339,12 +410,11 @@ fn the_initialize_reply_is_dropped_unread_and_never_logged() {
         "pid": 4242,
         "claude_code_version": "2.1.316",
     });
-    let connected = json!({ "mcpServers": [{ "name": "eileen", "status": "connected" }] });
     let exchange = ready_against(&[
         // A line that is no reply to the request is passed over unread as well.
         json!({ "type": "system", "subtype": "notice", "account": ACCOUNT_EMAIL }).to_string(),
-        control_reply("eileen_ready_1", "success", &account),
-        control_reply("eileen_ready_2", "success", &connected),
+        control_reply("eileen_ready_1", &account),
+        control_reply("eileen_ready_2", &eileen_at("connected")),
     ]);
     assert!(matches!(exchange.ready, Ok(())), "ready once eileen is connected: {exchange:?}");
     assert_eq!(exchange.asked, ["initialize", "mcp_status"], "the two requests, in order");
@@ -352,11 +422,245 @@ fn the_initialize_reply_is_dropped_unread_and_never_logged() {
     assert_eq!(exchange.logged, 0, "the readiness exchange logs nothing at all");
 
     // An error reply that quotes the account is refused by the request's name alone.
-    let error = json!({ "error": format!("signed in as {ACCOUNT_EMAIL}") });
-    let exchange = ready_against(&[control_reply("eileen_ready_1", "error", &error)]);
+    let error = format!("signed in as {ACCOUNT_EMAIL}");
+    let exchange = ready_against(&[control_error("eileen_ready_1", &error)]);
     let Err(Asked::Failed(refused)) = &exchange.ready else { panic!("refused: {exchange:?}") };
     assert_eq!(*refused, DriverError::ControlRefused { request: "initialize" }, "by name");
     assert!(!refused.to_string().contains(ACCOUNT_EMAIL), "the error quotes none of the reply");
     assert!(!exchange.leaked, "no span, event or field holds the account");
     assert_eq!(exchange.logged, 0, "nothing logged");
+}
+
+#[test]
+fn mcp_status_is_asked_again_while_eileen_is_not_listed_or_pending_until_it_connects() {
+    let exchange = ready_against(&[
+        control_reply("eileen_ready_1", &json!({})),
+        control_reply("eileen_ready_2", &json!({ "mcpServers": [] })),
+        control_reply("eileen_ready_3", &eileen_at("pending")),
+        control_reply("eileen_ready_4", &eileen_at("connected")),
+    ]);
+    assert!(matches!(exchange.ready, Ok(())), "ready once eileen is connected: {exchange:?}");
+    assert_eq!(
+        exchange.asked,
+        ["initialize", "mcp_status", "mcp_status", "mcp_status"],
+        "asked again after the reply that does not list it and the one where it is pending"
+    );
+    assert!(
+        exchange.waited >= STATUS_POLL * 2 && exchange.waited < STATUS_POLL * 3,
+        "one poll interval before each request asked again: {:?}",
+        exchange.waited
+    );
+}
+
+/// A runtime for a test that starts a process or writes files, on the real clock: on Windows
+/// tokio waits for a child on threads of its own, which a paused clock does not wait for.
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+}
+
+/// A process that runs for a minute and writes nothing on stderr, started through the
+/// supervisor as the CLI is. It stands in for a session whose stdout has closed while its job
+/// still runs: a background process a `Bash` call left running holds a Windows job open.
+fn quiet_process() -> Process {
+    let spec = if cfg!(windows) {
+        ChildSpec::new("claude.test", "ping").args(["-n", "60", "127.0.0.1"])
+    } else {
+        ChildSpec::new("claude.test", "sleep").args(["60"])
+    };
+    Process::start(&spec).unwrap()
+}
+
+/// A bound session of `process` holding `secrets`, as `start` and `bind` leave one.
+fn session_of(process: Process, secrets: Vec<LiteralGuard>) -> Session {
+    Session {
+        id: WorkerSessionId::from_parts(1_700_000_000_000, 21),
+        process,
+        init: None,
+        requests: Requests::default(),
+        bound: true,
+        _secrets: secrets,
+    }
+}
+
+/// A worker holding `session`, as if it had started it.
+fn worker_with(session: Session, redactor: Arc<Redactor>) -> ClaudeWorker {
+    let mut worker = ClaudeWorker::new(HarnessConfig::default(), redactor);
+    worker.session = Some(session);
+    worker
+}
+
+#[test]
+fn cancel_kills_a_session_that_a_dropped_call_left_waiting_for_its_own_exit() {
+    runtime().block_on(async {
+        let mut worker = worker_with(session_of(quiet_process(), Vec::new()), Arc::default());
+        // Its stdout closed, so `next_event` ends it without a kill and waits for its exit; a
+        // `select!` whose other branch won drops that call inside the wait.
+        let dropped = timeout(Duration::from_millis(100), worker.end(false)).await;
+        assert!(dropped.is_err(), "still waiting for it to exit on its own");
+        let cancelled = Instant::now();
+        timeout(HANG, worker.send(WorkerCmd::Cancel)).await.unwrap().unwrap();
+        let took = cancelled.elapsed();
+        assert!(took < EXIT_DEADLINE / 2, "killed at once, not after its wait: {took:?}");
+        let exited = timeout(HANG, worker.next_event()).await.unwrap();
+        assert!(matches!(exited, Some(WorkerEvent::Exited { .. })), "its exit: {exited:?}");
+        assert_eq!(timeout(HANG, worker.next_event()).await.unwrap(), None, "then nothing");
+    });
+}
+
+#[test]
+fn a_wait_for_its_exit_dropped_again_and_again_still_kills_it_at_its_deadline() {
+    runtime().block_on(async {
+        let mut worker = worker_with(session_of(quiet_process(), Vec::new()), Arc::default());
+        let closed = Instant::now();
+        let first = timeout(Duration::from_millis(250), worker.end(false)).await;
+        assert!(first.is_err(), "still waiting for it to exit on its own");
+        // Each call dropped well inside the wait, as a `select!` drops it when another of its
+        // branches fires more often than the deadline.
+        let exited = loop {
+            if let Ok(event) = timeout(Duration::from_millis(250), worker.next_event()).await {
+                break event;
+            }
+            assert!(closed.elapsed() < EXIT_DEADLINE * 2, "the wait restarted at every call");
+        };
+        let took = closed.elapsed();
+        assert!(matches!(exited, Some(WorkerEvent::Exited { .. })), "its exit: {exited:?}");
+        assert!(took >= EXIT_DEADLINE, "its whole wait for its own exit: {took:?}");
+        assert!(took < EXIT_DEADLINE + EXIT_DEADLINE / 2, "then the kill, at once: {took:?}");
+    });
+}
+
+#[test]
+fn a_session_ends_only_once_its_stderr_forwarding_has_ended_with_its_tokens_registered() {
+    runtime().block_on(async {
+        let redactor = Arc::new(Redactor::new());
+        let token = redactor.add_literal("token-of-a-session-being-ended").unwrap();
+        let mut process = quiet_process();
+        // Stands in for the forwarding while the CLI's last stderr lines are still being logged.
+        let (logged, still_logging) = oneshot::channel::<()>();
+        process.stderr = Some(eileen_rt::task::spawn("claude.test.stderr", async move {
+            let _released: Result<(), oneshot::error::RecvError> = still_logging.await;
+        }));
+        let mut worker = worker_with(session_of(process, vec![token]), Arc::clone(&redactor));
+        let dropped = timeout(Duration::from_millis(250), worker.send(WorkerCmd::Cancel)).await;
+        assert!(dropped.is_err(), "killed, and not ended while its stderr is still logged");
+        assert_eq!(redactor.literal_count(), 1, "its token is still redacted");
+        logged.send(()).unwrap();
+        let exited = timeout(HANG, worker.next_event()).await.unwrap();
+        assert!(matches!(exited, Some(WorkerEvent::Exited { .. })), "its exit: {exited:?}");
+        assert_eq!(redactor.literal_count(), 0, "its token is let go after its last line");
+    });
+}
+
+/// A fresh folder under the system's temporary folder, removed on drop.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("eileen-claude-{}-{n}", std::process::id()));
+        if dir.exists() {
+            fs::remove_dir_all(&dir).unwrap();
+        }
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Best effort: a failed removal leaves only a folder in the temporary folder.
+        let _removed: io::Result<()> = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn only_the_scratch_working_folder_is_made_and_a_missing_repository_is_refused() {
+    let dir = Scratch::new();
+    let cfg = HarnessConfig {
+        data_dir: dir.path().join("data"),
+        shim_exe: dir.path().join("eileen-shim"),
+        ..HarnessConfig::default()
+    };
+    let spec = coding_spec();
+    let files = session_files(&spec, &cfg, &cfg.host).unwrap();
+    let in_folder = |cwd: PathBuf| {
+        let mut files = files.clone();
+        files.cwd = cwd;
+        files
+    };
+    let not_found =
+        Err(DriverError::Files { what: "working folder", kind: io::ErrorKind::NotFound });
+    runtime().block_on(async {
+        // A repository path that names no folder, absolute as the core gives one.
+        let missing = dir.path().join("no-such-repository");
+        assert_eq!(write_files(&in_folder(missing.clone())).await, not_found, "refused");
+        assert!(!missing.exists(), "never made empty in the user's tree");
+        assert!(!files.run_dir.exists(), "refused before anything is written");
+        // A path that starts in the run folder and climbs out of it is no scratch folder.
+        let climbing = files.run_dir.join("cwd").join("..").join("..").join("elsewhere");
+        assert_eq!(write_files(&in_folder(climbing)).await, not_found, "refused too");
+        assert!(!files.run_dir.parent().unwrap().join("elsewhere").exists(), "not made");
+        // A file is no working folder.
+        let file = dir.path().join("a-file");
+        fs::write(&file, "not a folder").unwrap();
+        let not_a_folder =
+            DriverError::Files { what: "working folder", kind: io::ErrorKind::NotADirectory };
+        assert_eq!(write_files(&in_folder(file)).await, Err(not_a_folder), "refused");
+
+        // The session's scratch folder, `run/<session>/cwd`, is made with the run folder.
+        assert_eq!(write_files(&files).await, Ok(()), "{:?}", files.cwd);
+        assert!(files.cwd.is_dir(), "the scratch working folder");
+        assert!(files.settings_path.is_file() && files.mcp_path.is_file(), "the run files");
+        // A repository that exists is used as it is.
+        let repository = dir.path().join("repository");
+        fs::create_dir_all(&repository).unwrap();
+        assert_eq!(write_files(&in_folder(repository)).await, Ok(()), "an existing repository");
+    });
+}
+
+#[test]
+fn a_line_past_the_cap_is_given_one_byte_past_it_and_leaves_no_big_buffer() {
+    let (mut writer, reader) = duplex(64 * 1024);
+    let mut lines = Lines::new(BufReader::new(reader));
+    let write = async move {
+        // Past the cap; exactly at the cap with `\r\n`; past the cap with a `\r` just after it.
+        let long: [(u8, usize, &[u8]); 3] = [
+            (b'a', MAX_LINE_BYTES + 10, b"\n"),
+            (b'b', MAX_LINE_BYTES, b"\r\n"),
+            (b'c', MAX_LINE_BYTES, b"\rcc\n"),
+        ];
+        for (byte, len, ending) in long {
+            writer.write_all(&vec![byte; len]).await.unwrap();
+            writer.write_all(ending).await.unwrap();
+        }
+        writer.write_all(b"{\"type\":\"keep_alive\"}\n").await.unwrap();
+    };
+    let read = async {
+        let redactor = Redactor::new();
+        let over_cap = |line: &[u8]| {
+            matches!(
+                parse(line, &redactor),
+                Line::Malformed { reason: "the line is longer than MAX_LINE_BYTES", .. }
+            )
+        };
+        let line = lines.next().await.unwrap();
+        assert_eq!(line.len(), MAX_LINE_BYTES + 1, "cut one byte past the cap");
+        assert!(over_cap(line), "so the parser takes it as malformed");
+        assert!(lines.line.capacity() <= MAX_LINE_BYTES + 1, "it cost no more than the cap");
+        let line = lines.next().await.unwrap();
+        assert_eq!(line.len(), MAX_LINE_BYTES, "a line exactly at the cap stays whole");
+        assert!(!over_cap(line), "and is parsed");
+        let line = lines.next().await.unwrap();
+        assert_eq!(line.len(), MAX_LINE_BYTES + 1, "the `\\r` after the cap is no line ending");
+        assert!(over_cap(line), "malformed too");
+        let line = lines.next().await.map(<[u8]>::to_vec);
+        assert_eq!(line.as_deref(), Some(&br#"{"type":"keep_alive"}"#[..]), "the next, whole");
+        assert!(lines.line.capacity() <= KEPT_LINE_CAPACITY, "the big buffer was given back");
+    };
+    runtime().block_on(async { tokio::join!(write, read) });
 }

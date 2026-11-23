@@ -69,7 +69,11 @@ tokio-util = { version = "0.7.20", default-features = false }
 
 # Data and contracts
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+# float_roundtrip parses a float exactly, so a recorded line reads back to the number that was
+# written (eileen-record's exact inverse); the default parser can be a unit in the last place
+# off. Features unify across a build, so it is turned on here, for every crate, at about twice
+# the cost of parsing a float.
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 schemars = "1.2.3"
 ulid = { version = "3.0.0", default-features = false, features = ["std", "serde"] }
 toml = "1.1.8"

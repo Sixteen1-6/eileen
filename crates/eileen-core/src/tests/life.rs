@@ -289,6 +289,54 @@ fn an_exit_within_the_backoff_step_restarts_at_the_step() {
     assert_eq!(effects.first(), Some(&RESTART), "{effects:?}");
 }
 
+/// A core whose speech process never sends `Ready`, killed at the 120 s deadline `kills` times
+/// in a row with no minute up between, each killed process's `Exited` reported at once but the
+/// last one's; with the time of the last kill in ms and that kill's effects.
+fn loads_killed(kills: u32) -> (Harness, u64, Vec<Effect>) {
+    let mut h = Harness::booting(CoreConfig::default(), Vec::new());
+    let mut effects = h.step(Input::User(UserInput::SetMute(false)));
+    for kill in 1..=kills {
+        let deadline_ms = h.now_ms + 120_000;
+        let deadline = timer_at(&effects, deadline_ms).expect("120 s to be ready");
+        effects = fire(&mut h, deadline, deadline_ms);
+        assert_eq!(effects.first(), Some(&KILL), "kill {kill}: {effects:?}");
+        if kill == kills {
+            break;
+        }
+        h.step(exited());
+        let step_ms = h.now_ms + (1_000_u64 << (kill - 1));
+        let step = timer_at(&effects, step_ms).expect("the backoff step, doubling");
+        effects = fire(&mut h, step, step_ms);
+        assert_eq!(effects.first(), Some(&RESTART), "after kill {kill}: {effects:?}");
+    }
+    let killed_ms = h.now_ms;
+    (h, killed_ms, effects)
+}
+
+#[test]
+fn a_kill_whose_exit_never_comes_keeps_a_16_s_step_in_full() {
+    let (mut h, killed, effects) = loads_killed(5);
+    let step = timer_at(&effects, killed + 16_000).expect("the fifth kill in a row waits 16 s");
+    assert!(timer_at(&effects, killed + 10_000).is_none(), "not cut to 10 s: {effects:?}");
+    // A late heartbeat from the killed process, 10 s after the kill, restarts nothing.
+    h.now_ms = killed + 10_000;
+    let effects = h.step(speech(SidecarEvent::Heartbeat));
+    assert!(!effects.contains(&RESTART), "the step still runs at 10 s: {effects:?}");
+    let effects = fire(&mut h, step, killed + 16_000);
+    assert_eq!(effects.first(), Some(&RESTART), "at the step, with no exit seen: {effects:?}");
+}
+
+#[test]
+fn a_kill_whose_exit_never_comes_restarts_at_10_s_after_a_4_s_step() {
+    let (mut h, killed, effects) = loads_killed(3);
+    let step = timer_at(&effects, killed + 4_000).expect("the third kill in a row waits 4 s");
+    let effects = fire(&mut h, step, killed + 4_000);
+    assert!(!effects.contains(&RESTART), "no restart at 4 s before the kill's exit: {effects:?}");
+    let wait = timer_at(&effects, killed + 10_000).expect("the exit is waited for up to 10 s");
+    let effects = fire(&mut h, wait, killed + 10_000);
+    assert_eq!(effects.first(), Some(&RESTART), "at 10 s from the kill: {effects:?}");
+}
+
 #[test]
 fn a_turn_open_when_speech_went_down_is_never_routed() {
     let (mut h, _) = up();

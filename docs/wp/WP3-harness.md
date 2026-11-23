@@ -28,8 +28,8 @@ slice.
 - Branch: `wp3/<topic>`; the slice's pull request is `wp3/worker-brain`.
 - Depends on: WP0 phase A. Wave: W1. Desktop: no.
 - Owns: `crates/eileen-harness`, `crates/eileen-stub-harness`, `tests/harness-scripts/`,
-  `scenarios/claude/`, the fuzz targets `stream_json_line` and `control_message` with their
-  corpora and regressions, and this file.
+  `scenarios/claude/`, the fuzz targets `stream_json_line`, `control_message` and
+  `stub_script` with their corpora and regressions, and this file.
 
 ## Done when
 
@@ -329,6 +329,53 @@ permission route, which section 6.5's amendment of that date records (see Goal).
   restore, build slots, `JOB_OBJECT_LIMIT_JOB_MEMORY`, rate-limit events, a stub grandchild
   to show the kill takes the whole Job Object, and `session_files` reading the host from
   `HarnessConfig::host` instead of a third argument.
+- `wp3/claude-worker-review`: fixes from a review of #159. `bind` carries the text of a skill
+  the session's snapshot lacks instead of `Follow skill eileen-learned:<id>`, under a heading
+  that names the skill only to say where the steps came from, so the model is not sent to call
+  a skill outside the manifest (section 2.10, which marks such a call `snapshot_tampered`); a
+  skill's text without its skill is refused (`DriverError::UnnamedInlineSkill`). `start`
+  creates the working folder only when it is the session's scratch folder under its run folder
+  (a `..` disqualifies it), and refuses any other that is not an existing folder before writing
+  anything, so a mistyped repository is never made empty in the user's tree. A session being
+  ended keeps the deadline of the wait it is in, so a `next_event` dropped again and again
+  still kills it at its deadline, and a cancel kills a session that a dropped call left waiting
+  for its own exit. Its tokens stay registered until its stderr forwarding has ended, within
+  the same deadline, since the log sinks redact a line when it is logged. The stdout reader
+  gives a line cut at the cap as it was kept, one byte past the cap, so a line whose byte past
+  the cap is `\r` is no longer taken for one at the cap; it keeps a line of exactly the cap
+  ending in `\r\n` whole, and gives its buffer back to 64 KiB after each line. `driver-job`, `driver-skill` and `driver-crash`
+  were copies of the `worker-` scripts, which the tests now play. Unit tests cover the
+  readiness poll from not listed through pending to connected on a paused clock, the CLI's
+  error-reply shape in the privacy check, the line cap, the working folder, and the three
+  ending cases against a real quiet process (the stub cannot close its stdout and live on,
+  since it forbids unsafe code and on Windows a child would inherit its stdout). The
+  `real_claude` probe keeps the default init deadline. Left for later, before
+  `wp3/worker-brain` wires workers: `eileen_harness::component` is built from
+  `&HarnessConfig` alone (section 3.3.15), `ComponentCtx` carries no redactor and
+  `HarnessConfig` derives `Eq`, so it cannot reach the process's `Redactor` that
+  `TraceGuard::redactor()` hands the log sinks. Workers built there would register session
+  tokens with a private redactor, and the tokens would reach the log files unredacted. It needs
+  an amendment to section 3.3.15 (`component(cfg, redactor: Arc<Redactor>)`) agreed with WP2,
+  whose `eileen-cli` wiring passes the guard's redactor.
+- `amend/stub-script-fuzz` (#156, `type: amendment`): puts the `stub_script` fuzz target that
+  `wp3/stub-play` (#154) built into the plan. Section 3.3.16 asks a fuzz target of each parser
+  of its shared formats, `StubScriptLine` among them, but section 4.7's table had no row for
+  the stub harness. The table now has `stub_script` (stub harness scripts and the stdin lines a
+  driver writes to the stub, WP3), and section 6.5's Owns list, like the list above, names it.
+  The comment at the top of `fuzz/Cargo.toml`, WP0's file, no longer says the table lacks the
+  target; only that comment changes. No new tests: `it::fuzz_corpus` already replays the seeds.
+- `amend/serde-json-float-roundtrip` (#194, `type: amendment`): closes WP1's issue #185 from
+  this lane. `crates/eileen-record/Cargo.toml`, WP1's file, takes `serde_json` from the
+  workspace entry, which carries `float_roundtrip` since #157, and its comment promising the
+  change goes; WP1's and WP0's files record it, and `Cargo.lock` is unchanged. No new tests:
+  `eileen-record::it::round_trip::stubs_resolve_to_exactly_the_value_written_through_the_disk_store`
+  and `eileen-contracts::it::wire::a_written_float_reads_back_exactly` pass in CI with the
+  feature reaching every crate through the root entry alone.
+- Next for WP3, issue #186, now that #185 is closed: in `eileen-stub-harness`, `round_trips` in
+  `fuzz_entry` compares a `stub_script` line's value before and after a print-and-parse round
+  trip with `before == after`, and `same`, which lets two floats differ by up to
+  `8 * f64::EPSILON` relative, goes with its doc comment. If the owner declines #157 and its
+  root entry is reverted, the tolerance's reason holds again and #186 closes unchanged.
 
 ## Surprises
 

@@ -33,6 +33,8 @@ tracing.workspace = true
 # Captures the driver's logs in its unit tests.
 eileen-trace = { workspace = true, features = ["testing"] }
 insta.workspace = true
+# The worker's readiness exchange runs on a paused clock in its unit tests (`start_paused`).
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

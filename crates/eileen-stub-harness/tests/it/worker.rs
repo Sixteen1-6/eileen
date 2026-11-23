@@ -332,7 +332,7 @@ fn quotes_the_memory_folder(captured: &Captured) -> bool {
 #[tokio::test]
 async fn a_job_runs_to_completion_with_its_events_in_order() {
     let dir = Scratch::new();
-    let mut worker = started(&dir, "driver-job.ndjson").await;
+    let mut worker = started(&dir, "worker-hello.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     assert_eq!(
         summaries(&events),
@@ -352,7 +352,7 @@ async fn a_job_runs_to_completion_with_its_events_in_order() {
 #[tokio::test]
 async fn narration_lines_become_narration_and_other_text_stays_text() {
     let dir = Scratch::new();
-    let mut worker = started(&dir, "driver-job.ndjson").await;
+    let mut worker = started(&dir, "worker-hello.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     let narration: Vec<&str> = events
         .iter()
@@ -373,7 +373,7 @@ async fn narration_lines_become_narration_and_other_text_stays_text() {
 #[tokio::test]
 async fn a_skill_call_becomes_skill_invoked() {
     let dir = Scratch::new();
-    let mut worker = started(&dir, "driver-skill.ndjson").await;
+    let mut worker = started(&dir, "worker-skill.ndjson").await;
     let events = events_until(&mut worker, |e| matches!(e, WorkerEvent::TurnDone { .. })).await;
     let skills: Vec<String> = events
         .iter()
@@ -387,7 +387,7 @@ async fn a_skill_call_becomes_skill_invoked() {
 #[tokio::test]
 async fn a_crash_ends_the_job_with_its_exit_code_and_no_turn_done() {
     let dir = Scratch::new();
-    let mut worker = started(&dir, "driver-crash.ndjson").await;
+    let mut worker = started(&dir, "worker-crash.ndjson").await;
     let events = rest(&mut worker).await;
     let summaries = summaries(&events);
     assert_eq!(summaries.last().map(String::as_str), Some("exited Some(3)"), "{summaries:?}");
@@ -567,7 +567,7 @@ async fn a_tool_input_that_quotes_the_session_tokens_is_redacted() {
 #[tokio::test]
 async fn the_session_starts_in_its_folder_with_the_denylist_applied_and_memory_off() {
     let dir = Scratch::new();
-    let mut worker = started(&dir, "driver-job.ndjson").await;
+    let mut worker = started(&dir, "worker-hello.ndjson").await;
     let run = dir.join("data").join("run").join(session_id().to_string());
     assert!(run.join("cwd").is_dir(), "the session's working folder");
     let settings: Value =

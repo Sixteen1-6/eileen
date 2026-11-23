@@ -100,6 +100,11 @@ pub(crate) fn failed(name: &str, why: &str) -> String {
     format!("{} failed: {why}.", capitalised(name))
 }
 
+/// What Eileen says when she can no longer follow a job, such as an app's own render.
+pub(crate) fn lost(name: &str, why: &str) -> String {
+    format!("I lost track of {name} when {why}.")
+}
+
 fn capitalised(text: &str) -> String {
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
@@ -138,7 +143,7 @@ fn first_sentence(text: &str) -> String {
 mod tests {
     use eileen_contracts::ids::{JobId, MonoTime};
 
-    use super::{Announcement, CAPACITY, Due, QUIET_NS, Queue, completed, failed, gathered};
+    use super::{Announcement, CAPACITY, Due, QUIET_NS, Queue, completed, failed, gathered, lost};
 
     fn line(n: u64) -> Announcement {
         Announcement { job: JobId::from_parts(n, u128::from(n)), text: format!("line {n}") }
@@ -195,6 +200,11 @@ mod tests {
             gathered("flaky login tests", 2, 3),
             "Flaky login tests is done: 2 of 3 agents finished.",
             "a fan-out, with no worker's words"
+        );
+        assert_eq!(
+            lost("the render", "the app's bridge stopped"),
+            "I lost track of the render when the app's bridge stopped.",
+            "a job Eileen can no longer follow, never called failed"
         );
     }
 }

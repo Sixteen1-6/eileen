@@ -3,18 +3,20 @@
 //!
 //! - `start` refuses a spec whose snapshot, worktree, build slot or memory limit it does not
 //!   carry out yet, registers the session's hook and shim tokens with the redactor for the
-//!   session's life, writes the session's run folder (its working folder, the settings file and
-//!   the MCP config of `session_files`), and spawns the located executable through
-//!   `eileen_supervisor` in the Claude class (a kill-on-close Job Object at below-normal
-//!   priority) with exactly the session's environment. The CLI writes nothing on stdout,
-//!   `system/init` included, until its first user line (CLI 2.1.316), so readiness comes from
-//!   the stdio control protocol, which it answers before any user line: `initialize`, then
-//!   `mcp_status` until `eileen` is `connected`, all within `HarnessConfig::init_deadline`. A
-//!   session whose `eileen` is `failed` (or any status but `pending`) is killed and never bound
-//!   (section 2.5), with a `worker.refused` log; any other start that fails (the deadline, an
-//!   exit, an error reply) logs `worker.fault`.
-//! - `bind` writes the first user line: the task, `Follow skill eileen-learned:<id>` with any
-//!   inline skill text, and the facts block.
+//!   session's life, writes the session's run folder (the settings file and the MCP config of
+//!   `session_files`, and the working folder when it is the session's scratch folder there; a
+//!   repository named as the working folder must already exist), and spawns the located
+//!   executable through `eileen_supervisor` in the Claude class (a kill-on-close Job Object at
+//!   below-normal priority) with exactly the session's environment. The CLI writes nothing on
+//!   stdout, `system/init` included, until its first user line (CLI 2.1.316), so readiness
+//!   comes from the stdio control protocol, which it answers before any user line:
+//!   `initialize`, then `mcp_status` until `eileen` is `connected`, all within
+//!   `HarnessConfig::init_deadline`. A session whose `eileen` is `failed` (or any status but
+//!   `pending`) is killed and never bound (section 2.5), with a `worker.refused` log; any other
+//!   start that fails (the deadline, an exit, an error reply) logs `worker.fault`.
+//! - `bind` writes the first user line: the task, then `Follow skill eileen-learned:<id>`, or
+//!   the skill's text instead when the session's snapshot lacks it (section 2.10), then the
+//!   facts block.
 //! - `send` writes later user turns, the interrupt as a `control_request` once the first turn's
 //!   init offers it, and cancels by killing the Job Object and waiting for the job to empty. A
 //!   write that fails or passes its deadline may have left part of a line on the CLI's stdin,
@@ -33,11 +35,16 @@
 //! - Its stdout is read without a deadline: a turn's tool call can run for minutes with
 //!   nothing to say, so a session that stalls is ended by the core's cancel, not here.
 //! - `next_event` is cancel-safe: a partly read line stays buffered, and a session being ended
-//!   stays in `ending` until its exit is seen.
+//!   stays in `ending`, with the deadline of the wait it is in, until its exit and its last
+//!   stderr lines are seen. A cancel kills it there too.
+//! - A session's tokens stay registered until its stderr forwarding has ended, so its last
+//!   stderr lines are logged redacted.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io;
-use std::path::Path;
+use std::path::{Component, Path};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,6 +60,8 @@ use eileen_trace::redact::LiteralGuard;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
+use tokio::task::{JoinError, JoinHandle};
+use tokio::time::Instant;
 
 use super::{WorkerDriver, WorkerSession};
 use crate::session::{EILEEN_SERVER, SessionFiles, session_files};
@@ -64,8 +73,13 @@ use crate::{DriverError, HarnessConfig};
 /// would otherwise hold the driver once the pipe fills.
 const WRITE_DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long the session's processes have to exit after its stdout closed, or after the kill.
+/// How long the session's processes have to exit after its stdout closed, or after the kill,
+/// and how long its stderr forwarding then has to log its last lines.
 const EXIT_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The most buffer a session keeps between stdout lines. A line can run to megabytes (a
+/// screenshot's tool result), and its buffer is given back once the line is read.
+const KEPT_LINE_CAPACITY: usize = 64 * 1024;
 
 /// How long `start` waits between two `mcp_status` requests while `eileen` is still pending.
 const STATUS_POLL: Duration = Duration::from_millis(250);
@@ -91,7 +105,8 @@ pub struct ClaudeWorker {
 impl ClaudeWorker {
     /// A driver with no session yet. Its `claude` is `cfg.claude_exe`, which the runtime fills
     /// from `locate`, and `redactor`, the process's shared one, redacts every line it parses;
-    /// each session's tokens are registered with it while the session lives.
+    /// each session's tokens are registered with it from the session's start until its last
+    /// stderr line is logged.
     #[must_use]
     pub const fn new(cfg: HarnessConfig, redactor: Arc<Redactor>) -> Self {
         Self { cfg, redactor, session: None, ending: None, pending: VecDeque::new() }
@@ -107,25 +122,24 @@ impl ClaudeWorker {
     }
 
     /// Moves the session to `ending`, killing it when `kill` is set or waiting for its exit
-    /// otherwise, and queues its `Exited`.
+    /// otherwise, and queues its `Exited`. A kill also reaches a session already in `ending`,
+    /// whose wait for its own exit an earlier, dropped call began.
     async fn end(&mut self, kill: bool) {
         if let Some(session) = self.session.take() {
             let Session { id, process, _secrets: secrets, .. } = session;
-            self.ending = Some(Ending { id, process, kill, _secrets: secrets });
+            self.ending = Some(Ending::new(id, process, secrets));
+        }
+        if kill && let Some(ending) = self.ending.as_mut() {
+            ending.kill();
         }
         self.finish_ending().await;
     }
 
-    /// Finishes the session in `ending`, if there is one: its exit is awaited, then `Exited` is
-    /// queued. Cancel-safe: the session stays in `ending` until the exit is seen.
+    /// Finishes the session in `ending`, if there is one (`Ending::finish`), then queues its
+    /// `Exited`. Cancel-safe: the session stays in `ending` until it is finished.
     async fn finish_ending(&mut self) {
         let Some(ending) = self.ending.as_mut() else { return };
-        let exit = if ending.kill {
-            ending.process.kill_and_wait().await
-        } else {
-            ending.process.exit_code().await
-        };
-        let code = exit.code(ending.id);
+        let code = ending.finish().await;
         self.ending = None;
         self.pending.push_back(WorkerEvent::Exited { code });
     }
@@ -239,13 +253,14 @@ impl WorkerDriver for ClaudeWorker {
         let mut process = Process::spawn(&files, &self.cfg.claude_exe)?;
         if let Err(asked) = process.wait_ready(self.cfg.init_deadline).await {
             let id = spec.session;
+            // Ended like any session, so its tokens stay registered to its last stderr line.
+            let mut ending = Ending::new(id, process, secrets);
             let error = match asked {
                 // Its own exit code says why, so it is waited for before any kill.
-                Asked::Ended => {
-                    DriverError::EndedBeforeReady { code: process.exit_code().await.code(id) }
-                }
+                Asked::Ended => DriverError::EndedBeforeReady { code: ending.finish().await },
                 Asked::Failed(error) => {
-                    process.kill_and_wait().await.code(id);
+                    ending.kill();
+                    ending.finish().await;
                     error
                 }
             };
@@ -275,7 +290,7 @@ impl WorkerDriver for ClaudeWorker {
         if self.session_mut()?.bound {
             return Err(DriverError::AlreadyBound);
         }
-        self.write(&user_line(&first_turn(&binding))).await?;
+        self.write(&user_line(&first_turn(&binding)?)).await?;
         self.session_mut()?.bound = true;
         Ok(())
     }
@@ -347,44 +362,115 @@ struct Session {
     requests: Requests,
     /// Whether the job's first user line was written.
     bound: bool,
-    /// The session's tokens, registered with the redactor while it lives.
+    /// The session's tokens, registered with the redactor while it lives, and in `Ending`
+    /// until its last stderr line is logged.
     _secrets: Vec<LiteralGuard>,
 }
 
-/// A session being ended.
+/// A session being ended. The wait it is in keeps its deadline here, so a dropped
+/// `next_event` or `send` resumes that wait where it stopped instead of starting it again.
 #[derive(Debug)]
 struct Ending {
     id: WorkerSessionId,
     process: Process,
-    /// Whether it is killed, or was seen to close its stdout and is waited for.
-    kill: bool,
-    /// The session's tokens, still registered until its exit is seen, since until then it can
-    /// still write them on stderr.
+    step: Step,
+    /// The session's tokens, still registered until its stderr forwarding has ended: the file
+    /// and console logs redact a line when it is logged, and the CLI's last stderr lines can
+    /// still be on their way after its exit.
     _secrets: Vec<LiteralGuard>,
 }
 
-/// How a wait for the session's exit ended.
+/// Where a session being ended stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Exit {
-    /// It exited, with this code when it had one.
-    Exited(Option<i32>),
-    /// It was not seen to exit within [`EXIT_DEADLINE`] after the kill; dropping the child
-    /// kills its job once more.
-    Missed,
+enum Step {
+    /// Its stdout closed, so it is waited for until `until`, then killed.
+    Closing { until: Instant },
+    /// It was killed, and its job (on Linux its process group) is waited for until `until`.
+    Killed { until: Instant },
+    /// It exited, with `code` when it had one; its stderr forwarding is waited for until
+    /// `until`, so its last lines are logged while its tokens are still redacted.
+    Draining { code: Option<i32>, until: Instant },
 }
 
-impl Exit {
-    /// The exit code for `Exited`, logging a missed exit.
-    fn code(self, id: WorkerSessionId) -> Option<i32> {
-        match self {
-            Self::Exited(code) => code,
-            Self::Missed => {
-                let fault = "the session was not seen to exit after its kill";
-                tracing::warn!(name: names::WORKER_FAULT, ws_id = %id, fault);
-                None
+impl Ending {
+    /// A session whose stdout closed, waited for until [`EXIT_DEADLINE`] from now.
+    fn new(id: WorkerSessionId, process: Process, secrets: Vec<LiteralGuard>) -> Self {
+        Self { id, process, step: Step::Closing { until: exit_deadline() }, _secrets: secrets }
+    }
+
+    /// Kills the Job Object (on Linux the process group), unless it was killed already or has
+    /// been seen to exit.
+    fn kill(&mut self) {
+        if matches!(self.step, Step::Closing { .. }) {
+            // It may have exited already, which leaves nothing to kill.
+            let _killed: io::Result<()> = self.process.child.start_kill();
+            self.step = Step::Killed { until: exit_deadline() };
+        }
+    }
+
+    /// Waits for the session to exit, killing it if its wait passes its deadline, then for
+    /// its stderr forwarding to end; gives its exit code. Cancel-safe: each step keeps its
+    /// deadline in `step`. A session not seen to exit after its kill gives `None` at once,
+    /// with a `worker.fault` log: its stderr stays open while it runs, and dropping its child
+    /// kills its job once more.
+    async fn finish(&mut self) -> Option<i32> {
+        loop {
+            match self.step {
+                Step::Closing { until } => {
+                    match by_deadline("claude.exit", until, self.process.child.wait()).await {
+                        Some(exited) => self.drain(exit_code(exited)),
+                        None => self.kill(),
+                    }
+                }
+                Step::Killed { until } => {
+                    let Some(exited) =
+                        by_deadline("claude.kill", until, self.process.child.wait()).await
+                    else {
+                        let fault = "the session was not seen to exit after its kill";
+                        tracing::warn!(name: names::WORKER_FAULT, ws_id = %self.id, fault);
+                        return None;
+                    };
+                    self.drain(exit_code(exited));
+                }
+                Step::Draining { code, until } => {
+                    if let Some(forwarding) = self.process.stderr.as_mut() {
+                        // Past the deadline, dropping the handle leaves the forwarding running:
+                        // on Linux a descendant that left the group keeps the pipe open.
+                        let _ended: Option<Result<(), JoinError>> =
+                            by_deadline("claude.stderr", until, forwarding).await;
+                        self.process.stderr = None;
+                    }
+                    return code;
+                }
             }
         }
     }
+
+    /// Moves to waiting for the stderr forwarding of a session that exited with `code`.
+    fn drain(&mut self, code: Option<i32>) {
+        self.step = Step::Draining { code, until: exit_deadline() };
+    }
+}
+
+/// [`EXIT_DEADLINE`] from now.
+fn exit_deadline() -> Instant {
+    Instant::now() + EXIT_DEADLINE
+}
+
+/// The exit code of a wait for the session's exit, when it had one.
+fn exit_code(exited: io::Result<ExitStatus>) -> Option<i32> {
+    exited.ok().and_then(|status| status.code())
+}
+
+/// `future`'s output if it is ready by `until`, the end of a wait that an earlier, dropped call
+/// may have begun; `None` past it, logged as `with_deadline` logs a missed deadline, with what
+/// was left of the wait.
+async fn by_deadline<F: Future>(
+    call: &'static str,
+    until: Instant,
+    future: F,
+) -> Option<F::Output> {
+    with_deadline(call, until.saturating_duration_since(Instant::now()), future).await.ok()
 }
 
 /// The CLI's process and its stdio.
@@ -393,6 +479,8 @@ struct Process {
     child: Child,
     io: Pipes<ChildStdin, BufReader<ChildStdout>>,
     pid: u32,
+    /// The task forwarding its stderr into tracing, until `Ending::finish` has seen it end.
+    stderr: Option<JoinHandle<()>>,
 }
 
 impl Process {
@@ -405,43 +493,29 @@ impl Process {
                 .envs(files.env.vars())
                 .class(ChildClass::ClaudeSession)
         };
-        let mut child = spawn(&spec).map_err(|error| match error {
+        Self::start(&spec)
+    }
+
+    /// Starts `spec` through the supervisor with its stdin and stdout piped, keeping the task
+    /// that forwards its stderr.
+    fn start(spec: &ChildSpec) -> Result<Self, DriverError> {
+        let mut child = spawn(spec).map_err(|error| match error {
             eileen_supervisor::SupervisorError::Spawn { source, .. } => {
                 DriverError::Spawn { kind: source.kind() }
             }
         })?;
         let pid = child.id().unwrap_or_default();
+        let stderr = child.forward_stderr();
         let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
             return Err(DriverError::Spawn { kind: io::ErrorKind::BrokenPipe });
         };
-        Ok(Self { child, io: Pipes::new(stdin, BufReader::new(stdout)), pid })
+        Ok(Self { child, io: Pipes::new(stdin, BufReader::new(stdout)), pid, stderr })
     }
 
     /// Waits, within `deadline`, until the session is ready for its job (`Pipes::ready`).
     async fn wait_ready(&mut self, deadline: Duration) -> Result<(), Asked> {
         let missed = Err(Asked::Failed(DriverError::ReadyDeadline { secs: deadline.as_secs() }));
         with_deadline("claude.ready", deadline, self.io.ready()).await.unwrap_or(missed)
-    }
-
-    /// The exit once the process and its job have exited, waited for within
-    /// [`EXIT_DEADLINE`]; past it, the job is killed and waited for once more.
-    async fn exit_code(&mut self) -> Exit {
-        match with_deadline("claude.exit", EXIT_DEADLINE, self.child.wait()).await {
-            Ok(Ok(status)) => Exit::Exited(status.code()),
-            Ok(Err(_)) => Exit::Exited(None),
-            Err(_) => self.kill_and_wait().await,
-        }
-    }
-
-    /// Kills the Job Object (on Linux the process group) and waits for it to empty.
-    async fn kill_and_wait(&mut self) -> Exit {
-        // It may have exited already, which leaves nothing to kill.
-        let _killed: io::Result<()> = self.child.start_kill();
-        match with_deadline("claude.kill", EXIT_DEADLINE, self.child.wait()).await {
-            Ok(Ok(status)) => Exit::Exited(status.code()),
-            Ok(Err(_)) => Exit::Exited(None),
-            Err(_) => Exit::Missed,
-        }
     }
 }
 
@@ -536,54 +610,81 @@ struct Lines<R> {
     /// The line being read. It keeps what was read across calls until the line is whole, so a
     /// dropped `next` loses nothing.
     line: Vec<u8>,
+    /// How many bytes of the line being read were passed over at the cap.
+    cut: usize,
     /// Whether `line` holds a whole line already given out, to be cleared by the next call.
     done: bool,
 }
 
 impl<R: AsyncBufRead + Unpin> Lines<R> {
     const fn new(reader: R) -> Self {
-        Self { reader, line: Vec::new(), done: false }
+        Self { reader, line: Vec::new(), cut: 0, done: false }
     }
 
     /// The next line that is not blank, without its line ending, or `None` once stdout closed
     /// or failed. A line longer than [`MAX_LINE_BYTES`] is read to its end and kept only to one
-    /// byte past the cap, which the parser then takes as malformed, so a runaway line costs no
-    /// more memory than the cap. Cancel-safe: bytes are consumed from the reader only once they
-    /// are in `line`, and `line` is kept until it is whole.
+    /// byte past the cap, line ending included, so a runaway line costs no more memory than the
+    /// cap; it is given as it was kept, one byte past the cap, which the parser takes as
+    /// malformed. The next call gives back what a long line grew the buffer to, down to
+    /// [`KEPT_LINE_CAPACITY`]. Cancel-safe: bytes are consumed from the reader only once they
+    /// are in `line` or counted in `cut`, and both are kept until the line is whole.
     async fn next(&mut self) -> Option<&[u8]> {
         let end = loop {
             if self.done {
                 self.line.clear();
+                self.line.shrink_to(KEPT_LINE_CAPACITY);
+                self.cut = 0;
                 self.done = false;
             }
-            let ended = loop {
+            let newline = loop {
                 let Ok(buf) = self.reader.fill_buf().await else { return None };
                 if buf.is_empty() {
-                    break true;
-                }
-                let newline = buf.iter().position(|&byte| byte == b'\n');
-                let take = newline.map_or(buf.len(), |at| at + 1);
-                let room = (MAX_LINE_BYTES + 1).saturating_sub(self.line.len());
-                self.line.extend(buf.iter().take(take.min(room)));
-                self.reader.consume(take);
-                if newline.is_some() {
                     break false;
+                }
+                let at = buf.iter().position(|&byte| byte == b'\n');
+                let take = at.map_or(buf.len(), |at| at + 1);
+                let room = (MAX_LINE_BYTES + 1).saturating_sub(self.line.len());
+                let kept = take.min(room);
+                let wanted = self.line.len() + kept;
+                if wanted > self.line.capacity() {
+                    // Doubling, as a `Vec` grows, but never past one byte over the cap.
+                    let grown = self.line.capacity().saturating_mul(2).max(wanted);
+                    self.line.reserve_exact(grown.min(MAX_LINE_BYTES + 1) - self.line.len());
+                }
+                self.line.extend_from_slice(buf.get(..kept).unwrap_or_default());
+                self.cut = self.cut.saturating_add(take - kept);
+                self.reader.consume(take);
+                if at.is_some() {
+                    break true;
                 }
             };
             self.done = true;
-            if ended && self.line.is_empty() {
+            if !newline && self.line.is_empty() {
                 return None;
             }
-            let body = self.line.strip_suffix(b"\n").unwrap_or(&self.line);
-            let body = body.strip_suffix(b"\r").unwrap_or(body);
-            if !body.trim_ascii().is_empty() {
-                break body.len();
+            let end = self.body_len(newline);
+            if !self.line.get(..end).unwrap_or_default().trim_ascii().is_empty() {
+                break end;
             }
-            if ended {
+            if !newline {
                 return None;
             }
         };
         self.line.get(..end)
+    }
+
+    /// The length of the body of the line in `line`, which ended at a `\n` when `newline` is
+    /// set and at the end of stdout otherwise: without its line ending, or all that was kept
+    /// when it ran past the cap. A line cut at the cap fits under it only when all that was cut
+    /// is the `\n` after a `\r`, the ending of a line exactly at the cap.
+    fn body_len(&self, newline: bool) -> usize {
+        let line = self.line.as_slice();
+        let whole = self.cut == 0 || (self.cut == 1 && newline && line.ends_with(b"\r"));
+        if !whole {
+            return line.len();
+        }
+        let body = line.strip_suffix(b"\n").unwrap_or(line);
+        body.strip_suffix(b"\r").unwrap_or(body).len()
     }
 }
 
@@ -682,13 +783,27 @@ fn check_init(init: &Init) -> Result<(), DriverError> {
     Ok(())
 }
 
-/// Writes the session's run folder: its working folder, the settings file and the MCP config.
+/// Writes the session's run folder: the settings file, the MCP config, and the working folder
+/// when it is the session's scratch folder there (section 2.5: `run\<session>\cwd`). Any other
+/// working folder is the job's repository, which must already be a folder: a missing or
+/// mistyped one is refused before anything is written, never created empty in the user's tree.
 async fn write_files(files: &SessionFiles) -> Result<(), DriverError> {
     let failed = |what: &'static str| {
         move |error: io::Error| DriverError::Files { what, kind: error.kind() }
     };
+    // A `..` could climb out of the run folder while the path still starts with it.
+    let scratch = files.cwd.starts_with(&files.run_dir)
+        && !files.cwd.components().any(|part| part == Component::ParentDir);
+    if !scratch {
+        let found = tokio::fs::metadata(&files.cwd).await.map_err(failed("working folder"))?;
+        if !found.is_dir() {
+            return Err(failed("working folder")(io::ErrorKind::NotADirectory.into()));
+        }
+    }
     tokio::fs::create_dir_all(&files.run_dir).await.map_err(failed("run folder"))?;
-    tokio::fs::create_dir_all(&files.cwd).await.map_err(failed("working folder"))?;
+    if scratch {
+        tokio::fs::create_dir_all(&files.cwd).await.map_err(failed("working folder"))?;
+    }
     for (path, value, what) in [
         (&files.settings_path, &files.settings, "settings file"),
         (&files.mcp_path, &files.mcp_config, "MCP config"),
@@ -699,18 +814,27 @@ async fn write_files(files: &SessionFiles) -> Result<(), DriverError> {
     Ok(())
 }
 
-/// The job's first user turn (section 3.3.8): the task, then `Follow skill
-/// eileen-learned:<id>` when a skill is set, with its text when the snapshot lacks it (section
-/// 2.10), then the facts block.
-fn first_turn(binding: &JobBinding) -> String {
+/// The job's first user turn (sections 2.10 and 3.3.8): the task, then `Follow skill
+/// eileen-learned:<id>` when a skill is set, then the facts block. When the session's snapshot
+/// lacks the skill, its text is carried instead of that line, under a heading that names the
+/// skill only to say where the steps came from: a `Skill` call for a skill outside the
+/// snapshot's manifest would mark the trajectory `snapshot_tampered` (section 2.10). A skill's
+/// text without its skill is refused, since nothing would say where it came from.
+fn first_turn(binding: &JobBinding) -> Result<String, DriverError> {
     let mut text = binding.task.clone();
-    if let Some(skill) = &binding.skill {
-        text.push_str("\n\nFollow skill eileen-learned:");
-        text.push_str(skill.id.as_str());
-        if let Some(inline) = &binding.inline_skill {
-            text.push_str("\n\n");
+    match (&binding.skill, &binding.inline_skill) {
+        (Some(skill), None) => {
+            text.push_str("\n\nFollow skill eileen-learned:");
+            text.push_str(skill.id.as_str());
+        }
+        (Some(skill), Some(inline)) => {
+            text.push_str("\n\nFollow these steps (Eileen skill ");
+            text.push_str(skill.id.as_str());
+            text.push_str("):\n\n");
             text.push_str(inline);
         }
+        (None, Some(_)) => return Err(DriverError::UnnamedInlineSkill),
+        (None, None) => {}
     }
     if !binding.facts.is_empty() {
         text.push_str("\n\nFacts:");
@@ -719,7 +843,7 @@ fn first_turn(binding: &JobBinding) -> String {
             text.push_str(fact);
         }
     }
-    text
+    Ok(text)
 }
 
 /// One stream-json user line, without its line ending, in the shape WP3's approval contract
