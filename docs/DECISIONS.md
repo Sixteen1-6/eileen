@@ -883,7 +883,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Consequences: `cargo deny --locked check` passes again on both targets, with D78's three ignores, D80's four and this one. Any other vulnerability advisory, against `zip` or any other crate, still fails the job. BUILD.md section 4b.3 names the eight ignores and the playbook's dependency-policy paragraph counts them; D78 and D80 (whose Status lines only note this amendment), WP0's record and WP0 acceptance 3 stay as written. The pull request that moves the `sherpa-onnx` pin removes this ignore with D78's three.
 - Source: RUSTSEC-2026-0429 in the RustSec database and its assignment commit (read 2026-11-07); `build.rs` and `Cargo.toml` of `sherpa-onnx-sys` 1.13.8; the crates.io entries of `zip` and `sherpa-onnx-sys`, with the dependencies of `sherpa-onnx-sys` 2.0.0 and 2.0.1 (read 2026-11-07); D78 and D80; BUILD.md sections 4.1 and 4b.3 and its revision log entry of 2026-11-07 from `amend/zip-advisory-0429`.
 
-## D86. Evaluation is one framework, built by WP9 from W2
+## D87. Evaluation is one framework, built by WP9 from W2
 
 - Date: 2026-11-07
 - Status: accepted (the owner's direction of 2026-11-07, from `amend/evaluation-framework`)
@@ -892,7 +892,7 @@ Architecture decision log for Eileen. One entry per decision, in the order they 
 - Consequences: BUILD.md sections 0 and 6.1 (WP9 phases in W2, W3 and W6), the roadmap spine, 4.6 (two lanes), 4.7 (benchmarks become suites), 4.9 (new), 4b.5 (`eval` dispatches to `eileen-e2e`) and 6.11 (WP9 owns `evals/`, `eval.yml` and `docs/EVAL.md`, with new acceptance lines); ROADMAP M6. Benchmarks B1 to B10 keep their definitions and become suites the runner reports on. No contract changes in this amendment: WP9 pins the `eval` module in its first pull request, as it pins `fleet`.
 - Source: OWNER-DIRECTION.md 2026-11-07; [2026-11-evaluation.md](research/2026-11-evaluation.md); BUILD.md sections 4.7, 4.8 and 6.11 before this amendment.
 
-## D87. The live evaluation lane may hold the owner's Claude token, scoped to the run
+## D88. The live evaluation lane may hold the owner's Claude token, scoped to the run
 
 - Date: 2026-11-07
 - Status: accepted (the owner, 2026-11-07: "yes that's fine to go in that new direction", from `amend/evaluation-framework`)
