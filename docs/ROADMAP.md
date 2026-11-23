@@ -86,7 +86,7 @@ The build order is not the milestone order. The thin slice comes first and is li
 
 **Goal.** One continuous session exercises M1 to M4 end to end, the owner's benchmarks are timed scenarios, and friends' PCs are a test fleet.
 
-**Scope.** The opt-in fleet runner (recorded mode with no model by default, live mode on the contributor's own plan), anonymised results, ingest and failure clustering, benchmarks B1 to B10 (B10 is the brain benchmark) and the learning curve with A/B timing, soak tests, `docs/FLEET.md`; the real-desktop runner and scenario sharing already exist from slice S1.
+**Scope.** The opt-in fleet runner (recorded mode with no model by default, live mode on the contributor's own plan), anonymised results, ingest and failure clustering, benchmarks B1 to B10 (B10 is the brain benchmark) and the learning curve with A/B timing, soak tests, `docs/FLEET.md`; the real-desktop runner and scenario sharing already exist from slice S1. The evaluation framework (BUILD.md section 4.9) reaches its full matrix here, with the external benchmarks and the release gate; its runner and recorded tier exist from W2 and its live tiers from slice S1.
 
 **Acceptance.**
 
@@ -147,7 +147,7 @@ The build order is not the milestone order. The thin slice comes first and is li
 
 ## After v0.1 ships: staying at the frontier
 
-The owner's direction of 2026-10-20 makes keeping Eileen current a built-in loop, after the main product ships: a weekly scout of new models, CLIs, speech and voice models, MCP servers and research, with a digest and an issue per worthwhile upgrade; bold ideas tried as small measured experiments; every candidate adopted only if it wins the same benchmarks; failing scenarios triaged and drafted into fix pull requests that the owner approves. v0.1 keeps this possible with what it needs anyway: plug-in interfaces for the brain, workers, every speech stage, voices, the intent matcher and the app routes; model names as aliases in config; the benchmark suite, including the brain benchmark, with its public results table (`RESULTS.md` on the repository's `devhub` branch) and results page; and nightly runs against the latest Claude CLI, both the credential-free flag check and the owner's behavioural contract test.
+The owner's direction of 2026-10-20 makes keeping Eileen current a built-in loop, after the main product ships: a weekly scout of new models, CLIs, speech and voice models, MCP servers, trending repositories and research (owner direction 2026-11-07), with a digest and an issue per worthwhile upgrade; bold ideas tried as small measured experiments; every candidate adopted only if it wins the evaluation framework's suites (BUILD.md section 4.9); failing scenarios triaged and drafted into fix pull requests that the owner approves. v0.1 keeps this possible with what it needs anyway: plug-in interfaces for the brain, workers, every speech stage, voices, the intent matcher and the app routes; model names as aliases in config; the benchmark suite, including the brain benchmark, with its public results table (`RESULTS.md` on the repository's `devhub` branch) and results page; and nightly runs against the latest Claude CLI, both the credential-free flag check and the owner's behavioural contract test.
 
 ## Non-goals for now
 
