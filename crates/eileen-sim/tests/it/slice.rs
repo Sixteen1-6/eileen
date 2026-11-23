@@ -2,8 +2,10 @@
 //! first pull request): the fast path, "stop" while Eileen speaks, a backchannel, a brain
 //! answer clause by clause, a job's completion, mute, and room talk; and the speech process's
 //! life (`wp1/speech-life`): its start, a hang, a crash, a load that never finishes, and
-//! replies on the HUD while speech is down or the microphone is muted. Every step keeps every
-//! invariant the world checks.
+//! replies on the HUD while speech is down or the microphone is muted; and turns heard late
+//! (`wp1/speech-late`): speech the audio ring kept while the speech process loaded or
+//! restarted, replayed once it is ready and addressed only when it begins with the name. Every
+//! step keeps every invariant the world checks.
 
 use eileen_contracts::bus::{BusEvent, SpeakCause};
 use eileen_contracts::connectors::{SidecarCmd, SidecarEvent, SidecarId};
@@ -653,4 +655,99 @@ fn a_typed_request_while_muted_is_answered_on_the_hud() {
         "answered on the HUD: {:?}",
         hud_line(&world)
     );
+}
+
+/// The user's turn event reaches the speech process: stepped now when the process hears it
+/// live (true), kept in its audio ring while it is not ready (false).
+fn hear(world: &mut World, event: VoiceEvent) -> bool {
+    let Some(input) = world.hear(Input::Voice(event)) else { return false };
+    step(world, input);
+    true
+}
+
+fn end_of(turn: TurnId, text: &str) -> VoiceEvent {
+    VoiceEvent::EndOfTurn {
+        turn,
+        text: Personal::new(text.to_owned()),
+        smart_turn_pct: 92,
+        silence_ms: 250,
+        asr_confidence_pct: 96,
+        reason: TurnEndReason::SmartTurn,
+        source: 0,
+        level_db: -28,
+    }
+}
+
+/// The turns of the starts flagged replayed, from the `from`th input on.
+fn replayed_starts(world: &World, from: usize) -> Vec<TurnId> {
+    let starts = world.inputs().iter().skip(from).filter_map(|record| {
+        if let Input::Voice(VoiceEvent::SpeechStarted { turn, replayed: true, .. }) = record.input {
+            Some(turn)
+        } else {
+            None
+        }
+    });
+    starts.collect()
+}
+
+#[test]
+fn a_named_command_spoken_while_speech_restarts_is_acted_on_once_from_the_replay() {
+    let mut world = world();
+    settle(&mut world, 3_000);
+    let said = TurnId::from_parts(world.now_ms(), 11);
+    let started = VoiceEvent::SpeechStarted { turn: said, source: 0, replayed: false };
+    assert!(hear(&mut world, started), "the start is heard live");
+    settle(&mut world, 200);
+    world.crash_speech();
+    settle(&mut world, 300);
+    let (inputs, effects, published) =
+        (world.inputs().len(), world.effects().len(), world.published().len());
+    assert!(
+        !hear(&mut world, end_of(said, "Eileen, what time is it?")),
+        "the rest of the turn waits in the ring while speech restarts"
+    );
+    settle(&mut world, 5_000);
+    assert_eq!(world.speech().process(), Process::Up, "speech is back");
+    let replayed = replayed_starts(&world, inputs);
+    assert_eq!(replayed.len(), 1, "recognised once from the ring: {replayed:?}");
+    let late = replayed[0];
+    assert_ne!(late, said, "under a turn the restarted process minted");
+    let routed: Vec<_> = world.published()[published..]
+        .iter()
+        .filter(|e| matches!(e.body, BusEvent::TurnRouted { .. }))
+        .map(|e| e.ctx.turn)
+        .collect();
+    assert_eq!(routed, [Some(late)], "routed once, as the replayed turn, by the name");
+    assert!(
+        !world.published()[published..].iter().any(|e| e.ctx.turn == Some(said)),
+        "the turn open at the crash is never routed"
+    );
+    let replies = speaks(&bodies(&world, effects));
+    assert_eq!(replies.len(), 1, "answered once: {replies:?}");
+    assert!(replies[0].1[0].starts_with("It's "), "{replies:?}");
+    settle(&mut world, 10_000);
+    assert_eq!(speaks(&bodies(&world, effects)).len(), 1, "and never again");
+    assert_eq!(replayed_starts(&world, inputs).len(), 1, "nothing is replayed twice");
+}
+
+#[test]
+fn a_command_without_the_name_spoken_while_speech_loads_is_not_acted_on() {
+    let mut world = World::new(Profile::default_profile().unwrap(), 1);
+    step(&mut world, Input::User(UserInput::SetMute(false)));
+    let said = TurnId::from_parts(world.now_ms(), 12);
+    let started = VoiceEvent::SpeechStarted { turn: said, source: 0, replayed: false };
+    assert!(!hear(&mut world, started), "speech is still loading");
+    settle(&mut world, 400);
+    assert!(!hear(&mut world, end_of(said, "what time is it")), "the ring keeps the turn");
+    settle(&mut world, LOAD_MS);
+    assert_eq!(replayed_starts(&world, 0).len(), 1, "heard late once speech is ready");
+    assert!(world.published().is_empty(), "greyed, no bus event: {:?}", events(&world));
+    assert!(speaks(&bodies(&world, 0)).is_empty(), "nothing said");
+    let live = TurnId::from_parts(world.now_ms(), 13);
+    let started = VoiceEvent::SpeechStarted { turn: live, source: 0, replayed: false };
+    assert!(hear(&mut world, started), "heard live now");
+    settle(&mut world, 400);
+    assert!(hear(&mut world, end_of(live, "what time is it")), "and its end");
+    settle(&mut world, 100);
+    assert_eq!(speaks(&bodies(&world, 0)).len(), 1, "the same words heard live are a command");
 }

@@ -10,7 +10,9 @@
 //!   exhaustive enumeration of turn-taking over `eileen_core::turn::Turns` ([`exhaustive`]).
 //! - The parts that answer the core ([`parts`]): the speech process with its life (a load,
 //!   `Ready`, a heartbeat a second, and the hangs, crashes, slow loads and loads that never
-//!   finish a test or a fault injects), the playback device in 10 ms callbacks, a scripted
+//!   finish a test or a fault injects) and the audio ring, which keeps the user's speech while
+//!   the process is not ready and has it recognised, as turns heard late, once it is
+//!   ([`World::hear`]), the playback device in 10 ms callbacks, a scripted
 //!   brain ([`BrainReply`]) with one process per slot, each with its own instance number, at
 //!   the profile's pace, that can stall and fail, and scripted worker sessions that can crash
 //!   or run slow; the PC ([`pc`]): available memory, commit headroom and paging read into
@@ -62,7 +64,8 @@
 //! - Layers: unit tests per module, one test per pull request seed and profile
 //!   (`it::pr_seeds`), every stored regression (`it::regressions`), the world's PC, fault
 //!   points and stalling brain through the real core (`it::world`), slice S1's flows
-//!   through the minimal core, the speech process's life among them (`it::slice`), barge-in's
+//!   through the minimal core, the speech process's life and turns heard late among them
+//!   (`it::slice`), barge-in's
 //!   timing and heard prefix (`it::barge_in`), and `it::turn::exhaustive` to depth 6, or to
 //!   the depth in `EILEEN_EXHAUSTIVE_DEPTH` (8 nightly).
 //! - A bug here starts as a seed that fails only on one OS.

@@ -228,7 +228,7 @@ impl Core {
         self.timers.set(cx, TimerKind::Speech, after(cx.now, backoff_ns(self.life.failures)));
         if let Some(open) = self.turns.end_of_turn() {
             // Its audio is recognised afresh under a new turn: its own late events are dropped.
-            self.handled.first_time(open);
+            self.handled.insert(open);
         }
         self.partial = None;
         if let Some(speak) = self.turns.speaking() {

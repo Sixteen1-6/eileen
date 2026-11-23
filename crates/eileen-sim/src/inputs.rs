@@ -10,7 +10,9 @@
 //! device change, a stall), what the PC and the room do (other audio starting and stopping,
 //! physical input, another app taking the microphone), and the passing of time to the core's
 //! next timer. What answers the core (the speech process's clauses, playback reports, the
-//! brain, workers, memory readings) comes from the world's parts, not from here.
+//! brain, workers, memory readings) comes from the world's parts, not from here. A seeded run
+//! hands the turn events to the world's speech part (`World::hear`), whose audio ring keeps
+//! them while the speech process is not ready and replays them once it is.
 
 use arbitrary::Unstructured;
 use eileen_contracts::core_io::{ActivityEvent, Input, KeyEdge, PlaybackEvent, UserInput};

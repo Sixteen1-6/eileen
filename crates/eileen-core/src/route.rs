@@ -20,7 +20,7 @@ use eileen_contracts::intent::{
 use eileen_contracts::jobs::{Depth, TurnAuthority, TurnSource};
 use eileen_contracts::tools::brain::JobRef;
 
-use crate::addressee::{self, Decision, Facts};
+use crate::addressee::{self, Decision, Facts, Name};
 use crate::speech::Owner;
 use crate::turn::Verdict;
 use crate::{Core, Cx, clock, turn_ctx};
@@ -28,27 +28,28 @@ use crate::{Core, Cx, clock, turn_ctx};
 /// What Eileen says to a safety or control command the minimal core does not run yet.
 const NOT_BUILT: &str = "I can't do that yet.";
 
-/// How many ended speech turns the core remembers, so a repeated `EndOfTurn` is not routed
-/// again.
-const HANDLED_KEPT: usize = 8;
+/// How many speech turns each [`TurnSet`] remembers: the speech process hears one turn at a
+/// time, so a turn's later events come long before eight newer turns have started.
+const TURNS_KEPT: usize = 8;
 
-/// The speech turns already routed, or dropped when speech went down, newest last, at most
-/// `HANDLED_KEPT`.
+/// A few recent speech turns, newest last, at most `TURNS_KEPT`: the turns already routed or
+/// dropped when speech went down, so a repeated `EndOfTurn` is not routed again, and the turns
+/// heard late, whose speech began in a replayed frame.
 #[derive(Debug, Default)]
-pub(crate) struct Handled(VecDeque<TurnId>);
+pub(crate) struct TurnSet(VecDeque<TurnId>);
 
-impl Handled {
-    /// Whether `turn` was handled already.
+impl TurnSet {
+    /// Whether `turn` is in the set.
     pub(crate) fn contains(&self, turn: TurnId) -> bool {
         self.0.contains(&turn)
     }
 
-    /// Records `turn`; false when it was already handled.
-    pub(crate) fn first_time(&mut self, turn: TurnId) -> bool {
+    /// Adds `turn`, forgetting the oldest when full; false when it was in the set already.
+    pub(crate) fn insert(&mut self, turn: TurnId) -> bool {
         if self.0.contains(&turn) {
             return false;
         }
-        if self.0.len() >= HANDLED_KEPT {
+        if self.0.len() >= TURNS_KEPT {
             self.0.pop_front();
         }
         self.0.push_back(turn);
@@ -143,7 +144,7 @@ impl Core {
     /// The speech process's final transcript of `turn`. A turn already handled is not routed
     /// again.
     pub(crate) fn end_of_turn(&mut self, cx: &mut Cx<'_>, turn: TurnId, text: &str) {
-        if !self.handled.first_time(turn) {
+        if !self.handled.insert(turn) {
             return;
         }
         self.turns.end_of_turn();
@@ -193,14 +194,19 @@ impl Core {
         }
     }
 
-    /// One utterance through the gate; an addressed one goes on to the router.
+    /// One utterance through the gate; an addressed one goes on to the router. A spoken turn
+    /// heard late is addressed only when it begins with the name (section 2.8).
     fn utterance(&mut self, cx: &mut Cx<'_>, turn: TurnId, text: &str, source: TurnSource) {
         let named = addressee::strip_name(text, &self.names());
         let ctx = self.resolve_ctx(cx.now);
         let resolution = self.ports.resolver.resolve(&named.rest, &ctx);
         let voice = matches!(source, TurnSource::Voice);
+        let late = voice && self.late.contains(turn);
         self.spans.open_turn(turn, &source);
-        if voice && self.turns.barge_in() && !named.named && addressee::is_backchannel(&named.rest)
+        if voice
+            && self.turns.barge_in()
+            && !named.named()
+            && addressee::is_backchannel(&named.rest)
         {
             self.spans.addressee(turn, Decision::Greyed.name(), "backchannel");
             self.resolve_barge_in(cx, Verdict::Resume);
@@ -209,7 +215,8 @@ impl Core {
         }
         let decision = if voice {
             let facts = Facts {
-                named: named.named,
+                name: named.name,
+                late,
                 in_window: self.window.is_open(cx.now) || self.turns.speaking().is_some(),
                 command: is_full_command(&resolution),
             };
@@ -320,10 +327,11 @@ impl Core {
 
     /// Within 600 ms of a pause: an addressed partial (the name, a full command, a follow-up)
     /// stops Eileen, except "go on"; a backchannel, unaddressed speech or nothing heard resumes.
+    /// A partial of a turn heard late is addressed only when it begins with the name.
     fn verdict_from_partial(&self, now: MonoTime) -> Verdict {
-        let Some((_, text)) = &self.partial else { return Verdict::Resume };
+        let Some((turn, text)) = &self.partial else { return Verdict::Resume };
         let named = addressee::strip_name(text, &self.names());
-        if !named.named && addressee::is_backchannel(&named.rest) {
+        if !named.named() && addressee::is_backchannel(&named.rest) {
             return Verdict::Resume;
         }
         let ctx = self.resolve_ctx(now);
@@ -331,9 +339,13 @@ impl Core {
         if Fast::of(&resolution) == Some(Fast::GoOn) {
             return Verdict::Resume;
         }
-        let addressed = named.named
-            || is_full_command(&resolution)
-            || !matches!(self.ports.resolver.follow_up(&named.rest, &ctx), FollowUp::None);
+        let addressed = if self.late.contains(*turn) {
+            named.name == Name::Leads
+        } else {
+            named.named()
+                || is_full_command(&resolution)
+                || !matches!(self.ports.resolver.follow_up(&named.rest, &ctx), FollowUp::None)
+        };
         if addressed { Verdict::Stop } else { Verdict::Resume }
     }
 }

@@ -9,7 +9,9 @@
 //!   `Heartbeat` every second while it is ready; `HangDumpThenKill` ends it with `Exited`. A
 //!   test or a fault can hang it (no more heartbeats or clauses), crash it (`Exited` at once),
 //!   slow its next load or make its loads never finish. While it is not ready the audio
-//!   component answers `Speak` with `SpeakDone` and no clause.
+//!   component answers `Speak` with `SpeakDone` and no clause, and keeps the user's speech in
+//!   its ring, which the process recognises once it is ready again, as turns heard late
+//!   (`SpeechStarted.replayed`, [`Speech::hear`]).
 //! - The device plays the clauses whose `ClauseReady` was delivered, in 10 ms callbacks of
 //!   240 samples (24 kHz), reports `Played` at most every 50 ms, and honours `Duck`, `Pause`
 //!   (with a `Paused` report), `Resume` and `Stop` (with a `Stopped` report). It reports
@@ -50,6 +52,10 @@ use eileen_contracts::speech::{SpeechCmd, VoiceEvent};
 use serde_json::{Value, json};
 
 use crate::invariants::Handed;
+
+mod ring;
+
+use ring::Ring;
 
 /// The device's callback period, ms.
 pub const CALLBACK_MS: u64 = 10;
@@ -177,6 +183,8 @@ pub struct Speech {
     exit_ms: Option<u64>,
     /// The next load takes [`SLOW_LOAD_MS`] longer (a fault).
     slow_load: bool,
+    /// The audio ring: the user's speech captured while the process was not ready.
+    ring: Ring,
 }
 
 /// What the speech process sends that stops when it ends or hangs: clauses, `SpeakDone`,
@@ -258,20 +266,47 @@ impl Speech {
                 if matches!(self.process, Process::Off | Process::Dead) {
                     return;
                 }
-                self.end(due);
+                self.end(now_ms, due);
                 let exited = Input::Sidecar(SidecarId::Speech, SidecarEvent::Exited { code: None });
                 due.schedule(now_ms.saturating_add(self.exit_ms.unwrap_or(EXIT_MS)), exited);
             }
         }
     }
 
-    /// The world delivered `input`: a `Ready` makes a loading process ready, and while it is,
-    /// each heartbeat brings the next a second later.
+    /// The user's speech reaches the process. A turn event (a start, a partial, the end of
+    /// speech, the end of the turn) is heard now while the process is ready; while it is not,
+    /// the audio ring keeps it, unless capture is off, and the process recognises it once it is
+    /// ready, under a turn of its own whose start is flagged replayed. Other voice events pass
+    /// as they are.
+    pub fn hear(&mut self, now_ms: u64, event: VoiceEvent, capture: bool) -> Option<VoiceEvent> {
+        if ring::turn_of(&event).is_none() {
+            return Some(event);
+        }
+        if self.process == Process::Up {
+            return Some(self.ring.live(event));
+        }
+        if capture {
+            self.ring.hold(now_ms, event);
+        }
+        None
+    }
+
+    /// A mute empties the ring (decision D81).
+    pub fn mute(&mut self) {
+        self.ring.clear();
+    }
+
+    /// The world delivered `input`: a `Ready` makes a loading process ready, which recognises
+    /// what the ring held at once, and while it is ready, each heartbeat brings the next a
+    /// second later.
     pub fn delivered(&mut self, now_ms: u64, input: &Input, due: &mut Due) {
         let Input::Sidecar(SidecarId::Speech, event) = input else { return };
         let beats = match event {
             SidecarEvent::Ready { .. } if self.process == Process::Loading => {
                 self.process = Process::Up;
+                for heard in self.ring.replay(now_ms) {
+                    due.schedule(now_ms, Input::Voice(heard));
+                }
                 true
             }
             SidecarEvent::Heartbeat => self.process == Process::Up,
@@ -285,10 +320,12 @@ impl Speech {
         }
     }
 
-    /// The process hangs: no heartbeat, clause or `Ready` comes until it is killed.
-    pub fn hang(&mut self, due: &mut Due) {
+    /// The process hangs at `now_ms`: no heartbeat, clause or `Ready` comes until it is killed,
+    /// and the user's speech goes to the ring.
+    pub fn hang(&mut self, now_ms: u64, due: &mut Due) {
         if matches!(self.process, Process::Loading | Process::Up) {
             due.drop_where(from_the_process);
+            self.went_down(now_ms);
             self.process = Process::Hung;
         }
     }
@@ -298,16 +335,25 @@ impl Speech {
         if matches!(self.process, Process::Off | Process::Dead) {
             return;
         }
-        self.end(due);
+        self.end(now_ms, due);
         let exited = SidecarEvent::Exited { code: Some(CRASH_CODE) };
         due.schedule(now_ms, Input::Sidecar(SidecarId::Speech, exited));
     }
 
-    /// The process is gone, with everything it had not sent.
-    fn end(&mut self, due: &mut Due) {
+    /// The process is gone at `now_ms`, with everything it had not sent.
+    fn end(&mut self, now_ms: u64, due: &mut Due) {
         due.drop_where(from_the_process);
         self.utterances.clear();
+        self.went_down(now_ms);
         self.process = Process::Dead;
+    }
+
+    /// The process stops hearing at `now_ms`: if it was ready, the ring takes the turn it was
+    /// hearing, which the core drops.
+    fn went_down(&mut self, now_ms: u64) {
+        if self.process == Process::Up {
+            self.ring.process_lost(now_ms);
+        }
     }
 
     /// Answers a speech command. Only a ready process synthesizes; while none is, the audio
@@ -1093,7 +1139,7 @@ mod tests {
         let first = LOAD_MS + HEARTBEAT_MS;
         assert_eq!(deliver(&mut speech, &mut due, first), [beat()], "a second later");
         assert_eq!(deliver(&mut speech, &mut due, first + HEARTBEAT_MS), [beat()], "and on");
-        speech.hang(&mut due);
+        speech.hang(first + HEARTBEAT_MS, &mut due);
         assert!(due.is_empty(), "a hung process sends nothing");
         speech.command(5_000, &say, &mut due);
         assert!(due.is_empty(), "not even `SpeakDone`");

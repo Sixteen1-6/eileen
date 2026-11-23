@@ -1,6 +1,7 @@
 //! The minimal core through `Core::step`, with a scripted resolver: the gate, the fast path,
 //! one brain turn and mute. Barge-in is in `barge_in`, one job in `jobs`, many jobs in
-//! `steering`, `fan_out`, `router`, `apps` and `refusals`, and the speech process in `life`.
+//! `steering`, `fan_out`, `router`, `apps` and `refusals`, the speech process in `life`, and
+//! turns heard late in `late`.
 
 use eileen_contracts::bus::{BusEvent, TurnRoute};
 use eileen_contracts::config::{Config, Proposal, SettingChange, SettingSpecView, ValidationError};
@@ -691,6 +692,7 @@ mod apps;
 mod barge_in;
 mod fan_out;
 mod jobs;
+mod late;
 mod life;
 mod refusals;
 mod router;

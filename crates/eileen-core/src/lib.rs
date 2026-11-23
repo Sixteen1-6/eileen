@@ -13,8 +13,9 @@
 //!   and cancelled by name or pronoun, and app tasks that track an app's render with its
 //!   progress), mute, the completion announcement, the speech process's life (`life`: started
 //!   on the first step, hang-dumped, killed and restarted with a bounded backoff when it stops
-//!   answering) and the HUD's microphone state and reply line (`hud`). Later: the rest of
-//!   section 6.3's list, turns heard late first (`wp1/speech-late`).
+//!   answering), the HUD's microphone state and reply line (`hud`), and turns heard late
+//!   (section 2.8: speech that began in a replayed frame is addressed only when it begins with
+//!   the name). Later: the rest of section 6.3's list.
 //! - [`turn`]: the pure, cloneable turn-taking machine `Core::step` delegates to.
 //! - [`lifecycle`]: the job registry `Core::step` keeps, pure and cloneable: the job states and
 //!   the one legal graph of steps between them, names, slugs and fan-out ordinals given at
@@ -44,6 +45,11 @@
 //!   `crates/eileen-core/clippy.toml` bans `HashMap`).
 //! - One utterance holds the floor at a time; the announcement queue is bounded (invariant 10).
 //! - No unaddressed speech becomes a bus event, and `Heard` follows `TurnRouted` (invariant 6).
+//! - A turn whose speech began in a replayed frame (`SpeechStarted.replayed`) is heard late:
+//!   it is addressed only when it begins with the name, never by the conversation window, a
+//!   built-in command or a follow-up, and its partial decides a barge-in only by the name
+//!   (section 2.8). The question kinds it may never answer (an open question, a clarifying
+//!   choice, an approval, a `confirm` step) each add their own rule when they are built.
 //! - Barge-in ducks at the first window, pauses at the third consecutive one and resolves within
 //!   600 ms of the pause (invariant 2); the brain is told exactly the heard prefix (invariant 3).
 //! - Nothing is spoken and no earcon plays while muted (invariant 9); a reply that cannot be
@@ -130,6 +136,10 @@
 //!   start until the snapshot carries them (section 3.3.16).
 //! - The HUD's line holds at most 4 KiB: model text has no bound, and the whole HUD state must
 //!   fit one line of the HUD pipe. A line cut at the limit ends with " ..." and takes no more.
+//! - Section 2.8 has the HUD mark a turn heard late, but the core does not fill `HudState.heard`
+//!   yet (HUD state assembly comes with the full core) and `HeardLine` has no field for the
+//!   mark. The core keeps which turns were heard late, so the mark can come with both. Like the
+//!   turns already handled, they are not in the snapshot.
 //!
 //! # Logs and tracing
 //!
@@ -189,7 +199,7 @@ use crate::brain::Brain;
 use crate::hud::Hud;
 use crate::job::Jobs;
 use crate::life::SpeechLife;
-use crate::route::Handled;
+use crate::route::TurnSet;
 use crate::spans::Spans;
 use crate::turn::Turns;
 
@@ -359,7 +369,10 @@ pub struct Core {
     timers: Timers,
     spans: Spans,
     /// The speech turns already routed, so a repeated `EndOfTurn` is dropped.
-    handled: Handled,
+    handled: TurnSet,
+    /// The speech turns heard late: their speech began in a replayed frame, so the gate
+    /// addresses them only when they begin with the name (section 2.8).
+    late: TurnSet,
     /// The speech process's life.
     life: SpeechLife,
     /// The HUD's line and the state last sent.
@@ -405,7 +418,8 @@ impl Core {
             announcements: Queue::default(),
             timers,
             spans: Spans::default(),
-            handled: Handled::default(),
+            handled: TurnSet::default(),
+            late: TurnSet::default(),
             life: SpeechLife::default(),
             hud: Hud::default(),
             seq: counter(COUNTER_SEQ),
@@ -489,7 +503,12 @@ impl Core {
             // A turn already handled, or dropped when speech went down, is not heard again.
             VoiceEvent::SpeechStarted { turn, .. } | VoiceEvent::Partial { turn, .. }
                 if self.handled.contains(turn) => {}
-            VoiceEvent::SpeechStarted { turn, .. } => self.turns.speech_started(turn),
+            VoiceEvent::SpeechStarted { turn, replayed, .. } => {
+                if replayed {
+                    self.late.insert(turn);
+                }
+                self.turns.speech_started(turn);
+            }
             VoiceEvent::Partial { turn, text, .. } => {
                 if !self.turns.muted() {
                     self.partial = Some((turn, text.into_inner()));

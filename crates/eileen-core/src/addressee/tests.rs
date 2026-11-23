@@ -1,7 +1,7 @@
 use eileen_contracts::ids::MonoTime;
 
 use super::{
-    Decision, Facts, Window, content_words, decide, is_backchannel, levenshtein, soundex,
+    Decision, Facts, Name, Window, content_words, decide, is_backchannel, levenshtein, soundex,
     sounds_like, strip_name, words,
 };
 
@@ -51,16 +51,18 @@ fn the_name_matches_close_spellings_and_not_other_names() {
 #[test]
 fn the_name_is_taken_off_the_start_or_the_end() {
     let led = strip_name("Eileen, what time is it?", &names());
-    assert!(led.named, "name first");
+    assert_eq!(led.name, Name::Leads, "name first");
     assert_eq!(led.rest, "what time is it", "the rest");
     let trailed = strip_name("What time is it, Aileen?", &names());
-    assert!(trailed.named, "name last, misheard");
+    assert_eq!(trailed.name, Name::Ends, "name last, misheard: it does not lead");
+    assert!(trailed.named(), "but it names her");
     assert_eq!(trailed.rest, "what time is it", "the rest");
     let unnamed = strip_name("I told Eileen about it", &names());
-    assert!(!unnamed.named, "a mention in the middle does not address her");
+    assert_eq!(unnamed.name, Name::Absent, "a mention in the middle does not address her");
+    assert!(!unnamed.named(), "not named");
     let aliases = vec!["Eileen".to_owned(), "Ay Lean".to_owned()];
     let alias = strip_name("ay lean stop", &aliases);
-    assert!(alias.named, "a two-word calibration alias");
+    assert_eq!(alias.name, Name::Leads, "a two-word calibration alias");
     assert_eq!(alias.rest, "stop", "the rest");
 }
 
@@ -85,7 +87,12 @@ fn content_words_drop_short_and_stop_words() {
 
 #[test]
 fn the_gate_applies_rules_one_three_and_four_in_order() {
-    let facts = |named, in_window, command| Facts { named, in_window, command };
+    let facts = |named, in_window, command| Facts {
+        name: if named { Name::Leads } else { Name::Absent },
+        late: false,
+        in_window,
+        command,
+    };
     assert_eq!(decide(facts(true, false, false), || false), Decision::Named, "rule 1");
     assert_eq!(decide(facts(false, true, true), || false), Decision::Window, "rule 3, command");
     assert_eq!(decide(facts(false, true, false), || true), Decision::Window, "rule 3, follow-up");
@@ -96,8 +103,38 @@ fn the_gate_applies_rules_one_three_and_four_in_order() {
         Decision::Greyed,
         "the follow-up is asked only inside the window"
     );
+    let trailed = Facts { name: Name::Ends, late: false, in_window: false, command: false };
+    assert_eq!(decide(trailed, || false), Decision::Named, "rule 1 takes a name at the end");
     assert!(!Decision::Greyed.addressed(), "greyed is not addressed");
     assert!(Decision::Typed.addressed(), "typing is addressed");
+}
+
+#[test]
+fn a_turn_heard_late_is_addressed_only_when_it_begins_with_the_name() {
+    let late = |name, in_window, command| Facts { name, late: true, in_window, command };
+    let never = || -> bool { panic!("a turn heard late takes no follow-up") };
+    assert_eq!(decide(late(Name::Leads, false, false), never), Decision::NamedLate, "name-led");
+    assert_eq!(
+        decide(late(Name::Leads, true, true), never),
+        Decision::NamedLate,
+        "name-led inside the window, a command"
+    );
+    assert_eq!(
+        decide(late(Name::Ends, true, true), never),
+        Decision::Late,
+        "a name only at the end does not lead"
+    );
+    assert_eq!(decide(late(Name::Absent, true, true), never), Decision::Late, "not rule 3");
+    assert_eq!(decide(late(Name::Absent, false, true), never), Decision::Late, "not rule 4");
+    assert_eq!(decide(late(Name::Absent, true, false), never), Decision::Late, "no follow-up");
+    assert!(Decision::NamedLate.addressed(), "addressed by the name");
+    assert!(!Decision::Late.addressed(), "greyed");
+    assert_eq!(
+        (Decision::NamedLate.name(), Decision::Late.name()),
+        ("name", "greyed"),
+        "the span's decision is the rule's, and its reason says the turn was heard late"
+    );
+    assert!(Decision::Late.reason().contains("heard late"), "{}", Decision::Late.reason());
 }
 
 #[test]
