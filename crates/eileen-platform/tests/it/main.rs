@@ -4,3 +4,5 @@
 
 #[cfg(test)]
 mod machine;
+#[cfg(test)]
+mod paths;
