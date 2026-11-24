@@ -35,9 +35,9 @@ yanked = "deny"
 # iOS .xcframework.zip with ZipArchive::extract, which gives no password and takes its names from
 # the central directory, and it names neither of the other two. They come out with D78's three.
 # RUSTSEC-2026-0592 is against url 2.5.8, which reaches the tree only through ureq 2.12.1, the
-# build script's download client. The flaw is in Url::origin, which ureq never calls, and the
-# script downloads nothing once cargo xtask fetch-native has verified the archive, because
-# SHERPA_ONNX_ARCHIVE_DIR then points at it. The patched url 2.5.9 requires form_urlencoded 1.2.3,
+# build script's download client. The flaw is in Url::origin, which ureq never calls; the script
+# asks ureq for one URL built from its own constants, and none once cargo xtask fetch-native has
+# verified the archive, because SHERPA_ONNX_ARCHIVE_DIR then points at it. The patched url 2.5.9 requires form_urlencoded 1.2.3,
 # which is inside the cooling-off period until 2026-12-04; the ignore and the url ban below come
 # out with the lock update that takes both.
 ignore = [
@@ -95,9 +95,10 @@ deny = [
   { crate = "zstd:<0.14.3", wrappers = ["zip"], reason = "D80: below 0.14.3, only zip may bring in zstd" },
   { crate = "zstd-safe", wrappers = ["zstd"], reason = "D80: only zstd may bring in zstd-safe" },
   { crate = "zstd-sys", wrappers = ["zstd-safe"], reason = "D80: only zstd-safe may bring in zstd-sys" },
-  # D89 ignores one advisory against url; this keeps it under ureq, the build script's download
-  # client. The ban stops at 2.5.9, RUSTSEC-2026-0592's patched release, so any crate may take a
-  # patched url.
+  # D89 ignores one advisory against url; these keep it under ureq and ureq under sherpa-onnx-sys,
+  # whose build script uses it as its download client. The url ban stops at 2.5.9,
+  # RUSTSEC-2026-0592's patched release, so any crate may take a patched url.
+  { crate = "ureq", wrappers = ["sherpa-onnx-sys"], reason = "D89: only sherpa-onnx-sys's build script may bring in ureq" },
   { crate = "url:<2.5.9", wrappers = ["ureq"], reason = "D89: below 2.5.9, only ureq may bring in url" },
   # D82: allocation-counter declares its own #[global_allocator]. eileen-audio's allocation tests
   # take it as a dev-dependency; this keeps every other crate from taking it. cargo-deny cannot tell
