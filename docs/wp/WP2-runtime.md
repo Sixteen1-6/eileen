@@ -278,8 +278,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
     connection over"; dropping it would lose a client to another process's instances.
   - The DACL's one ACE grants `FILE_GENERIC_READ | FILE_GENERIC_WRITE`, not all access: it is
     what a client's open and the server's next instance need.
-  - A pipe name is at most 128 bytes of ASCII letters, digits, `-`, `_` and `.`, else
-    `BadName`, so no caller can pass a separator or a device path. Eileen's names (a fixed
+  - A pipe name is at most 128 bytes of ASCII letters, digits, `-` and `_`, else `BadName`,
+    so no caller can pass a separator, a device path or a dot, which Windows resolves or
+    drops before the pipe file system sees the path. Eileen's names (a fixed
     word and a `sess_` id, or `owner`) fit.
   - `grants_only_user` is test-only here, reading a pipe handle's DACL back in the
     supervisor's own tests. Its public form, for a pipe or a file (acceptance 15), arrives

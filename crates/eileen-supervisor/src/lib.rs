@@ -1,7 +1,7 @@
 //! How Eileen starts every child process (BUILD.md section 2.1): supervised in a kill-on-close
 //! Job Object with no console window and stderr into tracing ([`spawn`]), the guard's detached
-//! spawn ([`spawn_detached`]), deadlines, heartbeats and bounded restarts ([`watch`]), and
-//! the scheduling opt-outs every process makes at start ([`qos`]), and the pipes between
+//! spawn ([`spawn_detached`]), deadlines, heartbeats and bounded restarts ([`watch`]), the
+//! scheduling opt-outs every process makes at start ([`qos`]), and the pipes between
 //! Eileen's processes with the process id of each end ([`ipc`], section 3.1, decision D86).
 //!
 //! # Owns
@@ -45,7 +45,7 @@
 //!   `tests::stderr_lines_become_child_stderr_events`), and a [`ChildSpec`]'s `Debug` names its
 //!   environment without the values (`tests::a_spec_never_shows_its_environment_values_in_debug`).
 //!
-//! - A pipe exists only as its first instance, with remote clients rejected and a protected
+//! - A pipe is made only as its first instance, with remote clients rejected and a protected
 //!   DACL whose one ACE allows the current user, on every instance
 //!   (`tests::ipc::win::bind_refuses_a_name_that_exists`,
 //!   `tests::ipc::win::every_instance_grants_only_the_current_user`).

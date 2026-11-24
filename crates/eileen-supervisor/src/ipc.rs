@@ -41,7 +41,9 @@ pub enum IpcError {
     #[error("pipes and caller checks are not built for this OS")]
     Unsupported,
     /// The name is empty, longer than [`MAX_PIPE_NAME`], or holds a character other than an
-    /// ASCII letter, a digit, `-`, `_` or `.`, so it could name something other than one pipe.
+    /// ASCII letter, a digit, `-` or `_`, so it could name something other than one pipe. A
+    /// dot is refused too: Windows drops trailing dots and resolves `.` and `..` before the
+    /// pipe file system sees the path.
     #[error("not a pipe name")]
     BadName,
     /// A pipe of this name already exists, so another process holds the name.
@@ -103,7 +105,7 @@ impl Moment {
 /// wildcard or a device prefix never reaches the OS.
 #[cfg(any(windows, test))]
 pub(crate) fn pipe_path(name: &str) -> Result<String, IpcError> {
-    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_');
     if name.is_empty() || name.len() > MAX_PIPE_NAME || !name.chars().all(plain) {
         return Err(IpcError::BadName);
     }
@@ -118,8 +120,8 @@ trait Connection: AsyncRead + AsyncWrite + Unpin {
     fn since(&self) -> Moment;
 }
 
-/// The serving side of one pipe. It owns the name from the pipe's first instance and always
-/// keeps one instance for the next client, until it is dropped.
+/// The serving side of one pipe. It owns the name from the pipe's first instance and, until it
+/// is dropped, hands no connection over before an instance exists for the next client.
 #[derive(Debug)]
 pub struct PipeServer {
     inner: sys::Server,

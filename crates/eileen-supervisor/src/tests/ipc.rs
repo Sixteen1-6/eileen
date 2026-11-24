@@ -8,14 +8,29 @@ use crate::ipc::{IpcError, MAX_PIPE_NAME, pipe_path};
 #[test]
 fn a_pipe_name_is_one_plain_path_component() {
     assert_eq!(
-        pipe_path("eileen-speech-sess_01J.x").unwrap(),
-        r"\\.\pipe\eileen-speech-sess_01J.x",
+        pipe_path("eileen-speech-sess_01JX").unwrap(),
+        r"\\.\pipe\eileen-speech-sess_01JX",
         "a plain name becomes the pipe's path"
     );
     let longest = "a".repeat(MAX_PIPE_NAME);
     assert!(pipe_path(&longest).is_ok(), "the longest name is taken");
     let too_long = "a".repeat(MAX_PIPE_NAME + 1);
-    for bad in ["", r"a\b", "a/b", "a b", "a*", "a?", "a:b", "caf\u{e9}", "a\0", &too_long] {
+    for bad in [
+        "",
+        r"a\b",
+        "a/b",
+        "a b",
+        "a*",
+        "a?",
+        "a:b",
+        ".",
+        "..",
+        "a.",
+        "a.b",
+        "caf\u{e9}",
+        "a\0",
+        &too_long,
+    ] {
         assert!(
             matches!(pipe_path(bad), Err(IpcError::BadName)),
             "{bad:?} could name something other than one pipe"
@@ -256,9 +271,19 @@ pub(super) mod win {
         current_thread().block_on(async {
             let name = unique("left");
             let mut server = PipeServer::bind(&name).unwrap();
-            drop(PipeConn::connect(&name).unwrap());
-            // The OS may report the client that is gone as a connection or as an error.
-            let _gone = soon("the accept of the client that left", server.accept()).await;
+            // A plain file handle closes at once; a tokio pipe closes only when the runtime
+            // next runs, which would leave the client connected.
+            let mut plain = std::fs::OpenOptions::new();
+            plain.read(true).write(true);
+            drop(plain.open(pipe_path(&name).unwrap()).unwrap());
+            // The OS may report the client that is gone as an error or as a connection, and
+            // such a connection carries nothing.
+            let gone = soon("the accept of the client that left", server.accept()).await;
+            if let Ok(mut gone) = gone {
+                let mut byte = [0_u8; 1];
+                let read = soon("the read of a closed pipe", gone.read(&mut byte)).await;
+                assert!(matches!(read, Ok(0) | Err(_)), "nothing arrives from it: {read:?}");
+            }
 
             let mut client = PipeConn::connect(&name).unwrap();
             let mut accepted = soon("the accept after it", server.accept()).await.unwrap();

@@ -89,8 +89,9 @@ impl UserSid {
 
 /// A DACL with one ACE, which allows the user `sid` [`USER_RIGHTS`], as 32-bit words so the
 /// ACL is aligned.
-fn user_only_acl(sid: PSID) -> Result<Vec<u32>, Fault> {
-    // SAFETY: `sid` points at the valid SID a `UserSid` holds, which the caller keeps alive.
+fn user_only_acl(user: &UserSid) -> Result<Vec<u32>, Fault> {
+    let sid = user.as_psid();
+    // SAFETY: `sid` points at the valid SID inside `user`, which the borrow keeps alive.
     let sid_len = unsafe { GetLengthSid(sid) };
     // An ACL header, then an ACE whose last field is where the SID starts.
     let head = size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>();
@@ -100,7 +101,8 @@ fn user_only_acl(sid: PSID) -> Result<Vec<u32>, Fault> {
     // SAFETY: `acl` is writable for `size` bytes and aligned for an ACL.
     unsafe { InitializeAcl(acl.as_mut_ptr().cast(), size, ACL_REVISION) }
         .map_err(fault("InitializeAcl"))?;
-    // SAFETY: `acl` is the ACL initialised above, with room for this ACE, and `sid` is valid.
+    // SAFETY: `acl` is the ACL initialised above, with room for this ACE, and `sid` is the
+    // valid SID inside `user`.
     unsafe { AddAccessAllowedAce(acl.as_mut_ptr().cast(), ACL_REVISION, USER_RIGHTS, sid) }
         .map_err(fault("AddAccessAllowedAce"))?;
     Ok(acl)
@@ -116,7 +118,7 @@ pub(crate) fn create_instance(
     max_instances: Option<usize>,
 ) -> Result<NamedPipeServer, Fault> {
     let sid = UserSid::current()?;
-    let acl = user_only_acl(sid.as_psid())?;
+    let acl = user_only_acl(&sid)?;
     let mut descriptor = SECURITY_DESCRIPTOR::default();
     let descriptor_ptr = PSECURITY_DESCRIPTOR((&raw mut descriptor).cast());
     // SAFETY: `descriptor` is a writable SECURITY_DESCRIPTOR.
@@ -172,7 +174,8 @@ pub(crate) fn now_filetime() -> u64 {
 }
 
 /// Whether the DACL of the kernel object behind `object` is protected and holds exactly one
-/// ACE, which allows the current user. The tests read a pipe's DACL back with it.
+/// ACE, which allows the current user exactly [`USER_RIGHTS`] and is inherited by nothing.
+/// The tests read a pipe's DACL back with it.
 #[cfg(test)]
 pub(crate) fn grants_only_user(object: BorrowedHandle<'_>) -> Result<bool, Fault> {
     use windows::Win32::Security::{
@@ -236,7 +239,12 @@ pub(crate) fn grants_only_user(object: BorrowedHandle<'_>) -> Result<bool, Fault
     // SAFETY: GetAce set `ace` to the first ACE inside the buffer; every ACE starts with a
     // header.
     let kind = unsafe { (*ace).Header.AceType };
-    if u32::from(kind) != ACCESS_ALLOWED_ACE_TYPE {
+    // SAFETY: `ace` is the same ACE, whose header also holds its flags.
+    let flags = unsafe { (*ace).Header.AceFlags };
+    // SAFETY: `ace` is the same ACE; every kind of ACE a DACL holds has a mask after its
+    // header.
+    let mask = unsafe { (*ace).Mask };
+    if u32::from(kind) != ACCESS_ALLOWED_ACE_TYPE || flags != 0 || mask != USER_RIGHTS {
         return Ok(false);
     }
     // An allow ACE's SID starts at its last field.

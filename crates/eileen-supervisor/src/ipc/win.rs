@@ -65,9 +65,10 @@ impl Server {
             // The only await: a caller that drops this future leaves `front` listening, or
             // connected with the client still on it for the next call to find.
             if let Err(source) = self.front.connect().await {
-                // A failed connect can leave the instance half open; disconnecting puts it
-                // back to listening, and an instance that already listens only reports that.
-                let _already_listening = self.front.disconnect();
+                // A failed connect can leave the instance half open. Disconnecting clears
+                // it, so the connect of the next call starts it listening again; an instance
+                // with no client only reports that.
+                let _no_client = self.front.disconnect();
                 return Err(IpcError::Os { call: "ConnectNamedPipe", source });
             }
             let at = Moment::now();
