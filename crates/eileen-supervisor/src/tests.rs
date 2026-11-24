@@ -17,6 +17,7 @@ use tokio::time::timeout;
 
 use crate::{ChildSpec, MAX_STDERR_LINE, spawn};
 
+mod ipc;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -170,6 +171,9 @@ fn helper_entry() {
             lock_file(&dir).lock().unwrap();
             crate::ffi::process::exit_now(259)
         }
+        // A client of the pipe its environment names, for the test of both ends' process ids.
+        #[cfg(windows)]
+        "pipe-client" => ipc::win::helper_client(),
         other => panic!("unknown helper {other}"),
     }
 }

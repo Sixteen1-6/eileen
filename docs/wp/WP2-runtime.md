@@ -165,6 +165,23 @@ Every pull request also meets the rules section 6.1 sets for every package.
   and the events `effect.unserved` and `component.ended`. Unit tests on paused tokio time, one
   with the real core (its speech load deadline fires through the driver at 120 s).
   `eileen run` still says it is not built: `wp2/s1-live` wires the composition root.
+- `wp2/supervisor-pipes` (feature, W1 order item 3): `eileen_supervisor::ipc` with
+  `PipeServer`, `PipeConn`, `Moment` and `IpcError`, on every OS. On Windows `bind` makes the
+  pipe as its first instance over tokio's named pipes, with remote clients rejected and a
+  protected DACL whose one ACE allows the current user (built with `Win32_Security`'s own
+  calls in `ffi/pipe.rs`), and answers `NameTaken` when the name exists. `accept` waits for a
+  client, makes the instance that listens in its place and only then hands the connection
+  over; when that instance cannot be made it returns `NextInstance` and keeps the connected
+  client, and the next `accept` tries the instance again first, so the runtime can raise its
+  incident, wait and call again without losing a client. `PipeConn` reads and writes, and
+  gives `client_pid`, `server_pid` and `since`. Off Windows `bind` and `connect` answer
+  `Unsupported`, and neither type can hold a value. The tests make real pipes: a helper
+  child is the client whose process id the server reads, and a second instance made the
+  plain way fills a pipe held to two instances to bring about the failed next instance. The
+  incident itself is the runtime's, with the pipes' first users (`wp2/speech-transport`,
+  `wp2/dispatcher`); the module logs nothing. No new dependency. The crate doc
+  names the module; its invariants, traps and tests are in the module doc, because the crate
+  doc is at check 1's 80 lines.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
   2. `amend/wp2-session-wiring` (this amendment).
@@ -229,6 +246,20 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
   for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
   by then, and says so.
+- A named pipe's instance limit is set by its first instance, and tokio's default is no
+  limit, which is what `PipeServer::bind` keeps. So "a worker filling the instance limit"
+  (section 2.12) cannot happen by count on a core pipe: a next instance fails only when the
+  OS itself refuses one. The test holds a pipe to two instances through a test-only
+  constructor to reach that path.
+- A client can connect to a listening instance before the server calls `accept`; the OS
+  then reports the connection at once. `since()` on the server's end is read when `accept`
+  sees the connection, not when the client connected, so a server that stops calling
+  `accept` for a while stamps late. The process id is the one the OS recorded at the
+  connect either way.
+- A client that closes before `accept` runs is reported on the owner's Windows 11 as a
+  connection that reads nothing, not as `ERROR_NO_DATA`. `accept` still listens again on
+  `ERROR_NO_DATA` or `ERROR_BROKEN_PIPE` rather than return them, since any process of the user
+  could otherwise make the runtime raise an incident at will; no test reaches that branch.
 
 ## Decisions
 
@@ -236,6 +267,30 @@ Every pull request also meets the rules section 6.1 sets for every package.
   the `PathProbe` platform trait; every pipe client checks the server; `spawn` makes each child's
   Job Object itself; Linux forms are WP10's, and until then `ipc` answers `Unsupported` on
   Linux.
+- `wp2/supervisor-pipes`, where section 3.1 leaves the shape open, each the narrowest reading:
+  - `since()` returns `ipc::Moment`, an opaque, ordered moment whose `as_filetime` gives
+    100 ns steps since 1601, the unit of a process's creation time. Section 3.1 names the
+    clock (`GetSystemTimePreciseAsFileTime`) but no type; `Peer::open(pid, since)` takes it in
+    `wp2/supervisor-callers`, which also makes `Moment::now` public for the loopback server.
+  - `bind` and `connect` are plain functions that must run inside a tokio runtime, and
+    `accept` takes `&mut self` and is cancel safe. `connect` never waits: `NoServer` and
+    `Busy` are errors, and the client owns the retry and its deadline (the shim and the speech
+    process already connect again after a refused server).
+  - "Returns the error" for a next instance that cannot be made: the connected client stays
+    inside the server, at most one, and is handed over by the `accept` that makes the
+    instance. Handing it over without a listening instance would break "before it hands a
+    connection over"; dropping it would lose a client to another process's instances.
+  - The DACL's one ACE grants `FILE_GENERIC_READ | FILE_GENERIC_WRITE`, not all access: it is
+    what a client's open and the server's next instance need.
+  - A pipe name is at most 128 bytes of ASCII letters, digits, `-` and `_`, else `BadName`,
+    so no caller can pass a separator, a device path or a dot, which Windows resolves or
+    drops before the pipe file system sees the path. Eileen's names (a fixed
+    word and a `sess_` id, or `owner`) fit.
+  - `grants_only_user` is test-only here, reading a pipe handle's DACL back in the
+    supervisor's own tests. Its public form, for a pipe or a file (acceptance 15), arrives
+    with `write_user_only` in `wp2/supervisor-callers`, which item 4 names.
+  - No trace event: the module returns `IpcError` and the runtime logs and raises the
+    incident, so `eileen-trace` gains no name here.
 
 ## Outcome
 
