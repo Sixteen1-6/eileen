@@ -3,6 +3,7 @@
 //! families here; the core's timers, failures and shutdown, and the real core, in the modules
 //! below.
 
+mod bus;
 mod fixtures;
 mod real_core;
 mod stopping;
