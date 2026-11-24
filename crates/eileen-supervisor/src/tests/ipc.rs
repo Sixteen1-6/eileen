@@ -61,6 +61,7 @@ pub(super) mod win {
     use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
     use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
     use tokio::time::timeout;
+    use windows::Win32::Foundation::ERROR_ACCESS_DENIED;
 
     use super::super::{EXITS_WITHIN, TempDir, current_thread, helper};
     use crate::ipc::{IpcError, Moment, PipeConn, PipeServer, pipe_path};
@@ -267,6 +268,22 @@ pub(super) mod win {
     }
 
     #[test]
+    fn an_os_error_carries_its_win32_code() {
+        use windows::Win32::Foundation::E_NOTIMPL;
+
+        let denied = windows::core::Error::from(ERROR_ACCESS_DENIED.to_hresult());
+        let denied = crate::ffi::pipe::os_error(denied);
+        assert_eq!(
+            denied.raw_os_error(),
+            Some(i32::try_from(ERROR_ACCESS_DENIED.0).unwrap()),
+            "the code the ERROR_ constants name"
+        );
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied, "and its kind");
+        let other = crate::ffi::pipe::os_error(windows::core::Error::from(E_NOTIMPL));
+        assert_eq!(other.raw_os_error(), Some(E_NOTIMPL.0), "an HRESULT of no Win32 code stays");
+    }
+
+    #[test]
     fn a_client_that_left_before_the_accept_does_not_stop_the_server() {
         current_thread().block_on(async {
             let name = unique("left");
@@ -276,18 +293,34 @@ pub(super) mod win {
             let mut plain = std::fs::OpenOptions::new();
             plain.read(true).write(true);
             drop(plain.open(pipe_path(&name).unwrap()).unwrap());
-            // The OS may report the client that is gone as an error or as a connection, and
-            // such a connection carries nothing.
-            let gone = soon("the accept of the client that left", server.accept()).await;
-            if let Ok(mut gone) = gone {
-                let mut byte = [0_u8; 1];
-                let read = soon("the read of a closed pipe", gone.read(&mut byte)).await;
-                assert!(matches!(read, Ok(0) | Err(_)), "nothing arrives from it: {read:?}");
+            // The next client finds the instance busy until the server has cleared the one
+            // that left, so it connects again until it gets in, while `accept` runs.
+            let connector = async {
+                loop {
+                    match PipeConn::connect(&name) {
+                        Err(IpcError::Busy { .. }) => tokio::task::yield_now().await,
+                        other => return other,
+                    }
+                }
+            };
+            let both = async { tokio::join!(server.accept(), connector) };
+            let (served, client) = soon("the accept and the connect", both).await;
+            let mut served = served.expect("a client that left is no error for the caller");
+            let mut client = client.unwrap();
+            client.write_all(b"still serving").await.unwrap();
+            // The OS may report the client that left as a connection, which carries nothing;
+            // the live client is then the next one `accept` hands over.
+            let mut got = [0_u8; 13];
+            let mut have = soon("the first read", served.read(&mut got)).await.unwrap_or(0);
+            if have == 0 {
+                served = soon("the accept after it", server.accept()).await.unwrap();
             }
-
-            let mut client = PipeConn::connect(&name).unwrap();
-            let mut accepted = soon("the accept after it", server.accept()).await.unwrap();
-            carries(&mut client, &mut accepted, "still serving").await;
+            while have < got.len() {
+                let n = soon("the read", served.read(&mut got[have..])).await.unwrap();
+                assert!(n > 0, "the live client's bytes arrive");
+                have += n;
+            }
+            assert_eq!(&got, b"still serving", "the live client is served");
         });
     }
 }

@@ -256,6 +256,10 @@ Every pull request also meets the rules section 6.1 sets for every package.
   sees the connection, not when the client connected, so a server that stops calling
   `accept` for a while stamps late. The process id is the one the OS recorded at the
   connect either way.
+- A client that closes before `accept` runs is reported on the owner's Windows 11 as a
+  connection that reads nothing, not as `ERROR_NO_DATA`. `accept` still listens again on
+  `ERROR_NO_DATA` or `ERROR_BROKEN_PIPE` rather than return them, since any process of the user
+  could otherwise make the runtime raise an incident at will; no test reaches that branch.
 
 ## Decisions
 

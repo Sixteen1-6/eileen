@@ -9,7 +9,9 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY};
+use windows::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+};
 
 use super::{Connection, IpcError, Moment, pipe_path};
 use crate::ffi::pipe;
@@ -64,12 +66,19 @@ impl Server {
         } else {
             // The only await: a caller that drops this future leaves `front` listening, or
             // connected with the client still on it for the next call to find.
-            if let Err(source) = self.front.connect().await {
+            loop {
+                let Err(source) = self.front.connect().await else { break };
                 // A failed connect can leave the instance half open. Disconnecting clears
-                // it, so the connect of the next call starts it listening again; an instance
-                // with no client only reports that.
+                // it, so the next connect starts it listening again; an instance with no
+                // client only reports that.
                 let _no_client = self.front.disconnect();
-                return Err(IpcError::Os { call: "ConnectNamedPipe", source });
+                // A client that closed before the connect completed is no fault of the
+                // server's, and any process of the user can cause one at will, so it is not
+                // the caller's to report: listen again.
+                let gone = [ERROR_NO_DATA.0, ERROR_BROKEN_PIPE.0];
+                if os_code(&source).is_none_or(|c| !gone.contains(&c)) {
+                    return Err(IpcError::Os { call: "ConnectNamedPipe", source });
+                }
             }
             let at = Moment::now();
             self.connected_at = Some(at);

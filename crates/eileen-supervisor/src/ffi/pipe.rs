@@ -36,7 +36,22 @@ pub(crate) struct Fault {
 }
 
 fn fault(call: &'static str) -> impl FnOnce(windows::core::Error) -> Fault {
-    move |error| Fault { call, source: io::Error::from(error) }
+    move |error| Fault { call, source: os_error(error) }
+}
+
+/// The `windows` crate's error as the Win32 code it wraps, so that every `io::Error` this
+/// module returns carries a code callers can compare with the `ERROR_` constants, as tokio's
+/// do. An `HRESULT` that wraps no Win32 code is kept as it is.
+pub(crate) fn os_error(error: windows::core::Error) -> io::Error {
+    let hresult = error.code().0.cast_unsigned();
+    // Facility 7, FACILITY_WIN32, with the failure bit: 0x8007xxxx holds the Win32 code xxxx.
+    if hresult >> 16 == 0x8007
+        && let Ok(win32) = i32::try_from(hresult & 0xFFFF)
+    {
+        io::Error::from_raw_os_error(win32)
+    } else {
+        io::Error::from(error)
+    }
 }
 
 /// The current user's SID, inside the `TOKEN_USER` the OS wrote it into.
@@ -153,7 +168,8 @@ pub(crate) fn create_instance(
 pub(crate) fn client_pid(pipe: BorrowedHandle<'_>) -> io::Result<u32> {
     let mut pid: u32 = 0;
     // SAFETY: the borrow keeps the pipe handle open across the call, and `pid` is writable.
-    unsafe { GetNamedPipeClientProcessId(HANDLE(pipe.as_raw_handle()), &raw mut pid) }?;
+    unsafe { GetNamedPipeClientProcessId(HANDLE(pipe.as_raw_handle()), &raw mut pid) }
+        .map_err(os_error)?;
     Ok(pid)
 }
 
@@ -161,7 +177,8 @@ pub(crate) fn client_pid(pipe: BorrowedHandle<'_>) -> io::Result<u32> {
 pub(crate) fn server_pid(pipe: BorrowedHandle<'_>) -> io::Result<u32> {
     let mut pid: u32 = 0;
     // SAFETY: the borrow keeps the pipe handle open across the call, and `pid` is writable.
-    unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &raw mut pid) }?;
+    unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &raw mut pid) }
+        .map_err(os_error)?;
     Ok(pid)
 }
 

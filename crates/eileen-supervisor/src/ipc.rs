@@ -176,6 +176,9 @@ impl PipeServer {
     /// which tries the instance again before it does anything else. So a server whose caller
     /// keeps calling never stops listening without saying so.
     ///
+    /// A client that leaves before it is accepted is no error: the server listens again, or
+    /// hands over a connection that reads nothing.
+    ///
     /// The wait for a client has no deadline of its own, because a server listens for as long
     /// as it lives. The future is cancel safe: dropping it loses no connection.
     pub async fn accept(&mut self) -> Result<PipeConn, IpcError> {
