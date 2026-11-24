@@ -1,6 +1,8 @@
-//! The supervisor's only unsafe code: the Win32 calls for quality of service and, for the
-//! tests, process liveness. Every function here is safe to call; each unsafe block holds one
-//! operation and says why its preconditions hold.
+//! The supervisor's only unsafe code: the Win32 calls for quality of service, for the `ipc`
+//! module's pipes ([`pipe`]) and, for the tests, process liveness. Every function here is safe
+//! to call; each unsafe block holds one operation and says why its preconditions hold.
+
+pub(crate) mod pipe;
 
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::{
