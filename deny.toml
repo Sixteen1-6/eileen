@@ -31,13 +31,15 @@ yanked = "deny"
 # has checked against its SHA256. It comes out with D78's three.
 # Decision D89: RUSTSEC-2026-0545 and RUSTSEC-2026-0548 are a fifth and a sixth advisory against
 # the same zip 2.6.1, patched in zip 9.0.0 and 9.0.5. 0545 is in reading AES entries with a
-# password and 0548 in ZipStreamReader and read_zipfile_from_stream. The build script opens the
+# password and 0548 in ZipStreamReader and read_zipfile_from_stream. The build script unpacks the
 # iOS .xcframework.zip with ZipArchive::extract, which gives no password and takes its names from
 # the central directory, and it names neither of the other two. They come out with D78's three.
 # RUSTSEC-2026-0592 is against url 2.5.8, which reaches the tree only through ureq 2.12.1, the
 # build script's download client. The flaw is in Url::origin, which ureq never calls, and the
-# script downloads nothing when cargo xtask fetch-native has set SHERPA_ONNX_ARCHIVE_DIR. No pin
-# reaches url, so this one comes out with a lock update to url 2.5.9, its patched release.
+# script downloads nothing once cargo xtask fetch-native has verified the archive, because
+# SHERPA_ONNX_ARCHIVE_DIR then points at it. The patched url 2.5.9 requires form_urlencoded 1.2.3,
+# which is inside the cooling-off period until 2026-12-04; the ignore and the url ban below come
+# out with the lock update that takes both.
 ignore = [
   { id = "RUSTSEC-2026-0367", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
   { id = "RUSTSEC-2026-0368", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
