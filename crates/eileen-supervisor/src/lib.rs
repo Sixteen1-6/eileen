@@ -1,26 +1,19 @@
 //! How Eileen starts every child process (BUILD.md section 2.1): supervised in a kill-on-close
 //! Job Object with no console window and stderr into tracing ([`spawn`]), the guard's detached
 //! spawn ([`spawn_detached`]), deadlines, heartbeats and bounded restarts ([`watch`]), the
-//! scheduling opt-outs every process makes at start ([`qos`]), and the pipes between
-//! Eileen's processes with the process id of each end ([`ipc`], section 3.1, decision D86).
+//! scheduling opt-outs every process makes at start ([`qos`]), and the pipes ([`ipc`]).
 //!
 //! # Owns
 //!
 //! - The one `Command::new` for every child of the running product, and how it is wrapped (on
 //!   Linux, LINUX.md section 5: own session, parent-death signal, group kills).
 //! - [`spawn_detached`] for `eileen-guard.exe`: `CREATE_BREAKAWAY_FROM_JOB`, null handles.
-//! - [`watch`] (deadlines, heartbeats, restart backoff) and [`qos`] (`EcoQoS`, MMCSS).
-//! - [`ipc`]: [`ipc::PipeServer`], which makes a pipe as its first instance for the current user
-//!   only and keeps an instance listening, and [`ipc::PipeConn`], one connection with both ends'
-//!   process ids and the moment it began. The caller checks, the Job Object registry and the
-//!   user-only token files join it in `wp2/supervisor-callers`.
+//! - [`watch`] (deadlines, heartbeats, backoff), [`qos`] (`EcoQoS`, MMCSS), [`ipc`] (pipes).
 //!
 //! # Does not own
 //!
 //! - Launching apps for the user (`user_launch`, phase B), the guard itself (`eileen-guard`), cargo
 //!   under the build guard (`eileen-buildguard::spawn_cargo`), worker flags (`eileen-harness`).
-//! - Which caller a pipe accepts, and the incident for a pipe that cannot make its next
-//!   instance: `ipc` reports facts and errors, and `eileen-runtime` decides and reports.
 //!
 //! # Invariants
 //!
@@ -45,23 +38,11 @@
 //!   `tests::stderr_lines_become_child_stderr_events`), and a [`ChildSpec`]'s `Debug` names its
 //!   environment without the values (`tests::a_spec_never_shows_its_environment_values_in_debug`).
 //!
-//! - A pipe is made only as its first instance, with remote clients rejected and a protected
-//!   DACL whose one ACE allows the current user, on every instance
-//!   (`tests::ipc::win::bind_refuses_a_name_that_exists`,
-//!   `tests::ipc::win::every_instance_grants_only_the_current_user`).
-//! - [`ipc::PipeServer::accept`] hands a connection over only once the instance that listens in
-//!   its place exists; when that instance cannot be made it says so and keeps the connection
-//!   for the next call (`tests::ipc::win::an_instance_listens_while_connections_are_open`,
-//!   `tests::ipc::win::a_next_instance_that_cannot_be_made_is_an_error_and_keeps_the_connection`).
-//! - Off Windows every `ipc` constructor answers [`ipc::IpcError::Unsupported`]
-//!   (`tests::ipc::every_call_answers_unsupported_off_windows`).
-//!
 //! # Boundaries
 //!
 //! - Called by `eileen-runtime`, `eileen-harness`, `eileen-scenarios`, the sidecars.
 //! - May depend on `eileen-rt`, `eileen-stdx`, `eileen-trace`, `process-wrap`, `thiserror`,
-//!   `tokio` (its `net` feature for the named pipes) and `tracing`; `windows` on Windows;
-//!   `rustix` on Linux.
+//!   `tokio` (`net` for the pipes) and `tracing`; `windows` on Windows; `rustix` on Linux.
 //! - Wire types: none; the protocols on the pipes belong to their crates.
 //!
 //! # Testing
@@ -69,8 +50,7 @@
 //! - Fast command: `cargo xtask test -p eileen-supervisor`.
 //! - Layers: unit tests for the watch logic; process tests that run the test binary again
 //!   as a helper child (Job Object semantics on Windows, sessions, process groups and parent
-//!   death on Linux, stderr forwarding on both); real named pipes on Windows, with the helper
-//!   child as the client whose process id the server reads.
+//!   death on Linux, stderr forwarding on both, real pipes on Windows for `ipc`).
 //! - A bug here starts as an orphaned process after Eileen exits, or a restart storm.
 //!
 //! # Traps
@@ -86,13 +66,6 @@
 //! - The detached spawn falls back to a plain spawn when the parent's job refuses breakaway
 //!   ([`Detached::broke_away`] says which); its handles are null, so it cannot log to stderr.
 //! - Paused-time tests need tokio's `test-util`, which is not in the workspace feature union.
-//! - A pipe's DACL cannot keep the user's other processes from adding instances, so a client
-//!   may reach a server that is not the core: it checks [`ipc::PipeConn::server_pid`] before it
-//!   sends anything (BUILD.md section 2.12).
-//! - [`ipc::PipeServer::bind`] and [`ipc::PipeConn::connect`] need a tokio runtime with I/O.
-//!   `connect` never waits: a busy or missing pipe is an error the caller retries under its own
-//!   deadline. A client that connects before `accept` is called is stamped when `accept` sees
-//!   it, so call `accept` again as soon as it returns.
 //! - [`qos::AudioBoost`] is not `Send` on any OS: MMCSS is reverted on the thread that joined.
 //!
 //! # Logs and tracing
@@ -100,7 +73,6 @@
 //! - Emits `child.spawned`, `child.stderr` (the line in `pii.line`), `child.exited` and
 //!   `deadline.passed`; the restart span `supervisor.restart` belongs to the runtime that drives
 //!   [`watch::Restarts`].
-//! - `ipc` emits nothing: its errors go to the caller, which logs them and raises the incident.
 //!
 //! # Do not change without a decision record
 //!

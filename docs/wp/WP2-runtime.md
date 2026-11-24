@@ -179,8 +179,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   child is the client whose process id the server reads, and a second instance made the
   plain way fills a pipe held to two instances to bring about the failed next instance. The
   incident itself is the runtime's, with the pipes' first users (`wp2/speech-transport`,
-  `wp2/dispatcher`); the module logs nothing. No new dependency; the crate doc lists the
-  module.
+  `wp2/dispatcher`); the module logs nothing. No new dependency. The crate doc
+  names the module; its invariants, traps and tests are in the module doc, because the crate
+  doc is at check 1's 80 lines.
 - W1 order (BUILD.md section 6.4, "W1 order"), each pull request once those it names have merged:
   1. `amend/wp2-ipc-home` (#171, merged).
   2. `amend/wp2-session-wiring` (this amendment).
@@ -245,7 +246,6 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - `FakePathProbe` should keep simulated time as #77 gives the other fakes; #77 is open and held
   for the owner, so `wp2/path-probe-trait` builds on `main`'s `Deadline` if #77 has not merged
   by then, and says so.
-
 - A named pipe's instance limit is set by its first instance, and tokio's default is no
   limit, which is what `PipeServer::bind` keeps. So "a worker filling the instance limit"
   (section 2.12) cannot happen by count on a core pipe: a next instance fails only when the

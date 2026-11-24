@@ -13,6 +13,32 @@
 //! starts, and nothing more: the user cannot be denied the right to add instances, so any
 //! process of the user can add one later and catch a client. Every client therefore reads
 //! [`PipeConn::server_pid`] and checks that process before it sends anything.
+//!
+//! # Invariants
+//!
+//! - A pipe is made only as its first instance, with remote clients rejected and a protected
+//!   DACL whose one ACE allows the current user
+//!   (`tests::ipc::win::bind_refuses_a_name_that_exists`,
+//!   `tests::ipc::win::every_instance_grants_only_the_current_user`).
+//! - [`PipeServer::accept`] hands a connection over only once the instance that listens in its
+//!   place exists; when that instance cannot be made it says so and keeps the connection for
+//!   the next call (`tests::ipc::win::an_instance_listens_while_connections_are_open`,
+//!   `tests::ipc::win::a_next_instance_that_cannot_be_made_is_an_error_and_keeps_the_connection`).
+//! - A connection names the process at each end
+//!   (`tests::ipc::win::a_connection_names_the_process_at_each_end`).
+//! - Off Windows every constructor answers [`IpcError::Unsupported`]
+//!   (`tests::ipc::every_call_answers_unsupported_off_windows`).
+//!
+//! # Traps
+//!
+//! - Between a client's connect and the `accept` that makes the next instance, no instance of
+//!   the server's listens, so a client can find the pipe busy, or reach another process's
+//!   instance. [`PipeConn::connect`] never waits: the caller retries under its own deadline.
+//! - A client that connects before `accept` is called is stamped when `accept` sees it, so a
+//!   server keeps a task in `accept` for as long as it lives.
+//! - [`PipeServer::bind`] and [`PipeConn::connect`] need a tokio runtime with I/O.
+//! - The module logs nothing. Its errors go to the caller, which logs them and raises the
+//!   incident for a pipe that cannot make its next instance.
 
 use std::io;
 use std::pin::Pin;
