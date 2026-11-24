@@ -304,23 +304,23 @@ pub(super) mod win {
                 }
             };
             let both = async { tokio::join!(server.accept(), connector) };
-            let (served, client) = soon("the accept and the connect", both).await;
-            let mut served = served.expect("a client that left is no error for the caller");
+            let (accepted, client) = soon("the accept and the connect", both).await;
+            let mut accepted = accepted.expect("a client that left is no error for the caller");
             let mut client = client.unwrap();
             client.write_all(b"still serving").await.unwrap();
             // The OS may report the client that left as a connection, which carries nothing;
             // the live client is then the next one `accept` hands over.
             let mut got = [0_u8; 13];
-            let mut have = soon("the first read", served.read(&mut got)).await.unwrap_or(0);
+            let mut have = soon("the first read", accepted.read(&mut got)).await.unwrap_or(0);
             if have == 0 {
-                served = soon("the accept after it", server.accept()).await.unwrap();
+                accepted = soon("the accept after it", server.accept()).await.unwrap();
             }
             while have < got.len() {
-                let n = soon("the read", served.read(&mut got[have..])).await.unwrap();
+                let n = soon("the read", accepted.read(&mut got[have..])).await.unwrap();
                 assert!(n > 0, "the live client's bytes arrive");
                 have += n;
             }
-            assert_eq!(&got, b"still serving", "the live client is served");
+            assert_eq!(&got, b"still serving", "the live client is accepted");
         });
     }
 }
