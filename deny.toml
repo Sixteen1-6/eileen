@@ -1,10 +1,11 @@
 # cargo-deny 0.20.2 policy (BUILD.md section 4b.3): the rust-architecture report's file, with IJG
 # allowed for jpeg-encoder, one license exception for webpki-roots, the Linux target added so the
-# Linux lane is checked too, eight advisory ignores against crates that only sherpa-onnx-sys's
-# build script brings in (four against zip, decisions D78 and D85, and four against the zstd
-# crates zip takes, decision D80), bans that keep each of those crates on that path so the
-# ignores cover nothing else, and a ban that keeps allocation-counter, whose global allocator
-# replaces that of any binary linking it, inside eileen-audio (decision D82).
+# Linux lane is checked too, eleven advisory ignores against crates that only sherpa-onnx-sys's
+# build script brings in (six against zip, decisions D78, D85 and D89, four against the zstd
+# crates zip takes, decision D80, and one against url, which the script's download client takes,
+# decision D89), bans that keep each of those crates on that path so the ignores cover nothing
+# else, and a ban that keeps allocation-counter, whose global allocator replaces that of any
+# binary linking it, inside eileen-audio (decision D82).
 
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
@@ -28,6 +29,15 @@ yanked = "deny"
 # same zip 9.0.0. The build script does call ZipArchive::extract, the affected function, but only
 # for the iOS .xcframework.zip; on Windows it unpacks the .tar.bz2 that cargo xtask fetch-native
 # has checked against its SHA256. It comes out with D78's three.
+# Decision D89: RUSTSEC-2026-0545 and RUSTSEC-2026-0548 are a fifth and a sixth advisory against
+# the same zip 2.6.1, patched in zip 9.0.0 and 9.0.5. 0545 is in reading AES entries with a
+# password and 0548 in ZipStreamReader and read_zipfile_from_stream. The build script opens the
+# iOS .xcframework.zip with ZipArchive::extract, which gives no password and takes its names from
+# the central directory, and it names neither of the other two. They come out with D78's three.
+# RUSTSEC-2026-0592 is against url 2.5.8, which reaches the tree only through ureq 2.12.1, the
+# build script's download client. The flaw is in Url::origin, which ureq never calls, and the
+# script downloads nothing when cargo xtask fetch-native has set SHERPA_ONNX_ARCHIVE_DIR. No pin
+# reaches url, so this one comes out with a lock update to url 2.5.9, its patched release.
 ignore = [
   { id = "RUSTSEC-2026-0367", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
   { id = "RUSTSEC-2026-0368", reason = "D78: zip in sherpa-onnx-sys's build script, iOS archives only" },
@@ -37,6 +47,9 @@ ignore = [
   { id = "RUSTSEC-2026-0403", reason = "D80: zstd-safe under zip, legacy off, read::Decoder only" },
   { id = "RUSTSEC-2026-0410", reason = "D80: zstd-sys, wasm32 only, which is not a graph target" },
   { id = "RUSTSEC-2026-0429", reason = "D85: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0545", reason = "D89: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0548", reason = "D89: zip in sherpa-onnx-sys's build script, iOS archives only" },
+  { id = "RUSTSEC-2026-0592", reason = "D89: url under ureq in that build script, which never calls Url::origin" },
 ]
 
 [licenses]
@@ -71,7 +84,8 @@ highlight = "all"
 deny = [
   { crate = "openssl-sys", reason = "use rustls or SChannel" },
   { crate = "native-tls", reason = "use rustls" },
-  # D78 and D85 ignore four advisories against zip; this keeps them from covering zip anywhere else.
+  # D78, D85 and D89 ignore six advisories against zip; this keeps them from covering zip anywhere
+  # else.
   { crate = "zip", wrappers = ["sherpa-onnx-sys"], reason = "D78: only sherpa-onnx-sys's build script may bring in zip" },
   # D80 ignores four advisories against the zstd crates zip takes; these keep each of them under
   # its parent on that path. The zstd ban stops at 0.14.3, RUSTSEC-2026-0391's patched release, so
@@ -79,6 +93,10 @@ deny = [
   { crate = "zstd:<0.14.3", wrappers = ["zip"], reason = "D80: below 0.14.3, only zip may bring in zstd" },
   { crate = "zstd-safe", wrappers = ["zstd"], reason = "D80: only zstd may bring in zstd-safe" },
   { crate = "zstd-sys", wrappers = ["zstd-safe"], reason = "D80: only zstd-safe may bring in zstd-sys" },
+  # D89 ignores one advisory against url; this keeps it under ureq, the build script's download
+  # client. The ban stops at 2.5.9, RUSTSEC-2026-0592's patched release, so any crate may take a
+  # patched url.
+  { crate = "url:<2.5.9", wrappers = ["ureq"], reason = "D89: below 2.5.9, only ureq may bring in url" },
   # D82: allocation-counter declares its own #[global_allocator]. eileen-audio's allocation tests
   # take it as a dev-dependency; this keeps every other crate from taking it. cargo-deny cannot tell
   # a dev-dependency from a normal one, so check 15 (BUILD.md section 4b.3, WP0's phase B) holds
