@@ -8,13 +8,17 @@
 //! - **Untrusted text.** A transcript, a job's narration and summary, and the names and
 //!   reasons beside them can hold anything, a model's output and screen text included, and a
 //!   terminal obeys what it is sent. So control characters and the characters that reorder or
-//!   break a line are written as escapes, and a text is cut after [`MAX_TEXT`] characters: an
-//!   event is always one line and never moves the cursor, clears the screen or sets a title.
+//!   break a line are written as escapes, and a text is cut at [`MAX_TEXT`] characters as
+//!   shown: an event is always one line and never moves the cursor, clears the screen or sets
+//!   a title. Joiners and other invisible characters that scripts and emoji need are left as
+//!   they are, and a backslash is not doubled, so the view is for reading, not for parsing.
 //! - **Bounds.** The view keeps the names of at most [`MAX_NAMES`] unfinished jobs, the oldest
 //!   going first, and forgets a job at its terminal event.
-//! - **Where it runs.** [`Console::follow`] writes as it reads, so a terminal that stops taking
-//!   output holds the task that follows, never the bus: the view then lags and says so. The
-//!   composition root gives it its own subscriber and the terminal's output.
+//! - **Where it runs.** [`Console::show`] writes and flushes before it returns, and a
+//!   terminal can stop taking output for as long as it likes (a selection in a Windows console
+//!   does). So the composition root gives the view its own subscriber and runs
+//!   [`Console::follow`] on a thread of its own, never on a runtime worker: a stalled terminal
+//!   then holds that thread only, the bus goes on, and the view says how much it missed.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -26,7 +30,8 @@ use eileen_contracts::jobs::{JobKind, Route};
 
 use crate::bus::Subscriber;
 
-/// The most characters of one text a line shows; the rest is cut and marked `...`.
+/// The most characters one text takes on a line, escapes counted as they are shown; the rest
+/// is cut and marked `...`.
 pub const MAX_TEXT: usize = 200;
 
 /// The most unfinished jobs whose names the view keeps.
@@ -66,7 +71,8 @@ impl<W: Write> Console<W> {
         writeln!(self.out, "{line}").and_then(|()| self.out.flush()).map_err(ConsoleError::Write)
     }
 
-    /// Shows every event `events` gives until the bus stops.
+    /// Shows every event `events` gives until the bus stops. Each line is a blocking write, so
+    /// this runs on a thread of its own (the module doc says why).
     pub async fn follow(&mut self, events: &mut Subscriber) -> Result<(), ConsoleError> {
         while let Some(event) = events.recv().await {
             self.show(&event)?;
@@ -177,32 +183,40 @@ impl<W: Write> Console<W> {
 }
 
 /// `text` made safe to print on one line: control characters and the characters that reorder
-/// or break a line as escapes, and at most [`MAX_TEXT`] characters of it.
+/// or break a line as escapes, cut before it would take more than [`MAX_TEXT`] characters.
 fn plain(text: &str) -> String {
     let mut out = String::with_capacity(text.len().min(MAX_TEXT));
-    for (shown, c) in text.chars().enumerate() {
-        if shown == MAX_TEXT {
-            out.push_str("...");
-            break;
-        }
-        if c.is_control() {
+    let mut shown = 0_usize;
+    for c in text.chars() {
+        let start = out.len();
+        let width = if c.is_control() {
             out.extend(c.escape_default());
+            out.len() - start
         } else if reorders(c) {
             out.extend(c.escape_unicode());
+            out.len() - start
         } else {
             out.push(c);
+            1
+        };
+        // An escape is ASCII, so the bytes it added are the characters it shows.
+        shown = shown.saturating_add(width);
+        if shown > MAX_TEXT {
+            out.truncate(start);
+            out.push_str("...");
+            break;
         }
     }
     out
 }
 
 /// Whether `c` is no control character and still changes where text lands: the bidirectional
-/// marks, embeddings, overrides and isolates, which can show a line in another order than it
-/// was written, and the line and paragraph separators.
+/// marks, embeddings, overrides and isolates and the deprecated shaping controls, which can
+/// show a line in another order than it was written, and the line and paragraph separators.
 const fn reorders(c: char) -> bool {
     matches!(
         c,
-        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{206F}'
     )
 }
 

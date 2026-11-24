@@ -19,7 +19,8 @@
 //!   error, and so is a component that claims `Timer`, which the driver serves itself. An effect
 //!   nobody serves (no claim, or its component has ended) is dropped, with one `effect.unserved`
 //!   line per family per run. While a component's queue is full the driver waits for room,
-//!   still watching for shutdown and for any component's end.
+//!   still watching for shutdown and for any component's end: no input is stepped and no timer
+//!   fires meanwhile, the core's own deadlines included.
 //! - **Timers.** `SetTimer` and `CancelTimer` stay in the driver. A timer fires on tokio's clock
 //!   when the monotonic clock reaches its `at`, and comes back to the core as `Input::Timer`,
 //!   stepped at once with a time no earlier than `at`. Tokio wakes a timer up to a millisecond

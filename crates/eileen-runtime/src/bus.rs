@@ -80,8 +80,8 @@ impl Component for Bus {
             let mut stop = shutdown.wait();
             loop {
                 let mut next = effects.recv();
-                // An effect already queued goes out before shutdown is looked at, so the
-                // events of the last step reach the subscribers.
+                // An effect already queued goes out before shutdown is looked at, so what
+                // the driver routed here before it stopped still reaches the subscribers.
                 let effect = poll_fn(|cx| {
                     if let Poll::Ready(effect) = next.as_mut().poll(cx) {
                         return Poll::Ready(effect);

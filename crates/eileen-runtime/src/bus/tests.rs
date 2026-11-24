@@ -208,10 +208,11 @@ async fn every_event_is_delivered_or_counted() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_recv_dropped_while_waiting_loses_no_count() {
+async fn the_event_after_a_notice_survives_a_second_overrun() {
     let rig = rig(4);
     let mut subscriber = rig.handle.subscribe();
-    assert!(is_idle(&mut subscriber).await, "a recv that waited and was dropped");
+    // A recv that waited and was dropped took nothing off the bus.
+    assert!(is_idle(&mut subscriber).await, "nothing yet");
     rig.publish(1, 7).await;
     assert_eq!(next(&mut subscriber).await, Some(lagged(3, 4)), "the notice");
     // The event after the notice is held in the subscriber, so an overrun of the bus between

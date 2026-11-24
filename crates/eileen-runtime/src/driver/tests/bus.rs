@@ -41,7 +41,8 @@ async fn a_subscriber_that_never_reads_never_holds_the_core() {
             assert_eq!(ctx, TraceCtx::default(), "with the context the core gave it");
         }
     }
-    assert_eq!(steps_of(&steps).len(), 50, "the core took every input");
+    let stepped = u64::try_from(steps_of(&steps).len()).unwrap();
+    assert_eq!(stepped, INPUTS, "the core took every input");
 
     let notice = timeout(PATIENCE, stalled.recv()).await.unwrap().expect("the bus is running");
     assert_eq!(

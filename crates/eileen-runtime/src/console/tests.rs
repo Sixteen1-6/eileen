@@ -137,9 +137,16 @@ fn text_from_outside_cannot_add_a_line_or_drive_the_terminal() {
 #[test]
 fn long_text_is_cut_to_one_bounded_line() {
     let long = "a".repeat(MAX_TEXT + 500);
-    let exact = "b".repeat(MAX_TEXT);
-    let output = printed([heard(&long), heard(&exact)]);
-    let wanted = format!("heard  {}...\nheard  {}\n", "a".repeat(MAX_TEXT), "b".repeat(MAX_TEXT));
+    let exact = "\u{e9}".repeat(MAX_TEXT);
+    // Each escape takes five characters on the line, so 40 of them fill it and no more fit.
+    let escapes = "\u{1}".repeat(MAX_TEXT);
+    let output = printed([heard(&long), heard(&exact), heard(&escapes)]);
+    let wanted = format!(
+        "heard  {}...\nheard  {}\nheard  {}...\n",
+        "a".repeat(MAX_TEXT),
+        "\u{e9}".repeat(MAX_TEXT),
+        "\\u{1}".repeat(MAX_TEXT / 5)
+    );
     assert_eq!(
         output, wanted,
         "cut after the most it shows, and marked; a text that fits is whole"

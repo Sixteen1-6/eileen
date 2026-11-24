@@ -264,7 +264,8 @@ Every pull request also meets the rules section 6.1 sets for every package.
     resumes, and an empty `TraceCtx`.
   - The count of missed events is kept in the subscriber until it has been given, so a `recv`
     dropped while it waits loses none, and the event after a notice is held with it, so a
-    second overrun cannot take it.
+    second overrun cannot take it. No test reaches a `recv` dropped between a lag and the
+    event after it, since tokio gives that event at once.
   - A subscriber never keeps the bus running: the handle holds a weak reference, and a
     subscriber made after the bus stopped is at its end from the start.
   - The bus writes no log line of its own. Who lagged, and by how much, is known only to that
@@ -273,7 +274,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
 - The console view (`wp2/driver-loop`), by the narrowest reading of section 3.5's "what is
   heard, what Eileen says and the jobs, one line each":
   - It lives in `eileen_runtime::console`, beside `run`, which the runtime implements;
-    `eileen-cli` keeps the flag and the wiring, and gains no dependency.
+    `eileen-cli` keeps the flag and the wiring, and gains no dependency. Its writes block,
+    and a terminal can stall for as long as it likes, so `wp2/s1-live` runs `follow` on a
+    thread of its own, never on a runtime worker.
   - `Heard`, `Speaking` and the ten `Job*` events give a line, and so does a lag notice,
     since a view that drops lines without saying so would break invariant 6 at the last
     step. Approvals, `SpeakingStopped`, `UserError` and the rest give none; the match names
@@ -281,8 +284,9 @@ Every pull request also meets the rules section 6.1 sets for every package.
   - No time on a line: an envelope's `at` is UTC and the view has no local offset until
     `wp2/shell-local-time`.
   - Control characters, the bidirectional controls and the line and paragraph separators
-    are written as escapes, a text is cut after 200 characters, and the view keeps at most
-    256 unfinished jobs' names, the oldest going first.
+    are written as escapes, a text is cut at 200 characters as shown, and the view keeps at
+    most 256 unfinished jobs' names, the oldest going first. Joiners and other invisible
+    characters that scripts and emoji need pass, and a backslash is not doubled.
 
 ## Outcome
 
