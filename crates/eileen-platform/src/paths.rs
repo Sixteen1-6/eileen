@@ -3,7 +3,7 @@
 //! before it reads anything.
 //!
 //! Paths are strings as Windows writes them, not `std::path` values, so the classifier's table
-//! tests run on Linux over [`FakePathProbe`].
+//! tests run on Linux over `FakePathProbe`.
 
 use crate::{Deadline, PlatformError};
 
