@@ -81,7 +81,7 @@ toml = "1.1.8"
 # old on 2026-10-31 and past the cooling-off period, and its toml_datetime, toml_parser,
 # toml_writer, serde_spanned and winnow requirements accept the versions toml 1.1.8 locks, so the
 # tree still holds one copy of each. Exact, so a lock never takes a release newer than this one.
-toml_edit = "=0.25.17"
+toml_edit = "=0.25.18"
 
 # Errors, tracing, secrets
 thiserror = "2.0.21"
